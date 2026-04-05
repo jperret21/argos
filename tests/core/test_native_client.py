@@ -194,14 +194,14 @@ class TestVerifyInjection:
         assert client.firmware_ver_int == 2470
         assert not client._needs_verify()
 
-    def test_unknown_firmware_needs_verify(self):
-        """Unknown firmware (0) → safe default: inject verify."""
+    def test_unknown_firmware_no_verify(self):
+        """Unknown firmware (0) → assume modern S30 Pro (≥ 2706): do NOT inject verify."""
         c = SeestarNativeClient("127.0.0.1")
         assert c.firmware_ver_int == 0
-        assert c._needs_verify()
+        assert not c._needs_verify()
 
     @pytest.mark.parametrize("ver,expected", [
-        (0,    True),   # unknown → inject
+        (0,    False),  # unknown → assume modern, don't inject
         (2470, False),  # < 2582 → no inject
         (2600, True),   # 2582 < ver < 2706 → inject
         (2705, True),   # boundary − 1 → inject
