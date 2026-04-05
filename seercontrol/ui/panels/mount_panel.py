@@ -471,12 +471,13 @@ class MountPanel(QWidget):
 
     def _on_connection_lost(self) -> None:
         self._log("ERROR", "Connection to mount lost.")
+        self._stop_polling()
         self._set_connected_state(False)
         self._clear_position()
         self._telescope = None
-        if self._client:
-            self._client.close()
-            self._client = None
+        if self._native:
+            self._native.disconnect()
+            self._native = None
 
     # ------------------------------------------------------------------
     # Commands
@@ -522,6 +523,7 @@ class MountPanel(QWidget):
         self._manual_dialog.show()
         self._manual_dialog.raise_()
         self._manual_dialog.activateWindow()
+        self._manual_dialog.setFocus()  # ensure keyboard events go to the dialog
 
     def _on_manual_dialog_closed(self) -> None:
         self._manual_dialog = None
@@ -565,6 +567,6 @@ class MountPanel(QWidget):
         self._stop_polling()
         if self._telescope:
             self._telescope.disconnect()
-        if self._client:
-            self._client.close()
+        if self._native:
+            self._native.disconnect()
         super().closeEvent(event)

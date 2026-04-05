@@ -11,6 +11,9 @@ Protocol details (from seestar_alp / smart-underworld):
   - Direction angles use compass convention: 0=North, 90=East, 180=South, 270=West
   - ``scope_speed_move`` starts movement for ``dur_sec`` seconds then auto-stops
   - ``iscope_stop_view`` stops any ongoing movement immediately
+  - UDP scan_iscope on port 4720 must be sent before TCP connect (guest mode unlock)
+  - ``"verify": true`` is required in params for firmware 2582–2705 only;
+    firmware ≥ 2706 is SSL-authenticated and rejects verify in dict params.
 
 Usage::
 
@@ -27,6 +30,7 @@ import json
 import logging
 import socket
 import threading
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +46,12 @@ SPEED_SLOW   = 1000
 SPEED_NORMAL = 4000
 SPEED_FAST   = 8000
 
-NATIVE_PORT = 4700
+NATIVE_PORT    = 4700
+UDP_INTRO_PORT = 4720  # Port for the UDP scan_iscope handshake (guest mode unlock)
+
+# Firmware version thresholds for verify injection (from seestar_alp source).
+_VERIFY_MIN = 2582  # First firmware that requires verify in params
+_VERIFY_MAX = 2706  # First firmware where verify in dict params is rejected (SSL auth)
 
 
 class SeestarNativeError(Exception):
@@ -66,6 +75,7 @@ class SeestarNativeClient:
         self._cmdid = 10000
         self._lock = threading.Lock()
         self._connected = False
+        self._firmware_ver_int: int = 0  # 0 = unknown until connect
 
     # ------------------------------------------------------------------
     # Connection
@@ -74,9 +84,14 @@ class SeestarNativeClient:
     def connect(self) -> None:
         """Open the TCP connection to the Seestar native API.
 
+        Sends a UDP scan_iscope handshake on port 4720 first — the Seestar
+        requires this to release guest-mode lock before accepting TCP control.
+        Then queries the firmware version to calibrate verify injection.
+
         Raises:
             SeestarNativeError: If the connection cannot be established.
         """
+        self._send_udp_intro()
         logger.debug("Native: opening TCP socket to %s:%d…", self._host, self._port)
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -91,6 +106,9 @@ class SeestarNativeClient:
                          self._host, self._port, type(exc).__name__, exc)
             raise SeestarNativeError(f"Cannot connect to {self._host}:{self._port}: {exc}") from exc
 
+        # Read firmware version so we know whether to inject "verify" in params.
+        self._detect_firmware()
+
     def disconnect(self) -> None:
         """Close the TCP connection."""
         with self._lock:
@@ -101,11 +119,17 @@ class SeestarNativeClient:
                     pass
                 self._socket = None
             self._connected = False
+            self._firmware_ver_int = 0
             logger.info("Seestar native client disconnected")
 
     @property
     def is_connected(self) -> bool:
         return self._connected
+
+    @property
+    def firmware_ver_int(self) -> int:
+        """Firmware version integer read at connect time (0 if unknown)."""
+        return self._firmware_ver_int
 
     # ------------------------------------------------------------------
     # Commands
@@ -130,11 +154,14 @@ class SeestarNativeClient:
         logger.debug("Native move: angle=%d speed=%d dur=%ds  socket=%s connected=%s",
                      angle, speed, dur_sec,
                      "ok" if self._socket else "NONE", self._connected)
-        self._send("scope_speed_move", {
+        params: dict = {
             "speed": speed,
             "angle": angle,
             "dur_sec": dur_sec,
-        })
+        }
+        if self._needs_verify():
+            params["verify"] = True
+        self._send("scope_speed_move", params)
         logger.debug("scope_speed_move sent OK")
 
     def stop(self) -> None:
@@ -149,28 +176,124 @@ class SeestarNativeClient:
         logger.debug("iscope_stop_view sent OK")
 
     # ------------------------------------------------------------------
-    # Internal
+    # Internal — firmware detection
     # ------------------------------------------------------------------
+
+    def _needs_verify(self) -> bool:
+        """Return True if this firmware version requires ``"verify": true`` in params.
+
+        - Unknown firmware (0): inject as a safe default.
+        - Firmware 2582–2705: inject required.
+        - Firmware < 2582: not required.
+        - Firmware ≥ 2706: SSL-authenticated; verify in dict params is **rejected**.
+        """
+        v = self._firmware_ver_int
+        return v == 0 or (_VERIFY_MIN < v < _VERIFY_MAX)
+
+    def _detect_firmware(self) -> None:
+        """Query get_device_state to read firmware version integer.
+
+        Sets ``self._firmware_ver_int``. Non-fatal: on any error the version
+        stays at 0 (unknown), which causes verify to be injected by default.
+        """
+        if not self._socket:
+            return
+        try:
+            payload = json.dumps({
+                "method": "get_device_state",
+                "params": {},
+                "id": self._cmdid,
+            }) + "\r\n"
+            self._cmdid += 1
+            self._socket.sendall(payload.encode("utf-8"))
+
+            # Read the response (CRLF-delimited) with a short timeout.
+            self._socket.settimeout(3.0)
+            try:
+                buf = b""
+                while b"\r\n" not in buf:
+                    chunk = self._socket.recv(65536)
+                    if not chunk:
+                        break
+                    buf += chunk
+                if b"\r\n" in buf:
+                    line = buf.split(b"\r\n")[0]
+                    data = json.loads(line)
+                    result = data.get("result", {})
+                    device = result.get("device", {}) if isinstance(result, dict) else {}
+                    self._firmware_ver_int = int(device.get("firmware_ver_int", 0))
+                    logger.info(
+                        "Native: firmware ver_int=%d  verify_needed=%s",
+                        self._firmware_ver_int, self._needs_verify(),
+                    )
+            except (socket.timeout, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                logger.warning("Native: could not parse firmware response: %s", exc)
+                self._firmware_ver_int = 0
+            finally:
+                self._socket.settimeout(None)
+
+        except OSError as exc:
+            logger.warning("Native: firmware query failed: %s", exc)
+            self._firmware_ver_int = 0
+
+    # ------------------------------------------------------------------
+    # Internal — UDP intro
+    # ------------------------------------------------------------------
+
+    def _send_udp_intro(self) -> None:
+        """Send a UDP scan_iscope handshake to unlock Seestar guest mode.
+
+        The Seestar will refuse TCP control from a new client unless it has
+        first seen this UDP message on port 4720 (documented by seestar_alp).
+        """
+        message = json.dumps({"id": 1, "method": "scan_iscope", "params": ""}).encode()
+        sock: socket.socket | None = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(1.0)
+            sock.sendto(message, (self._host, UDP_INTRO_PORT))
+            try:
+                sock.recv(1024)  # drain response (non-critical)
+            except socket.timeout:
+                pass
+            logger.debug("Native: UDP intro sent to %s:%d", self._host, UDP_INTRO_PORT)
+        except OSError as exc:
+            logger.warning("Native: UDP intro failed (non-fatal) — %s: %s", type(exc).__name__, exc)
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+        time.sleep(0.2)  # brief pause to let the Seestar process the intro
+
+    # ------------------------------------------------------------------
+    # Internal — reconnect + send
+    # ------------------------------------------------------------------
+
+    def _reconnect(self) -> None:
+        """Re-open TCP socket (called when socket is None or broken). Not thread-safe — caller holds lock."""
+        logger.warning("Native: reconnecting to %s:%d…", self._host, self._port)
+        self._send_udp_intro()
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(5)
+            s.connect((self._host, self._port))
+            s.settimeout(None)
+            self._socket = s
+            self._connected = True
+            logger.info("Native: reconnected to %s:%d", self._host, self._port)
+        except OSError as exc:
+            self._socket = None
+            self._connected = False
+            logger.error("Native: reconnect failed — %s: %s", type(exc).__name__, exc)
+            raise SeestarNativeError(f"Reconnect failed: {exc}") from exc
 
     def _send(self, method: str, params: dict | list) -> None:
         with self._lock:
             if not self._socket:
-                # Socket is gone — try once to reconnect (Seestar may close idle connections)
-                logger.warning(
-                    "Native: socket is None (was connected=%s) — attempting reconnect for %s",
-                    self._connected, method,
-                )
-                try:
-                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    s.settimeout(5)
-                    s.connect((self._host, self._port))
-                    s.settimeout(None)
-                    self._socket = s
-                    self._connected = True
-                    logger.info("Native: reconnected to %s:%d", self._host, self._port)
-                except OSError as exc:
-                    logger.error("Native: reconnect failed — %s: %s", type(exc).__name__, exc)
-                    raise SeestarNativeError(f"Not connected and reconnect failed: {exc}") from exc
+                # Seestar closes idle TCP connections — reconnect transparently
+                self._reconnect()
 
             payload = json.dumps({
                 "method": method,
@@ -182,10 +305,26 @@ class SeestarNativeClient:
             try:
                 self._socket.sendall(payload.encode("utf-8"))
             except OSError as exc:
-                logger.error(
-                    "Native: sendall failed — %s: %s  (socket reset)",
-                    type(exc).__name__, exc,
+                # Socket broke mid-send — reconnect and retry once
+                logger.warning(
+                    "Native: sendall failed (%s: %s) — reconnecting and retrying %s",
+                    type(exc).__name__, exc, method,
                 )
                 self._connected = False
                 self._socket = None
-                raise SeestarNativeError(f"Send failed: {exc}") from exc
+                self._reconnect()
+                # Retry with a new command ID
+                payload = json.dumps({
+                    "method": method,
+                    "params": params,
+                    "id": self._cmdid,
+                }) + "\r\n"
+                self._cmdid += 1
+                try:
+                    self._socket.sendall(payload.encode("utf-8"))
+                    logger.info("Native: retry succeeded for %s", method)
+                except OSError as exc2:
+                    self._connected = False
+                    self._socket = None
+                    logger.error("Native: retry also failed — %s: %s", type(exc2).__name__, exc2)
+                    raise SeestarNativeError(f"Send failed after reconnect: {exc2}") from exc2
