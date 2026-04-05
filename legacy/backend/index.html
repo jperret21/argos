@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SeerControl</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d1117;color:#e6edf3;font-family:'SF Mono','Fira Code',monospace;font-size:13px;min-height:100vh}
+:root{
+  --accent:#58a6ff;--accent2:#3fb950;--warn:#f0883e;--danger:#f85149;
+  --surface:#161b22;--surface2:#21262d;--surface3:#30363d;
+  --border:#30363d;--text:#e6edf3;--muted:#8b949e;
+}
+.app{display:grid;grid-template-rows:auto 1fr;min-height:100vh}
+header{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 20px;display:flex;align-items:center;justify-content:space-between}
+.logo{display:flex;align-items:center;gap:10px}
+.logo-icon{width:28px;height:28px;background:var(--accent);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px}
+.logo-text{font-size:15px;font-weight:600;letter-spacing:.5px}
+.logo-sub{font-size:10px;color:var(--muted);letter-spacing:1px;text-transform:uppercase}
+.session-timer{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:8px}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--surface3)}
+.dot.live{background:var(--accent2);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+main{display:grid;grid-template-columns:300px 1fr;overflow:hidden}
+.sidebar{background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;max-height:calc(100vh - 53px)}
+.panel{padding:16px;border-bottom:1px solid var(--border)}
+.panel-title{font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);margin-bottom:12px;display:flex;align-items:center;gap:6px}
+.panel-title::before{content:'';display:block;width:2px;height:10px;background:var(--accent);border-radius:1px}
+.config-row{display:flex;gap:8px;margin-bottom:8px;align-items:center}
+.config-row label{font-size:11px;color:var(--muted);min-width:36px}
+input[type=text],input[type=number]{background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:12px;font-family:inherit;width:100%;outline:none;transition:border-color .15s}
+input:focus{border-color:var(--accent)}
+.btn{border:1px solid var(--border);background:var(--surface2);color:var(--text);border-radius:6px;padding:6px 14px;font-size:12px;font-family:inherit;cursor:pointer;transition:all .15s;white-space:nowrap}
+.btn:hover{background:var(--surface3);border-color:var(--accent)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#0d1117;font-weight:600}
+.btn.primary:hover{opacity:.85}
+.btn.danger{border-color:var(--danger);color:var(--danger)}
+.btn.danger:hover{background:rgba(248,81,73,.1)}
+.btn.warn{border-color:var(--warn);color:var(--warn)}
+.btn.warn:hover{background:rgba(240,136,62,.1)}
+.btn.full{width:100%;margin-top:6px}
+.btn-row{display:flex;gap:8px;margin-top:4px}
+.badge{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:500;border:1px solid}
+.badge.connected{color:var(--accent2);border-color:var(--accent2);background:rgba(63,185,80,.1)}
+.badge.disconnected{color:var(--muted);border-color:var(--border)}
+.badge.error{color:var(--danger);border-color:var(--danger);background:rgba(248,81,73,.1)}
+.status-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.status-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px}
+.status-card .label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.status-card .value{font-size:15px;font-weight:600}
+.value.green{color:var(--accent2)}.value.warn{color:var(--warn)}.value.muted{color:var(--muted)}
+.device-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.device-name{font-size:12px}.device-sub{font-size:10px;color:var(--muted)}
+.coords-display{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:8px}
+.coords-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px}
+.coords-value{font-size:19px;font-weight:600;color:var(--accent);letter-spacing:1px}
+.coords-sub{font-size:10px;color:var(--muted);margin-top:1px}
+.slew-form{display:flex;flex-direction:column;gap:8px}
+.slew-row{display:grid;grid-template-columns:80px 1fr;align-items:center;gap:8px}
+.slew-row label{font-size:11px;color:var(--muted)}
+.controls-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.toggle-btn{border:1px solid var(--border);background:var(--surface2);color:var(--muted);border-radius:6px;padding:6px 12px;font-size:11px;font-family:inherit;cursor:pointer;transition:all .15s}
+.toggle-btn.active{border-color:var(--accent2);color:var(--accent2);background:rgba(63,185,80,.1)}
+.toggle-btn:hover{border-color:var(--text);color:var(--text)}
+.main-content{display:flex;flex-direction:column;max-height:calc(100vh - 53px)}
+.top-bar{background:var(--surface);border-bottom:1px solid var(--border);padding:10px 20px;display:flex;align-items:center;gap:12px;flex-shrink:0}
+.log-area{flex:1;padding:12px 20px;overflow-y:auto;display:flex;flex-direction:column;gap:2px}
+.log-entry{display:flex;gap:12px;align-items:flex-start;font-size:11px;line-height:1.6;padding:2px 0;border-bottom:1px solid rgba(48,54,61,.4)}
+.log-time{color:var(--muted);min-width:70px;font-size:10px;padding-top:1px}
+.log-level{min-width:50px;font-size:10px;font-weight:600;padding-top:1px}
+.log-level.INFO{color:var(--accent)}.log-level.OK{color:var(--accent2)}.log-level.WARN{color:var(--warn)}.log-level.ERROR{color:var(--danger)}.log-level.CMD{color:#d2a8ff}.log-level.DISC{color:var(--warn)}
+.log-msg{color:var(--text);flex:1}
+.empty-state{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--muted);gap:8px;padding:40px}
+.empty-text{font-size:12px;text-align:center;max-width:220px;line-height:1.7}
+
+/* Modal découverte */
+.modal-bg{position:absolute;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:100}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;width:340px;max-width:90%}
+.modal-title{font-size:13px;font-weight:600;margin-bottom:4px}
+.modal-sub{font-size:11px;color:var(--muted);margin-bottom:16px;line-height:1.6}
+.device-found{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:8px;cursor:pointer;transition:border-color .15s}
+.device-found:hover{border-color:var(--accent)}
+.device-found .df-host{font-size:13px;font-weight:600;color:var(--accent)}
+.device-found .df-info{font-size:11px;color:var(--muted);margin-top:2px}
+.scanning-indicator{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;padding:16px 0}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--surface3);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Info proxy */
+.proxy-info{background:rgba(88,166,255,.06);border:1px solid rgba(88,166,255,.25);border-radius:8px;padding:12px;margin-top:10px}
+.proxy-info .pi-title{font-size:11px;color:var(--accent);font-weight:600;margin-bottom:6px}
+.proxy-info code{font-size:10px;color:#cae1ff;background:rgba(0,0,0,.3);padding:2px 6px;border-radius:4px;display:block;margin:3px 0;line-height:1.8}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+<header>
+  <div class="logo">
+    <div class="logo-icon">&#9673;</div>
+    <div>
+      <div class="logo-text">SeerControl</div>
+      <div class="logo-sub">Seestar S30 Pro · ASCOM Alpaca</div>
+    </div>
+  </div>
+  <div class="session-timer">
+    <div class="dot" id="live-dot"></div>
+    <span id="session-time">Session : 00:00:00</span>
+  </div>
+</header>
+
+<main>
+<div class="sidebar">
+
+  <!-- Config Alpaca -->
+  <div class="panel">
+    <div class="panel-title">Connexion Alpaca</div>
+    <div class="config-row">
+      <label>Host</label>
+      <input type="text" id="alpaca-host" value="localhost" placeholder="192.168.1.x" />
+    </div>
+    <div class="config-row">
+      <label>Port</label>
+      <input type="number" id="alpaca-port" value="4700" style="max-width:90px" />
+    </div>
+    <div style="display:flex;gap:6px;margin-top:4px">
+      <button class="btn warn" style="flex:1" id="btn-discover" onclick="openDiscovery()">&#x2316; Découvrir</button>
+      <button class="btn primary" style="flex:1" id="btn-connect" onclick="connectAlpaca()">Connecter</button>
+    </div>
+    <div style="margin-top:8px;display:flex;justify-content:center">
+      <span class="badge disconnected" id="conn-badge"><span style="width:6px;height:6px;border-radius:50%;background:currentColor;display:inline-block"></span> Déconnecté</span>
+    </div>
+  </div>
+
+  <!-- Devices -->
+  <div class="panel">
+    <div class="panel-title">Dispositifs</div>
+    <div class="device-row">
+      <div><div class="device-name">Monture</div><div class="device-sub">telescope/0</div></div>
+      <span class="badge disconnected" id="mount-badge">—</span>
+    </div>
+    <div class="device-row">
+      <div><div class="device-name">Caméra ASI585MC</div><div class="device-sub">camera/0</div></div>
+      <span class="badge disconnected" id="cam-badge">—</span>
+    </div>
+    <div class="device-row" style="margin-bottom:0">
+      <div><div class="device-name">Focuser</div><div class="device-sub">focuser/0</div></div>
+      <span class="badge disconnected" id="focus-badge">—</span>
+    </div>
+  </div>
+
+  <!-- Coords -->
+  <div class="panel">
+    <div class="panel-title">Position actuelle</div>
+    <div class="coords-display">
+      <div class="coords-label">Ascension droite (RA)</div>
+      <div class="coords-value" id="ra-display">—h —m —s</div>
+      <div class="coords-sub" id="ra-deg">—</div>
+    </div>
+    <div class="coords-display">
+      <div class="coords-label">Déclinaison (Dec)</div>
+      <div class="coords-value" id="dec-display">—° —' —"</div>
+      <div class="coords-sub" id="dec-deg">—</div>
+    </div>
+    <div class="status-grid">
+      <div class="status-card"><div class="label">Tracking</div><div class="value muted" id="tracking-val">—</div></div>
+      <div class="status-card"><div class="label">Slewing</div><div class="value muted" id="slewing-val">—</div></div>
+      <div class="status-card"><div class="label">Alt</div><div class="value muted" id="alt-val">—</div></div>
+      <div class="status-card"><div class="label">Az</div><div class="value muted" id="az-val">—</div></div>
+    </div>
+  </div>
+
+  <!-- Contrôles -->
+  <div class="panel">
+    <div class="panel-title">Contrôles monture</div>
+    <div class="controls-row">
+      <button class="toggle-btn" id="btn-tracking" onclick="toggleTracking()">Tracking OFF</button>
+      <button class="btn danger" onclick="abortSlew()">&#9632; Stop</button>
+      <button class="btn" onclick="parkMount()">Park</button>
+    </div>
+    <div style="height:1px;background:var(--border);margin:10px 0"></div>
+    <div style="font-size:10px;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Goto RA / Dec</div>
+    <div class="slew-form">
+      <div class="slew-row"><label>RA (h)</label><input type="text" id="goto-ra" placeholder="ex: 10.5" /></div>
+      <div class="slew-row"><label>Dec (°)</label><input type="text" id="goto-dec" placeholder="ex: 45.0" /></div>
+      <div class="btn-row">
+        <button class="btn primary" style="flex:1" onclick="slewTo()">&#10132; Goto</button>
+        <button class="btn" onclick="fillCurrentPos()">Ici</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="main-content">
+  <div class="top-bar">
+    <span style="font-size:11px;color:var(--muted)">Journal de session</span>
+    <button class="btn" style="padding:4px 10px;font-size:11px" onclick="clearLog()">Effacer</button>
+  </div>
+  <div class="log-area" id="log-area">
+    <div class="empty-state">
+      <div style="font-size:32px;opacity:.3">&#9673;</div>
+      <div class="empty-text">Clique sur <strong style="color:var(--warn)">Découvrir</strong> pour trouver le Seestar sur le réseau, ou entre l'IP manuellement et clique <strong style="color:var(--accent)">Connecter</strong>.</div>
+    </div>
+  </div>
+</div>
+</main>
+
+<!-- Modal découverte -->
+<div class="modal-bg" id="modal-disc" style="display:none;position:fixed">
+  <div class="modal">
+    <div class="modal-title">&#x2316; Découverte Alpaca</div>
+    <div class="modal-sub" id="modal-sub">Recherche des appareils Alpaca sur le réseau local...</div>
+    <div id="modal-results"></div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn" style="flex:1" onclick="retryDiscovery()">Relancer</button>
+      <button class="btn" onclick="closeDiscovery()">Fermer</button>
+    </div>
+
+    <div class="proxy-info" id="proxy-info" style="display:none">
+      <div class="pi-title">&#9432; Proxy UDP requis</div>
+      <div style="font-size:10px;color:var(--muted);margin-bottom:6px;line-height:1.6">
+        La découverte UDP ne peut pas s'exécuter depuis un navigateur. Lance ce proxy Python sur ton Mac (une seule fois) :
+      </div>
+      <code>pip install flask flask-cors</code>
+      <code>python3 seercontrol_proxy.py</code>
+      <div style="font-size:10px;color:var(--muted);margin-top:8px;margin-bottom:4px">Contenu du fichier <span style="color:var(--accent)">seercontrol_proxy.py</span> :</div>
+      <code id="proxy-code" style="white-space:pre-wrap;line-height:1.5;font-size:9.5px;cursor:pointer" onclick="copyProxy()" title="Cliquer pour copier">— cliquer pour générer —</code>
+      <div style="font-size:10px;color:var(--muted);margin-top:6px">Tu peux aussi entrer l'IP du Seestar manuellement ci-dessus (disponible dans l'app Seestar → Réglages avancés → Station Mode).</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const PROXY = 'http://localhost:5123';
+let connected=false,tracking=false,polling=null,sessionStart=null,logEmpty=true,lastRA=null,lastDec=null;
+
+const PROXY_SCRIPT = `#!/usr/bin/env python3
+# seercontrol_proxy.py — Proxy UDP Alpaca pour SeerControl
+import socket, json, threading
+from flask import Flask, jsonify
+from flask_cors import CORS
+
+app = Flask(__name__)
+CORS(app)
+
+def discover_alpaca(timeout=8):
+    results = []
+    msg = b'alpacadiscovery1'
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    sock.settimeout(timeout)
+    sock.bind(('', 0))
+    try:
+        sock.sendto(msg, ('255.255.255.255', 32227))
+        while True:
+            try:
+                data, addr = sock.recvfrom(1024)
+                resp = json.loads(data.decode())
+                port = resp.get('AlpacaPort', 80)
+                results.append({'host': addr[0], 'port': port})
+            except socket.timeout:
+                break
+            except:
+                pass
+    finally:
+        sock.close()
+    return results
+
+@app.route('/discover')
+def discover():
+    devices = discover_alpaca()
+    return jsonify({'devices': devices})
+
+if __name__ == '__main__':
+    print('SeerControl Proxy actif sur http://localhost:5123')
+    app.run(host='localhost', port=5123)`;
+
+function base(){
+  const h=document.getElementById('alpaca-host').value.trim()||'localhost';
+  const p=document.getElementById('alpaca-port').value||'4700';
+  return `http://${h}:${p}/api/v1`;
+}
+
+async function alpacaGet(device,num,prop){
+  const url=`${base()}/${device}/${num}/${prop}?ClientID=1&ClientTransactionID=${Date.now()%1000000}`;
+  const r=await fetch(url,{signal:AbortSignal.timeout(5000)});
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  const d=await r.json();
+  if(d.ErrorNumber&&d.ErrorNumber!==0) throw new Error(d.ErrorMessage||`Err ${d.ErrorNumber}`);
+  return d.Value;
+}
+
+async function alpacaPut(device,num,prop,body){
+  const url=`${base()}/${device}/${num}/${prop}`;
+  const form=new URLSearchParams({ClientID:'1',ClientTransactionID:String(Date.now()%1000000),...body});
+  const r=await fetch(url,{method:'PUT',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form,signal:AbortSignal.timeout(8000)});
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  const d=await r.json();
+  if(d.ErrorNumber&&d.ErrorNumber!==0) throw new Error(d.ErrorMessage||`Err ${d.ErrorNumber}`);
+  return d;
+}
+
+function log(level,msg){
+  const area=document.getElementById('log-area');
+  if(logEmpty){area.innerHTML='';logEmpty=false;}
+  const now=new Date();
+  const t=`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+  const e=document.createElement('div');
+  e.className='log-entry';
+  e.innerHTML=`<span class="log-time">${t}</span><span class="log-level ${level}">${level}</span><span class="log-msg">${msg}</span>`;
+  area.appendChild(e);
+  area.scrollTop=area.scrollHeight;
+}
+
+function clearLog(){document.getElementById('log-area').innerHTML='';logEmpty=false;log('INFO','Journal effacé.');}
+
+function setBadge(id,state,label){
+  const el=document.getElementById(id);
+  el.className='badge '+state;
+  el.innerHTML=`<span style="width:6px;height:6px;border-radius:50%;background:currentColor;display:inline-block"></span> ${label}`;
+}
+
+function updateSessionTimer(){
+  if(!sessionStart) return;
+  const s=Math.floor((Date.now()-sessionStart)/1000);
+  const h=String(Math.floor(s/3600)).padStart(2,'0');
+  const m=String(Math.floor((s%3600)/60)).padStart(2,'0');
+  const ss=String(s%60).padStart(2,'0');
+  document.getElementById('session-time').textContent=`Session : ${h}:${m}:${ss}`;
+}
+
+function raToHMS(ra){
+  const h=Math.floor(ra),mT=(ra-h)*60,m=Math.floor(mT),s=((mT-m)*60).toFixed(1);
+  return `${h}h ${m}m ${s}s`;
+}
+function decToDMS(dec){
+  const sign=dec<0?'-':'+',d=Math.abs(dec),deg=Math.floor(d),mT=(d-deg)*60,m=Math.floor(mT),s=((mT-m)*60).toFixed(0);
+  return `${sign}${deg}° ${String(m).padStart(2,'0')}' ${String(s).padStart(2,'0')}"`;
+}
+
+/* ─── DÉCOUVERTE ─── */
+function openDiscovery(){
+  document.getElementById('modal-disc').style.display='flex';
+  document.getElementById('proxy-info').style.display='none';
+  document.getElementById('proxy-code').textContent=PROXY_SCRIPT;
+  startDiscovery();
+}
+function closeDiscovery(){document.getElementById('modal-disc').style.display='none';}
+function retryDiscovery(){
+  document.getElementById('proxy-info').style.display='none';
+  document.getElementById('modal-results').innerHTML='';
+  startDiscovery();
+}
+
+async function startDiscovery(){
+  const res=document.getElementById('modal-results');
+  const sub=document.getElementById('modal-sub');
+  res.innerHTML=`<div class="scanning-indicator"><span class="spinner"></span> Scan UDP Alpaca en cours (≈8s)...</div>`;
+  sub.textContent='Recherche des appareils Alpaca sur le réseau local...';
+  log('DISC','Découverte Alpaca lancée (broadcast UDP :32227)...');
+
+  try{
+    const r=await fetch(`${PROXY}/discover`,{signal:AbortSignal.timeout(12000)});
+    if(!r.ok) throw new Error('proxy error');
+    const data=await r.json();
+    const devices=data.devices||[];
+
+    res.innerHTML='';
+    if(devices.length===0){
+      sub.textContent='Aucun appareil Alpaca trouvé sur ce réseau.';
+      log('WARN','Aucun appareil Alpaca découvert. Vérifie le Station Mode et le réseau WiFi.');
+      showProxyFallback(false);
+    } else {
+      sub.textContent=`${devices.length} appareil(s) trouvé(s) — clique pour sélectionner :`;
+      log('OK',`Découverte : ${devices.length} appareil(s) Alpaca trouvé(s).`);
+      devices.forEach(d=>{
+        const el=document.createElement('div');
+        el.className='device-found';
+        el.innerHTML=`<div class="df-host">${d.host}:${d.port}</div><div class="df-info">Appareil Alpaca — cliquer pour configurer</div>`;
+        el.onclick=()=>selectDevice(d.host,d.port);
+        res.appendChild(el);
+        log('OK',`Trouvé : ${d.host}:${d.port}`);
+      });
+    }
+  }catch(e){
+    res.innerHTML='';
+    sub.textContent='Proxy non disponible — voir instructions ci-dessous.';
+    log('WARN','Proxy UDP non joignable sur localhost:5123. Lance seercontrol_proxy.py sur ton Mac.');
+    showProxyFallback(true);
+  }
+}
+
+function showProxyFallback(proxyDown){
+  document.getElementById('proxy-info').style.display='block';
+}
+
+function selectDevice(host,port){
+  document.getElementById('alpaca-host').value=host;
+  document.getElementById('alpaca-port').value=port;
+  closeDiscovery();
+  log('OK',`Appareil sélectionné : ${host}:${port} — clique sur Connecter.`);
+}
+
+function copyProxy(){
+  navigator.clipboard.writeText(PROXY_SCRIPT).then(()=>{
+    const el=document.getElementById('proxy-code');
+    el.style.color='var(--accent2)';
+    setTimeout(()=>el.style.color='',1200);
+  });
+}
+
+/* ─── CONNEXION ─── */
+async function connectAlpaca(){
+  const btn=document.getElementById('btn-connect');
+  btn.disabled=true;btn.textContent='Connexion…';
+  log('INFO',`Connexion vers ${document.getElementById('alpaca-host').value}:${document.getElementById('alpaca-port').value}...`);
+  setBadge('conn-badge','disconnected','En cours...');
+
+  let mountOk=false;
+  try{
+    const name=await alpacaGet('telescope',0,'name');
+    mountOk=true;
+    setBadge('mount-badge','connected','OK');
+    log('OK',`Monture : ${name}`);
+    await alpacaPut('telescope',0,'connected',{Connected:'true'});
+    log('OK','Monture connectée.');
+    lastRA=await alpacaGet('telescope',0,'rightascension');
+    lastDec=await alpacaGet('telescope',0,'declination');
+  }catch(e){setBadge('mount-badge','error','Err');log('ERROR',`Monture : ${e.message}`);}
+
+  try{
+    const name=await alpacaGet('camera',0,'name');
+    setBadge('cam-badge','connected','OK');
+    log('OK',`Caméra : ${name}`);
+    await alpacaPut('camera',0,'connected',{Connected:'true'});
+  }catch(e){setBadge('cam-badge','error','Err');log('WARN',`Caméra : ${e.message}`);}
+
+  try{
+    const name=await alpacaGet('focuser',0,'name');
+    setBadge('focus-badge','connected','OK');
+    log('OK',`Focuser : ${name}`);
+    await alpacaPut('focuser',0,'connected',{Connected:'true'});
+  }catch(e){setBadge('focus-badge','error','Err');log('WARN',`Focuser : ${e.message}`);}
+
+  if(mountOk){
+    connected=true;
+    setBadge('conn-badge','connected','Connecté');
+    document.getElementById('live-dot').className='dot live';
+    if(!sessionStart){sessionStart=Date.now();setInterval(updateSessionTimer,1000);}
+    startPolling();
+    log('OK','Polling actif — rafraîchissement toutes les 2s.');
+  }else{
+    setBadge('conn-badge','error','Échec');
+    log('ERROR','Monture inaccessible. Vérifie l\'IP/port et que l\'app Seestar est active sur le téléphone.');
+  }
+  btn.disabled=false;btn.textContent='Connecter';
+}
+
+function startPolling(){
+  if(polling) clearInterval(polling);
+  polling=setInterval(pollStatus,2000);
+  pollStatus();
+}
+
+async function pollStatus(){
+  if(!connected) return;
+  try{
+    const ra=await alpacaGet('telescope',0,'rightascension');
+    const dec=await alpacaGet('telescope',0,'declination');
+    const slewing=await alpacaGet('telescope',0,'slewing');
+    tracking=await alpacaGet('telescope',0,'tracking');
+
+    document.getElementById('ra-display').textContent=raToHMS(ra);
+    document.getElementById('ra-deg').textContent=`${ra.toFixed(5)} h`;
+    document.getElementById('dec-display').textContent=decToDMS(dec);
+    document.getElementById('dec-deg').textContent=`${dec.toFixed(5)} °`;
+
+    const tv=document.getElementById('tracking-val');
+    tv.textContent=tracking?'ON':'OFF';tv.className='value '+(tracking?'green':'warn');
+    const sv=document.getElementById('slewing-val');
+    sv.textContent=slewing?'OUI':'NON';sv.className='value '+(slewing?'warn':'green');
+    const tb=document.getElementById('btn-tracking');
+    tb.textContent=`Tracking ${tracking?'ON':'OFF'}`;tb.className='toggle-btn'+(tracking?' active':'');
+
+    try{
+      const alt=await alpacaGet('telescope',0,'altitude');
+      const az=await alpacaGet('telescope',0,'azimuth');
+      document.getElementById('alt-val').textContent=`${alt.toFixed(1)}°`;
+      document.getElementById('alt-val').className='value green';
+      document.getElementById('az-val').textContent=`${az.toFixed(1)}°`;
+      document.getElementById('az-val').className='value green';
+    }catch(e){}
+    lastRA=ra;lastDec=dec;
+  }catch(e){log('ERROR',`Polling : ${e.message}`);}
+}
+
+async function toggleTracking(){
+  if(!connected){log('WARN','Non connecté.');return;}
+  const newState=!tracking;
+  try{
+    log('CMD',`Tracking → ${newState?'ON':'OFF'}`);
+    await alpacaPut('telescope',0,'tracking',{Tracking:String(newState)});
+    log('OK',`Tracking ${newState?'activé':'désactivé'}.`);
+    pollStatus();
+  }catch(e){log('ERROR',`Tracking : ${e.message}`);}
+}
+
+async function slewTo(){
+  if(!connected){log('WARN','Non connecté.');return;}
+  const ra=parseFloat(document.getElementById('goto-ra').value);
+  const dec=parseFloat(document.getElementById('goto-dec').value);
+  if(isNaN(ra)||isNaN(dec)){log('WARN','RA ou Dec invalide.');return;}
+  if(ra<0||ra>=24){log('WARN','RA doit être entre 0 et 24h.');return;}
+  if(dec<-90||dec>90){log('WARN','Dec doit être entre -90° et +90°.');return;}
+  try{
+    log('CMD',`Goto → RA=${ra.toFixed(4)}h Dec=${dec.toFixed(4)}°`);
+    if(!tracking){
+      await alpacaPut('telescope',0,'tracking',{Tracking:'true'});
+      log('INFO','Tracking activé automatiquement pour le slew.');
+    }
+    await alpacaPut('telescope',0,'slewtocoordinatesasync',{RightAscension:String(ra),Declination:String(dec)});
+    log('OK','Slew initié.');pollStatus();
+  }catch(e){log('ERROR',`Slew : ${e.message}`);}
+}
+
+async function abortSlew(){
+  if(!connected){log('WARN','Non connecté.');return;}
+  try{log('CMD','AbortSlew.');await alpacaPut('telescope',0,'abortslew',{});log('OK','Slew annulé.');pollStatus();}
+  catch(e){log('ERROR',`Abort : ${e.message}`);}
+}
+
+async function parkMount(){
+  if(!connected){log('WARN','Non connecté.');return;}
+  try{log('CMD','Park...');await alpacaPut('telescope',0,'park',{});log('OK','Park en cours.');pollStatus();}
+  catch(e){log('ERROR',`Park : ${e.message}`);}
+}
+
+function fillCurrentPos(){
+  if(lastRA!==null) document.getElementById('goto-ra').value=lastRA.toFixed(4);
+  if(lastDec!==null) document.getElementById('goto-dec').value=lastDec.toFixed(4);
+  log('INFO','Coordonnées actuelles copiées dans le formulaire Goto.');
+}
+</script>
+</body>
+</html>

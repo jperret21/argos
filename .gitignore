@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Config utilisateur (IP télescope, chemins, données perso)
+config.json
+*.local.json
+~/.seercontrol/
+
+# Sessions d'acquisition (images FITS — trop lourdes pour git)
+sessions/
+*.fits
+*.fit
+*.fts
+
+# macOS
+.DS_Store
+.AppleDouble
+.Spotlight-V100
+.Trashes
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Env
+.env
+.env.*
+
+# Tests
+.pytest_cache/
+htmlcov/
+.coverage
