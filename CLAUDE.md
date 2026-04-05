@@ -215,7 +215,7 @@ class AlpacaConnectionError(AlpacaError): ...
 - GET timeout: **5s**. PUT timeout: **10s**. Exposure timeout: `duration + 15s`.
 - Always check `ErrorNumber` in every Alpaca JSON response — 0 = success, otherwise raise `AlpacaError`.
 - **Do not implement** camera ROI mode (firmware bug, see handoff.md).
-- **Do not expose Park** as a reliable action (mechanical arm not wired, see handoff.md).
+- **Park** closes the arm reliably. **Unpark** via Alpaca does not open the arm — the user must use the native Seestar app for initialization. See handoff.md for details.
 
 ---
 
@@ -369,29 +369,59 @@ This structure is directly importable in Siril via "Open as sequence".
 
 ## 7. Dependencies
 
-### Production (`requirements.txt`)
+Dependencies are declared in `pyproject.toml` and locked in `uv.lock`.
+
+### Package manager: uv (mandatory)
+
+**Never use `pip install` directly in this project.**
+This project uses [uv](https://github.com/astral-sh/uv) for all dependency management.
+`pip install` ignores the lockfile and can pull incompatible versions — e.g. PyQt6 6.11
+which crashes on macOS at startup with a cocoa platform plugin error.
+
+```bash
+# Install uv (once)
+brew install uv
+
+# Install / sync the full environment (reads uv.lock — exact versions guaranteed)
+uv sync --extra dev
+
+# Add a production dependency
+uv add package-name
+
+# Add a dev-only dependency
+uv add --optional dev package-name
+```
+
+### Why uv, not pip+venv
+
+- Creates `uv.lock` — all versions pinned exactly, like `package-lock.json` in JS
+- 10-100x faster than pip
+- Immune to conda `(base)` environment interference (active by default on this machine)
+- `uv sync` is idempotent and safe to run at any time
+
+### Production dependencies (`pyproject.toml`)
 
 ```
-PyQt6>=6.6.0
-PyQt6-Qt6>=6.6.0
-pyqtgraph>=0.13.0       # real-time image display
-requests>=2.31.0        # Alpaca HTTP calls (synchronous, runs in threads)
-astropy>=6.0.0          # FITS writing, coordinates, time
-numpy>=1.26.0           # pixel processing
+PyQt6>=6.6.0,<6.8.0      # ⚠ KEEP <6.8.0 — see note below
+PyQt6-Qt6>=6.6.0,<6.8.0
+pyqtgraph>=0.13.0
+requests>=2.31.0
+astropy>=6.0.0
+numpy>=1.26.0
 ```
 
-### Development (`requirements-dev.txt`)
+### PyQt6 version constraint — critical
 
+PyQt6 **6.8.0 and above crashes on macOS** with:
 ```
-pytest>=8.0.0
-pytest-qt>=4.4.0        # PyQt6 widget testing
-black>=24.0.0
-ruff>=0.3.0
+qt.qpa.plugin: Could not find the Qt platform plugin "cocoa"
+This application failed to start because no Qt platform plugin could be initialized.
 ```
+The `<6.8.0` constraint in `pyproject.toml` prevents this.
+**Do not relax this constraint** without testing on macOS Apple Silicon first.
 
 ### Rules for Adding Dependencies
 
-Any new dependency must answer these questions:
 1. Can an existing library already do this?
 2. Is it actively maintained (recent commit < 6 months)?
 3. Is it compatible with macOS Apple Silicon (arm64)?
@@ -402,22 +432,25 @@ Do not add scipy, OpenCV, tensorflow, or any library > 50MB without prior discus
 
 ## 8. Development Workflow
 
-### Setup
+### First-time setup
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
+brew install uv           # install package manager (once)
+uv sync --extra dev       # create .venv and install all dependencies
+```
 
+### Daily commands
+
+```bash
 # Run the app
-python main.py
+./run.sh
 
 # Tests
-pytest tests/ -v
+.venv/bin/python3.11 -m pytest tests/ -v
 
 # Format + lint
-black seercontrol/ tests/
-ruff check seercontrol/ tests/
+.venv/bin/black seercontrol/ tests/
+.venv/bin/ruff check seercontrol/ tests/
 ```
 
 ### Testing Without the Real Telescope
@@ -457,6 +490,7 @@ simulator_required = pytest.mark.skipif(
 - **Never** hardcode colors in widgets — use `theme.py` constants.
 - **Never** hardcode file paths — use `pathlib.Path` and `config.py`.
 - **Never** use `time.sleep()` in a QThread — use `QThread.msleep()`.
+- **Never** use `pip install` — use `uv add` instead to keep `uv.lock` in sync.
 - **Never** commit `config.json` (contains IP, paths, user data).
 - **Never** implement camera ROI mode (Seestar firmware bug, see handoff.md).
 - **Never** delete `handoff.md` — it is the project's technical memory.

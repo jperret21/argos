@@ -43,3 +43,6 @@ sessions/
 .pytest_cache/
 htmlcov/
 .coverage
+
+# Local reports (not for the repo)
+reports/

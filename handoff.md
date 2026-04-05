@@ -113,9 +113,12 @@ def discover_alpaca(timeout=8):
 
 ## Limitations connues du Seestar S30 Pro en Alpaca
 
-1. **Park/Unpark non câblé** : la commande Park via Alpaca ne ferme pas le bras mécaniquement — il faut ouvrir/fermer le bras depuis l'app Seestar.
-2. **Slew sans app active** : `SlewToCoordinatesAsync` échoue si l'app Seestar n'est pas active sur le téléphone (bug connu firmware Alpaca 1.1.3). Avec l'app active, ça fonctionne.
-3. **Horloge désynchronisée** : quand l'app téléphone n'est pas active, la monture peut signaler une grosse différence d'horloge avec le PC (~217M secondes).
+1. **Park/Unpark — comportement réel (testé 2026-04-05)** :
+   - `Park` ferme le bras mécaniquement ✅ — mais seulement si on envoie d'abord `Unpark` via Alpaca (le device se croit parké même quand l'app native a ouvert le bras physiquement sans passer par Alpaca). Fix implémenté dans `telescope.py`.
+   - `Unpark` via Alpaca n'ouvre pas le bras physiquement sur le Seestar S30 Pro ❌.
+   - **Décision produit v1** : l'initialisation du télescope (ouverture du bras, alignement) se fait via l'app native Seestar. SeerControl prend le relais une fois le télescope opérationnel. Cette limitation sera adressée en Phase 6 (plate solving intégré).
+2. **Alignment et plate solving** : Le Seestar utilise son IMU pour l'orientation grossière, mais la précision de pointage dépend du plate solving fait par l'app native au démarrage. **Workflow obligatoire** : (1) lancer l'app Seestar native → laisser faire l'alignement automatique (photos du ciel), (2) garder l'app active en arrière-plan, (3) connecter SeerControl via Alpaca. Sans cette étape, `SlewToCoordinatesAsync` échoue ou pointe à côté (bug firmware Alpaca 1.1.3).
+3. **Horloge désynchronisée** : bug dans le driver Alpaca < 3.0.2 — la monture rapporte ~217M secondes de décalage, ce qui fait échouer SlewToCoordinatesAsync. Fix implémenté : on envoie UTCDate à la connexion (même fix que NINA). Corrigé dans le firmware Seestar app v3.0.2+.
 4. **ROI caméra cassé** : le mode ROI de la caméra génère une erreur dans le driver Alpaca du Seestar — ne pas implémenter pour l'instant.
 5. **CORS** : le Seestar peut bloquer les requêtes fetch() directes depuis le navigateur — le proxy Python résout ce problème.
 

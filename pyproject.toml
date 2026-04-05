@@ -1,0 +1,32 @@
+[project]
+name = "seercontrol"
+version = "0.1.0"
+description = "Astrophotography control for ZWO Seestar S30 Pro via ASCOM Alpaca"
+requires-python = ">=3.11,<3.12"
+
+dependencies = [
+    "PyQt6>=6.6.0,<6.8.0",
+    "PyQt6-Qt6>=6.6.0,<6.8.0",
+    "pyqtgraph>=0.13.0",
+    "requests>=2.31.0",
+    "astropy>=6.0.0",
+    "numpy>=1.26.0",
+    "alpyca>=3.1.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-qt>=4.4.0",
+    "black>=24.0.0",
+    "ruff>=0.3.0",
+]
+
+[tool.uv]
+python-preference = "only-system"
+
+[tool.black]
+line-length = 100
+
+[tool.ruff]
+line-length = 100
