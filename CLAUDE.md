@@ -302,10 +302,10 @@ IMAGETYP= 'Light Frame'             # 'Light Frame', 'Dark Frame', 'Flat Frame',
 # Instrument
 TELESCOP= 'ZWO Seestar S30 Pro'
 INSTRUME= 'IMX585'
-FOCALLEN= 150                       # mm — Seestar S30 Pro focal length
+FOCALLEN= 160                       # mm — Seestar S30 Pro focal length
 XPIXSZ  = 2.9                       # µm — IMX585 pixel size
 YPIXSZ  = 2.9
-BAYERPAT= 'RGGB'                    # IMX585 Bayer pattern
+BAYERPAT= 'GRBG'                    # IMX585 Bayer pattern (Sony GRBG — NOT RGGB)
 
 # Pointing (read from Alpaca at exposure start)
 RA      = <decimal hours J2000>
