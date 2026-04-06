@@ -173,6 +173,7 @@ class ManualControlDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _start(self, angle: int) -> None:
+        logger.info("ManualControl: button pressed — angle=%d speed=%d", angle, self._speed)
         self._angle = angle
         self._send_move()
         self._timer.start()
@@ -180,6 +181,7 @@ class ManualControlDialog(QDialog):
     def _stop(self) -> None:
         self._timer.stop()
         self._angle = None
+        logger.info("ManualControl: button released — sending stop")
         logger.debug("_stop called — native.is_connected=%s socket=%s",
                      self._native.is_connected,
                      "ok" if self._native._socket else "NONE")

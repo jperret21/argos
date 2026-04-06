@@ -143,6 +143,10 @@ class SeestarNativeClient:
         # Read firmware version (reader thread handles responses now).
         self._detect_firmware()
 
+        # Claim master-CLI control — without this the Seestar is in observer mode:
+        # it sends events but ignores all control commands (scope_speed_move etc.).
+        self._claim_master_cli()
+
     def disconnect(self) -> None:
         """Close the TCP connection and stop background threads."""
         self._stop_event.set()
@@ -210,45 +214,68 @@ class SeestarNativeClient:
         """Continuously read CRLF-delimited JSON messages from the socket.
 
         Stores responses keyed by their ``id`` field in ``_response_dict``.
-        Unsolicited events (no id) are logged at DEBUG level and discarded.
+        Unsolicited events (no id) are logged at INFO level.
         """
         buf = b""
-        logger.debug("Native reader thread started")
+        logger.info("Native reader thread started")
         while not self._stop_event.is_set():
             sock = self._socket
             if sock is None:
                 time.sleep(0.1)
                 continue
             try:
-                sock.settimeout(1.0)
+                # Use select to wait for data without modifying socket timeout
+                # (avoids race with sendall in _send).
+                import select
+                ready, _, _ = select.select([sock], [], [], 1.0)
+                if not ready:
+                    continue
                 chunk = sock.recv(65536)
                 if not chunk:
-                    # Server closed connection.
                     logger.warning("Native: reader — server closed connection")
                     self._connected = False
                     break
+                logger.info("Native: reader received %d bytes: %r", len(chunk), chunk[:200])
                 buf += chunk
-            except socket.timeout:
-                continue
-            except OSError:
-                # Socket closed by disconnect() or BrokenPipe.
+            except OSError as exc:
+                if not self._stop_event.is_set():
+                    logger.warning("Native: reader OSError: %s", exc)
                 break
 
             # Parse all complete messages in the buffer.
-            while b"\r\n" in buf:
-                line, buf = buf.split(b"\r\n", 1)
+            # Try both \r\n and \n as delimiters (some firmware variants).
+            while True:
+                # Find the earliest line ending.
+                idx_crlf = buf.find(b"\r\n")
+                idx_lf   = buf.find(b"\n")
+                if idx_crlf == -1 and idx_lf == -1:
+                    break
+                if idx_crlf == -1:
+                    idx = idx_lf
+                    end = idx + 1
+                elif idx_lf == -1 or idx_crlf <= idx_lf:
+                    idx = idx_crlf
+                    end = idx + 2
+                else:
+                    idx = idx_lf
+                    end = idx + 1
+
+                line = buf[:idx]
+                buf  = buf[end:]
                 if not line:
                     continue
+
+                logger.info("Native: reader parsed line: %r", line[:300])
                 try:
                     msg = json.loads(line)
-                except json.JSONDecodeError:
-                    logger.debug("Native: reader — malformed JSON: %r", line[:120])
+                except json.JSONDecodeError as exc:
+                    logger.warning("Native: reader malformed JSON (%s): %r", exc, line[:200])
                     continue
 
                 msg_id = msg.get("id")
                 if msg_id is None:
-                    # Unsolicited event (no id).
-                    logger.debug("Native: unsolicited event: %s", msg.get("method", "?"))
+                    logger.info("Native: unsolicited event: method=%s  full=%s",
+                                msg.get("method", "?"), msg)
                     continue
 
                 code = msg.get("code", 0)
@@ -262,7 +289,7 @@ class SeestarNativeClient:
                 with self._response_lock:
                     self._response_dict[msg_id] = msg
 
-        logger.debug("Native reader thread exited")
+        logger.info("Native reader thread exited")
 
     def _heartbeat_loop(self) -> None:
         """Send scope_get_equ_coord every _HEARTBEAT_INTERVAL seconds.
@@ -279,6 +306,28 @@ class SeestarNativeClient:
                 except OSError as exc:
                     logger.debug("Native: heartbeat failed: %s", exc)
         logger.debug("Native heartbeat thread exited")
+
+    # ------------------------------------------------------------------
+    # Internal — guest mode / master CLI
+    # ------------------------------------------------------------------
+
+    def _claim_master_cli(self) -> None:
+        """Claim master CLI control so the Seestar accepts control commands.
+
+        Without this the device stays in observer mode: it sends periodic
+        events (PiStatus, EqModePA …) but silently ignores all commands like
+        scope_speed_move.  seestar_alp calls this its "guest_mode_init".
+
+        Only firmware > 2300 requires the claim.  Since our firmware detection
+        often times out (device takes > 5s to respond to get_device_state),
+        we always attempt the claim — it is a no-op on older firmware.
+        """
+        logger.info("Native: claiming master CLI control (guest_mode_init)…")
+        try:
+            self._send("set_setting", {"master_cli": True})
+            logger.info("Native: master CLI claimed — device should now accept commands")
+        except SeestarNativeError as exc:
+            logger.warning("Native: master CLI claim failed (non-fatal): %s", exc)
 
     # ------------------------------------------------------------------
     # Internal — firmware detection
@@ -302,7 +351,8 @@ class SeestarNativeClient:
             return
         target_id = self._cmdid
         try:
-            self._send_raw("get_device_state", {})
+            # seestar_alp sends get_device_state without a params key — omit it.
+            self._send_raw("get_device_state", None)
         except OSError as exc:
             logger.warning("Native: firmware query failed: %s", exc)
             return
@@ -377,14 +427,22 @@ class SeestarNativeClient:
             logger.error("Native: reconnect failed — %s: %s", type(exc).__name__, exc)
             raise SeestarNativeError(f"Reconnect failed: {exc}") from exc
 
-    def _send_raw(self, method: str, params: dict | list) -> None:
-        """Send without waiting for response (used by heartbeat + detect_firmware)."""
+    def _send_raw(self, method: str, params: dict | list | None) -> None:
+        """Send without waiting for response (used by heartbeat + detect_firmware).
+
+        Pass params=None to omit the params key entirely (required by some methods
+        such as get_device_state — seestar_alp omits it and the firmware rejects
+        an explicit empty dict for those methods).
+        """
         with self._lock:
             if not self._socket:
                 return
             cmd_id = self._cmdid
             self._cmdid += 1
-            payload = json.dumps({"method": method, "params": params, "id": cmd_id}) + "\r\n"
+            msg: dict = {"method": method, "id": cmd_id}
+            if params is not None:
+                msg["params"] = params
+            payload = json.dumps(msg) + "\r\n"
             self._socket.sendall(payload.encode("utf-8"))
 
     def _send(self, method: str, params: dict | list) -> None:

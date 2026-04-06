@@ -9,8 +9,8 @@ unset VIRTUAL_ENV
 unset CONDA_PREFIX
 unset CONDA_DEFAULT_ENV
 
-# Ensure all dependencies (including dev extras) are installed before launching.
-/opt/homebrew/bin/uv sync --extra dev --quiet
+# Sync production dependencies only (dev extras like pytest/simulator not needed to run).
+/opt/homebrew/bin/uv sync --quiet
 
 # PyQt6 platform plugin path — Qt does not auto-discover this in uv venvs on macOS.
 # Without this, QApplication crashes with "Could not find the Qt platform plugin cocoa".
