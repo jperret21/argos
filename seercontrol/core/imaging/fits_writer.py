@@ -111,8 +111,8 @@ class FITSWriter:
 
         height, width = arr.shape
 
-        # FITS stores uint16 as signed int16 with BZERO=32768 offset
-        data_signed = arr.astype(np.int16)
+        # Pass uint16 directly — astropy sets BZERO=32768 / BSCALE=1 automatically.
+        # Manual int16 conversion + header BZERO is stripped by astropy on write.
 
         # ------------------------------------------------------------------ #
         # Timing                                                               #
@@ -208,7 +208,7 @@ class FITSWriter:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        hdu = fits.PrimaryHDU(data=data_signed, header=hdr)
+        hdu = fits.PrimaryHDU(data=arr, header=hdr)
         hdu.writeto(str(path), overwrite=True)
         logger.info("FITS saved: %s  (%dx%d  %.1fs  gain=%d)", path.name, width, height, exposure_time, gain)
 
