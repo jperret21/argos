@@ -25,8 +25,12 @@ from seercontrol.core.config import Config
 from seercontrol.ui import theme
 from seercontrol.ui.panels.camera_panel import CameraPanel
 from seercontrol.ui.panels.mount_panel import MountPanel
+from seercontrol.ui.panels.sequencer_panel import SequencerPanel
 
 logger = logging.getLogger(__name__)
+
+_CFG_GEOMETRY = "ui.window_geometry"
+_CFG_STATE    = "ui.window_state"
 
 
 class _PlaceholderPanel(QWidget):
@@ -130,69 +134,74 @@ class MainWindow(QMainWindow):
         """Create all dockable panels and register them in the View menu."""
         self._docks: dict[str, QDockWidget] = {}
 
-        # Mount panel
         self._mount_panel = MountPanel(config=self._config, parent=self)
         self._mount_panel.log_message.connect(self._on_log_message)
         self._mount_panel.status_changed.connect(self._on_status_changed)
 
-        # Camera panel
         self._camera_panel = CameraPanel(config=self._config, parent=self)
         self._camera_panel.log_message.connect(self._on_log_message)
         self._camera_panel.status_changed.connect(self._on_status_changed)
 
-        real_panels: list[tuple[str, Qt.DockWidgetArea, QWidget]] = [
-            ("Mount",  Qt.DockWidgetArea.LeftDockWidgetArea,  self._mount_panel),
-            ("Camera", Qt.DockWidgetArea.RightDockWidgetArea, self._camera_panel),
-        ]
+        self._sequencer_panel = SequencerPanel(config=self._config, parent=self)
+        self._sequencer_panel.log_message.connect(self._on_log_message)
+        self._sequencer_panel.status_changed.connect(self._on_status_changed)
+        self._camera_panel.camera_connected.connect(self._sequencer_panel.set_camera)
+        self._mount_panel.telescope_connected.connect(self._sequencer_panel.set_telescope)
 
+        real_panels: list[tuple[str, Qt.DockWidgetArea, QWidget]] = [
+            ("Mount",     Qt.DockWidgetArea.LeftDockWidgetArea,  self._mount_panel),
+            ("Camera",    Qt.DockWidgetArea.RightDockWidgetArea, self._camera_panel),
+            ("Sequencer", Qt.DockWidgetArea.RightDockWidgetArea, self._sequencer_panel),
+        ]
         placeholder_panels: list[tuple[str, Qt.DockWidgetArea]] = [
-            ("Sequencer",    Qt.DockWidgetArea.RightDockWidgetArea),
             ("Focuser",      Qt.DockWidgetArea.LeftDockWidgetArea),
             ("Filter Wheel", Qt.DockWidgetArea.LeftDockWidgetArea),
             ("Sky Map",      Qt.DockWidgetArea.BottomDockWidgetArea),
             ("Session Log",  Qt.DockWidgetArea.BottomDockWidgetArea),
         ]
-
-        first_right: QDockWidget | None = None
-        first_bottom: QDockWidget | None = None
-
         all_panels: list[tuple[str, Qt.DockWidgetArea, QWidget]] = (
             real_panels
             + [(name, area, _PlaceholderPanel(name)) for name, area in placeholder_panels]
         )
 
+        first_right: QDockWidget | None = None
+        first_bottom: QDockWidget | None = None
         for name, area, widget in all_panels:
-            dock = QDockWidget(name.upper(), self)
-            dock.setObjectName(f"dock_{name.replace(' ', '_').lower()}")
-            dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
-            dock.setWidget(widget)
-
-            self.addDockWidget(area, dock)
-
-            if area == Qt.DockWidgetArea.RightDockWidgetArea:
-                if first_right is None:
-                    first_right = dock
-                else:
-                    self.tabifyDockWidget(first_right, dock)
-            elif area == Qt.DockWidgetArea.BottomDockWidgetArea:
-                if first_bottom is None:
-                    first_bottom = dock
-                else:
-                    self.tabifyDockWidget(first_bottom, dock)
-
-            self._docks[name] = dock
-
-            toggle = dock.toggleViewAction()
-            toggle.setText(name)
-            self._view_menu.insertAction(
-                self._view_menu.actions()[0] if self._view_menu.actions() else None,
-                toggle,
-            )
+            dock = self._make_dock(name, area, widget)
+            first_right  = self._tabify(dock, area, Qt.DockWidgetArea.RightDockWidgetArea,  first_right)
+            first_bottom = self._tabify(dock, area, Qt.DockWidgetArea.BottomDockWidgetArea, first_bottom)
 
         if first_right:
             first_right.raise_()
         if first_bottom:
             first_bottom.raise_()
+
+    def _make_dock(self, name: str, area: Qt.DockWidgetArea, widget: QWidget) -> QDockWidget:
+        dock = QDockWidget(name.upper(), self)
+        dock.setObjectName(f"dock_{name.replace(' ', '_').lower()}")
+        dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        dock.setWidget(widget)
+        self.addDockWidget(area, dock)
+        self._docks[name] = dock
+        toggle = dock.toggleViewAction()
+        toggle.setText(name)
+        actions = self._view_menu.actions()
+        self._view_menu.insertAction(actions[0] if actions else None, toggle)
+        return dock
+
+    def _tabify(
+        self,
+        dock: QDockWidget,
+        dock_area: Qt.DockWidgetArea,
+        target_area: Qt.DockWidgetArea,
+        first: QDockWidget | None,
+    ) -> QDockWidget | None:
+        if dock_area != target_area:
+            return first
+        if first is None:
+            return dock
+        self.tabifyDockWidget(first, dock)
+        return first
 
     def _on_log_message(self, level: str, message: str) -> None:
         """Relay log messages from panels to the status bar (until LogPanel is built)."""
@@ -219,8 +228,8 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _restore_state(self) -> None:
-        geometry_b64 = self._config.get("ui.window_geometry")
-        state_b64 = self._config.get("ui.window_state")
+        geometry_b64 = self._config.get(_CFG_GEOMETRY)
+        state_b64 = self._config.get(_CFG_STATE)
 
         if geometry_b64:
             try:
@@ -237,13 +246,13 @@ class MainWindow(QMainWindow):
     def _save_state(self) -> None:
         geometry_b64 = base64.b64encode(bytes(self.saveGeometry())).decode()
         state_b64 = base64.b64encode(bytes(self.saveState())).decode()
-        self._config.set("ui.window_geometry", geometry_b64)
-        self._config.set("ui.window_state", state_b64)
+        self._config.set(_CFG_GEOMETRY, geometry_b64)
+        self._config.set(_CFG_STATE, state_b64)
 
     def _reset_layout(self) -> None:
         """Reset all docks to their default positions."""
-        self._config.set("ui.window_geometry", None)
-        self._config.set("ui.window_state", None)
+        self._config.set(_CFG_GEOMETRY, None)
+        self._config.set(_CFG_STATE, None)
         logger.info("Layout reset — restart to apply")
         self.statusBar().showMessage("Layout will reset on next launch.", 4000)
 
@@ -284,6 +293,7 @@ class MainWindow(QMainWindow):
         # Stop all workers before widgets are destroyed — prevents Qt fatal crash
         self._mount_panel.shutdown()
         self._camera_panel.shutdown()
+        self._sequencer_panel.shutdown()
         self._save_state()
         logger.info("MainWindow closed, state saved")
         super().closeEvent(event)

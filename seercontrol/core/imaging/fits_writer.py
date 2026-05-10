@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,9 +29,11 @@ _INSTRUMENT = "IMX585"
 
 logger = logging.getLogger(__name__)
 
+LIGHT_FRAME = "Light Frame"
+
 # Mapping from UI image type to FITS IMAGETYP value
 IMAGE_TYPE_MAP = {
-    "light": "Light Frame",
+    "light": LIGHT_FRAME,
     "dark":  "Dark Frame",
     "flat":  "Flat Frame",
     "bias":  "Bias Frame",
@@ -45,6 +48,37 @@ FILTER_ABBREV = {
     "IR-cut": "IRc",
 }
 
+# Siril OSC script expected lowercase folder names per image type
+_SIRIL_FOLDER: dict[str, str] = {
+    LIGHT_FRAME: "lights",
+    "Dark Frame":  "darks",
+    "Flat Frame":  "flats",
+    "Bias Frame":  "biases",
+}
+
+_DT_FMT = "%Y-%m-%dT%H:%M:%S.%f"
+
+
+@dataclass
+class FITSMeta:
+    """Optional metadata written to FITS headers.
+
+    Group pointing, target, filter, observer, and site info into one object
+    so that FITSWriter.write() stays under the linter's parameter limit.
+    """
+
+    image_type:  str            = LIGHT_FRAME
+    object_name: str            = ""
+    filter_name: str            = "LRGB"
+    ra:          float | None   = None   # decimal hours J2000
+    dec:         float | None   = None   # decimal degrees J2000
+    altitude:    float | None   = None
+    azimuth:     float | None   = None
+    observer:    str            = ""
+    site_lat:    float | None   = None
+    site_lon:    float | None   = None
+    site_elev:   float | None   = None
+
 
 class FITSWriter:
     """Writes science-grade FITS files for Seestar S30 Pro.
@@ -58,7 +92,7 @@ class FITSWriter:
             exposure_end=datetime_utc,
             exposure_time=10.0,
             gain=80,
-            image_type="Light Frame",
+            image_type=LIGHT_FRAME,
         )
     """
 
@@ -70,7 +104,7 @@ class FITSWriter:
         exposure_end: datetime,
         exposure_time: float,
         gain: int,
-        image_type: str = "Light Frame",
+        image_type: str = LIGHT_FRAME,
         ra: float | None = None,
         dec: float | None = None,
         altitude: float | None = None,
@@ -91,7 +125,7 @@ class FITSWriter:
             exposure_end:   UTC datetime when ImageReady became True.
             exposure_time:  Commanded exposure duration in seconds.
             gain:           Camera gain value used for this frame.
-            image_type:     FITS IMAGETYP string ("Light Frame", "Dark Frame", …).
+            image_type:     FITS IMAGETYP string (LIGHT_FRAME, "Dark Frame", …).
             ra:             Target RA in decimal hours (J2000), or None.
             dec:            Target Dec in decimal degrees (J2000), or None.
             altitude:       Mount altitude in degrees at exposure start, or None.
@@ -128,9 +162,9 @@ class FITSWriter:
         t_start = Time(exposure_start)
         t_mid   = Time(mid)
 
-        date_obs = exposure_start.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
-        date_avg = mid.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
-        date_loc = exposure_start.astimezone().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
+        date_obs = exposure_start.strftime(_DT_FMT)[:-3]
+        date_avg = mid.strftime(_DT_FMT)[:-3]
+        date_loc = exposure_start.astimezone().strftime(_DT_FMT)[:-3]
 
         # ------------------------------------------------------------------ #
         # Build header                                                         #
@@ -254,30 +288,29 @@ class FITSWriter:
         object_name: str,
         exposure_start: datetime,
         image_type: str,
-        filter_name: str,
+        filter_name: str = "",
     ) -> Path:
         """Return the Siril-compatible session folder for a given frame.
 
-        Structure::
+        Structure (lowercase folder names as expected by Siril's built-in scripts)::
 
-            {base_dir}/sessions/{YYYYMMDD}_{OBJECT}/{ImageType}/{Filter}/
+            {base_dir}/{YYYYMMDD}_{OBJECT}/{frame_type}/
 
         Args:
-            base_dir:       Root output directory (from config).
-            object_name:    Target name.
+            base_dir:       Root output directory chosen by the user.
+            object_name:    Target name (used for Lights; "calibration" otherwise).
             exposure_start: Frame timestamp.
-            image_type:     FITS IMAGETYP string.
-            filter_name:    Filter name.
+            image_type:     FITS IMAGETYP string (LIGHT_FRAME, "Dark Frame", …).
+            filter_name:    Unused (kept for backward compatibility).
 
         Returns:
             Path to the output folder (not yet created).
         """
-        obj  = _sanitize(object_name) or "Unknown"
+        obj  = _sanitize(object_name) if object_name else "calibration"
         date = exposure_start.strftime("%Y%m%d")
-        typ  = image_type.replace(" Frame", "") + "s"  # e.g. "Lights"
-        filt = _sanitize(FILTER_ABBREV.get(filter_name, filter_name))
+        typ  = _SIRIL_FOLDER.get(image_type, "misc")
 
-        return base_dir / "sessions" / f"{date}_{obj}" / typ / filt
+        return base_dir / f"{date}_{obj}" / typ
 
 
 # --------------------------------------------------------------------------- #
