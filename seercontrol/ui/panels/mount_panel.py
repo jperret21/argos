@@ -63,7 +63,6 @@ class MountPanel(QWidget):
 
         self._build_ui()
         self._load_config()
-        self.setMaximumWidth(270)
 
     # ------------------------------------------------------------------
     # UI construction

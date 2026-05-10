@@ -156,7 +156,8 @@ QPushButton {{
     color: {TEXT_PRIMARY};
     border: 1px solid {SURFACE_4};
     border-radius: 2px;
-    padding: 5px 14px;
+    padding: 6px 12px;
+    min-height: 26px;
     font-size: 11px;
     font-family: {FONT_UI};
     letter-spacing: 0.5px;
@@ -214,7 +215,8 @@ QLineEdit, QSpinBox, QDoubleSpinBox {{
     color: {TEXT_PRIMARY};
     border: 1px solid {SURFACE_4};
     border-radius: 2px;
-    padding: 4px 8px;
+    padding: 5px 8px;
+    min-height: 24px;
     font-family: {FONT_MONO};
     font-size: 11px;
     selection-background-color: {ACCENT};
@@ -249,7 +251,8 @@ QComboBox {{
     color: {TEXT_PRIMARY};
     border: 1px solid {SURFACE_4};
     border-radius: 2px;
-    padding: 4px 8px;
+    padding: 5px 8px;
+    min-height: 24px;
     font-size: 11px;
 }}
 

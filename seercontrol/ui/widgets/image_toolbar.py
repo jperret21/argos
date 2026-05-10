@@ -54,7 +54,8 @@ class ImageToolbar(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setFixedHeight(36)
+        self.setMinimumHeight(38)
+        self.setMaximumHeight(48)
         self.setStyleSheet(
             f"background-color: {theme.SURFACE_3};"
             f"border-bottom: 1px solid {theme.SURFACE_4};"
@@ -69,8 +70,7 @@ class ImageToolbar(QWidget):
         # ── Channel ────────────────────────────────────────────────────
         layout.addWidget(_lbl("Channel:"))
         self._channel_combo = QComboBox()
-        self._channel_combo.setFixedHeight(24)
-        self._channel_combo.setFixedWidth(72)
+        self._channel_combo.setMinimumWidth(68)
         self._channel_combo.setStyleSheet("font-size: 11px;")
         for ch in ["Raw", "R", "G", "B", "RGB"]:
             self._channel_combo.addItem(ch)
@@ -109,9 +109,8 @@ class ImageToolbar(QWidget):
 
         # ── Auto stretch ───────────────────────────────────────────────
         self._auto_btn = QPushButton("Auto ☀")
-        self._auto_btn.setFixedHeight(24)
-        self._auto_btn.setFixedWidth(64)
-        self._auto_btn.setStyleSheet("font-size: 11px; padding: 2px 6px;")
+        self._auto_btn.setMinimumWidth(60)
+        self._auto_btn.setStyleSheet("font-size: 11px;")
         self._auto_btn.setToolTip("Reset display levels to 1%–99% percentile")
         self._auto_btn.clicked.connect(self.auto_stretch_requested)
         layout.addWidget(self._auto_btn)
