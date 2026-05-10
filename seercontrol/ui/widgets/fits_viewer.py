@@ -74,6 +74,16 @@ class FitsViewer(QWidget):
             self._auto_stretch()
             self._first_frame = False
 
+    def set_levels(self, black: float, white: float) -> None:
+        """Apply manual black/white point to the display.
+
+        Args:
+            black: Black point in pixel units (0–65535 for uint16, 0–255 for uint8).
+            white: White point in pixel units.
+        """
+        if white > black:
+            self._view.setLevels(black, white)
+
     def set_gamma(self, value: float) -> None:
         """Set gamma correction value and re-render the last frame.
 
@@ -93,7 +103,7 @@ class FitsViewer(QWidget):
         Returns:
             Gamma-corrected array of the same dtype and shape.
         """
-        if self._gamma == 1.0:
+        if abs(self._gamma - 1.0) < 1e-6:
             return arr
 
         if arr.ndim == 2:
