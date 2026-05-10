@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from pathlib import Path
 
 import numpy as np
 from PyQt6.QtCore import Qt, QRunnable, QThreadPool, pyqtSignal
@@ -190,7 +189,10 @@ class CameraPanel(QWidget):
         return self._viewer
 
     def _update_save_dir_label(self) -> None:
-        base = Path(self._config.output_dir) if hasattr(self._config, "output_dir") else Path.home() / "SeerControl"
+        # FITSWriter.session_folder appends ``sessions/{date}_{obj}/...`` to its
+        # base argument, so we feed it the parent of ``sessions_path`` to avoid
+        # ending up with ``.../sessions/sessions/...``.
+        base = self._config.sessions_path.parent
         self._save_dir_lbl.setText(str(base / "sessions" / "…"))
 
     # ------------------------------------------------------------------
@@ -329,7 +331,8 @@ class CameraPanel(QWidget):
         filter_name = self._filter_combo.currentText()
         frame_idx  = self._frame_index
 
-        base = Path(self._config.output_dir) if hasattr(self._config, "output_dir") else Path.home() / "SeerControl"
+        # session_folder appends "sessions/..." itself — feed it sessions_path's parent.
+        base = self._config.sessions_path.parent
         folder = FITSWriter.session_folder(base, obj_name, start_dt, "Light Frame", filter_name)
         filename = FITSWriter.build_filename(obj_name, "Light Frame", start_dt, exposure, filter_name, frame_idx)
         path = folder / filename
