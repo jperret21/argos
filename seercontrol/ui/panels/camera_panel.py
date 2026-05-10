@@ -56,8 +56,9 @@ class CameraPanel(QWidget):
         status_changed: Short status string for the main window status bar.
     """
 
-    log_message    = pyqtSignal(str, str)
-    status_changed = pyqtSignal(str)
+    log_message      = pyqtSignal(str, str)
+    status_changed   = pyqtSignal(str)
+    camera_connected = pyqtSignal(object)   # Camera instance (or None on disconnect)
 
     def __init__(self, config: Config, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -264,6 +265,7 @@ class CameraPanel(QWidget):
                 f"gain {self._camera.gain_min}–{self._camera.gain_max}",
             )
             self._set_connected(True)
+            self.camera_connected.emit(self._camera)
 
         except AlpacaError as exc:
             self._log("ERROR", f"Camera connection failed: {exc}")
@@ -279,6 +281,7 @@ class CameraPanel(QWidget):
         self._frame_index = 0
         self._hfd_lbl.setText("—")
         self._log("INFO", "Camera disconnected.")
+        self.camera_connected.emit(None)
 
     def _set_connected(self, connected: bool) -> None:
         self._connect_btn.setEnabled(not connected)

@@ -49,8 +49,9 @@ class MountPanel(QWidget):
         status_changed: Emitted with a short status string for the main window status bar.
     """
 
-    log_message = pyqtSignal(str, str)       # (level, message)
-    status_changed = pyqtSignal(str)
+    log_message          = pyqtSignal(str, str)   # (level, message)
+    status_changed       = pyqtSignal(str)
+    telescope_connected  = pyqtSignal(object)     # Telescope instance (or None on disconnect)
 
     def __init__(self, config: Config, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -350,6 +351,7 @@ class MountPanel(QWidget):
             self._log("OK", f"Connected: {name}")
             self._set_connected_state(True)
             self._start_polling()
+            self.telescope_connected.emit(self._telescope)
 
         except AlpacaError as exc:
             self._log("ERROR", f"Connection failed: {exc}")
@@ -362,6 +364,7 @@ class MountPanel(QWidget):
         if self._telescope:
             self._telescope.disconnect()
             self._telescope = None
+        self.telescope_connected.emit(None)
 
         self._set_connected_state(False)
         self._clear_position()
@@ -455,6 +458,7 @@ class MountPanel(QWidget):
         self._set_connected_state(False)
         self._clear_position()
         self._telescope = None
+        self.telescope_connected.emit(None)
 
     # ------------------------------------------------------------------
     # Commands
