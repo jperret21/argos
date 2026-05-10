@@ -453,6 +453,54 @@ uv sync --extra dev       # create .venv and install all dependencies
 .venv/bin/ruff check seercontrol/ tests/
 ```
 
+### Git Workflow
+
+#### Branch strategy
+
+```
+main        — stable, tagged releases only. Never commit directly.
+develop     — integration branch. All features land here first.
+feat/<name> — new features (e.g. feat/preview-port-4801)
+fix/<name>  — bug fixes  (e.g. fix/imagearray-timeout)
+chore/<name>— tooling, deps, config (e.g. chore/update-deps)
+docs/<name> — documentation only
+```
+
+Rules:
+- `main` is updated only via PR from `develop`, after validation.
+- Every task starts with a branch cut from `develop`.
+- Claude Code manages commits and branch creation for all coding tasks.
+- No direct commits to `main` or `develop` — always branch + PR.
+
+#### Commit message format (Conventional Commits)
+
+```
+<type>(<scope>): <short description>
+
+Types  : feat | fix | chore | docs | refactor | test | perf
+Scope  : native | alpaca | camera | mount | ui | sequencer | fits | config
+Examples:
+  feat(native): add port 4801 binary frame receiver
+  fix(camera): fallback to JSON if ImageBytes unsupported
+  chore(deps): pin PyQt6 < 6.8.0
+  docs(claude): add git workflow section
+```
+
+#### Workflow for a new task
+
+```bash
+git checkout develop
+git pull origin develop
+git checkout -b feat/<name>
+
+# ... implement ...
+
+git add <specific files>
+git commit -m "feat(<scope>): ..."
+git push -u origin feat/<name>
+# → open PR to develop via gh pr create
+```
+
 ### Testing Without the Real Telescope
 
 ASCOM Alpaca Simulator — works on macOS:
@@ -516,27 +564,30 @@ are implemented in the PyQt6 app.
 
 ## 11. Technical Roadmap
 
-### Phase 1 — Foundations
-- [ ] Canonical project structure (folders, `__init__.py`, `main.py`)
-- [ ] `core/alpaca/client.py` — HTTP client with typed error handling
-- [ ] `core/alpaca/discovery.py` — UDP broadcast
-- [ ] `core/config.py` — persistent config
-- [ ] `ui/main_window.py` — main window with empty docks
-- [ ] `ui/theme.py` — dark Qt stylesheet
+### Phase 1 — Foundations ✅
+- [x] Canonical project structure (folders, `__init__.py`, `main.py`)
+- [x] `core/alpaca/client.py` — HTTP client with typed error handling
+- [x] `core/alpaca/discovery.py` — UDP broadcast
+- [x] `core/config.py` — persistent config
+- [x] `ui/main_window.py` — main window with empty docks
+- [x] `ui/theme.py` — dark Qt stylesheet
 
-### Phase 2 — Mount Control
-- [ ] `core/alpaca/telescope.py`
-- [ ] `workers/polling_worker.py`
-- [ ] `ui/panels/mount_panel.py`
+### Phase 2 — Mount Control ✅
+- [x] `core/alpaca/telescope.py`
+- [x] `workers/polling_worker.py`
+- [x] `ui/panels/mount_panel.py`
+- [x] `core/seestar/native_client.py` — TCP port 4700, jogging, master lock
 
-### Phase 3 — Camera and FITS
-- [ ] `core/alpaca/camera.py`
-- [ ] `core/imaging/fits_writer.py` — full compliant headers
-- [ ] `workers/exposure_worker.py`
-- [ ] `ui/panels/camera_panel.py` + `ui/widgets/fits_viewer.py`
+### Phase 3 — Camera and FITS ✅ (partial)
+- [x] `core/alpaca/camera.py`
+- [x] `core/imaging/fits_writer.py` — full compliant headers
+- [x] `workers/exposure_worker.py`
+- [x] `ui/panels/camera_panel.py` + `ui/widgets/fits_viewer.py`
+- [ ] `core/seestar/preview_client.py` — port 4801 binary stream (~1-5fps)
+- [ ] ImageBytes fast path confirmed working on ZWO firmware
 
 ### Phase 4 — Sequencer
-- [ ] `core/imaging/sequencer.py` — Light/Dark/Flat/Bias
+- [ ] `core/imaging/sequencer.py` — Light/Dark/Flat/Bias (A1-A12 chain, see docs/acquisition_sequence.md)
 - [ ] `workers/sequence_worker.py`
 - [ ] `ui/panels/sequencer_panel.py`
 
