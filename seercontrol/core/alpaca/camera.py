@@ -9,7 +9,7 @@ All methods are synchronous — run inside a QThread worker only.
 
 Seestar S30 Pro constraints:
   - Do NOT use ROI/subframing (firmware bug in Alpaca driver)
-  - Sensor: IMX585, Bayer RGGB, pixel size 2.9 µm, focal length 150 mm
+  - Sensor: IMX585, Bayer GRBG, pixel size 2.9 µm, focal length 160 mm
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import time
 
 import numpy as np
 from alpaca.camera import Camera as _AlpacaCamera
-from alpaca.exceptions import DriverException, InvalidValueException
+from alpaca.exceptions import DriverException, InvalidValueException, NotImplementedException
 
 from seercontrol.core.alpaca.client import AlpacaError
 
@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 
 # IMX585 physical characteristics (Seestar S30 Pro)
 PIXEL_SIZE_UM = 2.9
-FOCAL_LENGTH  = 150
-BAYER_PATTERN = "RGGB"
+FOCAL_LENGTH  = 160
+BAYER_PATTERN = "GRBG"
 INSTRUMENT    = "IMX585"
 TELESCOPE_NAME = "ZWO Seestar S30 Pro"
 
@@ -213,8 +213,9 @@ class Camera:
                 "Image downloaded (ImageBytes): %.2fs  shape=%s  typecode=%s",
                 time.perf_counter() - t0, arr.shape, raw.typecode,
             )
+            return arr
 
-        except InvalidValueException:
+        except (InvalidValueException, NotImplementedException):
             # -- Slow path: JSON nested list, column-major [X][Y] -----------
             logger.info("ImageBytes not supported — using JSON imagearray")
             try:

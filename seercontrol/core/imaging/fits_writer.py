@@ -21,8 +21,8 @@ from astropy.time import Time
 
 # IMX585 physical characteristics (Seestar S30 Pro)
 _PIXEL_SIZE_UM = 2.9
-_FOCAL_LENGTH_MM = 150
-_BAYER_PATTERN = "RGGB"
+_FOCAL_LENGTH_MM = 160
+_BAYER_PATTERN = "GRBG"
 _TELESCOPE_NAME = "ZWO Seestar S30 Pro"
 _INSTRUMENT = "IMX585"
 
@@ -111,8 +111,8 @@ class FITSWriter:
 
         height, width = arr.shape
 
-        # FITS stores uint16 as signed int16 with BZERO=32768 offset
-        data_signed = arr.astype(np.int16)
+        # Pass uint16 directly — astropy sets BZERO=32768 / BSCALE=1 automatically.
+        # Manually converting to int16 then setting BZERO causes astropy to strip BZERO.
 
         # ------------------------------------------------------------------ #
         # Timing                                                               #
@@ -143,9 +143,8 @@ class FITSWriter:
         hdr["NAXIS"]    = (2,     "number of data axes")
         hdr["NAXIS1"]   = (width, "length of data axis 1 (X/columns)")
         hdr["NAXIS2"]   = (height,"length of data axis 2 (Y/rows)")
-        hdr["BZERO"]    = (32768, "offset data range to that of unsigned short")
-        hdr["BSCALE"]   = (1,     "default scaling factor")
         hdr["EXTEND"]   = (True,  "FITS dataset may contain extensions")
+        # BZERO=32768 and BSCALE=1 are written automatically by astropy for uint16 data
 
         # Image type
         hdr["IMAGETYP"] = (image_type, "type of image: Light/Dark/Flat/Bias")
@@ -208,7 +207,7 @@ class FITSWriter:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        hdu = fits.PrimaryHDU(data=data_signed, header=hdr)
+        hdu = fits.PrimaryHDU(data=arr, header=hdr)
         hdu.writeto(str(path), overwrite=True)
         logger.info("FITS saved: %s  (%dx%d  %.1fs  gain=%d)", path.name, width, height, exposure_time, gain)
 
