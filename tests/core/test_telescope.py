@@ -1,17 +1,17 @@
 """Tests for core/alpaca/telescope.py.
 
-Unit tests: run always, use mocked AlpacaClient — no network needed.
+Unit tests: always run, mock alpyca's _AlpacaTelescope — no network needed.
 Integration tests: require the ASCOM Alpaca Simulator on localhost:32323.
                    Automatically skipped when the simulator is not running.
 """
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-from seercontrol.core.alpaca.client import AlpacaClient, AlpacaConnectionError, AlpacaError
+from seercontrol.core.alpaca.client import AlpacaError
 from seercontrol.core.alpaca.telescope import MountPosition, Telescope
 from tests.conftest import SIMULATOR_HOST, SIMULATOR_PORT, simulator_required
 
@@ -20,27 +20,42 @@ from tests.conftest import SIMULATOR_HOST, SIMULATOR_PORT, simulator_required
 # Fixtures
 # ===========================================================================
 
-@pytest.fixture
-def mock_client() -> MagicMock:
-    """AlpacaClient with all methods mocked."""
-    client = MagicMock(spec=AlpacaClient)
-    client.host = "localhost"
-    client.port = 4700
-    return client
+ALPYCA_PATH = "seercontrol.core.alpaca.telescope._AlpacaTelescope"
 
 
 @pytest.fixture
-def telescope(mock_client: MagicMock) -> Telescope:
-    return Telescope(mock_client)
+def mock_scope() -> MagicMock:
+    """Mock for alpyca's Telescope object."""
+    scope = MagicMock()
+    scope.Connected = False
+    scope.UTCDate = MagicMock()
+    scope.CanSlewAsync = True
+    scope.Name = "Mock Telescope"
+    scope.AtPark = False
+    scope.CanPark = True
+    scope.Tracking = False
+    scope.Slewing = False
+    scope.RightAscension = 5.5753
+    scope.Declination = -5.3911
+    scope.Altitude = 42.5
+    scope.Azimuth = 178.3
+    return scope
 
 
 @pytest.fixture
-def connected_telescope(mock_client: MagicMock) -> Telescope:
-    """Telescope already connected (connect() pre-called)."""
-    mock_client.get.return_value = "Seestar S30 Pro"
-    scope = Telescope(mock_client)
-    scope.connect()
-    mock_client.reset_mock()
+def telescope(mock_scope: MagicMock) -> Telescope:
+    with patch(ALPYCA_PATH, return_value=mock_scope):
+        scope = Telescope("localhost", 32323)
+    scope._scope = mock_scope
+    return scope
+
+
+@pytest.fixture
+def connected_telescope(mock_scope: MagicMock) -> Telescope:
+    with patch(ALPYCA_PATH, return_value=mock_scope):
+        scope = Telescope("localhost", 32323)
+    scope._scope = mock_scope
+    scope._connected = True
     return scope
 
 
@@ -50,38 +65,34 @@ def connected_telescope(mock_client: MagicMock) -> Telescope:
 
 class TestConnection:
 
-    def test_connect_sends_put_connected_true(self, telescope, mock_client):
-        mock_client.get.return_value = "Seestar S30 Pro"
+    def test_connect_sets_connected_true(self, telescope, mock_scope):
         telescope.connect()
-        mock_client.put.assert_called_once_with(
-            "telescope", 0, "connected", Connected="True"
-        )
+        assert mock_scope.Connected is True
+        assert telescope.is_connected
 
-    def test_connect_returns_device_name(self, telescope, mock_client):
-        mock_client.get.return_value = "Seestar S30 Pro"
+    def test_connect_returns_device_name(self, telescope, mock_scope):
+        mock_scope.Name = "Seestar S30 Pro"
         name = telescope.connect()
         assert name == "Seestar S30 Pro"
 
-    def test_connect_sets_is_connected(self, telescope, mock_client):
-        mock_client.get.return_value = "Test Mount"
-        assert not telescope.is_connected
+    def test_connect_syncs_utc(self, telescope, mock_scope):
         telescope.connect()
-        assert telescope.is_connected
+        assert mock_scope.UTCDate is not None
 
-    def test_disconnect_sends_put_connected_false(self, connected_telescope, mock_client):
+    def test_disconnect_sets_connected_false(self, connected_telescope, mock_scope):
         connected_telescope.disconnect()
-        mock_client.put.assert_called_once_with(
-            "telescope", 0, "connected", Connected="False"
-        )
+        assert mock_scope.Connected is False
+        assert not connected_telescope.is_connected
 
-    def test_disconnect_clears_is_connected(self, connected_telescope):
+    def test_disconnect_handles_error_gracefully(self, connected_telescope, mock_scope):
+        type(mock_scope).Connected = property(fset=MagicMock(side_effect=Exception("err")))
         connected_telescope.disconnect()
         assert not connected_telescope.is_connected
 
-    def test_disconnect_handles_alpaca_error_gracefully(self, connected_telescope, mock_client):
-        mock_client.put.side_effect = AlpacaError(1, "already disconnected")
-        connected_telescope.disconnect()  # should not raise
-        assert not connected_telescope.is_connected
+    def test_initial_state_not_connected(self):
+        with patch(ALPYCA_PATH):
+            scope = Telescope("localhost", 32323)
+        assert not scope.is_connected
 
 
 # ===========================================================================
@@ -90,27 +101,25 @@ class TestConnection:
 
 class TestGetPosition:
 
-    def _setup_mock_position(self, mock_client: MagicMock) -> None:
-        """Configure mock to return realistic position values."""
-        def get_side_effect(device, number, attribute):
-            values = {
-                "rightascension": 5.5753,
-                "declination": -5.3911,
-                "altitude": 42.5,
-                "azimuth": 178.3,
-                "tracking": True,
-                "slewing": False,
-            }
-            return values[attribute]
-        mock_client.get.side_effect = get_side_effect
+    def test_returns_mount_position(self, connected_telescope, mock_scope):
+        mock_scope.RightAscension = 5.5753
+        mock_scope.Declination = -5.3911
+        mock_scope.Altitude = 42.5
+        mock_scope.Azimuth = 178.3
+        mock_scope.Tracking = True
+        mock_scope.Slewing = False
 
-    def test_get_position_returns_mount_position(self, connected_telescope, mock_client):
-        self._setup_mock_position(mock_client)
         pos = connected_telescope.get_position()
         assert isinstance(pos, MountPosition)
 
-    def test_get_position_values(self, connected_telescope, mock_client):
-        self._setup_mock_position(mock_client)
+    def test_position_values(self, connected_telescope, mock_scope):
+        mock_scope.RightAscension = 5.5753
+        mock_scope.Declination = -5.3911
+        mock_scope.Altitude = 42.5
+        mock_scope.Azimuth = 178.3
+        mock_scope.Tracking = True
+        mock_scope.Slewing = False
+
         pos = connected_telescope.get_position()
         assert pos.ra == pytest.approx(5.5753)
         assert pos.dec == pytest.approx(-5.3911)
@@ -119,18 +128,12 @@ class TestGetPosition:
         assert pos.tracking is True
         assert pos.slewing is False
 
-    def test_get_position_calls_all_six_attributes(self, connected_telescope, mock_client):
-        self._setup_mock_position(mock_client)
-        connected_telescope.get_position()
-        called_attrs = [c.args[2] for c in mock_client.get.call_args_list]
-        assert set(called_attrs) == {
-            "rightascension", "declination", "altitude",
-            "azimuth", "tracking", "slewing"
-        }
-
-    def test_get_position_raises_on_alpaca_error(self, connected_telescope, mock_client):
-        mock_client.get.side_effect = AlpacaConnectionError("localhost", 4700)
-        with pytest.raises(AlpacaConnectionError):
+    def test_raises_alpaca_error_on_exception(self, connected_telescope, mock_scope):
+        from alpaca.exceptions import DriverException
+        mock_scope.RightAscension = property(
+            fget=MagicMock(side_effect=DriverException(1032, "not implemented"))
+        )
+        with pytest.raises(AlpacaError):
             connected_telescope.get_position()
 
 
@@ -140,37 +143,30 @@ class TestGetPosition:
 
 class TestMountPositionFormatting:
 
-    def _make_pos(self, ra=5.5753, dec=-5.3911, alt=42.5, az=178.3,
-                  tracking=True, slewing=False) -> MountPosition:
+    def _pos(self, ra=5.5753, dec=-5.3911, alt=42.5, az=178.3,
+             tracking=True, slewing=False) -> MountPosition:
         return MountPosition(ra=ra, dec=dec, altitude=alt, azimuth=az,
                              tracking=tracking, slewing=slewing)
 
     def test_ra_str_format(self):
-        pos = self._make_pos(ra=5.5753)
+        pos = self._pos(ra=5.5753)
         s = pos.ra_str()
         assert "h" in s and "m" in s and "s" in s
 
     def test_ra_str_zero(self):
-        pos = self._make_pos(ra=0.0)
-        assert pos.ra_str() == "00h 00m 00s"
+        assert self._pos(ra=0.0).ra_str() == "00h 00m 00s"
 
     def test_dec_str_positive(self):
-        pos = self._make_pos(dec=22.014)
-        s = pos.dec_str()
-        assert s.startswith("+")
+        assert self._pos(dec=22.014).dec_str().startswith("+")
 
     def test_dec_str_negative(self):
-        pos = self._make_pos(dec=-5.3911)
-        s = pos.dec_str()
-        assert s.startswith("-")
+        assert self._pos(dec=-5.391).dec_str().startswith("-")
 
-    def test_alt_str_contains_degree(self):
-        pos = self._make_pos(alt=42.5)
-        assert "°" in pos.alt_str()
+    def test_alt_str_contains_degree_symbol(self):
+        assert "°" in self._pos(alt=42.5).alt_str()
 
-    def test_az_str_contains_degree(self):
-        pos = self._make_pos(az=178.3)
-        assert "°" in pos.az_str()
+    def test_az_str_contains_degree_symbol(self):
+        assert "°" in self._pos(az=178.3).az_str()
 
 
 # ===========================================================================
@@ -179,43 +175,39 @@ class TestMountPositionFormatting:
 
 class TestCommands:
 
-    def test_slew_to_sends_correct_put(self, connected_telescope, mock_client):
-        connected_telescope.slew_to(ra=5.5753, dec=-5.3911)
-        mock_client.put.assert_called_once_with(
-            "telescope", 0, "slewtocoordinatesasync",
-            RightAscension="5.5753",
-            Declination="-5.3911",
-        )
-
-    def test_set_tracking_true(self, connected_telescope, mock_client):
+    def test_set_tracking_true(self, connected_telescope, mock_scope):
         connected_telescope.set_tracking(True)
-        mock_client.put.assert_called_once_with(
-            "telescope", 0, "tracking", Tracking="True"
-        )
+        assert mock_scope.Tracking is True
 
-    def test_set_tracking_false(self, connected_telescope, mock_client):
+    def test_set_tracking_false(self, connected_telescope, mock_scope):
         connected_telescope.set_tracking(False)
-        mock_client.put.assert_called_once_with(
-            "telescope", 0, "tracking", Tracking="False"
-        )
+        assert mock_scope.Tracking is False
 
-    def test_abort_slew(self, connected_telescope, mock_client):
+    def test_abort_slew_calls_abort(self, connected_telescope, mock_scope):
         connected_telescope.abort_slew()
-        mock_client.put.assert_called_once_with("telescope", 0, "abortslew")
+        mock_scope.AbortSlew.assert_called_once()
 
-    def test_park_when_not_parked(self, connected_telescope, mock_client):
-        # atpark returns False → park is sent directly, no unpark first
-        mock_client.get.return_value = False
+    def test_park_when_not_parked(self, connected_telescope, mock_scope):
+        mock_scope.AtPark = False
         connected_telescope.park()
-        mock_client.put.assert_called_once_with("telescope", 0, "park")
+        mock_scope.Park.assert_called_once()
+        mock_scope.Unpark.assert_not_called()
 
-    def test_park_when_already_parked_sends_unpark_first(self, connected_telescope, mock_client):
-        # atpark returns True → unpark then park (arm was opened via native app)
-        mock_client.get.return_value = True
+    def test_park_when_already_parked_unparks_first(self, connected_telescope, mock_scope):
+        mock_scope.AtPark = True
         connected_telescope.park()
-        calls = mock_client.put.call_args_list
-        assert calls[0] == call("telescope", 0, "unpark")
-        assert calls[1] == call("telescope", 0, "park")
+        mock_scope.Unpark.assert_called_once()
+        mock_scope.Park.assert_called_once()
+
+    def test_unpark_calls_unpark(self, connected_telescope, mock_scope):
+        connected_telescope.unpark()
+        mock_scope.Unpark.assert_called_once()
+
+    def test_is_parked(self, connected_telescope, mock_scope):
+        mock_scope.AtPark = True
+        assert connected_telescope.is_parked() is True
+        mock_scope.AtPark = False
+        assert connected_telescope.is_parked() is False
 
 
 # ===========================================================================
@@ -232,25 +224,19 @@ class TestTelescopeIntegration:
     """
 
     @pytest.fixture
-    def real_client(self) -> AlpacaClient:
-        return AlpacaClient(host=SIMULATOR_HOST, port=SIMULATOR_PORT)
-
-    @pytest.fixture
-    def real_telescope(self, real_client: AlpacaClient) -> Telescope:
-        scope = Telescope(real_client)
+    def real_telescope(self) -> Telescope:
+        scope = Telescope(SIMULATOR_HOST, SIMULATOR_PORT)
         yield scope
         try:
             scope.disconnect()
         except Exception:
             pass
-        real_client.close()
 
-    def test_connect_returns_name(self, real_telescope: Telescope):
+    def test_connect_returns_name(self, real_telescope):
         name = real_telescope.connect()
-        assert isinstance(name, str)
-        assert len(name) > 0
+        assert isinstance(name, str) and len(name) > 0
 
-    def test_get_position_after_connect(self, real_telescope: Telescope):
+    def test_get_position_after_connect(self, real_telescope):
         real_telescope.connect()
         pos = real_telescope.get_position()
         assert isinstance(pos, MountPosition)
@@ -259,16 +245,13 @@ class TestTelescopeIntegration:
         assert 0.0 <= pos.altitude <= 90.0
         assert 0.0 <= pos.azimuth < 360.0
 
-    def test_set_tracking_on_off(self, real_telescope: Telescope):
+    def test_set_tracking_on_off(self, real_telescope):
         real_telescope.connect()
         real_telescope.set_tracking(True)
-        pos = real_telescope.get_position()
-        assert pos.tracking is True
-
+        assert real_telescope.get_position().tracking is True
         real_telescope.set_tracking(False)
-        pos = real_telescope.get_position()
-        assert pos.tracking is False
+        assert real_telescope.get_position().tracking is False
 
-    def test_abort_slew_does_not_raise(self, real_telescope: Telescope):
+    def test_abort_slew_does_not_raise(self, real_telescope):
         real_telescope.connect()
-        real_telescope.abort_slew()  # should not raise even if not slewing
+        real_telescope.abort_slew()

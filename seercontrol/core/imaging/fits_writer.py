@@ -21,8 +21,8 @@ from astropy.time import Time
 
 # IMX585 physical characteristics (Seestar S30 Pro)
 _PIXEL_SIZE_UM = 2.9
-_FOCAL_LENGTH_MM = 150
-_BAYER_PATTERN = "RGGB"
+_FOCAL_LENGTH_MM = 160
+_BAYER_PATTERN = "GRBG"
 _TELESCOPE_NAME = "ZWO Seestar S30 Pro"
 _INSTRUMENT = "IMX585"
 
