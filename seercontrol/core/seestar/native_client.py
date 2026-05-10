@@ -349,12 +349,16 @@ class SeestarNativeClient:
         """
         if not self._socket:
             return
-        target_id = self._cmdid
         try:
             # seestar_alp sends get_device_state without a params key — omit it.
-            self._send_raw("get_device_state", None)
+            # _send_raw returns the cmd_id atomically (read + increment under
+            # _lock) so the heartbeat thread cannot steal our id.
+            target_id = self._send_raw("get_device_state", None)
         except OSError as exc:
             logger.warning("Native: firmware query failed: %s", exc)
+            return
+        if target_id is None:
+            logger.warning("Native: firmware query skipped — socket already closed")
             return
 
         deadline = time.monotonic() + 5.0
@@ -427,16 +431,23 @@ class SeestarNativeClient:
             logger.error("Native: reconnect failed — %s: %s", type(exc).__name__, exc)
             raise SeestarNativeError(f"Reconnect failed: {exc}") from exc
 
-    def _send_raw(self, method: str, params: dict | list | None) -> None:
+    def _send_raw(self, method: str, params: dict | list | None) -> int | None:
         """Send without waiting for response (used by heartbeat + detect_firmware).
 
         Pass params=None to omit the params key entirely (required by some methods
         such as get_device_state — seestar_alp omits it and the firmware rejects
         an explicit empty dict for those methods).
+
+        Returns:
+            The command id that was actually sent on the wire, or ``None`` if
+            the socket was not connected. Callers that need to correlate the
+            response (e.g. _detect_firmware) must use this returned id rather
+            than reading ``self._cmdid`` separately, which would race with the
+            heartbeat thread.
         """
         with self._lock:
             if not self._socket:
-                return
+                return None
             cmd_id = self._cmdid
             self._cmdid += 1
             msg: dict = {"method": method, "id": cmd_id}
@@ -444,6 +455,7 @@ class SeestarNativeClient:
                 msg["params"] = params
             payload = json.dumps(msg) + "\r\n"
             self._socket.sendall(payload.encode("utf-8"))
+            return cmd_id
 
     def _send(self, method: str, params: dict | list) -> None:
         """Send a command and wait up to _RESPONSE_TIMEOUT for a response.
