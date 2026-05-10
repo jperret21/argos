@@ -1,12 +1,13 @@
 """Camera control panel — live preview + exposure/gain controls + FITS saving.
 
 Dockable panel providing:
-  - Connect / disconnect camera (Alpaca)
-  - Live preview loop (repeated short exposures)
-  - Exposure time and gain controls
+  - Connect / disconnect camera and filter wheel (Alpaca)
+  - Live preview loop (short exposures via ImageBytes)
+  - Exposure time, gain, channel display controls
+  - Debayer GRBG→R/G/B/RGB or raw display
+  - HFD (Half-Flux Diameter) focus metric on every frame
   - FitsViewer for real-time image display
-  - Camera state indicator
-  - Optional FITS file saving with object name and filter selection
+  - FITS file saving with full headers
 """
 
 from __future__ import annotations
@@ -34,7 +35,9 @@ from PyQt6.QtWidgets import (
 
 from seercontrol.core.alpaca.camera import Camera
 from seercontrol.core.alpaca.client import AlpacaError
+from seercontrol.core.alpaca.filterwheel import FilterWheel, POSITION_NAMES
 from seercontrol.core.config import Config
+from seercontrol.core.imaging.debayer import compute_hfd, extract_channel
 from seercontrol.core.imaging.fits_writer import FITSWriter
 from seercontrol.ui import theme
 from seercontrol.ui.widgets.fits_viewer import FitsViewer
@@ -42,26 +45,28 @@ from seercontrol.workers.exposure_worker import LivePreviewWorker
 
 logger = logging.getLogger(__name__)
 
+_IMAGE_TYPE = "Light Frame"
+
 
 class CameraPanel(QWidget):
     """Live camera preview and exposure control panel.
 
     Signals:
-        log_message: (level, message) for the session log.
+        log_message:    (level, message) for the session log.
         status_changed: Short status string for the main window status bar.
     """
 
-    log_message    = pyqtSignal(str, str)
-    status_changed = pyqtSignal(str)
+    log_message      = pyqtSignal(str, str)
+    status_changed   = pyqtSignal(str)
+    camera_connected = pyqtSignal(object)   # Camera instance (or None on disconnect)
 
     def __init__(self, config: Config, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._config  = config
-        self._camera:  Camera            | None = None
-        self._worker:  LivePreviewWorker | None = None
+        self._config      = config
+        self._camera:      Camera      | None = None
+        self._filterwheel: FilterWheel | None = None
+        self._worker:      LivePreviewWorker | None = None
         self._frame_index: int = 0
-        self._last_start: datetime | None = None
-        self._last_end:   datetime | None = None
 
         self._build_ui()
 
@@ -76,16 +81,17 @@ class CameraPanel(QWidget):
 
         root.addWidget(self._build_connection_group())
         root.addWidget(self._build_controls_group())
+        root.addWidget(self._build_filter_group())
         root.addWidget(self._build_save_group())
         root.addWidget(self._build_viewer(), stretch=1)
 
     def _build_connection_group(self) -> QGroupBox:
-        group = QGroupBox("Camera Connection")
+        group = QGroupBox("Camera")
         layout = QVBoxLayout(group)
         layout.setSpacing(6)
 
         btn_row = QHBoxLayout()
-        self._connect_btn = QPushButton("Connect Camera")
+        self._connect_btn = QPushButton("Connect")
         self._connect_btn.setProperty("class", "primary")
         self._connect_btn.clicked.connect(self._on_connect)
 
@@ -104,7 +110,6 @@ class CameraPanel(QWidget):
             f"color:{theme.TEXT_MUTED}; font-size:11px; padding:3px;"
         )
         layout.addWidget(self._status_lbl)
-
         return group
 
     def _build_controls_group(self) -> QGroupBox:
@@ -120,27 +125,40 @@ class CameraPanel(QWidget):
         self._exposure_spin.setValue(1.0)
         self._exposure_spin.setSuffix("  s")
         self._exposure_spin.setSingleStep(0.5)
-        self._exposure_spin.setToolTip("Exposure time per frame")
         form.addRow(_muted("Exposure"), self._exposure_spin)
 
         self._gain_spin = QSpinBox()
-        self._gain_spin.setRange(0, 100)
+        self._gain_spin.setRange(0, 600)
         self._gain_spin.setValue(80)
-        self._gain_spin.setToolTip("Camera gain (0–100 by default)")
         form.addRow(_muted("Gain"), self._gain_spin)
 
-        self._scale_combo = QComboBox()
-        for label in ["1× (full res)", "2×", "4×", "8×"]:
-            self._scale_combo.addItem(label)
-        self._scale_combo.setCurrentIndex(2)  # 4× default — ~960×540 preview
-        self._scale_combo.setToolTip(
-            "Preview resolution scale.\n"
-            "Download is always full resolution.\n"
-            "FITS files are saved at full resolution."
+        self._channel_combo = QComboBox()
+        for ch in ["Raw", "R", "G", "B", "RGB"]:
+            self._channel_combo.addItem(ch)
+        self._channel_combo.setCurrentIndex(0)
+        self._channel_combo.setToolTip(
+            "Raw   — direct sensor data (no debayer)\n"
+            "R/G/B — single Bayer channel, half resolution\n"
+            "RGB   — colour composite, half resolution"
         )
-        form.addRow(_muted("Preview"), self._scale_combo)
+        form.addRow(_muted("Channel"), self._channel_combo)
 
         layout.addLayout(form)
+
+        # HFD display
+        hfd_row = QHBoxLayout()
+        hfd_row.addWidget(_muted("HFD"))
+        self._hfd_lbl = QLabel("—")
+        self._hfd_lbl.setStyleSheet(
+            f"color:{theme.ACCENT}; font-size:13px; font-weight:bold;"
+        )
+        self._hfd_lbl.setToolTip(
+            "Half-Flux Diameter — focus metric.\n"
+            "Lower = sharper. Typical range: 2–20 px."
+        )
+        hfd_row.addWidget(self._hfd_lbl)
+        hfd_row.addStretch()
+        layout.addLayout(hfd_row)
 
         btn_row = QHBoxLayout()
         self._preview_btn = QPushButton("▶  Start Preview")
@@ -158,24 +176,46 @@ class CameraPanel(QWidget):
 
         return group
 
+    def _build_filter_group(self) -> QGroupBox:
+        group = QGroupBox("Filter Wheel")
+        layout = QHBoxLayout(group)
+        layout.setSpacing(8)
+
+        self._fw_status_lbl = QLabel("—")
+        self._fw_status_lbl.setStyleSheet(f"color:{theme.TEXT_MUTED}; font-size:11px;")
+
+        self._fw_combo = QComboBox()
+        for pos, name in POSITION_NAMES.items():
+            self._fw_combo.addItem(f"{pos} — {name}")
+        self._fw_combo.setEnabled(False)
+        self._fw_combo.currentIndexChanged.connect(self._on_filter_changed)
+
+        self._fw_connect_btn = QPushButton("Connect FW")
+        self._fw_connect_btn.setFixedHeight(24)
+        self._fw_connect_btn.clicked.connect(self._on_fw_connect)
+
+        layout.addWidget(_muted("Position"))
+        layout.addWidget(self._fw_combo, stretch=1)
+        layout.addWidget(self._fw_status_lbl)
+        layout.addWidget(self._fw_connect_btn)
+        return group
+
     def _build_save_group(self) -> QGroupBox:
         group = QGroupBox("Save Frames")
         layout = QFormLayout(group)
         layout.setSpacing(6)
 
         self._save_chk = QCheckBox("Save FITS files")
-        self._save_chk.setToolTip("Write each frame to disk as a FITS file")
         layout.addRow(self._save_chk)
 
         self._object_edit = QLineEdit()
         self._object_edit.setPlaceholderText("e.g. M42, NGC 224")
-        self._object_edit.setToolTip("Target object name written to FITS OBJECT header")
         layout.addRow(_muted("Object"), self._object_edit)
 
-        self._filter_combo = QComboBox()
+        self._fits_filter_combo = QComboBox()
         for f in ["LRGB", "Ha", "OIII", "SII", "IR-cut"]:
-            self._filter_combo.addItem(f)
-        layout.addRow(_muted("Filter"), self._filter_combo)
+            self._fits_filter_combo.addItem(f)
+        layout.addRow(_muted("FITS Filter"), self._fits_filter_combo)
 
         self._save_dir_lbl = QLabel()
         self._save_dir_lbl.setStyleSheet(f"color:{theme.TEXT_MUTED}; font-size:10px;")
@@ -190,11 +230,14 @@ class CameraPanel(QWidget):
         return self._viewer
 
     def _update_save_dir_label(self) -> None:
-        base = Path(self._config.output_dir) if hasattr(self._config, "output_dir") else Path.home() / "SeerControl"
+        try:
+            base = self._config.sessions_path.parent
+        except AttributeError:
+            base = Path.home() / "SeerControl"
         self._save_dir_lbl.setText(str(base / "sessions" / "…"))
 
     # ------------------------------------------------------------------
-    # Connection
+    # Camera connection
     # ------------------------------------------------------------------
 
     def _on_connect(self) -> None:
@@ -215,9 +258,14 @@ class CameraPanel(QWidget):
             self._gain_spin.setRange(self._camera.gain_min, self._camera.gain_max)
             self._gain_spin.setValue(min(80, self._camera.gain_max))
 
-            self._log("OK", f"Camera connected: {name}  "
-                            f"{self._camera.width}×{self._camera.height}")
+            self._log(
+                "OK",
+                f"Camera connected: {name}  "
+                f"{self._camera.width}×{self._camera.height}  "
+                f"gain {self._camera.gain_min}–{self._camera.gain_max}",
+            )
             self._set_connected(True)
+            self.camera_connected.emit(self._camera)
 
         except AlpacaError as exc:
             self._log("ERROR", f"Camera connection failed: {exc}")
@@ -226,14 +274,14 @@ class CameraPanel(QWidget):
 
     def _on_disconnect(self) -> None:
         self._stop_preview()
-
         if self._camera:
             self._camera.disconnect()
             self._camera = None
-
         self._set_connected(False)
         self._frame_index = 0
+        self._hfd_lbl.setText("—")
         self._log("INFO", "Camera disconnected.")
+        self.camera_connected.emit(None)
 
     def _set_connected(self, connected: bool) -> None:
         self._connect_btn.setEnabled(not connected)
@@ -250,6 +298,41 @@ class CameraPanel(QWidget):
         self.status_changed.emit(f"Camera {'connected' if connected else 'disconnected'}")
 
     # ------------------------------------------------------------------
+    # Filter wheel
+    # ------------------------------------------------------------------
+
+    def _on_fw_connect(self) -> None:
+        host = self._config.alpaca_host
+        port = self._config.alpaca_port
+        if not host:
+            self._log("ERROR", "No host configured.")
+            return
+        try:
+            self._filterwheel = FilterWheel(host=host, port=port)
+            self._filterwheel.connect()
+            pos = self._filterwheel.get_position()
+            self._fw_combo.setCurrentIndex(max(0, pos))
+            self._fw_combo.setEnabled(True)
+            self._fw_status_lbl.setText(POSITION_NAMES.get(pos, "?"))
+            self._fw_status_lbl.setStyleSheet(f"color:{theme.SUCCESS}; font-size:11px;")
+            self._fw_connect_btn.setEnabled(False)
+            self._log("OK", f"Filter wheel connected — position {pos} ({POSITION_NAMES.get(pos)})")
+        except AlpacaError as exc:
+            self._log("WARN", f"Filter wheel unavailable: {exc}")
+            self._filterwheel = None
+
+    def _on_filter_changed(self, index: int) -> None:
+        if not self._filterwheel or not self._filterwheel.is_connected:
+            return
+        try:
+            self._filterwheel.set_position(index)
+            self._fw_status_lbl.setText("Moving…")
+            self._fw_status_lbl.setStyleSheet(f"color:{theme.WARNING}; font-size:11px;")
+            self._log("CMD", f"Filter wheel → {POSITION_NAMES.get(index)}")
+        except AlpacaError as exc:
+            self._log("ERROR", f"Filter change failed: {exc}")
+
+    # ------------------------------------------------------------------
     # Live preview
     # ------------------------------------------------------------------
 
@@ -259,19 +342,16 @@ class CameraPanel(QWidget):
         else:
             self._start_preview()
 
-    def _scale_value(self) -> int:
-        return {0: 1, 1: 2, 2: 4, 3: 8}.get(self._scale_combo.currentIndex(), 4)
-
     def _start_preview(self) -> None:
         if not self._camera:
             return
 
-        exposure = self._exposure_spin.value()
-        gain     = self._gain_spin.value()
-        scale    = self._scale_value()
-
+        self._viewer.reset()
         self._worker = LivePreviewWorker(
-            self._camera, exposure=exposure, gain=gain, preview_scale=scale,
+            self._camera,
+            exposure=self._exposure_spin.value(),
+            gain=self._gain_spin.value(),
+            preview_scale=1,  # debayer already halves resolution
         )
         self._worker.frame_ready.connect(self._on_frame)
         self._worker.status_updated.connect(self._state_lbl.setText)
@@ -283,7 +363,12 @@ class CameraPanel(QWidget):
         self._preview_btn.setProperty("class", "danger")
         self._preview_btn.style().unpolish(self._preview_btn)
         self._preview_btn.style().polish(self._preview_btn)
-        self._log("CMD", f"Live preview started  {exposure:.1f}s  gain {gain}")
+        self._log(
+            "CMD",
+            f"Preview started  {self._exposure_spin.value():.1f}s  "
+            f"gain {self._gain_spin.value()}  "
+            f"channel {self._channel_combo.currentText()}",
+        )
 
     def _stop_preview(self) -> None:
         if self._worker and self._worker.isRunning():
@@ -303,38 +388,63 @@ class CameraPanel(QWidget):
         start_dt: datetime,
         end_dt: datetime,
     ) -> None:
-        # Update settings for the next frame from the current spinbox values
         if self._worker:
             self._worker.update_settings(
                 self._exposure_spin.value(),
                 self._gain_spin.value(),
-                scale=self._scale_value(),
+                scale=1,
             )
 
-        self._last_start = start_dt
-        self._last_end   = end_dt
-        # Display the downsampled preview (fast render)
-        self._viewer.display(preview_arr)
+        # HFD on raw green channel (fast, half-res)
+        hfd = compute_hfd(full_arr)
+        if hfd is not None:
+            self._hfd_lbl.setText(f"{hfd:.1f} px")
+            if hfd < 5:
+                color = theme.SUCCESS
+            elif hfd < 10:
+                color = theme.WARNING
+            else:
+                color = theme.DANGER
+            self._hfd_lbl.setStyleSheet(
+                f"color:{color}; font-size:13px; font-weight:bold;"
+            )
+        else:
+            self._hfd_lbl.setText("—")
 
-        # Save full-resolution FITS if requested
+        # Apply debayer / channel selection for display
+        channel = self._channel_combo.currentText()
+        display_arr = extract_channel(full_arr, channel)
+        self._viewer.display(display_arr)
+
+        # Save full-resolution raw FITS if requested
         if self._save_chk.isChecked():
             self._frame_index += 1
             self._save_fits_async(full_arr, start_dt, end_dt)
 
-    def _save_fits_async(self, arr: np.ndarray, start_dt: datetime, end_dt: datetime) -> None:
-        """Write the FITS file in a thread-pool thread (non-blocking)."""
-        exposure   = self._exposure_spin.value()
-        gain       = self._gain_spin.value()
-        obj_name   = self._object_edit.text().strip() or "Unknown"
-        filter_name = self._filter_combo.currentText()
-        frame_idx  = self._frame_index
+    # ------------------------------------------------------------------
+    # FITS save
+    # ------------------------------------------------------------------
 
-        base = Path(self._config.output_dir) if hasattr(self._config, "output_dir") else Path.home() / "SeerControl"
-        folder = FITSWriter.session_folder(base, obj_name, start_dt, "Light Frame", filter_name)
-        filename = FITSWriter.build_filename(obj_name, "Light Frame", start_dt, exposure, filter_name, frame_idx)
+    def _save_fits_async(
+        self, arr: np.ndarray, start_dt: datetime, end_dt: datetime
+    ) -> None:
+        exposure    = self._exposure_spin.value()
+        gain        = self._gain_spin.value()
+        obj_name    = self._object_edit.text().strip() or "Unknown"
+        filter_name = self._fits_filter_combo.currentText()
+        frame_idx   = self._frame_index
+        log_fn      = self._log
+
+        try:
+            base = self._config.sessions_path.parent
+        except AttributeError:
+            base = Path.home() / "SeerControl"
+
+        folder   = FITSWriter.session_folder(base, obj_name, start_dt, _IMAGE_TYPE, filter_name)
+        filename = FITSWriter.build_filename(
+            obj_name, _IMAGE_TYPE, start_dt, exposure, filter_name, frame_idx
+        )
         path = folder / filename
-
-        log_fn = self._log
 
         class _SaveTask(QRunnable):
             def run(self) -> None:
@@ -346,7 +456,7 @@ class CameraPanel(QWidget):
                         exposure_end=end_dt,
                         exposure_time=exposure,
                         gain=gain,
-                        image_type="Light Frame",
+                        image_type=_IMAGE_TYPE,
                         object_name=obj_name,
                         filter_name=filter_name,
                     )
@@ -356,6 +466,10 @@ class CameraPanel(QWidget):
 
         QThreadPool.globalInstance().start(_SaveTask())
 
+    # ------------------------------------------------------------------
+    # Error / lifecycle
+    # ------------------------------------------------------------------
+
     def _on_preview_error(self, message: str) -> None:
         self._log("ERROR", f"Preview error: {message}")
         self._stop_preview()
@@ -363,13 +477,14 @@ class CameraPanel(QWidget):
     def _on_preview_finished(self) -> None:
         self._stop_preview()
 
-    # ------------------------------------------------------------------
-    # Shutdown
-    # ------------------------------------------------------------------
-
     def shutdown(self) -> None:
         """Stop workers. Call before closing the application."""
         self._stop_preview()
+        if self._filterwheel:
+            try:
+                self._filterwheel.disconnect()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Helpers

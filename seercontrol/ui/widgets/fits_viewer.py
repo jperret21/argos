@@ -1,15 +1,12 @@
 """FITS / raw image viewer widget based on PyQtGraph.
 
-Displays a 2-D numpy uint16 array with:
-  - Auto-stretch on first display (1 %–99 % percentile)
-  - Interactive histogram + manual levels
-  - Native PyQtGraph zoom / pan
-  - "Auto Stretch" button to reset levels
+Displays either:
+  - 2-D numpy uint16 array (H, W) — raw or single channel, with auto-stretch
+  - 3-D numpy uint8  array (H, W, 3) — debayered RGB, levels fixed at 0–255
 
-Usage::
-
-    viewer = FitsViewer()
-    viewer.display(arr)   # arr: np.ndarray, shape (H, W), dtype uint16
+Controls:
+  - Auto Stretch button (grayscale only)
+  - Native PyQtGraph zoom / pan and interactive histogram
 """
 
 from __future__ import annotations
@@ -29,6 +26,7 @@ class FitsViewer(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._first_frame = True
+        self._is_rgb = False
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -36,16 +34,15 @@ class FitsViewer(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
-        # Toolbar
         toolbar = QHBoxLayout()
         self._auto_btn = QPushButton("Auto Stretch")
         self._auto_btn.setFixedHeight(24)
+        self._auto_btn.setToolTip("Reset display levels to 1%–99% percentile")
         self._auto_btn.clicked.connect(self._auto_stretch)
         toolbar.addStretch()
         toolbar.addWidget(self._auto_btn)
         layout.addLayout(toolbar)
 
-        # Image view
         pg.setConfigOptions(imageAxisOrder="row-major")
         self._view = pg.ImageView()
         self._view.ui.roiBtn.hide()
@@ -56,13 +53,15 @@ class FitsViewer(QWidget):
         """Display a new frame.
 
         Args:
-            arr: 2-D numpy array, shape (H, W), dtype uint16.
-                 Displayed as-is; no Bayer demosaicing applied here.
+            arr: Either:
+                 - 2-D uint16 (H, W)   — raw / single channel
+                 - 3-D uint8  (H, W, 3) — debayered RGB
         """
-        if arr.ndim != 2:
+        if arr.ndim not in (2, 3):
             return
 
-        # PyQtGraph ImageView expects (rows, cols) with imageAxisOrder="row-major"
+        self._is_rgb = arr.ndim == 3
+
         self._view.setImage(
             arr,
             autoRange=False,
@@ -70,17 +69,27 @@ class FitsViewer(QWidget):
             autoHistogramRange=False,
         )
 
-        if self._first_frame:
+        if self._first_frame or self._is_rgb:
             self._auto_stretch()
             self._first_frame = False
 
+        self._auto_btn.setEnabled(not self._is_rgb)
+
     def _auto_stretch(self) -> None:
-        """Set display levels to 1 %–99 % percentile of current image."""
+        """Set display levels to 1%–99% percentile (grayscale) or 0–255 (RGB)."""
         img = self._view.image
         if img is None:
             return
-        lo = float(np.percentile(img, 1))
-        hi = float(np.percentile(img, 99))
-        if hi <= lo:
-            hi = lo + 1
-        self._view.setLevels(lo, hi)
+        if self._is_rgb:
+            self._view.setLevels(0, 255)
+        else:
+            lo = float(np.percentile(img, 1))
+            hi = float(np.percentile(img, 99))
+            if hi <= lo:
+                hi = lo + 1
+            self._view.setLevels(lo, hi)
+
+    def reset(self) -> None:
+        """Reset viewer state (call when switching targets)."""
+        self._first_frame = True
+        self._is_rgb = False
