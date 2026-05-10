@@ -3,7 +3,7 @@
 Layout:
   - Central area: ImageToolbar (36px) + FitsViewer (stretch)
   - Left dock:    MountPanel  (~270px)  [tabbed with FocuserPlaceholder]
-  - Right dock:   CameraPanel (~280px)  [tabbed with SkyMapPanel]
+  - Right dock:   CameraPanel (~280px)  [tabbed with StellPlaceholder]
   - Bottom dock:  SequencerPlaceholder  (120px)
 
 Window state (dock positions, sizes) is persisted in config.
@@ -17,9 +17,18 @@ import logging
 from PyQt6.QtCore import Qt, QByteArray
 from PyQt6.QtGui import QAction, QCloseEvent
 from PyQt6.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
     QDockWidget,
+    QDoubleSpinBox,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
+    QPushButton,
+    QSpinBox,
     QStatusBar,
     QVBoxLayout,
     QWidget,
@@ -36,6 +45,140 @@ logger = logging.getLogger(__name__)
 
 _CFG_GEOMETRY = "ui.window_geometry"
 _CFG_STATE    = "ui.window_state"
+
+
+# ---------------------------------------------------------------------------
+# Dialogs
+# ---------------------------------------------------------------------------
+
+class _ConnectDialog(QDialog):
+    """Generic host/port connection dialog."""
+
+    def __init__(self, title: str, config: Config, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setFixedWidth(320)
+        self._config = config
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        form = QFormLayout()
+        form.setSpacing(6)
+
+        self._host_edit = QLineEdit()
+        self._host_edit.setFixedHeight(26)
+        self._host_edit.setPlaceholderText("192.168.1.x")
+        self._host_edit.setText(config.alpaca_host or "")
+        form.addRow("Host:", self._host_edit)
+
+        self._port_spin = QSpinBox()
+        self._port_spin.setFixedHeight(26)
+        self._port_spin.setRange(1, 65535)
+        self._port_spin.setValue(config.alpaca_port or 11111)
+        form.addRow("Port:", self._port_spin)
+
+        layout.addLayout(form)
+
+        self._status_lbl = QLabel("")
+        self._status_lbl.setStyleSheet(f"color:{theme.TEXT_MUTED}; font-size:11px;")
+        self._status_lbl.setWordWrap(True)
+        layout.addWidget(self._status_lbl)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _on_accept(self) -> None:
+        host = self._host_edit.text().strip()
+        port = self._port_spin.value()
+        if not host:
+            self._status_lbl.setText("Host cannot be empty.")
+            self._status_lbl.setStyleSheet(f"color:{theme.DANGER}; font-size:11px;")
+            return
+        self._config.set("alpaca.host", host)
+        self._config.set("alpaca.port", port)
+        self.accept()
+
+    @property
+    def host(self) -> str:
+        return self._host_edit.text().strip()
+
+    @property
+    def port(self) -> int:
+        return self._port_spin.value()
+
+
+class _PreferencesDialog(QDialog):
+    """Observer and site preferences dialog."""
+
+    def __init__(self, config: Config, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Preferences")
+        self.setFixedWidth(360)
+        self._config = config
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        # Observer group
+        obs_group = QGroupBox("Observer")
+        obs_form = QFormLayout(obs_group)
+        obs_form.setSpacing(6)
+
+        self._name_edit = QLineEdit()
+        self._name_edit.setFixedHeight(26)
+        self._name_edit.setText(config.get("observer.name") or "")
+        obs_form.addRow("Name:", self._name_edit)
+
+        layout.addWidget(obs_group)
+
+        # Site group
+        site_group = QGroupBox("Site")
+        site_form = QFormLayout(site_group)
+        site_form.setSpacing(6)
+
+        self._lat_spin = QDoubleSpinBox()
+        self._lat_spin.setFixedHeight(26)
+        self._lat_spin.setRange(-90.0, 90.0)
+        self._lat_spin.setDecimals(4)
+        self._lat_spin.setSuffix("°")
+        self._lat_spin.setValue(config.get("site.latitude") or 0.0)
+        site_form.addRow("Latitude:", self._lat_spin)
+
+        self._lon_spin = QDoubleSpinBox()
+        self._lon_spin.setFixedHeight(26)
+        self._lon_spin.setRange(-180.0, 180.0)
+        self._lon_spin.setDecimals(4)
+        self._lon_spin.setSuffix("°")
+        self._lon_spin.setValue(config.get("site.longitude") or 0.0)
+        site_form.addRow("Longitude:", self._lon_spin)
+
+        self._elev_spin = QSpinBox()
+        self._elev_spin.setFixedHeight(26)
+        self._elev_spin.setRange(-500, 9000)
+        self._elev_spin.setSuffix(" m")
+        self._elev_spin.setValue(int(config.get("site.elevation") or 0))
+        site_form.addRow("Elevation:", self._elev_spin)
+
+        layout.addWidget(site_group)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._save)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _save(self) -> None:
+        self._config.set("observer.name",    self._name_edit.text().strip())
+        self._config.set("site.latitude",    self._lat_spin.value())
+        self._config.set("site.longitude",   self._lon_spin.value())
+        self._config.set("site.elevation",   self._elev_spin.value())
+        self.accept()
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +221,6 @@ class _StellPlaceholder(QWidget):
 
 
 def _make_dock(title: str, obj_name: str, widget: QWidget) -> QDockWidget:
-    """Create a QDockWidget with a lowercase compact title."""
     dock = QDockWidget(title.lower(), None)
     dock.setObjectName(f"dock_{obj_name}")
     dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
@@ -91,11 +233,7 @@ def _make_dock(title: str, obj_name: str, widget: QWidget) -> QDockWidget:
 # ---------------------------------------------------------------------------
 
 class MainWindow(QMainWindow):
-    """Main application window.
-
-    Args:
-        config: Application configuration instance.
-    """
+    """Main application window."""
 
     APP_VERSION = "0.1.0-dev"
 
@@ -128,7 +266,7 @@ class MainWindow(QMainWindow):
         )
 
     # ------------------------------------------------------------------
-    # Central widget: ImageToolbar + FitsViewer
+    # Central widget
     # ------------------------------------------------------------------
 
     def _build_central(self) -> None:
@@ -152,20 +290,30 @@ class MainWindow(QMainWindow):
     def _build_menu(self) -> None:
         menu_bar = self.menuBar()
 
-        # ── File ──────────────────────────────────────────────────────
-        file_menu = menu_bar.addMenu("File")
+        # ── Connection ────────────────────────────────────────────────
+        conn_menu = menu_bar.addMenu("Connection")
 
-        settings_action = QAction("Settings…", self)
-        settings_action.setShortcut("Ctrl+,")
-        settings_action.triggered.connect(self._open_settings)
-        file_menu.addAction(settings_action)
+        connect_mount_action = QAction("Connect Mount…", self)
+        connect_mount_action.setShortcut("Ctrl+M")
+        connect_mount_action.triggered.connect(self._open_connect_mount)
+        conn_menu.addAction(connect_mount_action)
 
-        file_menu.addSeparator()
+        connect_camera_action = QAction("Connect Camera…", self)
+        connect_camera_action.setShortcut("Ctrl+Shift+C")
+        connect_camera_action.triggered.connect(self._open_connect_camera)
+        conn_menu.addAction(connect_camera_action)
 
-        quit_action = QAction("Quit", self)
-        quit_action.setShortcut("Ctrl+Q")
-        quit_action.triggered.connect(self.close)
-        file_menu.addAction(quit_action)
+        conn_menu.addSeparator()
+
+        disconnect_all_action = QAction("Disconnect All", self)
+        disconnect_all_action.triggered.connect(self._disconnect_all)
+        conn_menu.addAction(disconnect_all_action)
+
+        # ── Preferences ───────────────────────────────────────────────
+        prefs_action = QAction("Preferences…", self)
+        prefs_action.setShortcut("Ctrl+,")
+        prefs_action.triggered.connect(self._open_preferences)
+        menu_bar.addAction(prefs_action)
 
         # ── View ──────────────────────────────────────────────────────
         self._view_menu = menu_bar.addMenu("View")
@@ -174,18 +322,6 @@ class MainWindow(QMainWindow):
         reset_layout_action.triggered.connect(self._reset_layout)
         self._view_menu.addSeparator()
         self._view_menu.addAction(reset_layout_action)
-
-        # ── Telescope ─────────────────────────────────────────────────
-        scope_menu = menu_bar.addMenu("Telescope")
-
-        connect_action = QAction("Connect…", self)
-        connect_action.setShortcut("Ctrl+K")
-        connect_action.triggered.connect(self._connect_telescope)
-        scope_menu.addAction(connect_action)
-
-        disconnect_action = QAction("Disconnect", self)
-        disconnect_action.triggered.connect(self._disconnect_telescope)
-        scope_menu.addAction(disconnect_action)
 
         # ── Help ──────────────────────────────────────────────────────
         help_menu = menu_bar.addMenu("Help")
@@ -201,20 +337,16 @@ class MainWindow(QMainWindow):
     def _build_docks(self) -> None:
         self._docks: dict[str, QDockWidget] = {}
 
-        # ── Real panels ───────────────────────────────────────────────
         self._mount_panel   = MountPanel(config=self._config, parent=self)
         self._camera_panel  = CameraPanel(config=self._config, parent=self)
 
-        # ── Dock objects ──────────────────────────────────────────────
         mount_dock   = _make_dock("Mount",    "mount",   self._mount_panel)
         camera_dock  = _make_dock("Camera",   "camera",  self._camera_panel)
 
-        # Placeholders — replaced when PRs are merged
         focuser_dock    = _make_dock("Focuser",    "focuser",    _PlaceholderPanel("Focuser"))
         sequencer_dock  = _make_dock("Sequencer",  "sequencer",  _PlaceholderPanel("Sequencer"))
         stellarium_dock = _make_dock("Stellarium", "stellarium", _StellPlaceholder())
 
-        # ── Add docks ─────────────────────────────────────────────────
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea,   mount_dock)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea,   focuser_dock)
         self.tabifyDockWidget(mount_dock, focuser_dock)
@@ -227,7 +359,6 @@ class MainWindow(QMainWindow):
 
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, sequencer_dock)
 
-        # ── View menu toggles ──────────────────────────────────────────
         for name, dock in [
             ("Mount", mount_dock),
             ("Camera", camera_dock),
@@ -248,32 +379,16 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _wire_signals(self) -> None:
-        # Panel → status bar / log
         self._mount_panel.log_message.connect(self._on_log_message)
         self._mount_panel.status_changed.connect(self._on_status_changed)
         self._camera_panel.log_message.connect(self._on_log_message)
         self._camera_panel.status_changed.connect(self._on_status_changed)
 
-        # ImageToolbar → viewer / camera
         self._image_toolbar.gamma_changed.connect(self._viewer.set_gamma)
         self._image_toolbar.auto_stretch_requested.connect(self._viewer._auto_stretch)
         self._image_toolbar.channel_changed.connect(self._camera_panel.set_channel)
 
-        self._image_toolbar.gain_changed.connect(
-            lambda g: self._camera_panel.update_acquisition_settings(
-                g, self._camera_panel._exposure_spin.value()
-            )
-        )
-        self._image_toolbar.exposure_changed.connect(
-            lambda e: self._camera_panel.update_acquisition_settings(
-                self._camera_panel._gain_spin.value(), e
-            )
-        )
-
-        # Camera panel → viewer
         self._camera_panel.frame_display.connect(self._viewer.display)
-
-        # position_updated_pub will wire to Stellarium panel in a future sprint
 
     # ------------------------------------------------------------------
     # Log / status
@@ -345,17 +460,32 @@ class MainWindow(QMainWindow):
         self._status_coords.setText(text)
 
     # ------------------------------------------------------------------
-    # Menu actions (stubs)
+    # Menu actions
     # ------------------------------------------------------------------
 
-    def _open_settings(self) -> None:
-        self.statusBar().showMessage("Settings — coming soon", 3000)
+    def _open_connect_mount(self) -> None:
+        dlg = _ConnectDialog("Connect Mount", self._config, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.statusBar().showMessage(
+                f"Host set to {dlg.host}:{dlg.port} — use the Mount panel to connect.", 5000
+            )
 
-    def _connect_telescope(self) -> None:
-        self.statusBar().showMessage("Connect — coming soon", 3000)
+    def _open_connect_camera(self) -> None:
+        dlg = _ConnectDialog("Connect Camera", self._config, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.statusBar().showMessage(
+                f"Host set to {dlg.host}:{dlg.port} — use the Camera panel to connect.", 5000
+            )
 
-    def _disconnect_telescope(self) -> None:
-        self.statusBar().showMessage("Disconnect — coming soon", 3000)
+    def _disconnect_all(self) -> None:
+        self._mount_panel.shutdown()
+        self._camera_panel.shutdown()
+        self.statusBar().showMessage("All devices disconnected.", 3000)
+
+    def _open_preferences(self) -> None:
+        dlg = _PreferencesDialog(self._config, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.statusBar().showMessage("Preferences saved.", 3000)
 
     def _show_about(self) -> None:
         self.statusBar().showMessage(

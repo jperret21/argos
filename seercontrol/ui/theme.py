@@ -1,4 +1,4 @@
-"""SeerControl visual theme.
+"""SeerControl visual theme — SpaceX-inspired aerospace UI.
 
 Single source of truth for all colors and the global Qt stylesheet.
 Apply once at startup via QApplication.setStyleSheet(get_stylesheet()).
@@ -8,27 +8,32 @@ Never hardcode colors in individual widgets — reference these constants.
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------
-# Color palette — dark observatory theme
+# Color palette — cold, precise, aerospace
 # ---------------------------------------------------------------------------
 
-ACCENT = "#58a6ff"        # blue — primary accents, interactive elements
-SUCCESS = "#3fb950"       # green — connected, OK, success states
-WARNING = "#f0883e"       # orange — warnings, non-critical issues
-DANGER = "#f85149"        # red — errors, destructive actions
-INFO = "#79c0ff"          # light blue — informational highlights
+ACCENT       = "#4fc3f7"   # cold electric blue — primary interactive
+SUCCESS      = "#00e5a0"   # cyan-green — connected, OK
+WARNING      = "#ffb347"   # amber — warnings
+DANGER       = "#ff4444"   # clean red — errors, destructive
+INFO         = "#b0bec5"   # slate — informational
 
-SURFACE_1 = "#0d1117"    # application background
-SURFACE_2 = "#161b22"    # panel / dock background
-SURFACE_3 = "#21262d"    # input, card background
-SURFACE_4 = "#30363d"    # borders, separators, hover
+SURFACE_1    = "#080a0c"   # near-black application background
+SURFACE_2    = "#0e1218"   # panel / dock background
+SURFACE_3    = "#141a22"   # input, card background
+SURFACE_4    = "#1e2733"   # borders, separators, hover
 
-TEXT_PRIMARY = "#e6edf3"
-TEXT_MUTED = "#8b949e"
-TEXT_DISABLED = "#484f58"
+TEXT_PRIMARY  = "#e8edf2"
+TEXT_MUTED    = "#6b7a8d"
+TEXT_DISABLED = "#3a4450"
+
+# Monospace font for data values (coordinates, numbers)
+FONT_MONO = '"JetBrains Mono", "Fira Code", "SF Mono", "Consolas", monospace'
+# Clean sans-serif for UI chrome
+FONT_UI   = '"Inter", "Helvetica Neue", "Segoe UI", "Arial", sans-serif'
 
 
 # ---------------------------------------------------------------------------
-# Log level colors (used in LogPanel)
+# Log level colors
 # ---------------------------------------------------------------------------
 
 LOG_COLORS: dict[str, str] = {
@@ -38,8 +43,8 @@ LOG_COLORS: dict[str, str] = {
     "WARNING":  WARNING,
     "ERROR":    DANGER,
     "CRITICAL": DANGER,
-    "CMD":      "#d2a8ff",   # purple — user commands
-    "DISC":     WARNING,     # discovery events
+    "CMD":      "#ce93d8",
+    "DISC":     WARNING,
 }
 
 
@@ -54,7 +59,7 @@ def get_stylesheet() -> str:
 QWidget {{
     background-color: {SURFACE_1};
     color: {TEXT_PRIMARY};
-    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    font-family: {FONT_UI};
     font-size: 12px;
 }}
 
@@ -65,23 +70,22 @@ QMainWindow {{
 
 QMainWindow::separator {{
     background-color: {SURFACE_4};
-    width: 2px;
-    height: 2px;
+    width: 1px;
+    height: 1px;
 }}
 
 /* ── Dock widgets ───────────────────────────────────────────────────────── */
 QDockWidget {{
     background-color: {SURFACE_2};
-    titlebar-close-icon: none;
-    titlebar-normal-icon: none;
 }}
 
 QDockWidget::title {{
     background-color: {SURFACE_2};
     color: {TEXT_MUTED};
-    padding: 6px 10px;
-    font-size: 10px;
-    letter-spacing: 1.5px;
+    padding: 5px 10px;
+    font-size: 9px;
+    font-family: {FONT_UI};
+    letter-spacing: 2px;
     text-transform: uppercase;
     border-bottom: 1px solid {SURFACE_4};
 }}
@@ -97,35 +101,40 @@ QMenuBar {{
     background-color: {SURFACE_2};
     color: {TEXT_PRIMARY};
     border-bottom: 1px solid {SURFACE_4};
-    padding: 2px 0;
+    padding: 2px 4px;
+    font-size: 12px;
+}}
+
+QMenuBar::item {{
+    padding: 4px 10px;
+    border-radius: 2px;
 }}
 
 QMenuBar::item:selected {{
     background-color: {SURFACE_4};
-    border-radius: 4px;
 }}
 
 QMenu {{
     background-color: {SURFACE_2};
     color: {TEXT_PRIMARY};
     border: 1px solid {SURFACE_4};
-    border-radius: 6px;
-    padding: 4px;
+    border-radius: 2px;
+    padding: 4px 0;
 }}
 
 QMenu::item {{
-    padding: 5px 20px 5px 12px;
-    border-radius: 4px;
+    padding: 6px 24px 6px 12px;
 }}
 
 QMenu::item:selected {{
     background-color: {SURFACE_4};
+    color: {ACCENT};
 }}
 
 QMenu::separator {{
     height: 1px;
     background-color: {SURFACE_4};
-    margin: 4px 8px;
+    margin: 4px 0;
 }}
 
 /* ── Status bar ─────────────────────────────────────────────────────────── */
@@ -134,6 +143,7 @@ QStatusBar {{
     color: {TEXT_MUTED};
     border-top: 1px solid {SURFACE_4};
     font-size: 11px;
+    font-family: {FONT_MONO};
 }}
 
 QStatusBar::item {{
@@ -142,37 +152,42 @@ QStatusBar::item {{
 
 /* ── Buttons ────────────────────────────────────────────────────────────── */
 QPushButton {{
-    background-color: {SURFACE_3};
+    background-color: transparent;
     color: {TEXT_PRIMARY};
     border: 1px solid {SURFACE_4};
-    border-radius: 6px;
-    padding: 6px 14px;
-    font-size: 12px;
+    border-radius: 2px;
+    padding: 5px 14px;
+    font-size: 11px;
+    font-family: {FONT_UI};
+    letter-spacing: 0.5px;
 }}
 
 QPushButton:hover {{
     background-color: {SURFACE_4};
     border-color: {ACCENT};
+    color: {ACCENT};
 }}
 
 QPushButton:pressed {{
-    background-color: {SURFACE_4};
+    background-color: {SURFACE_3};
 }}
 
 QPushButton:disabled {{
     color: {TEXT_DISABLED};
-    border-color: {SURFACE_4};
+    border-color: {SURFACE_3};
 }}
 
 QPushButton[class="primary"] {{
     background-color: {ACCENT};
     color: {SURFACE_1};
-    font-weight: bold;
+    font-weight: 600;
     border-color: {ACCENT};
+    letter-spacing: 1px;
 }}
 
 QPushButton[class="primary"]:hover {{
-    opacity: 0.85;
+    background-color: #6dcfff;
+    border-color: #6dcfff;
 }}
 
 QPushButton[class="danger"] {{
@@ -181,7 +196,7 @@ QPushButton[class="danger"] {{
 }}
 
 QPushButton[class="danger"]:hover {{
-    background-color: rgba(248, 81, 73, 0.1);
+    background-color: rgba(255, 68, 68, 0.1);
 }}
 
 QPushButton[class="success"] {{
@@ -189,21 +204,29 @@ QPushButton[class="success"] {{
     border-color: {SUCCESS};
 }}
 
+QPushButton[class="success"]:hover {{
+    background-color: rgba(0, 229, 160, 0.08);
+}}
+
 /* ── Inputs ─────────────────────────────────────────────────────────────── */
 QLineEdit, QSpinBox, QDoubleSpinBox {{
     background-color: {SURFACE_3};
     color: {TEXT_PRIMARY};
     border: 1px solid {SURFACE_4};
-    border-radius: 6px;
-    padding: 5px 8px;
+    border-radius: 2px;
+    padding: 4px 8px;
+    font-family: {FONT_MONO};
+    font-size: 11px;
     selection-background-color: {ACCENT};
+    selection-color: {SURFACE_1};
 }}
 
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
     border-color: {ACCENT};
+    background-color: {SURFACE_2};
 }}
 
-QLineEdit:disabled, QSpinBox:disabled {{
+QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {{
     color: {TEXT_DISABLED};
 }}
 
@@ -211,8 +234,13 @@ QSpinBox::up-button, QSpinBox::down-button,
 QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
     background-color: {SURFACE_4};
     border: none;
-    width: 16px;
-    border-radius: 3px;
+    width: 14px;
+    border-radius: 1px;
+}}
+
+QSpinBox::up-button:hover, QSpinBox::down-button:hover,
+QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {{
+    background-color: {ACCENT};
 }}
 
 /* ── ComboBox ───────────────────────────────────────────────────────────── */
@@ -220,8 +248,9 @@ QComboBox {{
     background-color: {SURFACE_3};
     color: {TEXT_PRIMARY};
     border: 1px solid {SURFACE_4};
-    border-radius: 6px;
-    padding: 5px 8px;
+    border-radius: 2px;
+    padding: 4px 8px;
+    font-size: 11px;
 }}
 
 QComboBox:focus {{
@@ -230,14 +259,60 @@ QComboBox:focus {{
 
 QComboBox::drop-down {{
     border: none;
-    width: 20px;
+    width: 18px;
 }}
 
 QComboBox QAbstractItemView {{
     background-color: {SURFACE_2};
     color: {TEXT_PRIMARY};
     border: 1px solid {SURFACE_4};
+    border-radius: 2px;
     selection-background-color: {SURFACE_4};
+    selection-color: {ACCENT};
+}}
+
+/* ── Slider ─────────────────────────────────────────────────────────────── */
+QSlider::groove:horizontal {{
+    background-color: {SURFACE_4};
+    height: 2px;
+    border-radius: 1px;
+}}
+
+QSlider::handle:horizontal {{
+    background-color: {ACCENT};
+    width: 10px;
+    height: 10px;
+    border-radius: 5px;
+    margin: -4px 0;
+}}
+
+QSlider::sub-page:horizontal {{
+    background-color: {ACCENT};
+    height: 2px;
+    border-radius: 1px;
+}}
+
+/* ── CheckBox ───────────────────────────────────────────────────────────── */
+QCheckBox {{
+    spacing: 8px;
+    font-size: 11px;
+}}
+
+QCheckBox::indicator {{
+    width: 14px;
+    height: 14px;
+    border: 1px solid {SURFACE_4};
+    border-radius: 2px;
+    background-color: {SURFACE_3};
+}}
+
+QCheckBox::indicator:checked {{
+    background-color: {ACCENT};
+    border-color: {ACCENT};
+}}
+
+QCheckBox::indicator:hover {{
+    border-color: {ACCENT};
 }}
 
 /* ── Labels ─────────────────────────────────────────────────────────────── */
@@ -252,6 +327,7 @@ QLabel[class="muted"] {{
 }}
 
 QLabel[class="value"] {{
+    font-family: {FONT_MONO};
     font-size: 16px;
     font-weight: bold;
     color: {ACCENT};
@@ -259,8 +335,8 @@ QLabel[class="value"] {{
 
 QLabel[class="section"] {{
     color: {TEXT_MUTED};
-    font-size: 10px;
-    letter-spacing: 1.5px;
+    font-size: 9px;
+    letter-spacing: 2px;
     text-transform: uppercase;
 }}
 
@@ -268,12 +344,13 @@ QLabel[class="section"] {{
 QGroupBox {{
     background-color: {SURFACE_2};
     border: 1px solid {SURFACE_4};
-    border-radius: 8px;
-    margin-top: 8px;
+    border-radius: 2px;
+    margin-top: 10px;
     padding-top: 8px;
-    font-size: 10px;
+    font-size: 9px;
+    font-family: {FONT_UI};
     color: {TEXT_MUTED};
-    letter-spacing: 1px;
+    letter-spacing: 2px;
     text-transform: uppercase;
 }}
 
@@ -281,6 +358,16 @@ QGroupBox::title {{
     subcontrol-origin: margin;
     left: 10px;
     padding: 0 4px;
+}}
+
+/* ── Dialogs ────────────────────────────────────────────────────────────── */
+QDialog {{
+    background-color: {SURFACE_2};
+    border: 1px solid {SURFACE_4};
+}}
+
+QDialogButtonBox QPushButton {{
+    min-width: 80px;
 }}
 
 /* ── Scroll areas ───────────────────────────────────────────────────────── */
@@ -291,13 +378,13 @@ QScrollArea {{
 
 QScrollBar:vertical {{
     background: {SURFACE_2};
-    width: 8px;
-    border-radius: 4px;
+    width: 6px;
+    border-radius: 3px;
 }}
 
 QScrollBar::handle:vertical {{
     background: {SURFACE_4};
-    border-radius: 4px;
+    border-radius: 3px;
     min-height: 20px;
 }}
 
@@ -309,15 +396,30 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
     height: 0;
 }}
 
+QScrollBar:horizontal {{
+    background: {SURFACE_2};
+    height: 6px;
+    border-radius: 3px;
+}}
+
+QScrollBar::handle:horizontal {{
+    background: {SURFACE_4};
+    border-radius: 3px;
+    min-width: 20px;
+}}
+
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+    width: 0;
+}}
+
 /* ── Splitter ───────────────────────────────────────────────────────────── */
 QSplitter::handle {{
     background-color: {SURFACE_4};
 }}
 
-/* ── Tab widget ─────────────────────────────────────────────────────────── */
+/* ── Tab bar (dock tabs) ────────────────────────────────────────────────── */
 QTabWidget::pane {{
     border: 1px solid {SURFACE_4};
-    border-radius: 6px;
     background: {SURFACE_2};
 }}
 
@@ -325,14 +427,15 @@ QTabBar::tab {{
     background: {SURFACE_3};
     color: {TEXT_MUTED};
     border: 1px solid {SURFACE_4};
-    padding: 6px 16px;
-    border-top-left-radius: 6px;
-    border-top-right-radius: 6px;
+    padding: 5px 14px;
+    font-size: 9px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
 }}
 
 QTabBar::tab:selected {{
     background: {SURFACE_2};
-    color: {TEXT_PRIMARY};
+    color: {ACCENT};
     border-bottom-color: {SURFACE_2};
 }}
 
@@ -344,16 +447,16 @@ QTabBar::tab:hover {{
 QProgressBar {{
     background-color: {SURFACE_3};
     border: 1px solid {SURFACE_4};
-    border-radius: 4px;
+    border-radius: 1px;
     text-align: center;
     color: {TEXT_PRIMARY};
-    font-size: 11px;
-    height: 12px;
+    font-size: 10px;
+    height: 10px;
 }}
 
 QProgressBar::chunk {{
     background-color: {ACCENT};
-    border-radius: 3px;
+    border-radius: 1px;
 }}
 
 /* ── Tooltips ───────────────────────────────────────────────────────────── */
@@ -361,8 +464,20 @@ QToolTip {{
     background-color: {SURFACE_3};
     color: {TEXT_PRIMARY};
     border: 1px solid {SURFACE_4};
-    border-radius: 4px;
+    border-radius: 2px;
     padding: 4px 8px;
     font-size: 11px;
+}}
+
+/* ── Text edit (log panel) ──────────────────────────────────────────────── */
+QTextEdit, QPlainTextEdit {{
+    background-color: {SURFACE_1};
+    color: {TEXT_PRIMARY};
+    border: 1px solid {SURFACE_4};
+    border-radius: 2px;
+    font-family: {FONT_MONO};
+    font-size: 11px;
+    selection-background-color: {ACCENT};
+    selection-color: {SURFACE_1};
 }}
 """
