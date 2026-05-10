@@ -49,8 +49,10 @@ class MountPanel(QWidget):
         status_changed: Emitted with a short status string for the main window status bar.
     """
 
-    log_message = pyqtSignal(str, str)       # (level, message)
-    status_changed = pyqtSignal(str)
+    log_message          = pyqtSignal(str, str)   # (level, message)
+    status_changed       = pyqtSignal(str)
+    telescope_connected  = pyqtSignal(object)    # Telescope | None
+    position_updated_pub = pyqtSignal(object)    # MountPosition — public relay
 
     def __init__(self, config: Config, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -61,6 +63,7 @@ class MountPanel(QWidget):
 
         self._build_ui()
         self._load_config()
+        self.setMaximumWidth(270)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -350,6 +353,7 @@ class MountPanel(QWidget):
             self._log("OK", f"Connected: {name}")
             self._set_connected_state(True)
             self._start_polling()
+            self.telescope_connected.emit(self._telescope)
 
         except AlpacaError as exc:
             self._log("ERROR", f"Connection failed: {exc}")
@@ -366,6 +370,7 @@ class MountPanel(QWidget):
         self._set_connected_state(False)
         self._clear_position()
         self._log("INFO", "Disconnected from mount.")
+        self.telescope_connected.emit(None)
 
     def _set_connected_state(self, connected: bool) -> None:
         self._connect_btn.setEnabled(not connected)
@@ -440,6 +445,7 @@ class MountPanel(QWidget):
         self._tracking_btn.blockSignals(False)
 
         self._status_coords(position)
+        self.position_updated_pub.emit(position)
 
     def _status_coords(self, pos: MountPosition) -> None:
         self.status_changed.emit(
@@ -455,6 +461,7 @@ class MountPanel(QWidget):
         self._set_connected_state(False)
         self._clear_position()
         self._telescope = None
+        self.telescope_connected.emit(None)
 
     # ------------------------------------------------------------------
     # Commands

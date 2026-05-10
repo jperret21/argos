@@ -1,13 +1,13 @@
 """Camera control panel — live preview + exposure/gain controls + FITS saving.
 
-Dockable panel providing:
+Compact dockable panel providing:
   - Connect / disconnect camera and filter wheel (Alpaca)
   - Live preview loop (short exposures via ImageBytes)
-  - Exposure time, gain, channel display controls
-  - Debayer GRBG→R/G/B/RGB or raw display
   - HFD (Half-Flux Diameter) focus metric on every frame
-  - FitsViewer for real-time image display
   - FITS file saving with full headers
+
+The FitsViewer is NOT embedded here — frames are emitted via frame_display
+for the central viewer to display.
 """
 
 from __future__ import annotations
@@ -40,7 +40,6 @@ from seercontrol.core.config import Config
 from seercontrol.core.imaging.debayer import compute_hfd, extract_channel
 from seercontrol.core.imaging.fits_writer import FITSWriter
 from seercontrol.ui import theme
-from seercontrol.ui.widgets.fits_viewer import FitsViewer
 from seercontrol.workers.exposure_worker import LivePreviewWorker
 
 logger = logging.getLogger(__name__)
@@ -49,25 +48,32 @@ _IMAGE_TYPE = "Light Frame"
 
 
 class CameraPanel(QWidget):
-    """Live camera preview and exposure control panel.
+    """Compact camera control panel (no embedded viewer).
 
     Signals:
-        log_message:    (level, message) for the session log.
-        status_changed: Short status string for the main window status bar.
+        log_message:      (level, message) for the session log.
+        status_changed:   Short status string for the main window status bar.
+        frame_display:    np.ndarray to display in the central FitsViewer.
+        camera_connected: Camera instance on connect, None on disconnect.
     """
 
-    log_message    = pyqtSignal(str, str)
-    status_changed = pyqtSignal(str)
+    log_message      = pyqtSignal(str, str)
+    status_changed   = pyqtSignal(str)
+    frame_display    = pyqtSignal(object)   # np.ndarray
+    camera_connected = pyqtSignal(object)   # Camera | None
 
     def __init__(self, config: Config, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._config      = config
-        self._camera:      Camera      | None = None
-        self._filterwheel: FilterWheel | None = None
-        self._worker:      LivePreviewWorker | None = None
-        self._frame_index: int = 0
+        self._config        = config
+        self._camera:       Camera      | None = None
+        self._filterwheel:  FilterWheel | None = None
+        self._worker:       LivePreviewWorker | None = None
+        self._frame_index:  int = 0
+        self._channel:      str = "Raw"
+        self._last_raw_frame: np.ndarray | None = None
 
         self._build_ui()
+        self.setMaximumWidth(280)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -75,26 +81,29 @@ class CameraPanel(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(8)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(6)
 
         root.addWidget(self._build_connection_group())
         root.addWidget(self._build_controls_group())
         root.addWidget(self._build_filter_group())
         root.addWidget(self._build_save_group())
-        root.addWidget(self._build_viewer(), stretch=1)
+        root.addStretch()
 
     def _build_connection_group(self) -> QGroupBox:
         group = QGroupBox("Camera")
         layout = QVBoxLayout(group)
-        layout.setSpacing(6)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
 
         btn_row = QHBoxLayout()
         self._connect_btn = QPushButton("Connect")
+        self._connect_btn.setFixedHeight(24)
         self._connect_btn.setProperty("class", "primary")
         self._connect_btn.clicked.connect(self._on_connect)
 
         self._disconnect_btn = QPushButton("Disconnect")
+        self._disconnect_btn.setFixedHeight(24)
         self._disconnect_btn.setProperty("class", "danger")
         self._disconnect_btn.setEnabled(False)
         self._disconnect_btn.clicked.connect(self._on_disconnect)
@@ -106,7 +115,7 @@ class CameraPanel(QWidget):
         self._status_lbl = QLabel("Disconnected")
         self._status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._status_lbl.setStyleSheet(
-            f"color:{theme.TEXT_MUTED}; font-size:11px; padding:3px;"
+            f"color:{theme.TEXT_MUTED}; font-size:11px; padding:2px;"
         )
         layout.addWidget(self._status_lbl)
         return group
@@ -114,11 +123,14 @@ class CameraPanel(QWidget):
     def _build_controls_group(self) -> QGroupBox:
         group = QGroupBox("Acquisition")
         layout = QVBoxLayout(group)
-        layout.setSpacing(6)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
 
         form = QFormLayout()
+        form.setSpacing(4)
 
         self._exposure_spin = QDoubleSpinBox()
+        self._exposure_spin.setFixedHeight(24)
         self._exposure_spin.setRange(0.001, 60.0)
         self._exposure_spin.setDecimals(3)
         self._exposure_spin.setValue(1.0)
@@ -127,20 +139,10 @@ class CameraPanel(QWidget):
         form.addRow(_muted("Exposure"), self._exposure_spin)
 
         self._gain_spin = QSpinBox()
+        self._gain_spin.setFixedHeight(24)
         self._gain_spin.setRange(0, 600)
         self._gain_spin.setValue(80)
         form.addRow(_muted("Gain"), self._gain_spin)
-
-        self._channel_combo = QComboBox()
-        for ch in ["Raw", "R", "G", "B", "RGB"]:
-            self._channel_combo.addItem(ch)
-        self._channel_combo.setCurrentIndex(0)
-        self._channel_combo.setToolTip(
-            "Raw   — direct sensor data (no debayer)\n"
-            "R/G/B — single Bayer channel, half resolution\n"
-            "RGB   — colour composite, half resolution"
-        )
-        form.addRow(_muted("Channel"), self._channel_combo)
 
         layout.addLayout(form)
 
@@ -149,7 +151,7 @@ class CameraPanel(QWidget):
         hfd_row.addWidget(_muted("HFD"))
         self._hfd_lbl = QLabel("—")
         self._hfd_lbl.setStyleSheet(
-            f"color:{theme.ACCENT}; font-size:13px; font-weight:bold;"
+            f"color:{theme.ACCENT}; font-size:12px; font-weight:bold;"
         )
         self._hfd_lbl.setToolTip(
             "Half-Flux Diameter — focus metric.\n"
@@ -161,12 +163,13 @@ class CameraPanel(QWidget):
 
         btn_row = QHBoxLayout()
         self._preview_btn = QPushButton("▶  Start Preview")
+        self._preview_btn.setFixedHeight(26)
         self._preview_btn.setProperty("class", "success")
         self._preview_btn.setEnabled(False)
         self._preview_btn.clicked.connect(self._on_toggle_preview)
 
         self._state_lbl = QLabel("—")
-        self._state_lbl.setStyleSheet(f"color:{theme.TEXT_MUTED}; font-size:11px;")
+        self._state_lbl.setStyleSheet(f"color:{theme.TEXT_MUTED}; font-size:10px;")
         self._state_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         btn_row.addWidget(self._preview_btn)
@@ -177,44 +180,50 @@ class CameraPanel(QWidget):
 
     def _build_filter_group(self) -> QGroupBox:
         group = QGroupBox("Filter Wheel")
-        layout = QHBoxLayout(group)
-        layout.setSpacing(8)
-
-        self._fw_status_lbl = QLabel("—")
-        self._fw_status_lbl.setStyleSheet(f"color:{theme.TEXT_MUTED}; font-size:11px;")
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
 
         self._fw_combo = QComboBox()
+        self._fw_combo.setFixedHeight(24)
         for pos, name in POSITION_NAMES.items():
             self._fw_combo.addItem(f"{pos} — {name}")
         self._fw_combo.setEnabled(False)
         self._fw_combo.currentIndexChanged.connect(self._on_filter_changed)
 
+        row = QHBoxLayout()
         self._fw_connect_btn = QPushButton("Connect FW")
         self._fw_connect_btn.setFixedHeight(24)
         self._fw_connect_btn.clicked.connect(self._on_fw_connect)
 
-        layout.addWidget(_muted("Position"))
-        layout.addWidget(self._fw_combo, stretch=1)
-        layout.addWidget(self._fw_status_lbl)
+        self._fw_status_lbl = QLabel("—")
+        self._fw_status_lbl.setStyleSheet(f"color:{theme.TEXT_MUTED}; font-size:11px;")
+
+        row.addWidget(self._fw_combo, stretch=1)
+        row.addWidget(self._fw_status_lbl)
+        layout.addLayout(row)
         layout.addWidget(self._fw_connect_btn)
         return group
 
     def _build_save_group(self) -> QGroupBox:
         group = QGroupBox("Save Frames")
         layout = QFormLayout(group)
-        layout.setSpacing(6)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
 
         self._save_chk = QCheckBox("Save FITS files")
         layout.addRow(self._save_chk)
 
         self._object_edit = QLineEdit()
+        self._object_edit.setFixedHeight(24)
         self._object_edit.setPlaceholderText("e.g. M42, NGC 224")
         layout.addRow(_muted("Object"), self._object_edit)
 
         self._fits_filter_combo = QComboBox()
+        self._fits_filter_combo.setFixedHeight(24)
         for f in ["LRGB", "Ha", "OIII", "SII", "IR-cut"]:
             self._fits_filter_combo.addItem(f)
-        layout.addRow(_muted("FITS Filter"), self._fits_filter_combo)
+        layout.addRow(_muted("Filter"), self._fits_filter_combo)
 
         self._save_dir_lbl = QLabel()
         self._save_dir_lbl.setStyleSheet(f"color:{theme.TEXT_MUTED}; font-size:10px;")
@@ -224,16 +233,42 @@ class CameraPanel(QWidget):
 
         return group
 
-    def _build_viewer(self) -> QWidget:
-        self._viewer = FitsViewer()
-        return self._viewer
-
     def _update_save_dir_label(self) -> None:
         try:
             base = self._config.sessions_path.parent
         except AttributeError:
             base = Path.home() / "SeerControl"
         self._save_dir_lbl.setText(str(base / "sessions" / "…"))
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def set_channel(self, channel: str) -> None:
+        """Update the active channel and re-emit the last frame.
+
+        Args:
+            channel: One of Raw, R, G, B, RGB.
+        """
+        self._channel = channel
+        if self._last_raw_frame is not None:
+            display_arr = extract_channel(self._last_raw_frame, self._channel)
+            self.frame_display.emit(display_arr)
+
+    def update_acquisition_settings(self, gain: int, exposure: float) -> None:
+        """Sync spinboxes from the toolbar (no preview restart needed).
+
+        Args:
+            gain:     New gain value.
+            exposure: New exposure value in seconds.
+        """
+        self._gain_spin.blockSignals(True)
+        self._gain_spin.setValue(gain)
+        self._gain_spin.blockSignals(False)
+
+        self._exposure_spin.blockSignals(True)
+        self._exposure_spin.setValue(exposure)
+        self._exposure_spin.blockSignals(False)
 
     # ------------------------------------------------------------------
     # Camera connection
@@ -264,6 +299,7 @@ class CameraPanel(QWidget):
                 f"gain {self._camera.gain_min}–{self._camera.gain_max}",
             )
             self._set_connected(True)
+            self.camera_connected.emit(self._camera)
 
         except AlpacaError as exc:
             self._log("ERROR", f"Camera connection failed: {exc}")
@@ -277,8 +313,10 @@ class CameraPanel(QWidget):
             self._camera = None
         self._set_connected(False)
         self._frame_index = 0
+        self._last_raw_frame = None
         self._hfd_lbl.setText("—")
         self._log("INFO", "Camera disconnected.")
+        self.camera_connected.emit(None)
 
     def _set_connected(self, connected: bool) -> None:
         self._connect_btn.setEnabled(not connected)
@@ -289,7 +327,7 @@ class CameraPanel(QWidget):
         text  = "Connected" if connected else "Disconnected"
         self._status_lbl.setText(text)
         self._status_lbl.setStyleSheet(
-            f"color:{color}; font-size:11px; padding:3px;"
+            f"color:{color}; font-size:11px; padding:2px;"
             + (" font-weight:bold;" if connected else "")
         )
         self.status_changed.emit(f"Camera {'connected' if connected else 'disconnected'}")
@@ -343,12 +381,11 @@ class CameraPanel(QWidget):
         if not self._camera:
             return
 
-        self._viewer.reset()
         self._worker = LivePreviewWorker(
             self._camera,
             exposure=self._exposure_spin.value(),
             gain=self._gain_spin.value(),
-            preview_scale=1,  # debayer already halves resolution
+            preview_scale=1,
         )
         self._worker.frame_ready.connect(self._on_frame)
         self._worker.status_updated.connect(self._state_lbl.setText)
@@ -364,7 +401,7 @@ class CameraPanel(QWidget):
             "CMD",
             f"Preview started  {self._exposure_spin.value():.1f}s  "
             f"gain {self._gain_spin.value()}  "
-            f"channel {self._channel_combo.currentText()}",
+            f"channel {self._channel}",
         )
 
     def _stop_preview(self) -> None:
@@ -392,7 +429,9 @@ class CameraPanel(QWidget):
                 scale=1,
             )
 
-        # HFD on raw green channel (fast, half-res)
+        self._last_raw_frame = full_arr
+
+        # HFD on raw green channel
         hfd = compute_hfd(full_arr)
         if hfd is not None:
             self._hfd_lbl.setText(f"{hfd:.1f} px")
@@ -403,15 +442,14 @@ class CameraPanel(QWidget):
             else:
                 color = theme.DANGER
             self._hfd_lbl.setStyleSheet(
-                f"color:{color}; font-size:13px; font-weight:bold;"
+                f"color:{color}; font-size:12px; font-weight:bold;"
             )
         else:
             self._hfd_lbl.setText("—")
 
-        # Apply debayer / channel selection for display
-        channel = self._channel_combo.currentText()
-        display_arr = extract_channel(full_arr, channel)
-        self._viewer.display(display_arr)
+        # Emit display array for central viewer
+        display_arr = extract_channel(full_arr, self._channel)
+        self.frame_display.emit(display_arr)
 
         # Save full-resolution raw FITS if requested
         if self._save_chk.isChecked():

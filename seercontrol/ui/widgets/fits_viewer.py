@@ -6,18 +6,23 @@ Displays either:
 
 Controls:
   - Auto Stretch button (grayscale only)
+  - Gamma correction via set_gamma()
   - Native PyQtGraph zoom / pan and interactive histogram
 """
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout, QWidget
 
+logger = logging.getLogger(__name__)
+
 
 class FitsViewer(QWidget):
-    """Image viewer with histogram and auto-stretch.
+    """Image viewer with histogram, auto-stretch, and gamma correction.
 
     Args:
         parent: Optional parent widget.
@@ -27,21 +32,14 @@ class FitsViewer(QWidget):
         super().__init__(parent)
         self._first_frame = True
         self._is_rgb = False
+        self._last_arr: np.ndarray | None = None
+        self._gamma: float = 1.0
         self._build_ui()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-
-        toolbar = QHBoxLayout()
-        self._auto_btn = QPushButton("Auto Stretch")
-        self._auto_btn.setFixedHeight(24)
-        self._auto_btn.setToolTip("Reset display levels to 1%–99% percentile")
-        self._auto_btn.clicked.connect(self._auto_stretch)
-        toolbar.addStretch()
-        toolbar.addWidget(self._auto_btn)
-        layout.addLayout(toolbar)
+        layout.setSpacing(0)
 
         pg.setConfigOptions(imageAxisOrder="row-major")
         self._view = pg.ImageView()
@@ -60,10 +58,13 @@ class FitsViewer(QWidget):
         if arr.ndim not in (2, 3):
             return
 
+        self._last_arr = arr
         self._is_rgb = arr.ndim == 3
 
+        display = self._apply_gamma(arr)
+
         self._view.setImage(
-            arr,
+            display,
             autoRange=False,
             autoLevels=False,
             autoHistogramRange=False,
@@ -73,7 +74,38 @@ class FitsViewer(QWidget):
             self._auto_stretch()
             self._first_frame = False
 
-        self._auto_btn.setEnabled(not self._is_rgb)
+    def set_gamma(self, value: float) -> None:
+        """Set gamma correction value and re-render the last frame.
+
+        Args:
+            value: Gamma exponent. 1.0 = neutral. < 1.0 darkens, > 1.0 brightens.
+        """
+        self._gamma = max(0.01, value)
+        if self._last_arr is not None:
+            self.display(self._last_arr)
+
+    def _apply_gamma(self, arr: np.ndarray) -> np.ndarray:
+        """Apply gamma correction to an array.
+
+        Args:
+            arr: Input array (uint16 2-D or uint8 3-D).
+
+        Returns:
+            Gamma-corrected array of the same dtype and shape.
+        """
+        if self._gamma == 1.0:
+            return arr
+
+        if arr.ndim == 2:
+            # uint16 grayscale
+            f = arr.astype(np.float32) / 65535.0
+            f = np.power(np.clip(f, 0.0, 1.0), 1.0 / self._gamma)
+            return (f * 65535.0).astype(np.uint16)
+        else:
+            # uint8 RGB
+            f = arr.astype(np.float32) / 255.0
+            f = np.power(np.clip(f, 0.0, 1.0), 1.0 / self._gamma)
+            return (f * 255.0).astype(np.uint8)
 
     def _auto_stretch(self) -> None:
         """Set display levels to 1%–99% percentile (grayscale) or 0–255 (RGB)."""
@@ -93,3 +125,5 @@ class FitsViewer(QWidget):
         """Reset viewer state (call when switching targets)."""
         self._first_frame = True
         self._is_rgb = False
+        self._last_arr = None
+        self._gamma = 1.0

@@ -1,7 +1,11 @@
 """SeerControl main application window.
 
-QMainWindow with dockable panels. Each panel is a QDockWidget that can be
-moved, resized, floated, or hidden independently by the user.
+Layout:
+  - Central area: ImageToolbar (36px) + FitsViewer (stretch)
+  - Left dock:    MountPanel  (~270px)  [tabbed with FocuserPlaceholder]
+  - Right dock:   CameraPanel (~280px)  [tabbed with SkyMapPanel]
+  - Bottom dock:  SequencerPlaceholder  (120px)
+
 Window state (dock positions, sizes) is persisted in config.
 """
 
@@ -17,31 +21,74 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMainWindow,
     QStatusBar,
-    QWidget,
     QVBoxLayout,
+    QWidget,
 )
 
 from seercontrol.core.config import Config
 from seercontrol.ui import theme
 from seercontrol.ui.panels.camera_panel import CameraPanel
 from seercontrol.ui.panels.mount_panel import MountPanel
+from seercontrol.ui.widgets.fits_viewer import FitsViewer
+from seercontrol.ui.widgets.image_toolbar import ImageToolbar
 
 logger = logging.getLogger(__name__)
 
+_CFG_GEOMETRY = "ui.window_geometry"
+_CFG_STATE    = "ui.window_state"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 class _PlaceholderPanel(QWidget):
-    """Temporary placeholder shown until a real panel is implemented."""
+    """Temporary placeholder panel."""
 
     def __init__(self, name: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
         label = QLabel(f"{name}\n(coming soon)")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setProperty("class", "muted")
         layout.addWidget(label)
 
+
+class _StellPlaceholder(QWidget):
+    """Placeholder for the Stellarium integration panel (Sprint 5)."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.setSpacing(8)
+        title = QLabel("Stellarium")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(f"color:{theme.ACCENT}; font-size:14px; font-weight:bold;")
+        desc = QLabel(
+            "Connexion via Remote Control Plugin\n"
+            "(port 8090)\n\n"
+            "Coming in Sprint 5"
+        )
+        desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        desc.setStyleSheet(f"color:{theme.TEXT_MUTED}; font-size:11px;")
+        lay.addWidget(title)
+        lay.addWidget(desc)
+
+
+def _make_dock(title: str, obj_name: str, widget: QWidget) -> QDockWidget:
+    """Create a QDockWidget with a lowercase compact title."""
+    dock = QDockWidget(title.lower(), None)
+    dock.setObjectName(f"dock_{obj_name}")
+    dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+    dock.setWidget(widget)
+    return dock
+
+
+# ---------------------------------------------------------------------------
+# Main window
+# ---------------------------------------------------------------------------
 
 class MainWindow(QMainWindow):
     """Main application window.
@@ -57,8 +104,10 @@ class MainWindow(QMainWindow):
         self._config = config
 
         self._setup_window()
+        self._build_central()
         self._build_menu()
         self._build_docks()
+        self._wire_signals()
         self._build_status_bar()
         self._restore_state()
 
@@ -71,14 +120,34 @@ class MainWindow(QMainWindow):
     def _setup_window(self) -> None:
         self.setWindowTitle(f"SeerControl  v{self.APP_VERSION}")
         self.setMinimumSize(1200, 700)
-        self.resize(1400, 900)
-
-        # Allow all dock areas
+        self.resize(1440, 900)
         self.setDockOptions(
             QMainWindow.DockOption.AllowNestedDocks
             | QMainWindow.DockOption.AllowTabbedDocks
             | QMainWindow.DockOption.AnimatedDocks
         )
+
+    # ------------------------------------------------------------------
+    # Central widget: ImageToolbar + FitsViewer
+    # ------------------------------------------------------------------
+
+    def _build_central(self) -> None:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self._image_toolbar = ImageToolbar()
+        self._viewer        = FitsViewer()
+
+        layout.addWidget(self._image_toolbar)
+        layout.addWidget(self._viewer, stretch=1)
+
+        self.setCentralWidget(container)
+
+    # ------------------------------------------------------------------
+    # Menu
+    # ------------------------------------------------------------------
 
     def _build_menu(self) -> None:
         menu_bar = self.menuBar()
@@ -100,7 +169,6 @@ class MainWindow(QMainWindow):
 
         # ── View ──────────────────────────────────────────────────────
         self._view_menu = menu_bar.addMenu("View")
-        # Dock toggle actions are added dynamically in _build_docks()
 
         reset_layout_action = QAction("Reset Layout", self)
         reset_layout_action.triggered.connect(self._reset_layout)
@@ -126,62 +194,48 @@ class MainWindow(QMainWindow):
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
 
+    # ------------------------------------------------------------------
+    # Docks
+    # ------------------------------------------------------------------
+
     def _build_docks(self) -> None:
-        """Create all dockable panels and register them in the View menu."""
         self._docks: dict[str, QDockWidget] = {}
 
-        # Mount panel
-        self._mount_panel = MountPanel(config=self._config, parent=self)
-        self._mount_panel.log_message.connect(self._on_log_message)
-        self._mount_panel.status_changed.connect(self._on_status_changed)
+        # ── Real panels ───────────────────────────────────────────────
+        self._mount_panel   = MountPanel(config=self._config, parent=self)
+        self._camera_panel  = CameraPanel(config=self._config, parent=self)
 
-        # Camera panel
-        self._camera_panel = CameraPanel(config=self._config, parent=self)
-        self._camera_panel.log_message.connect(self._on_log_message)
-        self._camera_panel.status_changed.connect(self._on_status_changed)
+        # ── Dock objects ──────────────────────────────────────────────
+        mount_dock   = _make_dock("Mount",    "mount",   self._mount_panel)
+        camera_dock  = _make_dock("Camera",   "camera",  self._camera_panel)
 
-        real_panels: list[tuple[str, Qt.DockWidgetArea, QWidget]] = [
-            ("Mount",  Qt.DockWidgetArea.LeftDockWidgetArea,  self._mount_panel),
-            ("Camera", Qt.DockWidgetArea.RightDockWidgetArea, self._camera_panel),
-        ]
+        # Placeholders — replaced when PRs are merged
+        focuser_dock    = _make_dock("Focuser",    "focuser",    _PlaceholderPanel("Focuser"))
+        sequencer_dock  = _make_dock("Sequencer",  "sequencer",  _PlaceholderPanel("Sequencer"))
+        stellarium_dock = _make_dock("Stellarium", "stellarium", _StellPlaceholder())
 
-        placeholder_panels: list[tuple[str, Qt.DockWidgetArea]] = [
-            ("Sequencer",    Qt.DockWidgetArea.RightDockWidgetArea),
-            ("Focuser",      Qt.DockWidgetArea.LeftDockWidgetArea),
-            ("Filter Wheel", Qt.DockWidgetArea.LeftDockWidgetArea),
-            ("Sky Map",      Qt.DockWidgetArea.BottomDockWidgetArea),
-            ("Session Log",  Qt.DockWidgetArea.BottomDockWidgetArea),
-        ]
+        # ── Add docks ─────────────────────────────────────────────────
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea,   mount_dock)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea,   focuser_dock)
+        self.tabifyDockWidget(mount_dock, focuser_dock)
+        mount_dock.raise_()
 
-        first_right: QDockWidget | None = None
-        first_bottom: QDockWidget | None = None
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea,  camera_dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea,  stellarium_dock)
+        self.tabifyDockWidget(camera_dock, stellarium_dock)
+        camera_dock.raise_()
 
-        all_panels: list[tuple[str, Qt.DockWidgetArea, QWidget]] = (
-            real_panels
-            + [(name, area, _PlaceholderPanel(name)) for name, area in placeholder_panels]
-        )
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, sequencer_dock)
 
-        for name, area, widget in all_panels:
-            dock = QDockWidget(name.upper(), self)
-            dock.setObjectName(f"dock_{name.replace(' ', '_').lower()}")
-            dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
-            dock.setWidget(widget)
-
-            self.addDockWidget(area, dock)
-
-            if area == Qt.DockWidgetArea.RightDockWidgetArea:
-                if first_right is None:
-                    first_right = dock
-                else:
-                    self.tabifyDockWidget(first_right, dock)
-            elif area == Qt.DockWidgetArea.BottomDockWidgetArea:
-                if first_bottom is None:
-                    first_bottom = dock
-                else:
-                    self.tabifyDockWidget(first_bottom, dock)
-
+        # ── View menu toggles ──────────────────────────────────────────
+        for name, dock in [
+            ("Mount", mount_dock),
+            ("Camera", camera_dock),
+            ("Stellarium", stellarium_dock),
+            ("Focuser", focuser_dock),
+            ("Sequencer", sequencer_dock),
+        ]:
             self._docks[name] = dock
-
             toggle = dock.toggleViewAction()
             toggle.setText(name)
             self._view_menu.insertAction(
@@ -189,17 +243,51 @@ class MainWindow(QMainWindow):
                 toggle,
             )
 
-        if first_right:
-            first_right.raise_()
-        if first_bottom:
-            first_bottom.raise_()
+    # ------------------------------------------------------------------
+    # Signal wiring
+    # ------------------------------------------------------------------
+
+    def _wire_signals(self) -> None:
+        # Panel → status bar / log
+        self._mount_panel.log_message.connect(self._on_log_message)
+        self._mount_panel.status_changed.connect(self._on_status_changed)
+        self._camera_panel.log_message.connect(self._on_log_message)
+        self._camera_panel.status_changed.connect(self._on_status_changed)
+
+        # ImageToolbar → viewer / camera
+        self._image_toolbar.gamma_changed.connect(self._viewer.set_gamma)
+        self._image_toolbar.auto_stretch_requested.connect(self._viewer._auto_stretch)
+        self._image_toolbar.channel_changed.connect(self._camera_panel.set_channel)
+
+        self._image_toolbar.gain_changed.connect(
+            lambda g: self._camera_panel.update_acquisition_settings(
+                g, self._camera_panel._exposure_spin.value()
+            )
+        )
+        self._image_toolbar.exposure_changed.connect(
+            lambda e: self._camera_panel.update_acquisition_settings(
+                self._camera_panel._gain_spin.value(), e
+            )
+        )
+
+        # Camera panel → viewer
+        self._camera_panel.frame_display.connect(self._viewer.display)
+
+        # position_updated_pub will wire to Stellarium panel in a future sprint
+
+    # ------------------------------------------------------------------
+    # Log / status
+    # ------------------------------------------------------------------
 
     def _on_log_message(self, level: str, message: str) -> None:
-        """Relay log messages from panels to the status bar (until LogPanel is built)."""
         self.statusBar().showMessage(f"[{level}] {message}", 5000)
 
     def _on_status_changed(self, text: str) -> None:
         self.set_connection_status(text)
+
+    # ------------------------------------------------------------------
+    # Status bar
+    # ------------------------------------------------------------------
 
     def _build_status_bar(self) -> None:
         status_bar = QStatusBar()
@@ -219,8 +307,8 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _restore_state(self) -> None:
-        geometry_b64 = self._config.get("ui.window_geometry")
-        state_b64 = self._config.get("ui.window_state")
+        geometry_b64 = self._config.get(_CFG_GEOMETRY)
+        state_b64    = self._config.get(_CFG_STATE)
 
         if geometry_b64:
             try:
@@ -236,19 +324,18 @@ class MainWindow(QMainWindow):
 
     def _save_state(self) -> None:
         geometry_b64 = base64.b64encode(bytes(self.saveGeometry())).decode()
-        state_b64 = base64.b64encode(bytes(self.saveState())).decode()
-        self._config.set("ui.window_geometry", geometry_b64)
-        self._config.set("ui.window_state", state_b64)
+        state_b64    = base64.b64encode(bytes(self.saveState())).decode()
+        self._config.set(_CFG_GEOMETRY, geometry_b64)
+        self._config.set(_CFG_STATE, state_b64)
 
     def _reset_layout(self) -> None:
-        """Reset all docks to their default positions."""
-        self._config.set("ui.window_geometry", None)
-        self._config.set("ui.window_state", None)
+        self._config.set(_CFG_GEOMETRY, None)
+        self._config.set(_CFG_STATE, None)
         logger.info("Layout reset — restart to apply")
         self.statusBar().showMessage("Layout will reset on next launch.", 4000)
 
     # ------------------------------------------------------------------
-    # Status bar helpers (called by workers via signals)
+    # Public status bar helpers
     # ------------------------------------------------------------------
 
     def set_connection_status(self, text: str) -> None:
@@ -258,7 +345,7 @@ class MainWindow(QMainWindow):
         self._status_coords.setText(text)
 
     # ------------------------------------------------------------------
-    # Menu actions (stubs — wired up when panels are implemented)
+    # Menu actions (stubs)
     # ------------------------------------------------------------------
 
     def _open_settings(self) -> None:
@@ -281,7 +368,6 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        # Stop all workers before widgets are destroyed — prevents Qt fatal crash
         self._mount_panel.shutdown()
         self._camera_panel.shutdown()
         self._save_state()
