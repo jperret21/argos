@@ -172,11 +172,73 @@ class MainWindow(QMainWindow):
     def _build_menu(self) -> None:
         bar = self.menuBar()
 
-        # ── Preferences ───────────────────────────────────────────────
+        # ── File ──────────────────────────────────────────────────────
+        file_menu = bar.addMenu("File")
+
         prefs_action = QAction("Preferences…", self)
         prefs_action.setShortcut("Ctrl+,")
         prefs_action.triggered.connect(self._open_preferences)
-        bar.addAction(prefs_action)
+        file_menu.addAction(prefs_action)
+
+        file_menu.addSeparator()
+
+        quit_action = QAction("Quit", self)
+        quit_action.setShortcut("Ctrl+Q")
+        quit_action.triggered.connect(self.close)
+        file_menu.addAction(quit_action)
+
+        # ── Connection ────────────────────────────────────────────────
+        conn_menu = bar.addMenu("Connection")
+
+        conn_mount = QAction("Connect Mount", self)
+        conn_mount.setShortcut("Ctrl+M")
+        conn_mount.triggered.connect(lambda: self._capture_panel._on_connect_mount())
+        conn_menu.addAction(conn_mount)
+
+        conn_cam = QAction("Connect Camera", self)
+        conn_cam.setShortcut("Ctrl+Shift+C")
+        conn_cam.triggered.connect(lambda: self._capture_panel._on_connect_camera())
+        conn_menu.addAction(conn_cam)
+
+        conn_menu.addSeparator()
+
+        discover_action = QAction("Discover Devices", self)
+        discover_action.setShortcut("Ctrl+D")
+        discover_action.triggered.connect(lambda: self._capture_panel._on_discover())
+        conn_menu.addAction(discover_action)
+
+        conn_menu.addSeparator()
+
+        disconnect_action = QAction("Disconnect All", self)
+        disconnect_action.triggered.connect(lambda: self._capture_panel.shutdown())
+        conn_menu.addAction(disconnect_action)
+
+        # ── Capture ───────────────────────────────────────────────────
+        cap_menu = bar.addMenu("Capture")
+
+        take_action = QAction("Take Shot", self)
+        take_action.setShortcut("Ctrl+T")
+        take_action.triggered.connect(lambda: self._capture_panel._on_take_shot())
+        cap_menu.addAction(take_action)
+
+        seq_action = QAction("Start / Stop Sequence", self)
+        seq_action.setShortcut("Ctrl+R")
+        seq_action.triggered.connect(lambda: self._capture_panel._on_toggle_sequence())
+        cap_menu.addAction(seq_action)
+
+        cap_menu.addSeparator()
+
+        preview_action = QAction("Live Preview", self)
+        preview_action.setShortcut("Ctrl+P")
+        preview_action.triggered.connect(lambda: self._capture_panel._on_toggle_preview())
+        cap_menu.addAction(preview_action)
+
+        cap_menu.addSeparator()
+
+        stretch_action = QAction("Auto Stretch", self)
+        stretch_action.setShortcut("Ctrl+A")
+        stretch_action.triggered.connect(self._viewer._auto_stretch)
+        cap_menu.addAction(stretch_action)
 
         # ── View ──────────────────────────────────────────────────────
         self._view_menu = bar.addMenu("View")

@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -183,65 +184,88 @@ class CapturePanel(QWidget):
         layout.setContentsMargins(8, 12, 8, 8)
         layout.setSpacing(8)
 
-        form = QFormLayout()
-        form.setSpacing(6)
+        # ── Settings form — 2-column grid ─────────────────────────────
+        grid = QGridLayout()
+        grid.setSpacing(5)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
 
         self._type_combo = QComboBox()
         for ft in _FRAME_TYPES:
             self._type_combo.addItem(ft)
         self._type_combo.currentTextChanged.connect(self._on_frame_type_changed)
-        form.addRow(_muted("Type"), self._type_combo)
+        grid.addWidget(_muted("Type"),   0, 0)
+        grid.addWidget(self._type_combo, 0, 1, 1, 3)  # span full width
 
         self._object_edit = QLineEdit()
         self._object_edit.setPlaceholderText("M42, NGC 224…")
-        form.addRow(_muted("Object"), self._object_edit)
+        grid.addWidget(_muted("Object"),    1, 0)
+        grid.addWidget(self._object_edit,   1, 1, 1, 3)
 
         self._filter_combo = QComboBox()
         for f in _FILTERS:
             self._filter_combo.addItem(f)
-        form.addRow(_muted("Filter"), self._filter_combo)
+        grid.addWidget(_muted("Filter"),    2, 0)
+        grid.addWidget(self._filter_combo,  2, 1, 1, 3)
 
+        # Exp + Gain on the same row
         self._exp_spin = QDoubleSpinBox()
         self._exp_spin.setRange(0.001, 600.0)
-        self._exp_spin.setDecimals(3)
+        self._exp_spin.setDecimals(2)
         self._exp_spin.setValue(1.0)
-        self._exp_spin.setSuffix("  s")
+        self._exp_spin.setSuffix(" s")
         self._exp_spin.setSingleStep(0.5)
-        form.addRow(_muted("Exposure"), self._exp_spin)
 
         self._gain_spin = QSpinBox()
         self._gain_spin.setRange(0, 600)
         self._gain_spin.setValue(80)
-        form.addRow(_muted("Gain"), self._gain_spin)
 
+        grid.addWidget(_muted("Exp"),    3, 0)
+        grid.addWidget(self._exp_spin,   3, 1)
+        grid.addWidget(_muted("Gain"),   3, 2)
+        grid.addWidget(self._gain_spin,  3, 3)
+
+        # Count + HFD on same row
         self._count_spin = QSpinBox()
         self._count_spin.setRange(1, 9999)
         self._count_spin.setValue(10)
-        form.addRow(_muted("Count"), self._count_spin)
 
-        layout.addLayout(form)
+        self._hfd_lbl = QLabel("—")
+        self._hfd_lbl.setStyleSheet(
+            f"color:{theme.ACCENT}; font-size:13px; font-weight:bold;"
+            f"font-family:{theme.FONT_MONO};"
+        )
 
-        # ── Action buttons ────────────────────────────────────────────
-        self._take_btn = QPushButton("◉  TAKE SHOT")
+        grid.addWidget(_muted("Count"), 4, 0)
+        grid.addWidget(self._count_spin, 4, 1)
+        grid.addWidget(_muted("HFD"),   4, 2)
+        grid.addWidget(self._hfd_lbl,   4, 3)
+
+        layout.addLayout(grid)
+
+        # ── Action buttons — 2-column grid ────────────────────────────
+        btn_grid = QGridLayout()
+        btn_grid.setSpacing(6)
+
+        self._take_btn = QPushButton("◉  Take Shot")
         self._take_btn.setProperty("class", "primary")
-        self._take_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._take_btn.setEnabled(False)
         self._take_btn.clicked.connect(self._on_take_shot)
-        layout.addWidget(self._take_btn)
 
-        self._seq_btn = QPushButton("▶  START SEQUENCE")
+        self._seq_btn = QPushButton("▶  Sequence")
         self._seq_btn.setProperty("class", "success")
-        self._seq_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._seq_btn.setEnabled(False)
         self._seq_btn.clicked.connect(self._on_toggle_sequence)
-        layout.addWidget(self._seq_btn)
 
-        # Preview toggle (quick feedback, no save)
         self._preview_btn = QPushButton("▶  Live Preview")
-        self._preview_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._preview_btn.setEnabled(False)
         self._preview_btn.clicked.connect(self._on_toggle_preview)
-        layout.addWidget(self._preview_btn)
+
+        btn_grid.addWidget(self._take_btn,    0, 0)
+        btn_grid.addWidget(self._seq_btn,     0, 1)
+        btn_grid.addWidget(self._preview_btn, 1, 0, 1, 2)  # full width
+
+        layout.addLayout(btn_grid)
 
         # ── Progress ──────────────────────────────────────────────────
         self._progress_bar = QProgressBar()
@@ -257,22 +281,9 @@ class CapturePanel(QWidget):
         self._eta_lbl.setVisible(False)
         layout.addWidget(self._eta_lbl)
 
-        # ── Status ────────────────────────────────────────────────────
         self._state_lbl = QLabel("—")
         self._state_lbl.setStyleSheet(f"color:{theme.TEXT_MUTED}; font-size:10px;")
         layout.addWidget(self._state_lbl)
-
-        # ── HFD display ───────────────────────────────────────────────
-        hfd_row = QHBoxLayout()
-        hfd_row.addWidget(_muted("HFD"))
-        self._hfd_lbl = QLabel("—")
-        self._hfd_lbl.setStyleSheet(
-            f"color:{theme.ACCENT}; font-size:13px; font-weight:bold;"
-            f"font-family:{theme.FONT_MONO};"
-        )
-        hfd_row.addWidget(self._hfd_lbl)
-        hfd_row.addStretch()
-        layout.addLayout(hfd_row)
 
         return group
 

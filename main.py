@@ -11,26 +11,39 @@ from pathlib import Path
 
 
 def _fix_qt_plugin_path() -> None:
-    """Set QT_QPA_PLATFORM_PLUGIN_PATH from the active venv if not already set.
+    """Fix Qt cocoa plugin loading on macOS uv venvs.
 
-    On macOS, Qt cannot auto-discover the cocoa platform plugin inside a uv
-    venv. run.sh sets the path via the environment; this fallback handles direct
-    invocation (uv run python main.py, IDE launchers, etc.).
+    Two problems to solve:
+    1. QT_QPA_PLATFORM_PLUGIN_PATH is not set — Qt can't find the platforms dir.
+    2. macOS quarantines freshly-downloaded dylibs — Qt can find the file but
+       can't load it (SIP blocks quarantined dylibs).
+
+    run.sh handles both via xattr + env var. This function is the fallback for
+    direct invocations (uv run python main.py, IDE launchers).
     Must be called before any QApplication is created.
     """
     if sys.platform != "darwin":
         return
-    if os.environ.get("QT_QPA_PLATFORM_PLUGIN_PATH"):
-        return  # already set by run.sh or caller
 
     try:
         import sysconfig
+        import subprocess
         site = Path(sysconfig.get_path("purelib"))
         plugin_path = site / "PyQt6" / "Qt6" / "plugins" / "platforms"
+
         if plugin_path.exists():
-            os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = str(plugin_path)
+            # 1. Set plugin path
+            if not os.environ.get("QT_QPA_PLATFORM_PLUGIN_PATH"):
+                os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = str(plugin_path)
+
+            # 2. Remove macOS quarantine from the entire PyQt6 tree (idempotent)
+            qt6_root = site / "PyQt6"
+            subprocess.run(
+                ["xattr", "-dr", "com.apple.quarantine", str(qt6_root)],
+                capture_output=True,
+            )
     except Exception:
-        pass  # best-effort — will surface as a Qt startup error if wrong
+        pass  # best-effort
 
 
 _fix_qt_plugin_path()
