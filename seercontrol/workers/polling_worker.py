@@ -21,7 +21,7 @@ import logging
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from seercontrol.core.alpaca.client import AlpacaConnectionError, AlpacaTimeoutError
+from seercontrol.core.alpaca.client import AlpacaError
 from seercontrol.core.alpaca.telescope import MountPosition, Telescope
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,11 @@ class MountPollingWorker(QThread):
             self._consecutive_errors = 0
             self.position_updated.emit(position)
 
-        except (AlpacaConnectionError, AlpacaTimeoutError) as exc:
+        except AlpacaError as exc:
+            # Telescope.get_position wraps every backend error in the base
+            # AlpacaError class, so we must catch the base type — catching
+            # only AlpacaConnectionError / AlpacaTimeoutError would miss every
+            # real-world failure and connection_lost would never fire.
             self._consecutive_errors += 1
             logger.warning(
                 "Poll failed (%d/%d): %s",
