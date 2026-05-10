@@ -34,6 +34,7 @@ sessions/
 
 # Logs
 *.log
+simulator.log.*
 
 # Env
 .env
