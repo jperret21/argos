@@ -1,7 +1,7 @@
 # Seestar S30 Pro — Protocol & Control Reference
 
 > Synthesized from: `seevar-main/dev/logic/*.MD`, `seestar_alp` source code,
-> and real-device testing (firmware 7.18 / fw_ver_int ~2706+, April 2026).
+> and real-device testing (firmware 7.18 / fw_ver_int ~2706+, April–May 2026).
 
 ---
 
@@ -28,21 +28,109 @@
 | Port | Protocol | Status | Purpose |
 |------|----------|--------|---------|
 | **32323** | HTTP Alpaca REST | **Active — primary** | All hardware control |
-| **4700** | JSON-RPC TCP | **Active — jogging only** | `scope_speed_move` (no Alpaca equivalent) |
-| **4720** | UDP | Active | `scan_iscope` handshake before port 4700 TCP |
-| 32227 | UDP | Unreliable on S30-Pro | Alpaca discovery broadcast |
-| 4800 | — | Does not exist | — |
-| 4801 | Binary | Deprecated | Old raw frame stream — replaced by Alpaca imagearray |
+| 4700 | JSON-RPC TCP | Silent — unusable | Accepts TCP but never responds to any command |
+| 4720 | UDP | No response | `scan_iscope` — not required on firmware 7.18+ |
+| 32227 | UDP | No response | Alpaca discovery broadcast — unreliable on S30-Pro |
+| 4801 | Binary | Open but unused | Preview frame stream — see plan_live_preview.md |
+| 80 | HTTP | Incomplete responses | Internal firmware web UI — not usable |
 
-### Key insight
+### Key insight (validated 2026-05-10, firmware 7.18)
 
-`seevar` migrated to **Alpaca-only** (port 32323) for all production control.
-Port 4700 is kept **only** for `scope_speed_move` (manual jogging) because Alpaca
-`MoveAxis` returns error 1032 (not implemented) on the Seestar firmware.
+**Port 32323 Alpaca is the only working control channel.**
+
+- Port 4700 (JSON-RPC) connects but returns no response to any command.
+  The native ZWO app may hold an exclusive lock that cannot be released.
+- `MoveAxis` (Alpaca) **works** on firmware 7.18+ despite earlier docs saying otherwise.
+  Measured: ~3°/1.5s at 2 deg/s, all 4 directions confirmed.
+- No UDP handshake is required. Direct HTTP to port 32323 is sufficient.
 
 ---
 
-## 3. Alpaca REST API (Port 32323)
+## 3. Validated Connection Recipe (2026-05-10)
+
+Tested against real Seestar S30 Pro at 192.168.0.18, firmware 7.18.
+
+### Step 1 — Connect telescope
+
+```http
+PUT http://192.168.0.18:32323/api/v1/telescope/0/connected
+Body: ClientID=1&ClientTransactionID=1&Connected=true
+→ {"ErrorNumber":0, ...}
+```
+
+### Step 2 — Read position
+
+```http
+GET http://192.168.0.18:32323/api/v1/telescope/0/rightascension?ClientID=1&ClientTransactionID=2
+→ {"Value": 22.52, "ErrorNumber": 0, ...}
+```
+
+Also works: `altitude`, `azimuth`, `declination`, `tracking`, `slewing`, `atpark`.
+
+### Step 3 — Jog (MoveAxis)
+
+```http
+# Start moving North (altitude+) at 2 deg/s
+PUT /api/v1/telescope/0/moveaxis
+Body: ClientID=1&ClientTransactionID=3&Axis=1&Rate=2.0
+
+# Stop
+PUT /api/v1/telescope/0/moveaxis
+Body: ClientID=1&ClientTransactionID=4&Axis=1&Rate=0.0
+```
+
+Axis mapping: `0` = Azimuth (E/W), `1` = Altitude (N/S).
+Positive rate: North / East. Negative rate: South / West.
+
+### Step 4 — Connect camera
+
+```http
+PUT http://192.168.0.18:32323/api/v1/camera/0/connected
+Body: ClientID=1&ClientTransactionID=5&Connected=true
+```
+
+Camera 0 = IMX585 telephoto (science). Camera 1 = wide-angle finder.
+GainMin=0, GainMax=600. Default gain: 80.
+
+### Step 5 — Take an exposure
+
+```http
+PUT /api/v1/camera/0/startexposure
+Body: ClientID=1&ClientTransactionID=6&Duration=10.0&Light=true
+
+# Poll until ready
+GET /api/v1/camera/0/imageready   → {"Value": false, ...}  (repeat)
+GET /api/v1/camera/0/imageready   → {"Value": true, ...}   (download now)
+
+# Download (slow ~33s via JSON, fast ~3s via ImageBytes)
+GET /api/v1/camera/0/imagearray
+```
+
+### Python shortcut (uses our wrapper)
+
+```python
+from seercontrol.core.alpaca.telescope import Telescope
+from seercontrol.core.alpaca.camera import Camera
+
+scope = Telescope("192.168.0.18", 32323)
+scope.connect()                         # returns "Seestar S30 Pro_... Telescope"
+
+scope.move_axis(1, 2.0)                 # start moving North
+import time; time.sleep(2.0)
+scope.stop_axis(1)                      # stop
+
+cam = Camera("192.168.0.18", 32323)
+cam.connect()                           # width=2160, height=3840, gain 0-600
+cam.set_gain(80)
+cam.start_exposure(10.0)
+while not cam.is_image_ready():
+    time.sleep(0.5)
+arr = cam.get_image_array()             # numpy uint16 (height, width)
+```
+
+---
+
+## 4. Alpaca REST API (Port 32323)
 
 Base URL: `http://<telescope_ip>:32323`
 
@@ -69,7 +157,7 @@ Always check `ErrorNumber` in every response: 0 = success, anything else = failu
 
 ---
 
-## 4. Telescope Control
+## 5. Telescope Control
 
 ### GET — Properties
 
@@ -120,14 +208,27 @@ Body: ClientID=42&ClientTransactionID=<n>&<params>
 | 1036 | Action not implemented |
 | 1279 | Command rejected (e.g. below horizon) |
 
-### Important: MoveAxis does NOT work
+### MoveAxis — confirmed working on firmware 7.18+
 
-`MoveAxis` returns error 1032 on the Seestar firmware.
-Use port 4700 `scope_speed_move` for manual jogging (see section 6).
+`MoveAxis` was previously believed broken (error 1032). Tested 2026-05-10:
+it works correctly. Use it for all manual jogging. Port 4700 is not needed.
+
+```python
+# Axis 0 = Azimuth (Primary)   — positive rate = East
+# Axis 1 = Altitude (Secondary) — positive rate = North
+PUT /api/v1/telescope/0/moveaxis
+Body: ClientID=1&ClientTransactionID=<n>&Axis=0&Rate=2.0   # start moving East
+# ...hold...
+PUT /api/v1/telescope/0/moveaxis
+Body: ClientID=1&ClientTransactionID=<n>&Axis=0&Rate=0.0   # stop
+```
+
+Measured movement: ~3° per 1.5 s at Rate=2.0 deg/s.
+Rate=0.0 stops immediately.
 
 ---
 
-## 5. Camera Control
+## 6. Camera Control
 
 ### GET — Properties
 
@@ -177,7 +278,7 @@ Timeouts used in seevar:
 
 ---
 
-## 6. Native JSON-RPC TCP (Port 4700) — Jogging Only
+## 7. Native JSON-RPC TCP (Port 4700) — Jogging Only
 
 Port 4700 is retained **exclusively** for `scope_speed_move`.
 Everything else uses Alpaca.
@@ -254,7 +355,7 @@ after ~20s of inactivity (BrokenPipe on next command).
 
 ---
 
-## 7. Filter Wheel
+## 8. Filter Wheel
 
 ```
 PUT /api/v1/filterwheel/0/position
@@ -269,7 +370,7 @@ Body: ClientID=42&ClientTransactionID=<n>&Position=<0-2>
 
 ---
 
-## 8. Hardware Fingerprinting
+## 9. Hardware Fingerprinting
 
 To confirm the device is an S30 Pro (not S30 or S50):
 
@@ -282,7 +383,7 @@ GET /api/v1/camera/0/cameraxsize?ClientID=42&ClientTransactionID=1
 
 ---
 
-## 9. Device Discovery
+## 10. Device Discovery
 
 **Preferred:** Direct HTTP probe
 
@@ -296,7 +397,7 @@ A 200 response with 7 devices confirms the telescope is online.
 
 ---
 
-## 10. Unpark Behaviour
+## 11. Unpark Behaviour
 
 `PUT /api/v1/telescope/0/unpark` deploys the arm and triggers a `ScopeMoveToHorizon`
 event — the arm swings to the horizon ready for use.
@@ -309,7 +410,7 @@ After that, `park` / `unpark` via Alpaca work correctly.
 
 ---
 
-## 11. Safety Vetoes
+## 12. Safety Vetoes
 
 | Condition | Threshold | Action |
 |-----------|-----------|--------|
@@ -320,7 +421,7 @@ After that, `park` / `unpark` via Alpaca work correctly.
 
 ---
 
-## 12. FITS Headers (Correct Values for S30 Pro)
+## 13. FITS Headers (Correct Values for S30 Pro)
 
 ```
 BAYERPAT = 'GRBG'        # Sony IMX585 — NOT RGGB
