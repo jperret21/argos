@@ -9,7 +9,7 @@ All methods are synchronous — run inside a QThread worker only.
 
 Seestar S30 Pro constraints:
   - Do NOT use ROI/subframing (firmware bug in Alpaca driver)
-  - Sensor: IMX585, Bayer RGGB, pixel size 2.9 µm, focal length 150 mm
+  - Sensor: IMX585, Bayer GRBG, pixel size 2.9 µm, focal length 160 mm
 """
 
 from __future__ import annotations
@@ -19,7 +19,11 @@ import time
 
 import numpy as np
 from alpaca.camera import Camera as _AlpacaCamera
-from alpaca.exceptions import DriverException, InvalidValueException
+from alpaca.exceptions import (
+    DriverException,
+    InvalidValueException,
+    NotImplementedException,
+)
 
 from seercontrol.core.alpaca.client import AlpacaError
 
@@ -27,8 +31,8 @@ logger = logging.getLogger(__name__)
 
 # IMX585 physical characteristics (Seestar S30 Pro)
 PIXEL_SIZE_UM = 2.9
-FOCAL_LENGTH  = 150
-BAYER_PATTERN = "RGGB"
+FOCAL_LENGTH  = 160
+BAYER_PATTERN = "GRBG"
 INSTRUMENT    = "IMX585"
 TELESCOPE_NAME = "ZWO Seestar S30 Pro"
 
@@ -194,7 +198,11 @@ class Camera:
 
         try:
             # -- Fast path: ImageBytes (binary, 8x faster than JSON) --------
-            # ImageArrayRaw raises InvalidValueException if device returns JSON.
+            # ImageArrayRaw raises:
+            #   - InvalidValueException when the server replies with JSON
+            #     instead of application/imagebytes (alpyca's own check).
+            #   - NotImplementedException when the device does not support
+            #     ImageBytes at all.
             raw = self._cam.ImageArrayRaw          # flat array.array
             meta = self._cam.ImageArrayInfo        # set as side-effect above
             dtype = _TYPECODE_DTYPE.get(raw.typecode, np.int32)
@@ -213,27 +221,29 @@ class Camera:
                 "Image downloaded (ImageBytes): %.2fs  shape=%s  typecode=%s",
                 time.perf_counter() - t0, arr.shape, raw.typecode,
             )
+            return arr
 
-        except InvalidValueException:
+        except (InvalidValueException, NotImplementedException) as exc:
             # -- Slow path: JSON nested list, column-major [X][Y] -----------
-            logger.info("ImageBytes not supported — using JSON imagearray")
-            try:
-                raw = self._cam.ImageArray          # List[List[int]]
-            except Exception as exc:
-                raise _wrap(exc) from exc
-
-            if raw is None:
-                raise AlpacaError(0, "imagearray returned None")
-
-            t1 = time.perf_counter()
-            # Use uint16 directly — IMX585 values are always in [0, 65535]
-            arr = np.array(raw, dtype=np.uint16).T  # (height, width)
-            logger.info(
-                "Image downloaded (JSON): %.2fs transfer + %.2fs convert = %.2fs total  shape=%s",
-                t1 - t0, time.perf_counter() - t1, time.perf_counter() - t0, arr.shape,
-            )
-
+            logger.info("ImageBytes not supported (%s) — using JSON imagearray",
+                        type(exc).__name__)
         except Exception as exc:
             raise _wrap(exc) from exc
 
+        # JSON fallback (reached only via the InvalidValue/NotImplemented branch).
+        try:
+            raw = self._cam.ImageArray              # List[List[int]]
+        except Exception as exc:
+            raise _wrap(exc) from exc
+
+        if raw is None:
+            raise AlpacaError(0, "imagearray returned None")
+
+        t1 = time.perf_counter()
+        # Use uint16 directly — IMX585 values are always in [0, 65535]
+        arr = np.array(raw, dtype=np.uint16).T      # (height, width)
+        logger.info(
+            "Image downloaded (JSON): %.2fs transfer + %.2fs convert = %.2fs total  shape=%s",
+            t1 - t0, time.perf_counter() - t1, time.perf_counter() - t0, arr.shape,
+        )
         return arr
