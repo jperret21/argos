@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
 from seercontrol.core.config import Config
 from seercontrol.ui import theme
 from seercontrol.ui.panels.camera_panel import CameraPanel
+from seercontrol.ui.panels.focuser_panel import FocuserPanel
 from seercontrol.ui.panels.mount_panel import MountPanel
 
 logger = logging.getLogger(__name__)
@@ -140,14 +141,20 @@ class MainWindow(QMainWindow):
         self._camera_panel.log_message.connect(self._on_log_message)
         self._camera_panel.status_changed.connect(self._on_status_changed)
 
+        # Focuser panel
+        self._focuser_panel = FocuserPanel(config=self._config, parent=self)
+        self._focuser_panel.log_message.connect(self._on_log_message)
+        self._focuser_panel.status_changed.connect(self._on_status_changed)
+        self._camera_panel.camera_connected.connect(self._focuser_panel.set_camera)
+
         real_panels: list[tuple[str, Qt.DockWidgetArea, QWidget]] = [
-            ("Mount",  Qt.DockWidgetArea.LeftDockWidgetArea,  self._mount_panel),
-            ("Camera", Qt.DockWidgetArea.RightDockWidgetArea, self._camera_panel),
+            ("Mount",   Qt.DockWidgetArea.LeftDockWidgetArea,  self._mount_panel),
+            ("Camera",  Qt.DockWidgetArea.RightDockWidgetArea, self._camera_panel),
+            ("Focuser", Qt.DockWidgetArea.LeftDockWidgetArea,  self._focuser_panel),
         ]
 
         placeholder_panels: list[tuple[str, Qt.DockWidgetArea]] = [
             ("Sequencer",    Qt.DockWidgetArea.RightDockWidgetArea),
-            ("Focuser",      Qt.DockWidgetArea.LeftDockWidgetArea),
             ("Filter Wheel", Qt.DockWidgetArea.LeftDockWidgetArea),
             ("Sky Map",      Qt.DockWidgetArea.BottomDockWidgetArea),
             ("Session Log",  Qt.DockWidgetArea.BottomDockWidgetArea),
@@ -284,6 +291,7 @@ class MainWindow(QMainWindow):
         # Stop all workers before widgets are destroyed — prevents Qt fatal crash
         self._mount_panel.shutdown()
         self._camera_panel.shutdown()
+        self._focuser_panel.shutdown()
         self._save_state()
         logger.info("MainWindow closed, state saved")
         super().closeEvent(event)
