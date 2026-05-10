@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
 from seercontrol.core.config import Config
 from seercontrol.ui import theme
 from seercontrol.ui.panels.camera_panel import CameraPanel
+from seercontrol.ui.panels.focuser_panel import FocuserPanel
 from seercontrol.ui.panels.mount_panel import MountPanel
 from seercontrol.ui.panels.sequencer_panel import SequencerPanel
 
