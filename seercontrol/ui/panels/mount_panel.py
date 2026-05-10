@@ -34,7 +34,6 @@ from seercontrol.core.alpaca.client import AlpacaError
 from seercontrol.core.alpaca.discovery import AlpacaDevice
 from seercontrol.core.alpaca.telescope import MountPosition, Telescope
 from seercontrol.core.config import Config
-from seercontrol.core.seestar.native_client import SeestarNativeClient, SeestarNativeError
 from seercontrol.workers.discovery_worker import DiscoveryWorker
 from seercontrol.workers.polling_worker import MountPollingWorker
 from seercontrol.ui import theme
@@ -57,7 +56,6 @@ class MountPanel(QWidget):
         super().__init__(parent)
         self._config = config
         self._telescope: Telescope | None = None
-        self._native: SeestarNativeClient | None = None
         self._discovery_worker: DiscoveryWorker | None = None
         self._polling_worker: MountPollingWorker | None = None
 
@@ -350,17 +348,6 @@ class MountPanel(QWidget):
             name = self._telescope.connect()
 
             self._log("OK", f"Connected: {name}")
-
-            # Native JSON-RPC client for scope_speed_move (manual jogging).
-            # Connects to port 4700 regardless of the Alpaca port.
-            self._native = SeestarNativeClient(host=host)
-            try:
-                self._native.connect()
-                self._log("OK", "Native API connected (manual control ready)")
-            except SeestarNativeError as exc:
-                self._native = None
-                self._log("WARN", f"Native API unavailable — manual jogging disabled: {exc}")
-
             self._set_connected_state(True)
             self._start_polling()
 
@@ -371,10 +358,6 @@ class MountPanel(QWidget):
 
     def _on_disconnect(self) -> None:
         self._stop_polling()
-
-        if self._native:
-            self._native.disconnect()
-            self._native = None
 
         if self._telescope:
             self._telescope.disconnect()
@@ -430,9 +413,6 @@ class MountPanel(QWidget):
     def shutdown(self) -> None:
         """Stop all background workers and connections. Call before closing."""
         self._stop_polling()
-        if self._native:
-            self._native.disconnect()
-            self._native = None
         if self._discovery_worker and self._discovery_worker.isRunning():
             self._discovery_worker.quit()
             self._discovery_worker.wait(2000)
@@ -475,9 +455,6 @@ class MountPanel(QWidget):
         self._set_connected_state(False)
         self._clear_position()
         self._telescope = None
-        if self._native:
-            self._native.disconnect()
-            self._native = None
 
     # ------------------------------------------------------------------
     # Commands
@@ -512,12 +489,12 @@ class MountPanel(QWidget):
             self._log("ERROR", f"Park failed: {exc}")
 
     def _on_open_manual_control(self) -> None:
-        if not self._native:
-            self._log("WARN", "Native API not connected — manual control unavailable.")
+        if not self._telescope:
+            self._log("WARN", "Not connected — connect first.")
             return
         if not hasattr(self, "_manual_dialog") or self._manual_dialog is None:
             from seercontrol.ui.panels.manual_control_dialog import ManualControlDialog
-            self._manual_dialog = ManualControlDialog(self._native, parent=self)
+            self._manual_dialog = ManualControlDialog(self._telescope, parent=self)
             self._manual_dialog.log_message.connect(self.log_message)
             self._manual_dialog.finished.connect(self._on_manual_dialog_closed)
         self._manual_dialog.show()
