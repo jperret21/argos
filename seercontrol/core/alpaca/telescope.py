@@ -10,10 +10,9 @@ All methods are synchronous and must run inside a QThread worker.
 Never call them from the Qt main thread.
 
 Seestar S30 Pro known limitations:
-  - MoveAxis        → DriverException (error 1032) — not implemented
   - SlewToAltAzAsync→ DriverException (error 1024) — not implemented
   - Unpark          → does not open the arm physically
-  - Manual jogging  → use native JSON-RPC TCP API (scope_speed_move)
+  - MoveAxis        → confirmed working on firmware 7.18+ (tested 2026-05)
 """
 
 from __future__ import annotations
@@ -130,11 +129,10 @@ class Telescope:
         except Exception:
             self._can_slew_async = True
 
-        # Log MoveAxis capability (informational — Seestar returns error 1032, native API used instead)
         try:
             from alpaca.telescope import TelescopeAxes
-            can_primary = self._scope.CanMoveAxis(TelescopeAxes.Primary)
-            can_secondary = self._scope.CanMoveAxis(TelescopeAxes.Secondary)
+            can_primary = self._scope.CanMoveAxis(TelescopeAxes.axisPrimary)
+            can_secondary = self._scope.CanMoveAxis(TelescopeAxes.axisSecondary)
             logger.info("CanMoveAxis Primary=%s Secondary=%s", can_primary, can_secondary)
         except Exception as exc:
             logger.debug("CanMoveAxis query failed (non-fatal): %s", exc)
@@ -329,10 +327,37 @@ class Telescope:
         except Exception as exc:
             raise _wrap(exc) from exc
 
+    def move_axis(self, axis: int, rate: float) -> None:
+        """Start continuous jog on one axis at the given rate (deg/s).
+
+        The mount keeps moving until ``stop_axis()`` is called.
+
+        Args:
+            axis: 0 = Primary (RA/Az), 1 = Secondary (Dec/Alt).
+            rate: Speed in deg/s. Positive = North/East, negative = South/West.
+                  Pass 0.0 to stop.
+
+        Raises:
+            AlpacaError: Device error or axis not supported.
+        """
+        try:
+            from alpaca.telescope import TelescopeAxes
+            ax = TelescopeAxes.axisPrimary if axis == 0 else TelescopeAxes.axisSecondary
+            self._scope.MoveAxis(ax, rate)
+            logger.debug("MoveAxis axis=%d rate=%.3f", axis, rate)
+        except Exception as exc:
+            raise _wrap(exc) from exc
+
+    def stop_axis(self, axis: int) -> None:
+        """Stop a jogging axis (sets rate to 0).
+
+        Args:
+            axis: 0 = Primary (RA/Az), 1 = Secondary (Dec/Alt).
+        """
+        self.move_axis(axis, 0.0)
+
     def pulse_guide(self, direction: int, duration_ms: int) -> None:
         """Send a PulseGuide command (guide-rate only — not for manual jogging).
-
-        For manual jogging use SeestarNativeClient.move() instead.
 
         Args:
             direction: 0=North, 1=South, 2=East, 3=West (ASCOM constants).

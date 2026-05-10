@@ -112,7 +112,7 @@ class FITSWriter:
         height, width = arr.shape
 
         # Pass uint16 directly — astropy sets BZERO=32768 / BSCALE=1 automatically.
-        # Manual int16 conversion + header BZERO is stripped by astropy on write.
+        # Manually converting to int16 then setting BZERO causes astropy to strip BZERO.
 
         # ------------------------------------------------------------------ #
         # Timing                                                               #
@@ -143,9 +143,8 @@ class FITSWriter:
         hdr["NAXIS"]    = (2,     "number of data axes")
         hdr["NAXIS1"]   = (width, "length of data axis 1 (X/columns)")
         hdr["NAXIS2"]   = (height,"length of data axis 2 (Y/rows)")
-        hdr["BZERO"]    = (32768, "offset data range to that of unsigned short")
-        hdr["BSCALE"]   = (1,     "default scaling factor")
         hdr["EXTEND"]   = (True,  "FITS dataset may contain extensions")
+        # BZERO=32768 and BSCALE=1 are written automatically by astropy for uint16 data
 
         # Image type
         hdr["IMAGETYP"] = (image_type, "type of image: Light/Dark/Flat/Bias")

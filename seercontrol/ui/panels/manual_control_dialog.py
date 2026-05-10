@@ -1,33 +1,22 @@
-"""Manual mount control dialog — native scope_speed_move API.
+"""Manual mount control dialog — Alpaca MoveAxis jogging.
 
-Uses the Seestar's native JSON-RPC TCP API (port 4700) rather than
-ASCOM Alpaca, because:
-  - MoveAxis  → error 1032 (not implemented)
-  - SlewToAltAzAsync → error 1024 (not implemented)
-  - SlewToCoordinatesAsync → GOTO only, not suitable for jogging
-  - PulseGuide → guide-rate only (~arcsec/s), invisible to the eye
+Uses ASCOM Alpaca MoveAxis (port 32323) which is confirmed working on
+Seestar S30 Pro firmware 7.18+.
 
-Native command ``scope_speed_move``:
-  { "method": "scope_speed_move",
-    "params": { "speed": <int>, "angle": <int>, "dur_sec": <int> } }
+Axis mapping (Alt-Az mount):
+  Axis 0 (Primary)   = Azimuth   → East/West
+  Axis 1 (Secondary) = Altitude  → North/South
 
-  angle: compass degrees — 0=North, 90=East, 180=South, 270=West
-  speed: 500–8000 (empirical)
-  dur_sec: mount moves for this many seconds then auto-stops
-
-Stop command:  { "method": "iscope_stop_view", "params": {} }
-
-Behaviour:
-  - Button pressed   → send scope_speed_move(dur_sec=DUR)
-  - Timer fires every TICK_MS (< DUR*1000) → resend to extend movement
-  - Button released  → send iscope_stop_view immediately
+The mount keeps moving at the commanded rate until Rate=0 is sent.
+Button pressed → MoveAxis(rate), button released → MoveAxis(0).
+No periodic resend needed (unlike native scope_speed_move).
 """
 
 from __future__ import annotations
 
 import logging
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -39,32 +28,28 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from seercontrol.core.seestar.native_client import (
-    ANGLE_EAST,
-    ANGLE_NORTH,
-    ANGLE_SOUTH,
-    ANGLE_WEST,
-    SeestarNativeClient,
-    SeestarNativeError,
-)
+from seercontrol.core.alpaca.client import AlpacaError
+from seercontrol.core.alpaca.telescope import Telescope
 from seercontrol.ui import theme
 
 logger = logging.getLogger(__name__)
 
-# Each scope_speed_move command moves the mount for DUR_SEC seconds.
-# TICK_MS is the interval at which we resend (must be < DUR_SEC * 1000
-# so the scope never stops between ticks).
-DUR_SEC  = 2
-TICK_MS  = 1500
+# Jog speed levels in deg/s
+SPEEDS: dict[str, float] = {
+    "Slow":   0.5,
+    "Normal": 2.0,
+    "Fast":   5.0,
+}
 
-# Speed levels (scope_speed_move "speed" parameter).
-# seestar_alp documents speed=4000 as the default for a normal move.
-# Do NOT exceed 10000 until we know the motor limits — the firmware
-# likely clamps values internally but this is not confirmed.
-SPEEDS: dict[str, int] = {
-    "Slow":   1000,
-    "Normal": 4000,
-    "Fast":   8000,
+# Axis/rate for each direction
+# axis 0 = Az (E/W), axis 1 = Alt (N/S)
+# Positive rate on axis 1 → altitude increases → North
+# Positive rate on axis 0 → azimuth increases → East
+_DIRECTIONS: dict[str, tuple[int, float]] = {
+    "North": (1,  1.0),
+    "South": (1, -1.0),
+    "East":  (0,  1.0),
+    "West":  (0, -1.0),
 }
 
 
@@ -79,7 +64,7 @@ class _JogButton(QPushButton):
 
 
 class ManualControlDialog(QDialog):
-    """Floating dialog for manual mount jogging via native scope_speed_move.
+    """Floating dialog for manual mount jogging via Alpaca MoveAxis.
 
     Signals:
         log_message: (level, message) forwarded to the session log.
@@ -89,17 +74,13 @@ class ManualControlDialog(QDialog):
 
     def __init__(
         self,
-        native: SeestarNativeClient,
+        telescope: Telescope,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self._native = native
-        self._speed: int = list(SPEEDS.values())[0]
-        self._angle: int | None = None
-
-        self._timer = QTimer(self)
-        self._timer.setInterval(TICK_MS)
-        self._timer.timeout.connect(self._tick)
+        self._telescope = telescope
+        self._speed: float = list(SPEEDS.values())[1]
+        self._active_axis: int | None = None
 
         self._setup_window()
         self._build_ui()
@@ -111,7 +92,7 @@ class ManualControlDialog(QDialog):
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.WindowCloseButtonHint
         )
-        self.setFixedSize(280, 340)
+        self.setFixedSize(280, 320)
         self.setModal(False)
 
     def _build_ui(self) -> None:
@@ -124,8 +105,9 @@ class ManualControlDialog(QDialog):
         self._speed_combo = QComboBox()
         for name in SPEEDS:
             self._speed_combo.addItem(name)
+        self._speed_combo.setCurrentIndex(1)  # Normal default
         self._speed_combo.currentTextChanged.connect(
-            lambda t: setattr(self, "_speed", SPEEDS.get(t, 500))
+            lambda t: setattr(self, "_speed", SPEEDS.get(t, 2.0))
         )
         root.addWidget(lbl)
         root.addWidget(self._speed_combo)
@@ -140,15 +122,15 @@ class ManualControlDialog(QDialog):
         grid.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         buttons = [
-            (0, 1, "↑", "North",  ANGLE_NORTH),
-            (2, 1, "↓", "South",  ANGLE_SOUTH),
-            (1, 0, "←", "West",   ANGLE_WEST),
-            (1, 2, "→", "East",   ANGLE_EAST),
+            (0, 1, "↑", "North"),
+            (2, 1, "↓", "South"),
+            (1, 0, "←", "West"),
+            (1, 2, "→", "East"),
         ]
-        for row, col, icon, tip, angle in buttons:
+        for row, col, icon, direction in buttons:
             btn = _JogButton(icon)
-            btn.setToolTip(tip)
-            btn.pressed.connect(lambda a=angle: self._start(a))
+            btn.setToolTip(direction)
+            btn.pressed.connect(lambda d=direction: self._start(d))
             btn.released.connect(self._stop)
             grid.addWidget(btn, row, col)
 
@@ -172,47 +154,28 @@ class ManualControlDialog(QDialog):
     # Motion
     # ------------------------------------------------------------------
 
-    def _start(self, angle: int) -> None:
-        logger.info("ManualControl: button pressed — angle=%d speed=%d", angle, self._speed)
-        self._angle = angle
-        self._send_move()
-        self._timer.start()
+    def _start(self, direction: str) -> None:
+        axis, sign = _DIRECTIONS[direction]
+        rate = sign * self._speed
+        self._active_axis = axis
+        logger.info("ManualControl: %s  axis=%d rate=%.2f", direction, axis, rate)
+        try:
+            self._telescope.move_axis(axis, rate)
+        except AlpacaError as exc:
+            self._active_axis = None
+            logger.error("MoveAxis failed: %s", exc)
+            self._log("ERROR", f"Move failed: {exc}")
 
     def _stop(self) -> None:
-        self._timer.stop()
-        self._angle = None
-        logger.info("ManualControl: button released — sending stop")
-        logger.debug("_stop called — native.is_connected=%s socket=%s",
-                     self._native.is_connected,
-                     "ok" if self._native._socket else "NONE")
-        try:
-            self._native.stop()
-        except SeestarNativeError as exc:
-            logger.warning("Stop failed: %s (native connected=%s)",
-                           exc, self._native.is_connected)
-            self._log("WARN", f"Stop failed: {exc}")
-
-    def _tick(self) -> None:
-        if self._angle is None:
-            self._timer.stop()
-        else:
-            self._send_move()
-
-    def _send_move(self) -> None:
-        if self._angle is None:
-            return
-        logger.debug("_send_move angle=%d speed=%d — native.is_connected=%s socket=%s",
-                     self._angle, self._speed,
-                     self._native.is_connected,
-                     "ok" if self._native._socket else "NONE")
-        try:
-            self._native.move(self._angle, self._speed, DUR_SEC)
-        except SeestarNativeError as exc:
-            self._timer.stop()
-            self._angle = None
-            logger.error("Move failed: %s (native connected=%s)",
-                         exc, self._native.is_connected)
-            self._log("ERROR", f"Move failed: {exc}")
+        axis = self._active_axis
+        self._active_axis = None
+        if axis is not None:
+            try:
+                self._telescope.stop_axis(axis)
+                logger.info("ManualControl: stopped axis %d", axis)
+            except AlpacaError as exc:
+                logger.warning("Stop axis %d failed: %s", axis, exc)
+                self._log("WARN", f"Stop failed: {exc}")
 
     # ------------------------------------------------------------------
     # Keyboard
@@ -222,14 +185,14 @@ class ManualControlDialog(QDialog):
         if event.isAutoRepeat():
             return
         mapping = {
-            Qt.Key.Key_Up:    ANGLE_NORTH,
-            Qt.Key.Key_Down:  ANGLE_SOUTH,
-            Qt.Key.Key_Left:  ANGLE_WEST,
-            Qt.Key.Key_Right: ANGLE_EAST,
+            Qt.Key.Key_Up:    "North",
+            Qt.Key.Key_Down:  "South",
+            Qt.Key.Key_Left:  "West",
+            Qt.Key.Key_Right: "East",
         }
-        angle = mapping.get(event.key())
-        if angle is not None:
-            self._start(angle)
+        direction = mapping.get(event.key())
+        if direction is not None:
+            self._start(direction)
         else:
             super().keyPressEvent(event)
 

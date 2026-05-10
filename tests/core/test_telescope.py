@@ -209,6 +209,14 @@ class TestCommands:
         mock_scope.AtPark = False
         assert connected_telescope.is_parked() is False
 
+    def test_move_axis_calls_move_axis(self, connected_telescope, mock_scope):
+        connected_telescope.move_axis(0, 2.0)
+        mock_scope.MoveAxis.assert_called_once()
+
+    def test_stop_axis_calls_move_axis_zero(self, connected_telescope, mock_scope):
+        connected_telescope.stop_axis(1)
+        mock_scope.MoveAxis.assert_called_once()
+
 
 # ===========================================================================
 # Integration tests — ASCOM Alpaca Simulator
