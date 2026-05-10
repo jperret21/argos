@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 
 # IMX585 physical characteristics (Seestar S30 Pro)
 PIXEL_SIZE_UM = 2.9
-FOCAL_LENGTH  = 150
-BAYER_PATTERN = "RGGB"
+FOCAL_LENGTH  = 160
+BAYER_PATTERN = "GRBG"
 INSTRUMENT    = "IMX585"
 TELESCOPE_NAME = "ZWO Seestar S30 Pro"
 

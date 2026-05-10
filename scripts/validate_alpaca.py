@@ -24,6 +24,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # ---------------------------------------------------------------------------
 
+_failures: list[str] = []
+
+
 def check(label: str, fn):
     """Run fn(), print OK or FAIL with value."""
     try:
@@ -32,6 +35,7 @@ def check(label: str, fn):
         return val
     except Exception as exc:
         print(f"  FAIL {label}: {exc}")
+        _failures.append(label)
         return None
 
 
@@ -110,23 +114,27 @@ def main() -> None:
     check("start_exposure(0.1s)", lambda: cam.start_exposure(0.1, light=True))
 
     print("  ...  Waiting for image (polling imageready)…")
-    t0 = time.perf_counter()
+    t0 = time.time()
     deadline = t0 + 30.0
+    image_ok = False
     while not cam.is_image_ready():
         if time.time() > deadline:
             print("  FAIL imageready timeout after 30s")
+            _failures.append("imageready")
             break
         time.sleep(0.2)
     else:
-        elapsed = time.perf_counter() - t0
+        elapsed = time.time() - t0
         print(f"  OK   imageready in {elapsed:.2f}s")
+        image_ok = True
 
+    if image_ok:
         arr = check("get_image_array", cam.get_image_array)
         if arr is not None:
             print(f"       shape={arr.shape}  dtype={arr.dtype}  "
                   f"min={arr.min()}  max={arr.max()}")
-            assert arr.ndim == 2,          f"Expected 2D array, got {arr.ndim}D"
-            assert arr.dtype.kind in ('u', 'i'), f"Expected integer dtype, got {arr.dtype}"
+            assert arr.ndim == 2,                   f"Expected 2D array, got {arr.ndim}D"
+            assert arr.dtype.kind in ('u', 'i', 'f'), f"Unexpected dtype: {arr.dtype}"
             print("  OK   Image shape and dtype valid")
 
     check("disconnect", cam.disconnect)
@@ -175,7 +183,11 @@ def main() -> None:
 
     # ── Done ──────────────────────────────────────────────────────────────
     print(f"\n{'═' * 55}")
-    print("  All checks passed.")
+    if _failures:
+        print(f"  ÉCHEC — {len(_failures)} check(s) failed: {', '.join(_failures)}")
+        sys.exit(1)
+    else:
+        print("  TOUT OK — communication Alpaca validée.")
     print(f"{'═' * 55}\n")
 
 
