@@ -64,9 +64,11 @@ class CapturePanel(QWidget):
         frame_display:  np.ndarray ready to display in the central FitsViewer.
     """
 
-    log_message    = pyqtSignal(str, str)
-    status_changed = pyqtSignal(str)
-    frame_display  = pyqtSignal(object)   # np.ndarray
+    log_message        = pyqtSignal(str, str)
+    status_changed     = pyqtSignal(str)
+    frame_display      = pyqtSignal(object)   # np.ndarray
+    mount_conn_changed = pyqtSignal(bool)     # True = connected
+    camera_conn_changed = pyqtSignal(bool)    # True = connected
 
     def __init__(self, config: Config, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -130,49 +132,52 @@ class CapturePanel(QWidget):
         layout.setContentsMargins(8, 12, 8, 8)
         layout.setSpacing(6)
 
-        # Host row
-        host_row = QHBoxLayout()
-        host_row.addWidget(_muted("Host"))
+        # Host + Port on same row
+        net_grid = QGridLayout()
+        net_grid.setSpacing(5)
+        net_grid.setColumnStretch(1, 2)
+        net_grid.setColumnStretch(3, 1)
+
         self._host_edit = QLineEdit()
         self._host_edit.setPlaceholderText("192.168.x.x")
         self._host_edit.textChanged.connect(self._on_host_changed)
-        host_row.addWidget(self._host_edit)
-        layout.addLayout(host_row)
 
-        port_row = QHBoxLayout()
-        port_row.addWidget(_muted("Port"))
         self._port_spin = QSpinBox()
         self._port_spin.setRange(1, 65535)
         self._port_spin.valueChanged.connect(self._on_port_changed)
-        port_row.addWidget(self._port_spin)
-        layout.addLayout(port_row)
 
-        # Discover
-        self._discover_btn = QPushButton("Discover")
+        net_grid.addWidget(_muted("Host"), 0, 0)
+        net_grid.addWidget(self._host_edit, 0, 1)
+        net_grid.addWidget(_muted("Port"), 0, 2)
+        net_grid.addWidget(self._port_spin, 0, 3)
+        layout.addLayout(net_grid)
+
+        # Discover + badges on same row
+        disc_row = QHBoxLayout()
+        self._discover_btn = QPushButton("⚡  Discover")
         self._discover_btn.clicked.connect(self._on_discover)
-        layout.addWidget(self._discover_btn)
-
-        # Status badges
-        badges = QHBoxLayout()
         self._mount_badge  = _badge("Mount",  connected=False)
         self._camera_badge = _badge("Camera", connected=False)
-        badges.addWidget(self._mount_badge)
-        badges.addWidget(self._camera_badge)
-        layout.addLayout(badges)
+        disc_row.addWidget(self._discover_btn)
+        disc_row.addStretch()
+        disc_row.addWidget(self._mount_badge)
+        disc_row.addWidget(self._camera_badge)
+        layout.addLayout(disc_row)
 
-        # Connect/Disconnect buttons
-        btn_row = QHBoxLayout()
-        self._connect_mount_btn = QPushButton("Connect Mount")
+        # Connect buttons — 2 columns
+        btn_grid = QGridLayout()
+        btn_grid.setSpacing(6)
+        self._connect_mount_btn = QPushButton("↗  Mount")
         self._connect_mount_btn.setProperty("class", "primary")
         self._connect_mount_btn.clicked.connect(self._on_connect_mount)
 
-        self._connect_camera_btn = QPushButton("Connect Camera")
+        self._connect_camera_btn = QPushButton("↗  Camera")
         self._connect_camera_btn.setProperty("class", "primary")
         self._connect_camera_btn.clicked.connect(self._on_connect_camera)
 
-        btn_row.addWidget(self._connect_mount_btn)
-        btn_row.addWidget(self._connect_camera_btn)
-        layout.addLayout(btn_row)
+        btn_grid.addWidget(self._connect_mount_btn,  0, 0)
+        btn_grid.addWidget(self._connect_camera_btn, 0, 1)
+        layout.addLayout(btn_grid)
 
         return group
 
@@ -295,43 +300,54 @@ class CapturePanel(QWidget):
         layout.setContentsMargins(8, 12, 8, 8)
         layout.setSpacing(6)
 
-        form = QFormLayout()
-        form.setSpacing(4)
+        # Coordinates — 2×2 grid (RA/Dec left, Alt/Az right)
+        coords = QGridLayout()
+        coords.setSpacing(4)
+        coords.setColumnStretch(1, 1)
+        coords.setColumnStretch(3, 1)
 
-        self._ra_lbl  = _coord_label("— h — m — s")
+        self._ra_lbl  = _coord_label("—h —m —s")
         self._dec_lbl = _coord_label("—° —′ —″")
         self._alt_lbl = _coord_label("—°")
         self._az_lbl  = _coord_label("—°")
 
-        form.addRow(_muted("RA"),  self._ra_lbl)
-        form.addRow(_muted("Dec"), self._dec_lbl)
-        form.addRow(_muted("Alt"), self._alt_lbl)
-        form.addRow(_muted("Az"),  self._az_lbl)
-        layout.addLayout(form)
+        coords.addWidget(_muted("RA"),  0, 0)
+        coords.addWidget(self._ra_lbl,  0, 1)
+        coords.addWidget(_muted("Alt"), 0, 2)
+        coords.addWidget(self._alt_lbl, 0, 3)
+        coords.addWidget(_muted("Dec"), 1, 0)
+        coords.addWidget(self._dec_lbl, 1, 1)
+        coords.addWidget(_muted("Az"),  1, 2)
+        coords.addWidget(self._az_lbl,  1, 3)
+        layout.addLayout(coords)
 
-        track_row = QHBoxLayout()
-        track_row.addWidget(_muted("Track"))
+        # Tracking status + toggle — same row
+        track_row = QGridLayout()
+        track_row.setSpacing(6)
         self._track_lbl = QLabel("—")
         self._track_lbl.setStyleSheet(f"color:{theme.TEXT_MUTED}; font-size:11px;")
-        track_row.addWidget(self._track_lbl)
-
-        self._track_btn = QPushButton("Track ON")
+        self._track_btn = QPushButton("Tracking ON")
         self._track_btn.setProperty("class", "success")
         self._track_btn.setCheckable(True)
         self._track_btn.setEnabled(False)
         self._track_btn.toggled.connect(self._on_tracking_toggled)
-        track_row.addStretch()
-        track_row.addWidget(self._track_btn)
+        track_row.addWidget(_muted("Status"), 0, 0)
+        track_row.addWidget(self._track_lbl,  0, 1)
+        track_row.addWidget(self._track_btn,  0, 2)
         layout.addLayout(track_row)
 
-        # Goto form
+        # Goto group
         goto_group = QGroupBox("Goto")
         goto_layout = QVBoxLayout(goto_group)
         goto_layout.setContentsMargins(6, 10, 6, 6)
-        goto_layout.setSpacing(4)
+        goto_layout.setSpacing(6)
 
-        gform = QFormLayout()
-        gform.setSpacing(4)
+        # RA + Dec on same row
+        goto_grid = QGridLayout()
+        goto_grid.setSpacing(5)
+        goto_grid.setColumnStretch(1, 1)
+        goto_grid.setColumnStretch(3, 1)
+
         self._goto_ra = QDoubleSpinBox()
         self._goto_ra.setRange(0.0, 23.9999)
         self._goto_ra.setDecimals(4)
@@ -342,11 +358,15 @@ class CapturePanel(QWidget):
         self._goto_dec.setDecimals(4)
         self._goto_dec.setSuffix("  °")
 
-        gform.addRow(_muted("RA"), self._goto_ra)
-        gform.addRow(_muted("Dec"), self._goto_dec)
-        goto_layout.addLayout(gform)
+        goto_grid.addWidget(_muted("RA"),     0, 0)
+        goto_grid.addWidget(self._goto_ra,    0, 1)
+        goto_grid.addWidget(_muted("Dec"),    0, 2)
+        goto_grid.addWidget(self._goto_dec,   0, 3)
+        goto_layout.addLayout(goto_grid)
 
-        goto_btns = QHBoxLayout()
+        # 3 buttons in one row
+        btn_grid = QGridLayout()
+        btn_grid.setSpacing(6)
         self._slew_btn = QPushButton("▶  Slew")
         self._slew_btn.setProperty("class", "primary")
         self._slew_btn.setEnabled(False)
@@ -361,10 +381,10 @@ class CapturePanel(QWidget):
         self._park_btn.setEnabled(False)
         self._park_btn.clicked.connect(self._on_park)
 
-        goto_btns.addWidget(self._slew_btn)
-        goto_btns.addWidget(self._abort_btn)
-        goto_btns.addWidget(self._park_btn)
-        goto_layout.addLayout(goto_btns)
+        btn_grid.addWidget(self._slew_btn,  0, 0)
+        btn_grid.addWidget(self._abort_btn, 0, 1)
+        btn_grid.addWidget(self._park_btn,  0, 2)
+        goto_layout.addLayout(btn_grid)
         layout.addWidget(goto_group)
 
         return group
@@ -434,6 +454,7 @@ class CapturePanel(QWidget):
             self._log("OK", f"Mount connected: {name}")
             self._mount_badge.setText("● Mount")
             self._mount_badge.setStyleSheet(_badge_style(True))
+            self.mount_conn_changed.emit(True)
             self._track_btn.setEnabled(True)
             self._slew_btn.setEnabled(True)
             self._abort_btn.setEnabled(True)
@@ -474,6 +495,7 @@ class CapturePanel(QWidget):
             self._take_btn.setEnabled(True)
             self._seq_btn.setEnabled(True)
             self._preview_btn.setEnabled(True)
+            self.camera_conn_changed.emit(True)
             self.status_changed.emit("Camera connected")
         except AlpacaError as exc:
             self._log("ERROR", f"Camera connection failed: {exc}")
@@ -755,6 +777,7 @@ class CapturePanel(QWidget):
         self._telescope = None
         self._mount_badge.setText("○ Mount")
         self._mount_badge.setStyleSheet(_badge_style(False))
+        self.mount_conn_changed.emit(False)
         self._track_btn.setEnabled(False)
         self._slew_btn.setEnabled(False)
         self._abort_btn.setEnabled(False)

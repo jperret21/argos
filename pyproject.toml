@@ -5,8 +5,8 @@ description = "Astrophotography control for ZWO Seestar S30 Pro via ASCOM Alpaca
 requires-python = ">=3.11,<3.12"
 
 dependencies = [
-    "PyQt6>=6.6.0,<6.8.0",
-    "PyQt6-Qt6>=6.6.0,<6.8.0",
+    "PyQt6==6.7.1",
+    "PyQt6-Qt6==6.7.1",
     "pyqtgraph>=0.13.0",
     "requests>=2.31.0",
     "astropy>=6.0.0",

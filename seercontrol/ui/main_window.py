@@ -23,11 +23,14 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
+    QPushButton,
     QSpinBox,
     QStatusBar,
+    QToolBar,
     QWidget,
 )
 
@@ -137,6 +140,7 @@ class MainWindow(QMainWindow):
         self._build_central()
         self._build_menu()
         self._build_docks()
+        self._build_toolbar()
         self._wire_signals()
         self._build_status_bar()
         self._restore_state()
@@ -300,6 +304,66 @@ class MainWindow(QMainWindow):
             )
 
     # ------------------------------------------------------------------
+    # Top toolbar (always visible inside the window)
+    # ------------------------------------------------------------------
+
+    def _build_toolbar(self) -> None:
+        tb = QToolBar("Main")
+        tb.setMovable(False)
+        tb.setFloatable(False)
+        tb.setStyleSheet(
+            f"QToolBar {{ background:{theme.SURFACE_2}; border-bottom:1px solid {theme.SURFACE_4};"
+            f" padding:2px 8px; spacing:6px; }}"
+            f"QToolBar::separator {{ background:{theme.SURFACE_4}; width:1px; margin:4px 4px; }}"
+        )
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, tb)
+
+        # App label
+        app_lbl = QLabel(f"  SEERCONTROL  <span style='color:{theme.TEXT_MUTED};font-size:10px;'>v{self.APP_VERSION}</span>")
+        app_lbl.setStyleSheet(
+            f"color:{theme.ACCENT}; font-size:12px; font-weight:bold;"
+            f" letter-spacing:2px; background:transparent;"
+        )
+        tb.addWidget(app_lbl)
+        tb.addSeparator()
+
+        # Connection status badges — updated by _wire_signals via capture_panel
+        self._tb_mount_lbl  = QLabel("○  Mount")
+        self._tb_camera_lbl = QLabel("○  Camera")
+        for lbl in (self._tb_mount_lbl, self._tb_camera_lbl):
+            lbl.setStyleSheet(
+                f"color:{theme.TEXT_MUTED}; font-size:11px;"
+                f" padding:0 6px; background:transparent;"
+            )
+        tb.addWidget(self._tb_mount_lbl)
+        tb.addWidget(self._tb_camera_lbl)
+        tb.addSeparator()
+
+        # Quick action buttons
+        def _tb_btn(label: str, slot, shortcut: str | None = None) -> QPushButton:
+            btn = QPushButton(label)
+            btn.setFlat(True)
+            btn.setStyleSheet(
+                f"QPushButton {{ color:{theme.TEXT_PRIMARY}; background:transparent;"
+                f" border:none; padding:4px 10px; font-size:11px; }}"
+                f"QPushButton:hover {{ background:{theme.SURFACE_4}; border-radius:2px; }}"
+            )
+            btn.clicked.connect(slot)
+            if shortcut:
+                btn.setToolTip(f"{label}  ({shortcut})")
+            return btn
+
+        tb.addWidget(_tb_btn("⚡ Discover",      lambda: self._capture_panel._on_discover()))
+        tb.addWidget(_tb_btn("↗ Mount",           lambda: self._capture_panel._on_connect_mount()))
+        tb.addWidget(_tb_btn("↗ Camera",          lambda: self._capture_panel._on_connect_camera()))
+        tb.addSeparator()
+        tb.addWidget(_tb_btn("◉ Take Shot",       lambda: self._capture_panel._on_take_shot(),       "Ctrl+T"))
+        tb.addWidget(_tb_btn("▶ Sequence",         lambda: self._capture_panel._on_toggle_sequence(), "Ctrl+R"))
+        tb.addWidget(_tb_btn("▶ Preview",          lambda: self._capture_panel._on_toggle_preview(),  "Ctrl+P"))
+        tb.addSeparator()
+        tb.addWidget(_tb_btn("☀ Auto Stretch",     self._viewer._auto_stretch,                        "Ctrl+A"))
+
+    # ------------------------------------------------------------------
     # Signal wiring
     # ------------------------------------------------------------------
 
@@ -312,6 +376,10 @@ class MainWindow(QMainWindow):
         self._capture_panel.log_message.connect(self._log_panel.append)
         self._capture_panel.status_changed.connect(self._on_status_changed)
 
+        # Toolbar connection badges
+        self._capture_panel.mount_conn_changed.connect(self._on_mount_conn_changed)
+        self._capture_panel.camera_conn_changed.connect(self._on_camera_conn_changed)
+
         # Analysis → FitsViewer
         self._analysis_panel.levels_changed.connect(self._viewer.set_levels)
         self._analysis_panel.gamma_changed.connect(self._viewer.set_gamma)
@@ -319,6 +387,22 @@ class MainWindow(QMainWindow):
 
         # Analysis channel combo → CapturePanel channel switch
         self._analysis_panel.channel_changed.connect(self._capture_panel.set_channel)
+
+    def _on_mount_conn_changed(self, connected: bool) -> None:
+        dot = "●" if connected else "○"
+        color = theme.SUCCESS if connected else theme.TEXT_MUTED
+        self._tb_mount_lbl.setText(f"{dot}  Mount")
+        self._tb_mount_lbl.setStyleSheet(
+            f"color:{color}; font-size:11px; padding:0 6px; background:transparent;"
+        )
+
+    def _on_camera_conn_changed(self, connected: bool) -> None:
+        dot = "●" if connected else "○"
+        color = theme.SUCCESS if connected else theme.TEXT_MUTED
+        self._tb_camera_lbl.setText(f"{dot}  Camera")
+        self._tb_camera_lbl.setStyleSheet(
+            f"color:{color}; font-size:11px; padding:0 6px; background:transparent;"
+        )
 
     # ------------------------------------------------------------------
     # Status bar
