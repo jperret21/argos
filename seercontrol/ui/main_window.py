@@ -311,18 +311,17 @@ class MainWindow(QMainWindow):
         tb = QToolBar("Main")
         tb.setMovable(False)
         tb.setFloatable(False)
-        tb.setStyleSheet(
-            f"QToolBar {{ background:{theme.SURFACE_2}; border-bottom:1px solid {theme.SURFACE_4};"
-            f" padding:2px 8px; spacing:6px; }}"
-            f"QToolBar::separator {{ background:{theme.SURFACE_4}; width:1px; margin:4px 4px; }}"
-        )
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, tb)
 
-        # App label
-        app_lbl = QLabel(f"  SEERCONTROL  <span style='color:{theme.TEXT_MUTED};font-size:10px;'>v{self.APP_VERSION}</span>")
+        # App label — Siril-style: bold blue Helvetica, version in muted suffix
+        app_lbl = QLabel(
+            f"SeerControl "
+            f"<span style='color:{theme.FG_MUTED};font-size:11px;font-weight:normal;'>"
+            f"— ASCOM control · v{self.APP_VERSION}</span>"
+        )
         app_lbl.setStyleSheet(
-            f"color:{theme.ACCENT}; font-size:12px; font-weight:bold;"
-            f" letter-spacing:2px; background:transparent;"
+            f"color:{theme.ACCENT}; font-size:15px; font-weight:bold;"
+            f" padding:2px 8px; background:transparent;"
         )
         tb.addWidget(app_lbl)
         tb.addSeparator()
@@ -332,21 +331,22 @@ class MainWindow(QMainWindow):
         self._tb_camera_lbl = QLabel("○  Camera")
         for lbl in (self._tb_mount_lbl, self._tb_camera_lbl):
             lbl.setStyleSheet(
-                f"color:{theme.TEXT_MUTED}; font-size:11px;"
-                f" padding:0 6px; background:transparent;"
+                f"color:{theme.FG_MUTED}; font-size:11px;"
+                f" padding:0 8px; background:transparent;"
             )
         tb.addWidget(self._tb_mount_lbl)
         tb.addWidget(self._tb_camera_lbl)
         tb.addSeparator()
 
-        # Quick action buttons
+        # Quick action buttons — flat, hover-only, Siril chrome
         def _tb_btn(label: str, slot, shortcut: str | None = None) -> QPushButton:
             btn = QPushButton(label)
             btn.setFlat(True)
             btn.setStyleSheet(
-                f"QPushButton {{ color:{theme.TEXT_PRIMARY}; background:transparent;"
-                f" border:none; padding:4px 10px; font-size:11px; }}"
-                f"QPushButton:hover {{ background:{theme.SURFACE_4}; border-radius:2px; }}"
+                f"QPushButton {{ color:{theme.FG}; background:transparent;"
+                f" border:none; padding:4px 10px; font-size:11px; min-height:0; }}"
+                f"QPushButton:hover {{ background:{theme.SURFACE}; color:{theme.ACCENT};"
+                f" border-radius:3px; }}"
             )
             btn.clicked.connect(slot)
             if shortcut:
@@ -390,18 +390,18 @@ class MainWindow(QMainWindow):
 
     def _on_mount_conn_changed(self, connected: bool) -> None:
         dot = "●" if connected else "○"
-        color = theme.SUCCESS if connected else theme.TEXT_MUTED
+        color = theme.SUCCESS if connected else theme.FG_MUTED
         self._tb_mount_lbl.setText(f"{dot}  Mount")
         self._tb_mount_lbl.setStyleSheet(
-            f"color:{color}; font-size:11px; padding:0 6px; background:transparent;"
+            f"color:{color}; font-size:11px; padding:0 8px; background:transparent;"
         )
 
     def _on_camera_conn_changed(self, connected: bool) -> None:
         dot = "●" if connected else "○"
-        color = theme.SUCCESS if connected else theme.TEXT_MUTED
+        color = theme.SUCCESS if connected else theme.FG_MUTED
         self._tb_camera_lbl.setText(f"{dot}  Camera")
         self._tb_camera_lbl.setStyleSheet(
-            f"color:{color}; font-size:11px; padding:0 6px; background:transparent;"
+            f"color:{color}; font-size:11px; padding:0 8px; background:transparent;"
         )
 
     # ------------------------------------------------------------------

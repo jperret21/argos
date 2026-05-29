@@ -49,7 +49,7 @@ class LogPanel(QWidget):
         self._text.setReadOnly(True)
         self._text.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         self._text.setStyleSheet(
-            f"background:{theme.SURFACE_1}; border:none;"
+            f"background:{theme.BG2}; color:{theme.FG_MUTED}; border:1px solid {theme.BORDER};"
             f"font-family:{theme.FONT_MONO}; font-size:11px;"
         )
 
