@@ -41,6 +41,7 @@ from seercontrol.ui.panels.analysis_panel import AnalysisPanel
 from seercontrol.ui.panels.capture_panel import CapturePanel
 from seercontrol.ui.panels.log_panel import LogPanel
 from seercontrol.ui.widgets.fits_viewer import FitsViewer
+from seercontrol.ui.wizard.session_wizard import SessionWizard
 from seercontrol.workers.stellarium_worker import StellariumWorker
 
 logger = logging.getLogger(__name__)
@@ -214,6 +215,13 @@ class MainWindow(QMainWindow):
 
         # ── File ──────────────────────────────────────────────────────
         file_menu = bar.addMenu("File")
+
+        quick_session_action = QAction("Quick Session…", self)
+        quick_session_action.setShortcut("Ctrl+N")
+        quick_session_action.triggered.connect(self._open_quick_session)
+        file_menu.addAction(quick_session_action)
+
+        file_menu.addSeparator()
 
         prefs_action = QAction("Preferences…", self)
         prefs_action.setShortcut("Ctrl+,")
@@ -562,6 +570,10 @@ class MainWindow(QMainWindow):
         dlg = _PreferencesDialog(self._config, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.statusBar().showMessage("Preferences saved.", 3000)
+
+    def _open_quick_session(self) -> None:
+        wiz = SessionWizard(self._capture_panel, self._config, parent=self)
+        wiz.exec()
 
     def _show_about(self) -> None:
         self.statusBar().showMessage(

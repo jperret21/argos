@@ -910,6 +910,66 @@ class CapturePanel(QWidget):
         self._log("CMD", f"{prefix} → RA {ra_hours:.4f}h  Dec {dec_degrees:+.4f}°")
         self._on_goto()
 
+    # ------------------------------------------------------------------
+    # Public API for the SessionWizard
+    # ------------------------------------------------------------------
+
+    @property
+    def telescope(self):
+        return self._telescope
+
+    @property
+    def camera(self):
+        return self._camera
+
+    def start_discovery(self) -> None:
+        """Trigger an Alpaca UDP discovery sweep (same as the toolbar button)."""
+        self._on_discover()
+
+    def set_host_port(self, host: str, port: int) -> None:
+        """Fill the connection fields. The wizard calls this before ``connect_*``."""
+        self._host_edit.setText(host)
+        self._port_spin.setValue(port)
+
+    def connect_mount(self) -> None:
+        self._on_connect_mount()
+
+    def connect_camera(self) -> None:
+        self._on_connect_camera()
+
+    def start_quick_session(
+        self,
+        target_ra: float,
+        target_dec: float,
+        target_name: str,
+        profile,
+    ) -> None:
+        """Configure the capture form from ``profile`` and start the sequence.
+
+        Used by the Quick Session wizard. The wizard knows nothing about the
+        worker / FITS save pipeline — it just hands us the high-level intent.
+        """
+        if not self._telescope or not self._camera:
+            self._log("WARN", "Quick session aborted — mount or camera not connected")
+            return
+
+        # Make sure the standard capture form matches the profile so the FITS
+        # writer and sequence loop pick up the right values.
+        self._object_edit.setText(target_name)
+        _set_combo_text(self._type_combo, profile.frame_type)
+        _set_combo_text(self._filter_combo, profile.filter_name)
+        self._exp_spin.setValue(float(profile.exposure_s))
+        self._gain_spin.setValue(int(profile.gain))
+        self._count_spin.setValue(int(profile.frames))
+
+        # Goto first (also fills TARGRA/TARGDEC for the FITS headers).
+        self.goto_target(target_ra, target_dec, label=f"wizard target {target_name}")
+
+        # Stop any prior sequence, then start a fresh one.
+        if self._in_sequence:
+            self._stop_sequence()
+        self._start_sequence()
+
     def _on_abort(self) -> None:
         if not self._telescope:
             return
@@ -979,3 +1039,10 @@ def _badge(name: str, connected: bool) -> QLabel:
     lbl = QLabel(f"{'●' if connected else '○'} {name}")
     lbl.setStyleSheet(_badge_style(connected))
     return lbl
+
+
+def _set_combo_text(combo: QComboBox, text: str) -> None:
+    """Select the entry whose text equals ``text`` if present; otherwise no-op."""
+    idx = combo.findText(text)
+    if idx >= 0:
+        combo.setCurrentIndex(idx)
