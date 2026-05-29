@@ -367,3 +367,61 @@ class Telescope:
             self._scope.PulseGuide(direction, duration_ms)
         except Exception as exc:
             raise _wrap(exc) from exc
+
+    # ------------------------------------------------------------------
+    # Tracking rate, target hint, side of pier
+    # ------------------------------------------------------------------
+
+    def set_tracking_rate(self, rate: int) -> None:
+        """Select the tracking rate model.
+
+        Args:
+            rate: ASCOM ``DriveRates`` enum value:
+                  0=Sidereal, 1=Lunar, 2=Solar, 3=King.
+
+        Raises:
+            AlpacaError: Mount rejected the rate (e.g. only Sidereal supported).
+        """
+        try:
+            from alpaca.telescope import DriveRates
+            self._scope.TrackingRate = DriveRates(rate)
+            logger.info("Tracking rate set to %s", DriveRates(rate).name)
+        except Exception as exc:
+            raise _wrap(exc) from exc
+
+    def get_tracking_rate(self) -> int | None:
+        """Return the current ASCOM ``DriveRates`` value, or None if unsupported."""
+        try:
+            return int(self._scope.TrackingRate)
+        except Exception as exc:
+            logger.debug("TrackingRate read failed: %s", exc)
+            return None
+
+    def set_target(self, ra: float, dec: float) -> None:
+        """Set the mount's TargetRightAscension/TargetDeclination without slewing.
+
+        Useful before a slew or sync so the mount's pointing model records what
+        we were aiming at — independent of the actual pointing it eventually
+        achieves. Failures are logged and re-raised; some firmwares do not allow
+        writing these properties (in which case the slew code path tolerates
+        the failure on its own).
+        """
+        try:
+            self._scope.TargetRightAscension = ra
+            self._scope.TargetDeclination = dec
+            logger.debug("Target hint set: RA=%.6f Dec=%.6f", ra, dec)
+        except Exception as exc:
+            raise _wrap(exc) from exc
+
+    def side_of_pier(self) -> str | None:
+        """Return 'EAST' / 'WEST' / 'UNKNOWN', or None if the mount can't tell.
+
+        For an alt-az like the Seestar this concept is meaningless — the
+        property may simply not be exposed.
+        """
+        try:
+            value = int(self._scope.SideOfPier)
+        except Exception:
+            return None
+        # ASCOM PierSide: -1 unknown, 0 east, 1 west
+        return {0: "EAST", 1: "WEST"}.get(value, "UNKNOWN")

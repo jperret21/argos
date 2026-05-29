@@ -14,7 +14,7 @@ from __future__ import annotations
 import base64
 import logging
 
-from PyQt6.QtCore import Qt, QByteArray
+from PyQt6.QtCore import Qt, QByteArray, QObject, QRunnable, QThreadPool, pyqtSignal
 from PyQt6.QtGui import QAction, QCloseEvent
 from PyQt6.QtWidgets import (
     QDialog,
@@ -35,11 +35,13 @@ from PyQt6.QtWidgets import (
 )
 
 from seercontrol.core.config import Config
+from seercontrol.core.stellarium.remote_pull import pull_selected_object
 from seercontrol.ui import theme
 from seercontrol.ui.panels.analysis_panel import AnalysisPanel
 from seercontrol.ui.panels.capture_panel import CapturePanel
 from seercontrol.ui.panels.log_panel import LogPanel
 from seercontrol.ui.widgets.fits_viewer import FitsViewer
+from seercontrol.workers.stellarium_worker import StellariumWorker
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +114,39 @@ class _PreferencesDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
+# Stellarium HTTP pull runner
+# ---------------------------------------------------------------------------
+
+class _PullRunnerSignals(QObject):
+    target = pyqtSignal(str, float, float)
+    failed = pyqtSignal(str)
+
+
+class _PullRunner(QRunnable):
+    """One-shot HTTP query to Stellarium's Remote Control endpoint.
+
+    Runs on the global QThreadPool so the ~2 s timeout never blocks the UI.
+    """
+
+    def __init__(self, host: str, port: int) -> None:
+        super().__init__()
+        self._host = host
+        self._port = port
+        self.signals = _PullRunnerSignals()
+
+    def run(self) -> None:
+        try:
+            target = pull_selected_object(host=self._host, port=self._port)
+        except Exception as exc:  # network errors already swallowed by pull_selected_object
+            self.signals.failed.emit(str(exc))
+            return
+        if target is None:
+            self.signals.failed.emit("no selection or plugin not running")
+            return
+        self.signals.target.emit(target.name, target.ra_hours, target.dec_degrees)
+
+
+# ---------------------------------------------------------------------------
 # Dock factory
 # ---------------------------------------------------------------------------
 
@@ -135,6 +170,7 @@ class MainWindow(QMainWindow):
     def __init__(self, config: Config) -> None:
         super().__init__()
         self._config = config
+        self._stellarium_worker: StellariumWorker | None = None
 
         self._setup_window()
         self._build_central()
@@ -388,6 +424,12 @@ class MainWindow(QMainWindow):
         # Analysis channel combo → CapturePanel channel switch
         self._analysis_panel.channel_changed.connect(self._capture_panel.set_channel)
 
+        # Stellarium card → MainWindow handlers
+        card = self._capture_panel.stellarium_card
+        card.start_server_requested.connect(self._on_stellarium_start)
+        card.stop_server_requested.connect(self._on_stellarium_stop)
+        card.pull_requested.connect(self._on_stellarium_pull)
+
     def _on_mount_conn_changed(self, connected: bool) -> None:
         dot = "●" if connected else "○"
         color = theme.SUCCESS if connected else theme.FG_MUTED
@@ -403,6 +445,72 @@ class MainWindow(QMainWindow):
         self._tb_camera_lbl.setStyleSheet(
             f"color:{color}; font-size:11px; padding:0 8px; background:transparent;"
         )
+
+    # ------------------------------------------------------------------
+    # Stellarium integration
+    # ------------------------------------------------------------------
+
+    def _on_stellarium_start(self, host: str, port: int) -> None:
+        if self._stellarium_worker is not None:
+            self._stop_stellarium_worker()
+        worker = StellariumWorker(host=host, port=port)
+        card = self._capture_panel.stellarium_card
+
+        worker.target_received.connect(self._on_stellarium_target)
+        worker.client_count_changed.connect(card.set_client_count)
+        worker.server_started.connect(lambda: card.set_server_state(True))
+        worker.server_stopped.connect(lambda: card.set_server_state(False))
+        worker.error_occurred.connect(self._on_stellarium_error)
+        # Keep the asyncio side fed with every mount position update.
+        self._capture_panel.position_updated.connect(worker.update_mount_position)
+
+        self._stellarium_worker = worker
+        worker.start()
+        self._capture_panel.log_message.emit(
+            "INFO", f"Stellarium server starting on {host}:{port}"
+        )
+
+    def _on_stellarium_stop(self) -> None:
+        self._stop_stellarium_worker()
+
+    def _stop_stellarium_worker(self) -> None:
+        worker = self._stellarium_worker
+        if worker is None:
+            return
+        try:
+            self._capture_panel.position_updated.disconnect(worker.update_mount_position)
+        except (TypeError, RuntimeError):
+            pass
+        worker.stop()
+        worker.wait(3000)
+        self._stellarium_worker = None
+
+    def _on_stellarium_target(self, ra_hours: float, dec_degrees: float) -> None:
+        self._capture_panel.stellarium_card.flash_goto(ra_hours, dec_degrees)
+        self._capture_panel.goto_target(ra_hours, dec_degrees, label="goto")
+
+    def _on_stellarium_error(self, message: str) -> None:
+        self._capture_panel.log_message.emit("ERROR", f"Stellarium: {message}")
+        self._capture_panel.stellarium_card.set_server_state(False, "✗  error")
+
+    def _on_stellarium_pull(self, host: str, port: int) -> None:
+        """Run the HTTP "Pull selected" call on a background thread.
+
+        The call blocks for up to ~2 s on a timeout — we never want that on
+        the UI thread.
+        """
+        runner = _PullRunner(host=host, port=port)
+        runner.signals.target.connect(self._on_pull_target)
+        runner.signals.failed.connect(
+            lambda msg: self._capture_panel.log_message.emit("WARN", f"Stellarium pull: {msg}")
+        )
+        QThreadPool.globalInstance().start(runner)
+
+    def _on_pull_target(self, name: str, ra_hours: float, dec_degrees: float) -> None:
+        self._capture_panel.log_message.emit(
+            "OK", f"Stellarium → {name}  RA {ra_hours:.4f}h  Dec {dec_degrees:+.4f}°"
+        )
+        self._capture_panel.goto_target(ra_hours, dec_degrees, label=f"target '{name}'")
 
     # ------------------------------------------------------------------
     # Status bar
@@ -466,6 +574,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self._stop_stellarium_worker()
         self._capture_panel.shutdown()
         self._save_state()
         logger.info("MainWindow closed")

@@ -44,6 +44,7 @@ from seercontrol.core.alpaca.telescope import MountPosition, Telescope
 from seercontrol.core.config import Config
 from seercontrol.core.imaging.debayer import compute_hfd, extract_channel
 from seercontrol.core.imaging.fits_writer import FITSWriter, FrameContext
+from seercontrol.ui.panels.stellarium_card import StellariumCard
 from seercontrol.ui import theme
 from seercontrol.workers.discovery_worker import DiscoveryWorker
 from seercontrol.workers.exposure_worker import LivePreviewWorker
@@ -69,6 +70,7 @@ class CapturePanel(QWidget):
     frame_display      = pyqtSignal(object)   # np.ndarray
     mount_conn_changed = pyqtSignal(bool)     # True = connected
     camera_conn_changed = pyqtSignal(bool)    # True = connected
+    position_updated   = pyqtSignal(float, float, bool)  # ra_h, dec_deg, slewing
 
     def __init__(self, config: Config, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -123,6 +125,8 @@ class CapturePanel(QWidget):
         inner_layout.addWidget(self._build_connection_group())
         inner_layout.addWidget(self._build_capture_group())
         inner_layout.addWidget(self._build_mount_group())
+        self.stellarium_card = StellariumCard()
+        inner_layout.addWidget(self.stellarium_card)
         inner_layout.addStretch()
 
         scroll.setWidget(inner)
@@ -343,6 +347,24 @@ class CapturePanel(QWidget):
         track_row.addWidget(self._track_btn,  0, 2)
         layout.addLayout(track_row)
 
+        # Tracking rate (Sidereal/Lunar/Solar) + Sync button
+        rate_row = QGridLayout()
+        rate_row.setSpacing(6)
+        rate_row.setColumnStretch(1, 1)
+        self._rate_combo = QComboBox()
+        for label in ("Sidereal", "Lunar", "Solar"):
+            self._rate_combo.addItem(label)
+        self._rate_combo.setEnabled(False)
+        self._rate_combo.currentIndexChanged.connect(self._on_tracking_rate_changed)
+        self._sync_btn = QPushButton("⟳  Sync")
+        self._sync_btn.setToolTip("Sync the mount pointing model to the current RA/Dec")
+        self._sync_btn.setEnabled(False)
+        self._sync_btn.clicked.connect(self._on_sync_to_current)
+        rate_row.addWidget(_muted("Rate"),    0, 0)
+        rate_row.addWidget(self._rate_combo,  0, 1)
+        rate_row.addWidget(self._sync_btn,    0, 2)
+        layout.addLayout(rate_row)
+
         # Goto group
         goto_group = QGroupBox("Goto")
         goto_layout = QVBoxLayout(goto_group)
@@ -466,6 +488,8 @@ class CapturePanel(QWidget):
             self._slew_btn.setEnabled(True)
             self._abort_btn.setEnabled(True)
             self._park_btn.setEnabled(True)
+            self._rate_combo.setEnabled(True)
+            self._sync_btn.setEnabled(True)
             self._start_polling()
             self.status_changed.emit(f"Mount connected — {host}:{port}")
         except AlpacaError as exc:
@@ -794,6 +818,8 @@ class CapturePanel(QWidget):
         self._dec_lbl.setText(pos.dec_str())
         self._alt_lbl.setText(pos.alt_str())
         self._az_lbl.setText(pos.az_str())
+        # Fan out to the Stellarium worker (and anyone else interested).
+        self.position_updated.emit(pos.ra, pos.dec, pos.slewing)
 
         color = theme.SUCCESS if pos.tracking else theme.WARNING
         self._track_lbl.setText("ON" if pos.tracking else "OFF")
@@ -819,6 +845,8 @@ class CapturePanel(QWidget):
         self._slew_btn.setEnabled(False)
         self._abort_btn.setEnabled(False)
         self._park_btn.setEnabled(False)
+        self._rate_combo.setEnabled(False)
+        self._sync_btn.setEnabled(False)
 
     # ------------------------------------------------------------------
     # Mount commands
@@ -844,6 +872,43 @@ class CapturePanel(QWidget):
             self._log("CMD", f"Slewing → RA {ra:.4f}h  Dec {dec:+.4f}°")
         except AlpacaError as exc:
             self._log("ERROR", f"Goto failed: {exc}")
+
+    def _on_tracking_rate_changed(self, idx: int) -> None:
+        if not self._telescope:
+            return
+        labels = ("Sidereal", "Lunar", "Solar")
+        try:
+            self._telescope.set_tracking_rate(idx)
+            self._log("CMD", f"Tracking rate → {labels[idx]}")
+        except AlpacaError as exc:
+            self._log("ERROR", f"Tracking rate failed: {exc}")
+
+    def _on_sync_to_current(self) -> None:
+        if not self._telescope or self._last_position is None:
+            return
+        ra, dec = self._last_position.ra, self._last_position.dec
+        try:
+            self._telescope.sync_to(ra, dec)
+            self._log("CMD", f"Sync at RA {ra:.4f}h  Dec {dec:+.4f}°")
+        except AlpacaError as exc:
+            self._log("ERROR", f"Sync failed: {exc}")
+
+    def goto_target(self, ra_hours: float, dec_degrees: float, label: str = "") -> None:
+        """Slew the mount to ``(ra, dec)``.
+
+        Used by external sources (Stellarium TCP goto, Stellarium HTTP pull,
+        wizard target page). Populates the goto fields, then triggers the
+        existing slew path so the FITS TARGRA/DEC headers get the requested
+        coords.
+        """
+        if not self._telescope:
+            self._log("WARN", "Goto requested but mount not connected")
+            return
+        self._goto_ra.setValue(float(ra_hours))
+        self._goto_dec.setValue(float(dec_degrees))
+        prefix = f"Stellarium {label}" if label else "Goto"
+        self._log("CMD", f"{prefix} → RA {ra_hours:.4f}h  Dec {dec_degrees:+.4f}°")
+        self._on_goto()
 
     def _on_abort(self) -> None:
         if not self._telescope:
