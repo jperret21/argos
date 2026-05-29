@@ -43,7 +43,7 @@ from seercontrol.core.alpaca.filterwheel import FilterWheel, POSITION_NAMES
 from seercontrol.core.alpaca.telescope import MountPosition, Telescope
 from seercontrol.core.config import Config
 from seercontrol.core.imaging.debayer import compute_hfd, extract_channel
-from seercontrol.core.imaging.fits_writer import FITSWriter
+from seercontrol.core.imaging.fits_writer import FITSWriter, FrameContext
 from seercontrol.ui import theme
 from seercontrol.workers.discovery_worker import DiscoveryWorker
 from seercontrol.workers.exposure_worker import LivePreviewWorker
@@ -92,6 +92,13 @@ class CapturePanel(QWidget):
         self._seq_total:       int   = 0
         self._seq_saved:       int   = 0
         self._seq_start:       float = 0.0
+        # Latest mount position cached from the polling worker — used to fill
+        # FITS pointing/airmass/moon headers without re-querying the mount.
+        self._last_position:   MountPosition | None = None
+        # Latest target the user asked the mount to slew to (set by goto).
+        # Stays None until a goto runs; falls back to the actual pointing.
+        self._target_ra:       float | None = None
+        self._target_dec:      float | None = None
 
         self._build_ui()
         self._load_config()
@@ -704,6 +711,20 @@ class CapturePanel(QWidget):
         frame_idx   = self._seq_saved if self._in_sequence else 1
         log_fn      = self._log
 
+        # --- Snapshot UI-thread state for the worker -----------------------
+        pos = self._last_position
+        ra        = pos.ra if pos else None
+        dec       = pos.dec if pos else None
+        altitude  = pos.altitude if pos else None
+        azimuth   = pos.azimuth if pos else None
+        target_ra  = self._target_ra
+        target_dec = self._target_dec
+        observer  = (self._config.get("observer.name") or "").strip()
+        site_lat  = self._config.get("site.latitude")
+        site_lon  = self._config.get("site.longitude")
+        site_elev = self._config.get("site.elevation")
+        camera    = self._camera   # may be None
+
         try:
             base = self._config.sessions_path.parent
         except AttributeError:
@@ -717,13 +738,28 @@ class CapturePanel(QWidget):
 
         class _Task(QRunnable):
             def run(self) -> None:
+                # Camera reads happen here (worker thread) — each is tolerant.
+                ccd_temp = camera.get_ccd_temperature() if camera else None
+                egain_d  = camera.get_electrons_per_adu() if camera else None
+                offset_v = camera.get_offset() if camera else None
+                readout  = camera.get_readout_mode_name() if camera else None
+
+                ctx = FrameContext(
+                    ra=ra, dec=dec, altitude=altitude, azimuth=azimuth,
+                    target_ra=target_ra, target_dec=target_dec,
+                    ccd_temp=ccd_temp, egain_driver=egain_d,
+                    offset=offset_v, readout_mode=readout,
+                    object_name=obj_name, filter_name=filter_name,
+                    observer=observer,
+                    site_lat=site_lat, site_lon=site_lon, site_elev=site_elev,
+                    software="SeerControl v0.1.0-dev",
+                )
                 try:
                     FITSWriter.write(
                         arr=arr, path=path,
                         exposure_start=start_dt, exposure_end=end_dt,
                         exposure_time=exposure, gain=gain,
-                        image_type=frame_type, object_name=obj_name,
-                        filter_name=filter_name,
+                        image_type=frame_type, context=ctx,
                     )
                     log_fn("OK", f"Saved {path.name}")
                 except Exception as exc:
@@ -753,6 +789,7 @@ class CapturePanel(QWidget):
 
     @pyqtSlot(object)
     def _on_position_updated(self, pos: MountPosition) -> None:
+        self._last_position = pos
         self._ra_lbl.setText(pos.ra_str())
         self._dec_lbl.setText(pos.dec_str())
         self._alt_lbl.setText(pos.alt_str())
@@ -803,6 +840,7 @@ class CapturePanel(QWidget):
         try:
             self._telescope.set_tracking(True)
             self._telescope.slew_to(ra, dec)
+            self._target_ra, self._target_dec = ra, dec
             self._log("CMD", f"Slewing → RA {ra:.4f}h  Dec {dec:+.4f}°")
         except AlpacaError as exc:
             self._log("ERROR", f"Goto failed: {exc}")

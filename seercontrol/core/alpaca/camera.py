@@ -145,6 +145,106 @@ class Camera:
             raise _wrap(exc) from exc
 
     # ------------------------------------------------------------------
+    # Optional properties (driver may or may not expose them)
+    # ------------------------------------------------------------------
+
+    def get_ccd_temperature(self) -> float | None:
+        """Return sensor temperature in °C, or None if unsupported.
+
+        Falls back to ``HeatSinkTemperature`` if ``CCDTemperature`` is absent
+        (the Seestar is air-cooled — no Peltier — but exposes a sensor probe).
+        """
+        for attr in ("CCDTemperature", "HeatSinkTemperature"):
+            try:
+                value = getattr(self._cam, attr)
+                if value is None:
+                    continue
+                return round(float(value), 2)
+            except (AttributeError, NotImplementedException, InvalidValueException, DriverException):
+                continue
+            except Exception as exc:
+                logger.debug("%s read failed: %s", attr, exc)
+        return None
+
+    def get_electrons_per_adu(self) -> float | None:
+        """Return ElectronsPerADU from the driver, or None if not exposed."""
+        try:
+            value = self._cam.ElectronsPerADU
+            if value is None or value <= 0:
+                return None
+            return round(float(value), 4)
+        except (AttributeError, NotImplementedException, InvalidValueException, DriverException):
+            return None
+        except Exception as exc:
+            logger.debug("ElectronsPerADU read failed: %s", exc)
+            return None
+
+    def get_offset(self) -> int | None:
+        """Return the electronic offset (bias level setting), or None."""
+        try:
+            return int(self._cam.Offset)
+        except (AttributeError, NotImplementedException, InvalidValueException, DriverException):
+            return None
+        except Exception as exc:
+            logger.debug("Offset read failed: %s", exc)
+            return None
+
+    def get_readout_mode_name(self) -> str | None:
+        """Return current readout mode name (e.g. 'Normal', 'HCG'), or None."""
+        try:
+            idx = int(self._cam.ReadoutMode)
+        except (AttributeError, NotImplementedException, InvalidValueException, DriverException):
+            return None
+        except Exception as exc:
+            logger.debug("ReadoutMode read failed: %s", exc)
+            return None
+        try:
+            modes = self._cam.ReadoutModes
+            if modes and 0 <= idx < len(modes):
+                return str(modes[idx])
+        except Exception:
+            pass
+        return f"mode{idx}"
+
+    def get_full_well(self) -> int | None:
+        """Return full-well capacity in electrons, or None."""
+        try:
+            value = self._cam.FullWellCapacity
+            if value is None or value <= 0:
+                return None
+            return int(value)
+        except (AttributeError, NotImplementedException, InvalidValueException, DriverException):
+            return None
+        except Exception as exc:
+            logger.debug("FullWellCapacity read failed: %s", exc)
+            return None
+
+    def get_sensor_metadata(self) -> dict:
+        """Snapshot of static sensor metadata for FITS / diagnostics.
+
+        Each field is tolerant — missing values are simply absent from the dict.
+        """
+        out: dict = {}
+        for key, attr in [
+            ("name",         "Name"),
+            ("sensor_name",  "SensorName"),
+            ("sensor_type",  "SensorType"),
+            ("bayer_off_x",  "BayerOffsetX"),
+            ("bayer_off_y",  "BayerOffsetY"),
+            ("max_bin_x",    "MaxBinX"),
+            ("max_bin_y",    "MaxBinY"),
+            ("driver_info",  "DriverInfo"),
+            ("driver_ver",   "DriverVersion"),
+        ]:
+            try:
+                value = getattr(self._cam, attr)
+                if value is not None:
+                    out[key] = value
+            except Exception:
+                continue
+        return out
+
+    # ------------------------------------------------------------------
     # Acquisition
     # ------------------------------------------------------------------
 

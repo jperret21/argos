@@ -5,13 +5,15 @@ compatible with Siril, PixInsight, AstroImageJ, and other astronomy tools.
 
 Header set follows NINA's production header list and the mandatory headers
 defined in CLAUDE.md, extended with DATE-LOC, DATE-AVG, MJD-OBS, MJD-AVG
-required for accurate photometric time analysis.
+required for accurate photometric time analysis, plus EGAIN/CCD-TEMP/OFFSET/
+AIRMASS/MOONSEP/TARGRA needed by the varstar postprod pipeline.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,12 +21,66 @@ import numpy as np
 from astropy.io import fits
 from astropy.time import Time
 
+from seercontrol.core.imaging import imx585, sky_geometry
+
 # IMX585 physical characteristics (Seestar S30 Pro)
 _PIXEL_SIZE_UM = 2.9
 _FOCAL_LENGTH_MM = 160
 _BAYER_PATTERN = "GRBG"
 _TELESCOPE_NAME = "ZWO Seestar S30 Pro"
 _INSTRUMENT = "IMX585"
+
+# ISO 8601 datetime format with millisecond precision (FITS convention).
+_DATETIME_FMT = "%Y-%m-%dT%H:%M:%S.%f"
+
+# Default SOFTWARE/CREATOR string when callers don't pass one.
+_DEFAULT_SOFTWARE = "SeerControl"
+
+
+@dataclass
+class FrameContext:
+    """Mount/sky/camera/site state captured at exposure time.
+
+    Every field is optional — missing data results in a missing FITS header
+    rather than a failure. ``write()`` accepts ``None`` and falls back to
+    defaults so callers in tests can stay minimal.
+    """
+
+    # Pointing reported by the mount at exposure start (J2000)
+    ra: float | None = None
+    dec: float | None = None
+    altitude: float | None = None
+    azimuth: float | None = None
+    pier_side: str | None = None
+
+    # What the user asked for — may differ from actual pointing after a slew
+    target_ra: float | None = None
+    target_dec: float | None = None
+
+    # Dynamic camera state read just before/after exposure
+    ccd_temp: float | None = None
+    egain_driver: float | None = None      # e-/ADU from driver (None → IMX585 lookup)
+    offset: int | None = None
+    readout_mode: str | None = None
+
+    # Frame metadata
+    object_name: str = ""
+    filter_name: str = "LRGB"
+
+    # Observer + site (from Preferences)
+    observer: str = ""
+    site_lat: float | None = None
+    site_lon: float | None = None
+    site_elev: float | None = None
+
+    # Software identity (from MainWindow.APP_VERSION)
+    software: str = _DEFAULT_SOFTWARE
+
+    # Free-form annotation for photometry sessions (e.g. "T CrB pre-outburst")
+    annotation: str = ""
+
+    # Camera metadata snapshot for diagnostics (passed through, not written)
+    sensor_meta: dict = field(default_factory=dict)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +115,7 @@ class FITSWriter:
             exposure_time=10.0,
             gain=80,
             image_type="Light Frame",
+            context=FrameContext(ra=..., dec=..., observer="JP", ...),
         )
     """
 
@@ -71,145 +128,62 @@ class FITSWriter:
         exposure_time: float,
         gain: int,
         image_type: str = "Light Frame",
-        ra: float | None = None,
-        dec: float | None = None,
-        altitude: float | None = None,
-        azimuth: float | None = None,
-        object_name: str = "",
-        filter_name: str = "LRGB",
-        observer: str = "",
-        site_lat: float | None = None,
-        site_lon: float | None = None,
-        site_elev: float | None = None,
+        context: FrameContext | None = None,
     ) -> None:
         """Write a single FITS frame to disk.
 
         Args:
             arr:            2-D numpy uint16 array, shape (height, width).
-            path:           Output file path (parent directory must exist).
+            path:           Output file path (parent directory will be created).
             exposure_start: UTC datetime of exposure start.
             exposure_end:   UTC datetime when ImageReady became True.
             exposure_time:  Commanded exposure duration in seconds.
             gain:           Camera gain value used for this frame.
             image_type:     FITS IMAGETYP string ("Light Frame", "Dark Frame", …).
-            ra:             Target RA in decimal hours (J2000), or None.
-            dec:            Target Dec in decimal degrees (J2000), or None.
-            altitude:       Mount altitude in degrees at exposure start, or None.
-            azimuth:        Mount azimuth in degrees at exposure start, or None.
-            object_name:    Target name (e.g. "M42", "NGC 224").
-            filter_name:    Filter name (e.g. "LRGB", "Ha").
-            observer:       Observer name from config.
-            site_lat:       Observer latitude in degrees.
-            site_lon:       Observer longitude in degrees.
-            site_elev:      Observer elevation in metres.
+            context:        Mount/sky/camera/site state. Defaults to an empty
+                            FrameContext if not provided (frame still writes,
+                            just with fewer headers).
 
         Raises:
-            OSError: If the file cannot be written.
+            ValueError: If ``arr`` is not 2-D.
+            OSError:    If the file cannot be written.
         """
         if arr.ndim != 2:
             raise ValueError(f"Expected 2-D array, got shape {arr.shape}")
 
+        ctx = context or FrameContext()
         height, width = arr.shape
 
-        # Pass uint16 directly — astropy sets BZERO=32768 / BSCALE=1 automatically.
-        # Manually converting to int16 then setting BZERO causes astropy to strip BZERO.
+        start, end = _ensure_utc(exposure_start), _ensure_utc(exposure_end)
+        mid = start + (end - start) / 2
 
-        # ------------------------------------------------------------------ #
-        # Timing                                                               #
-        # ------------------------------------------------------------------ #
-        # Ensure aware datetimes (UTC)
-        if exposure_start.tzinfo is None:
-            exposure_start = exposure_start.replace(tzinfo=timezone.utc)
-        if exposure_end.tzinfo is None:
-            exposure_end = exposure_end.replace(tzinfo=timezone.utc)
+        egain, egain_source = _resolve_egain(gain, ctx.egain_driver)
+        airmass = sky_geometry.compute_airmass(ctx.altitude) if ctx.altitude is not None else None
+        moon = sky_geometry.compute_moon_info(
+            when_utc=start,
+            site_lat=ctx.site_lat, site_lon=ctx.site_lon, site_elev=ctx.site_elev,
+            target_ra_hours=ctx.target_ra if ctx.target_ra is not None else ctx.ra,
+            target_dec_deg=ctx.target_dec if ctx.target_dec is not None else ctx.dec,
+        )
 
-        mid = exposure_start + (exposure_end - exposure_start) / 2
-
-        t_start = Time(exposure_start)
-        t_mid   = Time(mid)
-
-        date_obs = exposure_start.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
-        date_avg = mid.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
-        date_loc = exposure_start.astimezone().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
-
-        # ------------------------------------------------------------------ #
-        # Build header                                                         #
-        # ------------------------------------------------------------------ #
         hdr = fits.Header()
+        _add_structure_headers(hdr, width, height, image_type)
+        _add_timing_headers(hdr, start, mid, exposure_time)
+        _add_sensor_headers(hdr, gain, egain, egain_source, ctx)
+        _add_instrument_headers(hdr)
+        _add_target_headers(hdr, ctx)
+        _add_pointing_headers(hdr, ctx)
+        _add_sky_headers(hdr, airmass, moon)
+        _add_observer_headers(hdr, ctx)
+        _add_software_headers(hdr, ctx)
 
-        # Primary structure
-        hdr["SIMPLE"]   = (True,  "file conforms to FITS standard")
-        hdr["BITPIX"]   = (16,    "number of bits per data pixel")
-        hdr["NAXIS"]    = (2,     "number of data axes")
-        hdr["NAXIS1"]   = (width, "length of data axis 1 (X/columns)")
-        hdr["NAXIS2"]   = (height,"length of data axis 2 (Y/rows)")
-        hdr["EXTEND"]   = (True,  "FITS dataset may contain extensions")
-        # BZERO=32768 and BSCALE=1 are written automatically by astropy for uint16 data
-
-        # Image type
-        hdr["IMAGETYP"] = (image_type, "type of image: Light/Dark/Flat/Bias")
-
-        # Acquisition timing
-        hdr["DATE-OBS"] = (date_obs, "UTC date/time of exposure start")
-        hdr["DATE-LOC"] = (date_loc, "local date/time of exposure start")
-        hdr["DATE-AVG"] = (date_avg, "UTC date/time of exposure midpoint")
-        hdr["MJD-OBS"]  = (float(t_start.mjd), "MJD of exposure start (UTC)")
-        hdr["MJD-AVG"]  = (float(t_mid.mjd),   "MJD of exposure midpoint (UTC)")
-        hdr["EXPTIME"]  = (exposure_time, "[s] exposure time")
-        hdr["EXPOSURE"] = (exposure_time, "[s] exposure time (alias)")
-
-        # Sensor configuration
-        hdr["GAIN"]     = (gain, "camera gain")
-        hdr["XBINNING"] = (1,    "binning factor X")
-        hdr["YBINNING"] = (1,    "binning factor Y")
-
-        # Instrument
-        hdr["TELESCOP"] = (_TELESCOPE_NAME, "telescope name")
-        hdr["INSTRUME"] = (_INSTRUMENT,     "sensor / instrument name")
-        hdr["FOCALLEN"] = (_FOCAL_LENGTH_MM,"[mm] telescope focal length")
-        hdr["FOCRATIO"] = (round(_FOCAL_LENGTH_MM / 50.0, 1), "focal ratio (f/number)")
-        hdr["XPIXSZ"]   = (_PIXEL_SIZE_UM,  "[um] pixel size X (unbinned)")
-        hdr["YPIXSZ"]   = (_PIXEL_SIZE_UM,  "[um] pixel size Y (unbinned)")
-        hdr["BAYERPAT"] = (_BAYER_PATTERN,  "Bayer color filter pattern")
-        hdr["XBAYROFF"] = (0, "Bayer X offset")
-        hdr["YBAYROFF"] = (0, "Bayer Y offset")
-
-        # Target object
-        if object_name:
-            hdr["OBJECT"] = (object_name[:68], "target object name")
-        hdr["FILTER"] = (filter_name, "filter name")
-
-        # Pointing (from mount, optional)
-        if ra is not None:
-            hdr["RA"]      = (ra,  "[h] right ascension of pointing (J2000)")
-            hdr["OBJCTRA"] = (_decimal_to_hms(ra), "right ascension of pointing (J2000)")
-        if dec is not None:
-            hdr["DEC"]     = (dec, "[deg] declination of pointing (J2000)")
-            hdr["OBJCTDEC"]= (_decimal_to_dms(dec), "declination of pointing (J2000)")
-        if altitude is not None:
-            hdr["ALTITUDE"] = (altitude, "[deg] telescope altitude")
-        if azimuth is not None:
-            hdr["AZIMUTH"]  = (azimuth,  "[deg] telescope azimuth")
-
-        # Observer / site
-        if observer:
-            hdr["OBSERVER"] = (observer[:68], "observer name")
-        if site_lat is not None:
-            hdr["SITELAT"]  = (site_lat,  "[deg] site latitude")
-        if site_lon is not None:
-            hdr["SITELONG"] = (site_lon,  "[deg] site longitude (east positive)")
-        if site_elev is not None:
-            hdr["SITEELEV"] = (site_elev, "[m] site elevation")
-
-        # ------------------------------------------------------------------ #
-        # Write file                                                           #
-        # ------------------------------------------------------------------ #
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-
-        hdu = fits.PrimaryHDU(data=arr, header=hdr)
-        hdu.writeto(str(path), overwrite=True)
-        logger.info("FITS saved: %s  (%dx%d  %.1fs  gain=%d)", path.name, width, height, exposure_time, gain)
+        fits.PrimaryHDU(data=arr, header=hdr).writeto(str(path), overwrite=True)
+        logger.info(
+            "FITS saved: %s  (%dx%d  %.1fs  gain=%d  EGAIN=%.3f e-/ADU [%s])",
+            path.name, width, height, exposure_time, gain, egain, egain_source,
+        )
 
     @staticmethod
     def build_filename(
@@ -306,3 +280,141 @@ def _decimal_to_dms(dec_deg: float) -> str:
     m = int((total % 3600) // 60)
     s = total % 60
     return f"{sign}{d:02d} {m:02d} {s:04.1f}"
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    """Return ``dt`` as a tz-aware UTC datetime."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+def _resolve_egain(gain_setting: int, driver_value: float | None) -> tuple[float, str]:
+    """Return (e-/ADU, source) — driver if available, else IMX585 lookup."""
+    if driver_value and driver_value > 0:
+        return float(driver_value), "driver"
+    return float(imx585.lookup_egain(gain_setting)), "IMX585 lookup"
+
+
+# --------------------------------------------------------------------------- #
+# Per-section header builders                                                  #
+# --------------------------------------------------------------------------- #
+
+def _add_structure_headers(hdr: fits.Header, width: int, height: int, image_type: str) -> None:
+    # BZERO=32768 / BSCALE=1 are added automatically by astropy for uint16 data
+    hdr["SIMPLE"]   = (True,   "file conforms to FITS standard")
+    hdr["BITPIX"]   = (16,     "number of bits per data pixel")
+    hdr["NAXIS"]    = (2,      "number of data axes")
+    hdr["NAXIS1"]   = (width,  "length of data axis 1 (X/columns)")
+    hdr["NAXIS2"]   = (height, "length of data axis 2 (Y/rows)")
+    hdr["EXTEND"]   = (True,   "FITS dataset may contain extensions")
+    hdr["IMAGETYP"] = (image_type, "type of image: Light/Dark/Flat/Bias")
+
+
+def _add_timing_headers(
+    hdr: fits.Header, start: datetime, mid: datetime, exptime: float
+) -> None:
+    date_obs = start.strftime(_DATETIME_FMT)[:-3]
+    date_avg = mid.strftime(_DATETIME_FMT)[:-3]
+    date_loc = start.astimezone().strftime(_DATETIME_FMT)[:-3]
+    hdr["DATE-OBS"] = (date_obs, "UTC date/time of exposure start")
+    hdr["DATE-LOC"] = (date_loc, "local date/time of exposure start")
+    hdr["DATE-AVG"] = (date_avg, "UTC date/time of exposure midpoint")
+    hdr["MJD-OBS"]  = (float(Time(start).mjd), "MJD of exposure start (UTC)")
+    hdr["MJD-AVG"]  = (float(Time(mid).mjd),   "MJD of exposure midpoint (UTC)")
+    hdr["EXPTIME"]  = (exptime, "[s] exposure time")
+    hdr["EXPOSURE"] = (exptime, "[s] exposure time (alias)")
+
+
+def _add_sensor_headers(
+    hdr: fits.Header,
+    gain: int,
+    egain: float,
+    egain_source: str,
+    ctx: "FrameContext",
+) -> None:
+    rdnoise   = imx585.lookup_read_noise(gain)
+    full_well = imx585.full_well_capacity(gain)
+    eg = round(egain, 4)
+    hdr["GAIN"]     = (gain, "camera gain setting")
+    hdr["EGAIN"]    = (eg, f"[e-/ADU] electron gain ({egain_source})")
+    hdr["EPERDN"]   = (eg, "[e-/ADU] electron gain (alias)")
+    hdr["GAIN_E"]   = (eg, "[e-/ADU] electron gain (AAVSO alias)")
+    hdr["RDNOISE"]  = (round(rdnoise, 3), "[e-] read noise (IMX585 lookup)")
+    hdr["FULLWELL"] = (int(full_well), "[e-] full-well capacity (IMX585 lookup)")
+    hdr["XBINNING"] = (1, "binning factor X")
+    hdr["YBINNING"] = (1, "binning factor Y")
+    if ctx.ccd_temp is not None:
+        hdr["CCD-TEMP"] = (round(float(ctx.ccd_temp), 2), "[degC] CCD/sensor temperature")
+    if ctx.offset is not None:
+        hdr["OFFSET"]   = (int(ctx.offset), "electronic offset (bias setting)")
+    if ctx.readout_mode is not None:
+        hdr["READOUTM"] = (str(ctx.readout_mode)[:68], "sensor readout mode")
+
+
+def _add_instrument_headers(hdr: fits.Header) -> None:
+    hdr["TELESCOP"] = (_TELESCOPE_NAME, "telescope name")
+    hdr["INSTRUME"] = (_INSTRUMENT,     "sensor / instrument name")
+    hdr["FOCALLEN"] = (_FOCAL_LENGTH_MM, "[mm] telescope focal length")
+    hdr["FOCRATIO"] = (round(_FOCAL_LENGTH_MM / 50.0, 1), "focal ratio (f/number)")
+    hdr["XPIXSZ"]   = (_PIXEL_SIZE_UM, "[um] pixel size X (unbinned)")
+    hdr["YPIXSZ"]   = (_PIXEL_SIZE_UM, "[um] pixel size Y (unbinned)")
+    hdr["BAYERPAT"] = (_BAYER_PATTERN, "Bayer color filter pattern")
+    hdr["XBAYROFF"] = (0, "Bayer X offset")
+    hdr["YBAYROFF"] = (0, "Bayer Y offset")
+    hdr["EQUINOX"]  = (2000.0, "equinox of celestial coordinate system")
+    hdr["RADESYS"]  = ("ICRS", "celestial coordinate reference system")
+
+
+def _add_target_headers(hdr: fits.Header, ctx: "FrameContext") -> None:
+    if ctx.object_name:
+        hdr["OBJECT"] = (ctx.object_name[:68], "target object name")
+    hdr["FILTER"] = (ctx.filter_name, "filter name")
+    if ctx.target_ra is not None:
+        hdr["TARGRA"]  = (ctx.target_ra,  "[h] requested target RA (J2000)")
+    if ctx.target_dec is not None:
+        hdr["TARGDEC"] = (ctx.target_dec, "[deg] requested target Dec (J2000)")
+
+
+def _add_pointing_headers(hdr: fits.Header, ctx: "FrameContext") -> None:
+    if ctx.ra is not None:
+        hdr["RA"]      = (ctx.ra, "[h] right ascension of pointing (J2000)")
+        hdr["OBJCTRA"] = (_decimal_to_hms(ctx.ra), "right ascension of pointing (J2000)")
+    if ctx.dec is not None:
+        hdr["DEC"]      = (ctx.dec, "[deg] declination of pointing (J2000)")
+        hdr["OBJCTDEC"] = (_decimal_to_dms(ctx.dec), "declination of pointing (J2000)")
+    if ctx.altitude is not None:
+        hdr["ALTITUDE"] = (ctx.altitude, "[deg] telescope altitude")
+    if ctx.azimuth is not None:
+        hdr["AZIMUTH"]  = (ctx.azimuth, "[deg] telescope azimuth")
+    if ctx.pier_side:
+        hdr["PIERSIDE"] = (str(ctx.pier_side)[:8], "side of pier")
+
+
+def _add_sky_headers(hdr: fits.Header, airmass: float | None, moon: dict) -> None:
+    if airmass is not None:
+        hdr["AIRMASS"] = (airmass, "airmass at exposure start (Pickering)")
+    if "moon_sep" in moon:
+        hdr["MOONSEP"] = (moon["moon_sep"], "[deg] angular separation target-Moon")
+    if "moon_alt" in moon:
+        hdr["MOONALT"] = (moon["moon_alt"], "[deg] Moon altitude at site")
+    if "moon_phase" in moon:
+        hdr["MOONPHAS"] = (moon["moon_phase"], "Moon illuminated fraction (0-1)")
+
+
+def _add_observer_headers(hdr: fits.Header, ctx: "FrameContext") -> None:
+    if ctx.observer:
+        hdr["OBSERVER"] = (ctx.observer[:68], "observer name")
+    if ctx.site_lat is not None:
+        hdr["SITELAT"]  = (ctx.site_lat, "[deg] site latitude")
+    if ctx.site_lon is not None:
+        hdr["SITELONG"] = (ctx.site_lon, "[deg] site longitude (east positive)")
+    if ctx.site_elev is not None:
+        hdr["SITEELEV"] = (ctx.site_elev, "[m] site elevation")
+
+
+def _add_software_headers(hdr: fits.Header, ctx: "FrameContext") -> None:
+    sw = (ctx.software or _DEFAULT_SOFTWARE)[:68]
+    hdr["SOFTWARE"] = (sw, "acquisition software")
+    hdr["SWCREATE"] = (sw, "acquisition software (alias)")
+    hdr["CREATOR"]  = (sw, "acquisition software (alias)")
+    if ctx.annotation:
+        hdr["ANNOTATE"] = (ctx.annotation[:68], "session annotation")
