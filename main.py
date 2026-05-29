@@ -48,11 +48,12 @@ def _fix_qt_plugin_path() -> None:
 
 _fix_qt_plugin_path()
 
-from PyQt6.QtWidgets import QApplication
+# E402: these imports run after _fix_qt_plugin_path() on purpose — the env var
+# must be set before Qt is imported, and the config/theme stay grouped.
+from PyQt6.QtWidgets import QApplication  # noqa: E402
 
-from seercontrol.core.config import Config
-from seercontrol.ui.main_window import MainWindow
-from seercontrol.ui.theme import get_stylesheet
+from seercontrol.core.config import Config  # noqa: E402
+from seercontrol.ui.theme import get_stylesheet  # noqa: E402
 
 
 def _setup_logging(level: str) -> None:
@@ -61,6 +62,23 @@ def _setup_logging(level: str) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+
+
+def _build_window(config: Config):
+    """Return the top-level window.
+
+    The new 3-mode Shell is the default. Set ``SEERCONTROL_LEGACY=1`` to fall
+    back to the old dockable ``MainWindow`` during the redesign sprints —
+    the flag will be removed once the new Shell reaches feature parity.
+    """
+    if os.environ.get("SEERCONTROL_LEGACY"):
+        logging.getLogger(__name__).info(
+            "SEERCONTROL_LEGACY=1 — using the legacy dockable MainWindow"
+        )
+        from seercontrol.ui.main_window import MainWindow
+        return MainWindow(config)
+    from seercontrol.ui.shell import Shell
+    return Shell(config)
 
 
 def main() -> None:
@@ -75,7 +93,7 @@ def main() -> None:
     app.setOrganizationName("SeerControl")
     app.setStyleSheet(get_stylesheet())
 
-    window = MainWindow(config)
+    window = _build_window(config)
     window.show()
 
     logger.info("UI ready")
