@@ -143,7 +143,7 @@ class Shell(QMainWindow):
         # Page registry — keep references so we can swap them in later sprints.
         self._pages: dict[str, QWidget] = {
             "equipment": EquipmentPage(self._config),
-            "target":    TargetPage(),
+            "target":    TargetPage(self._config),
             "imaging":   ImagingPage(self._config),
             "settings":  SettingsPage(),
         }
@@ -157,6 +157,7 @@ class Shell(QMainWindow):
         )
         self._wire_imaging_page()
         self._wire_equipment_page()
+        self._wire_target_page()
 
     # ------------------------------------------------------------------
     # Menus
@@ -208,6 +209,23 @@ class Shell(QMainWindow):
         card.start_server_requested.connect(self._on_stellarium_start)
         card.stop_server_requested.connect(self._on_stellarium_stop)
         card.pull_requested.connect(self._on_stellarium_pull)
+
+    def _wire_target_page(self) -> None:
+        """Connect TargetPage's slew-and-start signal to ImagingPage + sidebar."""
+        target = self._pages.get("target")
+        if not isinstance(target, TargetPage):
+            return
+        target.slew_and_start_requested.connect(self._on_slew_and_start)
+
+    def _on_slew_and_start(
+        self, ra_h: float, dec_d: float, profile, object_name: str
+    ) -> None:
+        """Switch to Imaging mode, then trigger the slew + sequence."""
+        self._sidebar.select("imaging")
+        imaging = self._pages.get("imaging")
+        if not isinstance(imaging, ImagingPage):
+            return
+        imaging.slew_and_start(ra_h, dec_d, profile, object_name)
 
     def _wire_equipment_page(self) -> None:
         """Route EquipmentPage intents into ImagingPage's public API."""

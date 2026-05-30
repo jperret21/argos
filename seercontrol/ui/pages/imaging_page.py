@@ -498,6 +498,20 @@ class ImagingPage(QWidget):
         """Expose the card so the Shell can connect its server / pull signals."""
         return self._stellarium_card
 
+    def slew_and_start(self, ra_h: float, dec_d: float, profile, object_name: str = "") -> None:
+        """Pre-fill the camera dock from a Profile, slew, then start sequence.
+
+        Called by the Shell after the user clicks "▶ Slew + Start" on the
+        Target page. The Shell switches to Imaging mode first, then calls this.
+        """
+        self._camera_dock.apply_profile(profile, object_name)
+        self._target_ra  = ra_h
+        self._target_dec = dec_d
+        if object_name:
+            self.log_message.emit("CMD", f"Target '{object_name}' → RA {ra_h:.4f}h Dec {dec_d:+.4f}°")
+        self._on_goto(ra_h, dec_d)
+        self._start_sequence()
+
     def goto_target(self, ra_h: float, dec_d: float, label: str = "") -> None:
         """Slew to ``(ra, dec)`` from an external source (Stellarium, wizard).
 

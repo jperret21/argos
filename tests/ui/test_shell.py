@@ -31,6 +31,7 @@ def test_shell_and_imaging_walkthrough() -> None:
     from seercontrol.ui.shell import Shell
     from seercontrol.ui.pages._placeholder import PlaceholderPage
     from seercontrol.ui.pages.imaging_page import ImagingPage
+    from seercontrol.ui.pages.target_page import TargetPage
     from seercontrol.ui.widgets.camera_dock import CameraDock, CaptureParams
     from seercontrol.ui.widgets.histogram_dock import HistogramDock
     from seercontrol.ui.widgets.mount_dock import MountDock
@@ -109,6 +110,44 @@ def test_shell_and_imaging_walkthrough() -> None:
         page.device_state_changed.emit("camera", "busy", "exposing")
         assert shell.status.device_state("mount")  == "connected"
         assert shell.status.device_state("camera") == "busy"
+
+        # ── R4: Target page ──────────────────────────────────────────
+        target = shell._pages["target"]
+        assert isinstance(target, TargetPage)
+
+        # Profile combo populated from built-ins.
+        assert target._profile_combo.count() >= 3
+
+        # Override fields filled from first profile.
+        assert target._ov_frames.value() > 0
+        assert target._ov_exp.value() > 0
+
+        # set_target pre-fills coords + enables Slew + Start.
+        target.set_target("Test", 5.59, -5.39)
+        assert abs(target._ra_spin.value() - 5.59) < 0.001
+        assert target._start_btn.isEnabled()
+
+        # Slew + Start signal carries ra, dec, profile, object_name.
+        received: list = []
+        target.slew_and_start_requested.connect(
+            lambda ra, dec, p, n: received.append((ra, dec, p, n))
+        )
+        target._start_btn.click()
+        assert len(received) == 1
+        ra_got, dec_got, profile_got, name_got = received[0]
+        assert abs(ra_got - 5.59) < 0.001
+        assert abs(dec_got - (-5.39)) < 0.001
+        assert profile_got is not None
+        assert name_got == "Test"
+
+        # apply_profile fills camera dock correctly.
+        from seercontrol.core.profiles import builtin_profiles
+        first_profile = builtin_profiles()[0]
+        page._camera_dock.apply_profile(first_profile, object_name="M42")
+        p = page._camera_dock.params()
+        assert p.object_name == "M42"
+        assert p.gain == first_profile.gain
+        assert abs(p.exposure_s - first_profile.exposure_s) < 0.01
 
         # replace_page keeps the stack index stable across swaps.
         original_index = shell._page_indices["target"]
