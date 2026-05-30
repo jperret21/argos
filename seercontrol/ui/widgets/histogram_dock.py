@@ -13,16 +13,20 @@ import logging
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import pyqtSlot
-from PyQt6.QtWidgets import QFormLayout, QGroupBox, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (
+    QFormLayout,
+    QSizePolicy,
+    QWidget,
+)
 
-from seercontrol.ui import theme
+from seercontrol.ui import design, theme
 
 logger = logging.getLogger(__name__)
 
 _HIST_BINS = 128
 
 
-class HistogramDock(QGroupBox):
+class HistogramDock(design.Card):
     """Histogram + min/max/mean/median compact panel."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -30,14 +34,17 @@ class HistogramDock(QGroupBox):
         self._build_ui()
 
     def _build_ui(self) -> None:
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(4, 14, 4, 6)
-        outer.setSpacing(4)
+        outer = design.card_layout(self)
 
         pg.setConfigOptions(antialias=True)
         self._plot = pg.PlotWidget()
         self._plot.setBackground(theme.BG2)
-        self._plot.setMinimumHeight(110)
+        # Hard cap — pyqtgraph asks for ~500 px by default which would push
+        # the dock past the visible area and stack widgets on top of each
+        # other. 130 px keeps the histogram readable without sprawling.
+        self._plot.setMinimumHeight(100)
+        self._plot.setMaximumHeight(130)
+        self._plot.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._plot.showGrid(x=False, y=False)
         self._plot.getAxis("left").hide()
         bottom = self._plot.getAxis("bottom")
@@ -56,16 +63,19 @@ class HistogramDock(QGroupBox):
 
         # Stats — 4 short lines, mono font so columns align across frames.
         stats = QFormLayout()
-        stats.setHorizontalSpacing(8)
-        stats.setVerticalSpacing(2)
-        self._min_lbl    = _stat("—")
-        self._max_lbl    = _stat("—")
-        self._mean_lbl   = _stat("—")
-        self._median_lbl = _stat("—")
-        stats.addRow(_key("Min"),    self._min_lbl)
-        stats.addRow(_key("Max"),    self._max_lbl)
-        stats.addRow(_key("Mean"),   self._mean_lbl)
-        stats.addRow(_key("Median"), self._median_lbl)
+        stats.setHorizontalSpacing(design.SPACING_MD)
+        stats.setVerticalSpacing(design.SPACING_XS)
+        self._min_lbl    = design.MetricLabel("—")
+        self._max_lbl    = design.MetricLabel("—")
+        self._mean_lbl   = design.MetricLabel("—")
+        self._median_lbl = design.MetricLabel("—")
+        for label, widget in (
+            ("Min", self._min_lbl),
+            ("Max", self._max_lbl),
+            ("Mean", self._mean_lbl),
+            ("Median", self._median_lbl),
+        ):
+            stats.addRow(design.MutedLabel(label), widget)
         outer.addLayout(stats)
 
     @pyqtSlot(object)
@@ -85,22 +95,3 @@ class HistogramDock(QGroupBox):
         self._max_lbl.setText(f"{int(arr.max())}")
         self._mean_lbl.setText(f"{arr.mean():.0f}")
         self._median_lbl.setText(f"{int(np.median(arr))}")
-
-
-# --------------------------------------------------------------------------- #
-# Helpers                                                                      #
-# --------------------------------------------------------------------------- #
-
-def _key(text: str) -> QLabel:
-    lbl = QLabel(text)
-    lbl.setStyleSheet(f"color:{theme.FG_MUTED}; font-size:10px; background:transparent;")
-    return lbl
-
-
-def _stat(text: str) -> QLabel:
-    lbl = QLabel(text)
-    lbl.setStyleSheet(
-        f"color:{theme.FG}; font-size:11px; font-family:{theme.FONT_MONO};"
-        f" background:transparent;"
-    )
-    return lbl

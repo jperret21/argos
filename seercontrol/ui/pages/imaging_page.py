@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QSplitter,
     QVBoxLayout,
@@ -48,7 +49,7 @@ from seercontrol.core.alpaca.telescope import MountPosition, Telescope
 from seercontrol.core.config import Config
 from seercontrol.core.imaging.debayer import compute_hfd, extract_channel
 from seercontrol.core.imaging.fits_writer import FITSWriter, FrameContext
-from seercontrol.ui import theme
+from seercontrol.ui import design, theme
 from seercontrol.ui.panels.log_panel import LogPanel
 from seercontrol.ui.panels.manual_control_dialog import ManualControlDialog
 from seercontrol.ui.widgets.camera_dock import CameraDock
@@ -127,21 +128,29 @@ class ImagingPage(QWidget):
         self._mount_dock     = MountDock()
         self._histogram_dock = HistogramDock()
 
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
+        # Right rail wrapped in a scroll area so the stacked docks never get
+        # squished into widget overlap when the window is short.
+        right_inner = QWidget()
+        right_layout = QVBoxLayout(right_inner)
         right_layout.setContentsMargins(6, 6, 6, 6)
         right_layout.setSpacing(8)
         right_layout.addWidget(self._camera_dock)
         right_layout.addWidget(self._mount_dock)
         right_layout.addWidget(self._histogram_dock)
         right_layout.addStretch()
-        right.setMinimumWidth(280)
-        right.setMaximumWidth(380)
-        center.addWidget(right)
+
+        right_scroll = QScrollArea()
+        right_scroll.setWidget(right_inner)
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        right_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        right_scroll.setMinimumWidth(design.RIGHT_RAIL_MIN_WIDTH)
+        right_scroll.setMaximumWidth(design.RIGHT_RAIL_MAX_WIDTH)
+        center.addWidget(right_scroll)
 
         center.setStretchFactor(0, 1)
         center.setStretchFactor(1, 0)
-        center.setSizes([900, 320])
+        center.setSizes([900, design.RIGHT_RAIL_MIN_WIDTH])
         root.addWidget(center, 1)
 
         # Bottom: log panel.
