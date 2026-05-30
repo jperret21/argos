@@ -45,6 +45,7 @@ from PyQt6.QtWidgets import (
 
 from seercontrol.core.alpaca.camera import Camera
 from seercontrol.core.alpaca.client import AlpacaError
+from seercontrol.core.alpaca.focuser import Focuser
 from seercontrol.core.alpaca.telescope import MountPosition, Telescope
 from seercontrol.core.config import Config
 from seercontrol.core.imaging.debayer import compute_hfd, extract_channel
@@ -52,11 +53,14 @@ from seercontrol.core.imaging.fits_writer import FITSWriter, FrameContext
 from seercontrol.ui import design
 from seercontrol.ui.panels.log_panel import LogPanel
 from seercontrol.ui.panels.manual_control_dialog import ManualControlDialog
+from seercontrol.ui.panels.stellarium_card import StellariumCard
 from seercontrol.ui.widgets.camera_dock import CameraDock
 from seercontrol.ui.widgets.fits_viewer import FitsViewer
+from seercontrol.ui.widgets.focuser_dock import FocuserDock
 from seercontrol.ui.widgets.histogram_dock import HistogramDock
 from seercontrol.ui.widgets.image_toolbar import ImageToolbar
 from seercontrol.ui.widgets.mount_dock import MountDock
+from seercontrol.workers.autofocus_worker import AutofocusWorker
 from seercontrol.workers.discovery_worker import DiscoveryWorker
 from seercontrol.workers.exposure_worker import LivePreviewWorker
 from seercontrol.workers.polling_worker import MountPollingWorker
@@ -74,16 +78,19 @@ class ImagingPage(QWidget):
     action_changed       = pyqtSignal(str)
     log_message          = pyqtSignal(str, str)        # level, message
     discovered_address   = pyqtSignal(str, int)        # host, port
+    position_updated     = pyqtSignal(float, float, bool)  # ra_h, dec_d, slewing
 
     def __init__(self, config: Config, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = config
 
-        self._telescope: Telescope | None = None
-        self._camera:    Camera    | None = None
-        self._discovery: DiscoveryWorker     | None = None
-        self._polling:   MountPollingWorker  | None = None
-        self._preview:   LivePreviewWorker   | None = None
+        self._telescope:  Telescope  | None = None
+        self._camera:     Camera     | None = None
+        self._focuser:    Focuser    | None = None
+        self._discovery:  DiscoveryWorker     | None = None
+        self._polling:    MountPollingWorker  | None = None
+        self._preview:    LivePreviewWorker   | None = None
+        self._autofocus:  AutofocusWorker     | None = None
         self._jog_dialog: ManualControlDialog | None = None
 
         self._channel = "Raw"
@@ -121,18 +128,28 @@ class ImagingPage(QWidget):
         self._viewer = FitsViewer()
         center.addWidget(self._viewer)
 
-        self._camera_dock    = CameraDock()
-        self._mount_dock     = MountDock()
-        self._histogram_dock = HistogramDock()
+        self._camera_dock     = CameraDock()
+        self._mount_dock      = MountDock()
+        self._focuser_dock    = FocuserDock()
+        self._stellarium_card = StellariumCard()
+        self._histogram_dock  = HistogramDock()
+        # Fixed vertical policy so a tight rail doesn't overlap widgets.
+        from PyQt6.QtWidgets import QSizePolicy  # local import — narrow scope
+        self._stellarium_card.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
 
         # Right rail wrapped in a scroll area so the stacked docks never get
         # squished into widget overlap when the window is short.
         right_inner = QWidget()
         right_layout = QVBoxLayout(right_inner)
-        right_layout.setContentsMargins(6, 6, 6, 6)
-        right_layout.setSpacing(8)
+        right_layout.setContentsMargins(design.SPACING_MD, design.SPACING_MD,
+                                        design.SPACING_MD, design.SPACING_MD)
+        right_layout.setSpacing(design.SPACING_MD)
         right_layout.addWidget(self._camera_dock)
         right_layout.addWidget(self._mount_dock)
+        right_layout.addWidget(self._focuser_dock)
+        right_layout.addWidget(self._stellarium_card)
         right_layout.addWidget(self._histogram_dock)
         right_layout.addStretch()
 
@@ -178,6 +195,14 @@ class ImagingPage(QWidget):
         self._mount_dock.abort_clicked.connect(self._on_abort)
         self._mount_dock.park_clicked.connect(self._on_park)
         self._mount_dock.manual_control_requested.connect(self._open_jog)
+        self._mount_dock.jog_start.connect(self._on_jog_start)
+        self._mount_dock.jog_stop.connect(self._on_jog_stop)
+
+        # Focuser dock
+        self._focuser_dock.step_requested.connect(self._on_focuser_step)
+        self._focuser_dock.halt_requested.connect(self._on_focuser_halt)
+        self._focuser_dock.autofocus_requested.connect(self._on_autofocus_requested)
+        self._focuser_dock.move_to_requested.connect(self._on_focuser_move_to)
 
         # Logs reach the bottom log panel locally + propagate up to the Shell.
         self.log_message.connect(self._log_panel.append)
@@ -262,9 +287,41 @@ class ImagingPage(QWidget):
         self.device_state_changed.emit("camera", "disconnected", "")
         self.log_message.emit("INFO", "Camera disconnected.")
 
+    def connect_focuser(self, host: str, port: int) -> None:
+        self._config.alpaca_host = host
+        self._config.alpaca_port = port
+        self.action_changed.emit(f"Connecting focuser {host}:{port}…")
+        try:
+            foc = Focuser(host=host, port=port)
+            name = foc.connect()
+            self._focuser = foc
+            self._focuser_dock.set_enabled(True)
+            pos = foc.get_position()
+            self._focuser_dock.set_position(pos)
+            temp = foc.get_temperature()
+            self._focuser_dock.set_temperature(temp)
+            self.log_message.emit("OK", f"Focuser connected: {name}  pos={pos}")
+            self.device_state_changed.emit("focuser", "connected", name)
+        except AlpacaError as exc:
+            self.log_message.emit("ERROR", f"Focuser: {exc}")
+            self.device_state_changed.emit("focuser", "error", str(exc)[:48])
+
+    def disconnect_focuser(self) -> None:
+        self._stop_autofocus()
+        if self._focuser:
+            try:
+                self._focuser.disconnect()
+            except AlpacaError:
+                pass
+            self._focuser = None
+        self._focuser_dock.set_enabled(False)
+        self.device_state_changed.emit("focuser", "disconnected", "")
+        self.log_message.emit("INFO", "Focuser disconnected.")
+
     def disconnect_all(self) -> None:
         self.disconnect_camera()
         self.disconnect_mount()
+        self.disconnect_focuser()
         self.action_changed.emit("Disconnected")
 
     # ------------------------------------------------------------------
@@ -409,6 +466,9 @@ class ImagingPage(QWidget):
             pos.tracking, pos.slewing,
         )
         self.tracking_changed.emit(pos.tracking)
+        # Fan out to the Stellarium worker (via the Shell) so the on-screen
+        # reticle in Stellarium keeps following the live mount position.
+        self.position_updated.emit(pos.ra, pos.dec, pos.slewing)
         if pos.slewing:
             self.device_state_changed.emit("mount", "busy", "slewing")
         else:
@@ -432,6 +492,26 @@ class ImagingPage(QWidget):
             self.log_message.emit("CMD", f"Slewing → RA {ra_h:.4f}h Dec {dec_d:+.4f}°")
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Goto: {exc}")
+
+    @property
+    def stellarium_card(self) -> StellariumCard:
+        """Expose the card so the Shell can connect its server / pull signals."""
+        return self._stellarium_card
+
+    def goto_target(self, ra_h: float, dec_d: float, label: str = "") -> None:
+        """Slew to ``(ra, dec)`` from an external source (Stellarium, wizard).
+
+        Pre-fills the mount dock's goto fields so the user can see where the
+        request came from, then triggers the same slew code path that the UI
+        button uses.
+        """
+        if not self._telescope:
+            self.log_message.emit("WARN", "Goto requested but mount not connected")
+            return
+        self._mount_dock.set_goto_fields(ra_h, dec_d)
+        prefix = f"Stellarium {label}" if label else "Goto"
+        self.log_message.emit("CMD", f"{prefix} → RA {ra_h:.4f}h Dec {dec_d:+.4f}°")
+        self._on_goto(ra_h, dec_d)
 
     def _on_sync(self) -> None:
         if not (self._telescope and self._last_position):
@@ -480,6 +560,22 @@ class ImagingPage(QWidget):
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Park: {exc}")
 
+    def _on_jog_start(self, axis: int, rate: float) -> None:
+        if not self._telescope:
+            return
+        try:
+            self._telescope.move_axis(axis, rate)
+        except AlpacaError as exc:
+            self.log_message.emit("ERROR", f"Jog: {exc}")
+
+    def _on_jog_stop(self, axis: int) -> None:
+        if not self._telescope:
+            return
+        try:
+            self._telescope.stop_axis(axis)
+        except AlpacaError as exc:
+            self.log_message.emit("WARN", f"Stop jog: {exc}")
+
     def _open_jog(self) -> None:
         if not self._telescope:
             return
@@ -488,6 +584,91 @@ class ImagingPage(QWidget):
             self._jog_dialog.log_message.connect(self.log_message)
         self._jog_dialog.show()
         self._jog_dialog.raise_()
+
+    # ------------------------------------------------------------------
+    # Focuser actions
+    # ------------------------------------------------------------------
+
+    def _on_focuser_step(self, delta: int) -> None:
+        if not self._focuser:
+            return
+        try:
+            target = self._focuser.step(delta)
+            self._focuser_dock.set_position(target)
+            self.log_message.emit("CMD", f"Focuser step {delta:+d} → pos {target}")
+        except AlpacaError as exc:
+            self.log_message.emit("ERROR", f"Focuser step: {exc}")
+
+    def _on_focuser_move_to(self, position: int) -> None:
+        if not self._focuser:
+            return
+        try:
+            self._focuser.move_to(position)
+            self._focuser_dock.set_position(position)
+            self.log_message.emit("CMD", f"Focuser move → {position}")
+        except AlpacaError as exc:
+            self.log_message.emit("ERROR", f"Focuser move: {exc}")
+
+    def _on_focuser_halt(self) -> None:
+        if not self._focuser:
+            return
+        self._stop_autofocus()
+        try:
+            self._focuser.halt()
+            self.log_message.emit("CMD", "Focuser halted")
+        except AlpacaError as exc:
+            self.log_message.emit("WARN", f"Focuser halt: {exc}")
+
+    def _on_autofocus_requested(self) -> None:
+        if not (self._focuser and self._camera):
+            self.log_message.emit("WARN", "Autofocus needs focuser + camera connected")
+            return
+        if self._autofocus and self._autofocus.isRunning():
+            return
+        params = self._camera_dock.params()
+        self._autofocus = AutofocusWorker(
+            focuser=self._focuser,
+            camera=self._camera,
+            exposure_s=min(params.exposure_s, 10.0),
+            gain=params.gain,
+            parent=self,
+        )
+        self._autofocus.step_done.connect(self._on_af_step)
+        self._autofocus.best_found.connect(self._on_af_done)
+        self._autofocus.error_occurred.connect(
+            lambda m: self.log_message.emit("ERROR", f"AF: {m}")
+        )
+        self._autofocus.finished.connect(self._on_af_finished)
+        self._focuser_dock.set_autofocus_running(True)
+        self._autofocus.start()
+        self.log_message.emit("CMD", "Autofocus started…")
+        self.action_changed.emit("Autofocus running")
+
+    def _stop_autofocus(self) -> None:
+        if self._autofocus and self._autofocus.isRunning():
+            self._autofocus.stop()
+            self._autofocus.wait(10_000)
+        self._autofocus = None
+        self._focuser_dock.set_autofocus_running(False)
+
+    @pyqtSlot(int, int, int, object)
+    def _on_af_step(self, step: int, total: int, pos: int, hfd) -> None:
+        self._focuser_dock.set_position(pos)
+        hfd_str = f"{hfd:.1f}" if hfd is not None else "—"
+        self._focuser_dock.set_autofocus_status(f"Step {step}/{total}  HFD={hfd_str}")
+        self.log_message.emit(
+            "INFO", f"AF {step}/{total}  pos={pos}  HFD={hfd_str}"
+        )
+
+    @pyqtSlot(int, object)
+    def _on_af_done(self, best_pos: int, best_hfd) -> None:
+        self._focuser_dock.set_position(best_pos)
+        hfd_str = f"{best_hfd:.1f}" if best_hfd is not None else "—"
+        self.log_message.emit("OK", f"Autofocus complete — best pos={best_pos}  HFD={hfd_str}")
+        self.action_changed.emit(f"Focused  pos={best_pos}")
+
+    def _on_af_finished(self) -> None:
+        self._focuser_dock.set_autofocus_running(False)
 
     # ------------------------------------------------------------------
     # FITS save
@@ -565,6 +746,7 @@ class ImagingPage(QWidget):
     def shutdown(self) -> None:
         self._stop_preview()
         self._stop_polling()
+        self._stop_autofocus()
 
     def closeEvent(self, event) -> None:
         self.shutdown()

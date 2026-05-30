@@ -23,20 +23,29 @@ from __future__ import annotations
 
 import logging
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
     QGridLayout,
+    QPushButton,
     QWidget,
 )
 
-from seercontrol.ui import design
+from seercontrol.ui import design, theme
 
 logger = logging.getLogger(__name__)
 
 _TRACKING_RATES = ("Sidereal", "Lunar", "Solar")
+
+# Jog speed presets (deg/s) — same defaults as ManualControlDialog.
+_JOG_SPEEDS: dict[str, float] = {
+    "Slow":   0.5,
+    "Normal": 2.0,
+    "Fast":   5.0,
+}
 
 
 class MountDock(design.Card):
@@ -49,6 +58,11 @@ class MountDock(design.Card):
     abort_clicked             = pyqtSignal()
     park_clicked              = pyqtSignal()
     manual_control_requested  = pyqtSignal()
+    # Inline jog pad: (axis, rate). Axis 0 = Az (E/W), axis 1 = Alt (N/S).
+    # Positive rate = N or E. Listener calls move_axis(axis, rate) on press
+    # and stop_axis(axis) on release.
+    jog_start = pyqtSignal(int, float)
+    jog_stop  = pyqtSignal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Mount", parent)
@@ -117,20 +131,72 @@ class MountDock(design.Card):
         goto_form.addRow(design.MutedLabel("Goto Dec"), self._goto_dec)
         outer.addLayout(goto_form)
 
-        # Action buttons — two rows of two, plus the full-width Jog launcher.
+        # Goto action row.
         self._slew_btn  = design.PrimaryButton("▶  Slew")
         self._slew_btn.clicked.connect(self._on_slew)
         self._abort_btn = design.DangerButton("■  Abort")
         self._abort_btn.clicked.connect(self.abort_clicked)
+        outer.addLayout(design.button_row(self._slew_btn, self._abort_btn))
+
+        outer.addWidget(design.horizontal_divider())
+
+        # Inline jog pad — hold-to-move 4-arrow cross + speed selector +
+        # full Jog… dialog launcher for users who prefer arrow-key control.
+        jog_header = QFormLayout()
+        jog_header.setHorizontalSpacing(design.SPACING_MD)
+        self._jog_speed_combo = QComboBox()
+        for name in _JOG_SPEEDS:
+            self._jog_speed_combo.addItem(name)
+        self._jog_speed_combo.setCurrentText("Normal")
+        jog_header.addRow(design.MutedLabel("Jog speed"), self._jog_speed_combo)
+        outer.addLayout(jog_header)
+
+        pad = QGridLayout()
+        pad.setSpacing(design.SPACING_SM)
+        # Build the 4 jog buttons in a cross layout (centered ↑ / ←   → / ↓).
+        self._jog_btns: dict[str, QPushButton] = {}
+        for label, axis, sign, row, col in (
+            ("↑", 1,  1.0, 0, 1),   # North
+            ("←", 0, -1.0, 1, 0),   # West
+            ("→", 0,  1.0, 1, 2),   # East
+            ("↓", 1, -1.0, 2, 1),   # South
+        ):
+            btn = _JogArrowButton(label)
+            btn.pressed.connect(lambda a=axis, s=sign: self._on_jog_pressed(a, s))
+            btn.released.connect(lambda a=axis: self.jog_stop.emit(a))
+            self._jog_btns[label] = btn
+            pad.addWidget(btn, row, col, alignment=Qt.AlignmentFlag.AlignCenter)
+        # Center stop button — also lets the user kill any stuck jog.
+        center_stop = _JogArrowButton("■")
+        center_stop.setToolTip("Stop")
+        center_stop.clicked.connect(lambda: (
+            self.jog_stop.emit(0), self.jog_stop.emit(1)
+        ))
+        center_stop.setStyleSheet(
+            f"QPushButton {{ color:{theme.DANGER}; }}"
+            f"QPushButton:hover {{ background:{theme.DANGER}; color:white; }}"
+        )
+        pad.addWidget(center_stop, 1, 1, alignment=Qt.AlignmentFlag.AlignCenter)
+        # Push the pad into the centre of the rail.
+        pad_wrapper = QGridLayout()
+        pad_wrapper.addLayout(pad, 0, 1)
+        pad_wrapper.setColumnStretch(0, 1)
+        pad_wrapper.setColumnStretch(2, 1)
+        outer.addLayout(pad_wrapper)
+
+        outer.addWidget(design.horizontal_divider())
+
+        # Secondary actions.
         self._sync_btn  = design.SecondaryButton("⟳  Sync")
         self._sync_btn.setToolTip("Sync mount pointing model to current RA/Dec")
         self._sync_btn.clicked.connect(self.sync_to_current_clicked)
         self._park_btn  = design.SecondaryButton("⊙  Park")
         self._park_btn.clicked.connect(self.park_clicked)
-        self._jog_btn   = design.SecondaryButton("✥  Jog…")
-        self._jog_btn.setToolTip("Open the manual jog dialog")
+        self._jog_btn   = design.SecondaryButton("✥  Jog dialog…")
+        self._jog_btn.setToolTip(
+            "Open the floating jog dialog (arrow-key navigation, stay-on-top)"
+        )
         self._jog_btn.clicked.connect(self.manual_control_requested)
-        outer.addLayout(design.button_row(self._slew_btn, self._abort_btn))
         outer.addLayout(design.button_row(self._sync_btn, self._park_btn))
         outer.addLayout(design.button_row(self._jog_btn))
 
@@ -143,7 +209,8 @@ class MountDock(design.Card):
         for w in (
             self._tracking_btn, self._rate_combo,
             self._slew_btn, self._abort_btn, self._sync_btn,
-            self._park_btn, self._jog_btn,
+            self._park_btn, self._jog_btn, self._jog_speed_combo,
+            *self._jog_btns.values(),
         ):
             w.setEnabled(connected)
 
@@ -181,6 +248,22 @@ class MountDock(design.Card):
 
     def _on_tracking_toggle(self, checked: bool) -> None:
         self.tracking_toggled.emit(checked)
+
+    def _on_jog_pressed(self, axis: int, sign: float) -> None:
+        speed = _JOG_SPEEDS.get(self._jog_speed_combo.currentText(), 1.0)
+        self.jog_start.emit(axis, sign * speed)
+
+
+class _JogArrowButton(QPushButton):
+    """Square hold-to-move arrow button used in the jog cross pad."""
+
+    def __init__(self, label: str, parent: QWidget | None = None) -> None:
+        super().__init__(label, parent)
+        self.setFixedSize(54, 54)
+        self.setAutoRepeat(False)
+        f = QFont()
+        f.setPointSize(16)
+        self.setFont(f)
 
 
 # --------------------------------------------------------------------------- #

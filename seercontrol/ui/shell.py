@@ -18,7 +18,7 @@ from __future__ import annotations
 import base64
 import logging
 
-from PyQt6.QtCore import QByteArray, Qt
+from PyQt6.QtCore import QByteArray, QObject, QRunnable, Qt, QThreadPool, pyqtSignal
 from PyQt6.QtGui import QAction, QCloseEvent, QKeySequence
 from PyQt6.QtWidgets import (
     QMainWindow,
@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
 )
 
 from seercontrol.core.config import Config
+from seercontrol.core.stellarium.remote_pull import pull_selected_object
 from seercontrol.ui import theme
 from seercontrol.ui.pages.equipment_page import EquipmentPage
 from seercontrol.ui.pages.imaging_page import ImagingPage
@@ -35,12 +36,46 @@ from seercontrol.ui.pages.settings_page import SettingsPage
 from seercontrol.ui.pages.target_page import TargetPage
 from seercontrol.ui.sidebar import Sidebar
 from seercontrol.ui.statusbar import TopStatusBar
+from seercontrol.workers.stellarium_worker import StellariumWorker
 
 logger = logging.getLogger(__name__)
 
 _CFG_GEOMETRY = "ui.shell.geometry"
 _CFG_STATE    = "ui.shell.state"
 _CFG_MODE     = "ui.shell.mode"
+
+
+# --------------------------------------------------------------------------- #
+# Stellarium HTTP pull runner (one-shot, off-thread)                           #
+# --------------------------------------------------------------------------- #
+
+class _PullRunnerSignals(QObject):
+    target = pyqtSignal(str, float, float)
+    failed = pyqtSignal(str)
+
+
+class _PullRunner(QRunnable):
+    """One-shot HTTP query to Stellarium's Remote Control endpoint.
+
+    Runs on the global QThreadPool so the ~2 s timeout never blocks the UI.
+    """
+
+    def __init__(self, host: str, port: int) -> None:
+        super().__init__()
+        self._host = host
+        self._port = port
+        self.signals = _PullRunnerSignals()
+
+    def run(self) -> None:
+        try:
+            target = pull_selected_object(host=self._host, port=self._port)
+        except Exception as exc:  # network errors already swallowed inside
+            self.signals.failed.emit(str(exc))
+            return
+        if target is None:
+            self.signals.failed.emit("no selection or plugin not running")
+            return
+        self.signals.target.emit(target.name, target.ra_hours, target.dec_degrees)
 
 
 class Shell(QMainWindow):
@@ -63,6 +98,7 @@ class Shell(QMainWindow):
     def __init__(self, config: Config) -> None:
         super().__init__()
         self._config = config
+        self._stellarium_worker: StellariumWorker | None = None
 
         self.setWindowTitle(f"SeerControl  v{self.APP_VERSION}")
         self.setMinimumSize(1100, 700)
@@ -160,13 +196,18 @@ class Shell(QMainWindow):
 
     def _wire_imaging_page(self) -> None:
         """Connect ImagingPage upward signals to the global status bar +
-        forward device state to the Equipment page."""
+        forward device state to the Equipment page + Stellarium card."""
         page = self._pages.get("imaging")
         if not isinstance(page, ImagingPage):
             return
         page.device_state_changed.connect(self._on_device_state_changed)
         page.tracking_changed.connect(self._status.set_tracking)
         page.action_changed.connect(self._status.set_action)
+
+        card = page.stellarium_card
+        card.start_server_requested.connect(self._on_stellarium_start)
+        card.stop_server_requested.connect(self._on_stellarium_stop)
+        card.pull_requested.connect(self._on_stellarium_pull)
 
     def _wire_equipment_page(self) -> None:
         """Route EquipmentPage intents into ImagingPage's public API."""
@@ -190,8 +231,10 @@ class Shell(QMainWindow):
             imaging.connect_mount(host, port)
         elif device_id == "camera":
             imaging.connect_camera(host, port)
+        elif device_id == "focuser":
+            imaging.connect_focuser(host, port)
         else:
-            # Filter wheel / focuser not yet wired — show a friendly message.
+            # Filter wheel not yet wired — show a friendly message.
             self._status.set_action(
                 f"{device_id.title()} connect — not implemented yet (R5)"
             )
@@ -204,6 +247,8 @@ class Shell(QMainWindow):
             imaging.disconnect_mount()
         elif device_id == "camera":
             imaging.disconnect_camera()
+        elif device_id == "focuser":
+            imaging.disconnect_focuser()
 
     def _on_connect_all(self, host: str, port: int) -> None:
         imaging = self._pages["imaging"]
@@ -211,6 +256,90 @@ class Shell(QMainWindow):
             return
         imaging.connect_mount(host, port)
         imaging.connect_camera(host, port)
+        imaging.connect_focuser(host, port)
+
+    # ------------------------------------------------------------------
+    # Stellarium integration
+    # ------------------------------------------------------------------
+
+    def _on_stellarium_start(self, host: str, port: int) -> None:
+        if self._stellarium_worker is not None:
+            self._stop_stellarium_worker()
+        imaging = self._pages["imaging"]
+        if not isinstance(imaging, ImagingPage):
+            return
+        card = imaging.stellarium_card
+
+        worker = StellariumWorker(host=host, port=port)
+        worker.target_received.connect(self._on_stellarium_target)
+        worker.client_count_changed.connect(card.set_client_count)
+        worker.server_started.connect(lambda: card.set_server_state(True))
+        worker.server_stopped.connect(lambda: card.set_server_state(False))
+        worker.error_occurred.connect(self._on_stellarium_error)
+        # Keep the asyncio side fed with every mount position update so the
+        # Stellarium on-screen reticle follows the mount in real time.
+        imaging.position_updated.connect(worker.update_mount_position)
+
+        self._stellarium_worker = worker
+        worker.start()
+        imaging.log_message.emit(
+            "INFO", f"Stellarium server starting on {host}:{port}"
+        )
+
+    def _on_stellarium_stop(self) -> None:
+        self._stop_stellarium_worker()
+
+    def _stop_stellarium_worker(self) -> None:
+        worker = self._stellarium_worker
+        if worker is None:
+            return
+        imaging = self._pages.get("imaging")
+        if isinstance(imaging, ImagingPage):
+            try:
+                imaging.position_updated.disconnect(worker.update_mount_position)
+            except (TypeError, RuntimeError):
+                pass
+        worker.stop()
+        worker.wait(3000)
+        self._stellarium_worker = None
+
+    def _on_stellarium_target(self, ra_hours: float, dec_degrees: float) -> None:
+        imaging = self._pages["imaging"]
+        if not isinstance(imaging, ImagingPage):
+            return
+        imaging.stellarium_card.flash_goto(ra_hours, dec_degrees)
+        imaging.goto_target(ra_hours, dec_degrees, label="goto")
+
+    def _on_stellarium_error(self, message: str) -> None:
+        imaging = self._pages.get("imaging")
+        if isinstance(imaging, ImagingPage):
+            imaging.log_message.emit("ERROR", f"Stellarium: {message}")
+            imaging.stellarium_card.set_server_state(False, "✗  error")
+
+    def _on_stellarium_pull(self, host: str, port: int) -> None:
+        """Run the HTTP 'Pull selected' call on a background thread."""
+        runner = _PullRunner(host=host, port=port)
+        runner.signals.target.connect(self._on_stellarium_pull_target)
+        runner.signals.failed.connect(self._on_stellarium_pull_failed)
+        QThreadPool.globalInstance().start(runner)
+
+    def _on_stellarium_pull_target(
+        self, name: str, ra_hours: float, dec_degrees: float
+    ) -> None:
+        imaging = self._pages["imaging"]
+        if not isinstance(imaging, ImagingPage):
+            return
+        imaging.log_message.emit(
+            "OK", f"Stellarium → {name}  RA {ra_hours:.4f}h Dec {dec_degrees:+.4f}°"
+        )
+        imaging.goto_target(ra_hours, dec_degrees, label=f"target '{name}'")
+
+    def _on_stellarium_pull_failed(self, msg: str) -> None:
+        imaging = self._pages.get("imaging")
+        if isinstance(imaging, ImagingPage):
+            imaging.log_message.emit("WARN", f"Stellarium pull: {msg}")
+
+    # ------------------------------------------------------------------
 
     def _on_device_state_changed(self, device_id: str, state: str, info: str) -> None:
         """Fan one device-state event out to the status bar + Equipment page."""
@@ -312,6 +441,7 @@ class Shell(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self._stop_stellarium_worker()
         page = self._pages.get("imaging")
         if isinstance(page, ImagingPage):
             page.shutdown()
