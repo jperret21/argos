@@ -2,8 +2,7 @@
 
 Layout::
 
-    ┌─ Quick connect bar (temporary, removed in R3) ─────────────────┐
-    ├─ ImageToolbar (channel / γ / auto-stretch) ────────────────────┤
+    ┌─ ImageToolbar (channel / γ / auto-stretch) ────────────────────┐
     ├──────────────────────────────────────────────┬─ Camera dock ──┤
     │                                              │ Mount  dock    │
     │           FitsViewer (PyQtGraph)             │ Histogram dock │
@@ -13,13 +12,19 @@ Layout::
     └────────────────────────────────────────────────────────────────┘
 
 The page owns the device handles (Telescope, Camera) and orchestrates the
-existing workers (Discovery, MountPolling, LivePreview). It emits four upward
-signals that the Shell wires into the global status bar:
+existing workers (Discovery, MountPolling, LivePreview). Connection is
+driven from EquipmentPage via the public ``connect_mount(host, port)`` /
+``connect_camera(host, port)`` / ``start_discovery()`` / ``disconnect_all()``
+methods, routed through the Shell.
+
+The page emits four upward signals that the Shell wires into the global
+status bar and forwards to the Equipment page:
 
     device_state_changed(device, state, info)
     tracking_changed(bool | None)
     action_changed(text)
     log_message(level, message)
+    discovered_address(host, port)              # for EquipmentPage to pre-fill
 """
 
 from __future__ import annotations
@@ -32,12 +37,7 @@ from pathlib import Path
 import numpy as np
 from PyQt6.QtCore import QRunnable, Qt, QThreadPool, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QPushButton,
     QScrollArea,
-    QSpinBox,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -49,7 +49,7 @@ from seercontrol.core.alpaca.telescope import MountPosition, Telescope
 from seercontrol.core.config import Config
 from seercontrol.core.imaging.debayer import compute_hfd, extract_channel
 from seercontrol.core.imaging.fits_writer import FITSWriter, FrameContext
-from seercontrol.ui import design, theme
+from seercontrol.ui import design
 from seercontrol.ui.panels.log_panel import LogPanel
 from seercontrol.ui.panels.manual_control_dialog import ManualControlDialog
 from seercontrol.ui.widgets.camera_dock import CameraDock
@@ -73,6 +73,7 @@ class ImagingPage(QWidget):
     tracking_changed     = pyqtSignal(object)          # bool | None
     action_changed       = pyqtSignal(str)
     log_message          = pyqtSignal(str, str)        # level, message
+    discovered_address   = pyqtSignal(str, int)        # host, port
 
     def __init__(self, config: Config, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -99,7 +100,6 @@ class ImagingPage(QWidget):
 
         self._build_ui()
         self._wire_signals()
-        self._load_config()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -109,9 +109,6 @@ class ImagingPage(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-
-        # Temporary quick-connect bar — removed in R3 when EquipmentPage lands.
-        root.addWidget(self._build_connect_bar())
 
         # Image toolbar — channel, gamma, auto stretch.
         self._toolbar = ImageToolbar()
@@ -159,45 +156,6 @@ class ImagingPage(QWidget):
         self._log_panel.setMaximumHeight(180)
         root.addWidget(self._log_panel)
 
-    def _build_connect_bar(self) -> QWidget:
-        """Temporary 1-line connect bar — removed in R3."""
-        bar = QWidget()
-        bar.setStyleSheet(
-            f"background:{theme.SURFACE}; border-bottom:1px solid {theme.BORDER};"
-        )
-        bar.setFixedHeight(40)
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(6)
-
-        layout.addWidget(QLabel("Host"))
-        self._host_edit = QLineEdit()
-        self._host_edit.setPlaceholderText("192.168.x.x")
-        self._host_edit.setFixedWidth(140)
-        layout.addWidget(self._host_edit)
-
-        layout.addWidget(QLabel("Port"))
-        self._port_spin = QSpinBox()
-        self._port_spin.setRange(1, 65535)
-        self._port_spin.setFixedWidth(80)
-        layout.addWidget(self._port_spin)
-
-        self._discover_btn = QPushButton("⚡ Discover")
-        self._discover_btn.clicked.connect(self._on_discover)
-        layout.addWidget(self._discover_btn)
-
-        self._connect_btn = QPushButton("↗ Connect Mount + Camera")
-        self._connect_btn.setProperty("class", "primary")
-        self._connect_btn.clicked.connect(self._on_quick_connect)
-        layout.addWidget(self._connect_btn)
-
-        self._disconnect_btn = QPushButton("✗ Disconnect")
-        self._disconnect_btn.clicked.connect(self._on_disconnect_all)
-        layout.addWidget(self._disconnect_btn)
-
-        layout.addStretch()
-        return bar
-
     # ------------------------------------------------------------------
     # Signal wiring
     # ------------------------------------------------------------------
@@ -224,26 +182,19 @@ class ImagingPage(QWidget):
         # Logs reach the bottom log panel locally + propagate up to the Shell.
         self.log_message.connect(self._log_panel.append)
 
-    def _load_config(self) -> None:
-        self._host_edit.setText(self._config.alpaca_host or "")
-        self._port_spin.setValue(self._config.alpaca_port or 32323)
-
     # ------------------------------------------------------------------
-    # Connection actions (temporary — moved to EquipmentPage in R3)
+    # Public connection API — driven by EquipmentPage via the Shell
     # ------------------------------------------------------------------
 
-    def _on_discover(self) -> None:
+    def start_discovery(self) -> None:
         if self._discovery and self._discovery.isRunning():
             return
-        self._discover_btn.setEnabled(False)
-        self._discover_btn.setText("Scanning…")
         self.log_message.emit("INFO", "Starting Alpaca discovery…")
         self._discovery = DiscoveryWorker(timeout=8.0, parent=self)
         self._discovery.devices_found.connect(self._on_devices_found)
         self._discovery.error_occurred.connect(
             lambda m: self.log_message.emit("ERROR", f"Discovery: {m}")
         )
-        self._discovery.finished.connect(self._on_discovery_finished)
         self._discovery.start()
 
     def _on_devices_found(self, devices) -> None:
@@ -252,41 +203,28 @@ class ImagingPage(QWidget):
             return
         first = devices[0]
         host, port = first.get("address", ""), int(first.get("port", 32323))
-        self._host_edit.setText(host)
-        self._port_spin.setValue(port)
         self.log_message.emit("OK", f"Found {host}:{port}")
+        self.discovered_address.emit(host, port)
 
-    def _on_discovery_finished(self) -> None:
-        self._discover_btn.setText("⚡ Discover")
-        self._discover_btn.setEnabled(True)
-
-    def _on_quick_connect(self) -> None:
-        host = self._host_edit.text().strip()
-        port = int(self._port_spin.value())
-        if not host:
-            self.log_message.emit("ERROR", "Enter a host first.")
-            return
+    def connect_mount(self, host: str, port: int) -> None:
         self._config.alpaca_host = host
         self._config.alpaca_port = port
-
-        self._connect_telescope(host, port)
-        self._connect_camera(host, port)
-
-    def _connect_telescope(self, host: str, port: int) -> None:
         self.action_changed.emit(f"Connecting mount {host}:{port}…")
         try:
             scope = Telescope(host=host, port=port)
             name = scope.connect()
             self._telescope = scope
             self.log_message.emit("OK", f"Mount connected: {name}")
-            self.device_state_changed.emit("mount", "connected", "")
+            self.device_state_changed.emit("mount", "connected", name)
             self._start_polling()
             self._mount_dock.set_enabled(True)
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Mount: {exc}")
-            self.device_state_changed.emit("mount", "error", "")
+            self.device_state_changed.emit("mount", "error", str(exc)[:48])
 
-    def _connect_camera(self, host: str, port: int) -> None:
+    def connect_camera(self, host: str, port: int) -> None:
+        self._config.alpaca_host = host
+        self._config.alpaca_port = port
         self.action_changed.emit(f"Connecting camera {host}:{port}…")
         try:
             cam = Camera(host=host, port=port)
@@ -294,13 +232,12 @@ class ImagingPage(QWidget):
             self._camera = cam
             self._camera_dock.set_enabled(True)
             self.log_message.emit("OK", f"Camera connected: {name}")
-            self.device_state_changed.emit("camera", "connected", "")
+            self.device_state_changed.emit("camera", "connected", name)
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Camera: {exc}")
-            self.device_state_changed.emit("camera", "error", "")
+            self.device_state_changed.emit("camera", "error", str(exc)[:48])
 
-    def _on_disconnect_all(self) -> None:
-        self._stop_preview()
+    def disconnect_mount(self) -> None:
         self._stop_polling()
         if self._telescope:
             try:
@@ -308,6 +245,13 @@ class ImagingPage(QWidget):
             except AlpacaError:
                 pass
             self._telescope = None
+        self._mount_dock.set_enabled(False)
+        self.device_state_changed.emit("mount", "disconnected", "")
+        self.tracking_changed.emit(None)
+        self.log_message.emit("INFO", "Mount disconnected.")
+
+    def disconnect_camera(self) -> None:
+        self._stop_preview()
         if self._camera:
             try:
                 self._camera.disconnect()
@@ -315,12 +259,13 @@ class ImagingPage(QWidget):
                 pass
             self._camera = None
         self._camera_dock.set_enabled(False)
-        self._mount_dock.set_enabled(False)
-        self.device_state_changed.emit("mount", "disconnected", "")
         self.device_state_changed.emit("camera", "disconnected", "")
-        self.tracking_changed.emit(None)
+        self.log_message.emit("INFO", "Camera disconnected.")
+
+    def disconnect_all(self) -> None:
+        self.disconnect_camera()
+        self.disconnect_mount()
         self.action_changed.emit("Disconnected")
-        self.log_message.emit("INFO", "All devices disconnected.")
 
     # ------------------------------------------------------------------
     # Camera actions

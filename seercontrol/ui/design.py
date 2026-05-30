@@ -41,24 +41,32 @@ from seercontrol.ui import theme
 # Spacing scale — Material-style 4-pt grid                                     #
 # --------------------------------------------------------------------------- #
 
-SPACING_XS = 2
-SPACING_SM = 4
-SPACING_MD = 8
-SPACING_LG = 12
-SPACING_XL = 16
+SPACING_XS = 4
+SPACING_SM = 6
+SPACING_MD = 10
+SPACING_LG = 16
+SPACING_XL = 24
 
 # Card padding (left, top, right, bottom) — leaves room above the title.
-CARD_PADDING: tuple[int, int, int, int] = (10, 14, 10, 10)
+CARD_PADDING: tuple[int, int, int, int] = (14, 18, 14, 14)
 
 # Standard widget heights — kept consistent so forms line up across pages.
-INPUT_HEIGHT          = 26
-BUTTON_HEIGHT         = 30
-BUTTON_PRIMARY_HEIGHT = 34
+INPUT_HEIGHT          = 30
+BUTTON_HEIGHT         = 34
+BUTTON_PRIMARY_HEIGHT = 40
 
 # Right-rail width range used by the Imaging page (and any future page that
-# pins controls to the side of an image).
-RIGHT_RAIL_MIN_WIDTH = 340
-RIGHT_RAIL_MAX_WIDTH = 460
+# pins controls to the side of an image). Generous enough that long button
+# labels ("▶  Sequence", "■  Abort") never clip.
+RIGHT_RAIL_MIN_WIDTH = 420
+RIGHT_RAIL_MAX_WIDTH = 580
+
+# Typography sizes (pixel values, no rem/em in Qt stylesheets).
+FONT_SIZE_BODY    = 12
+FONT_SIZE_LABEL   = 12
+FONT_SIZE_METRIC  = 15
+FONT_SIZE_HEADING = 20
+FONT_SIZE_SECTION = 12
 
 
 # --------------------------------------------------------------------------- #
@@ -109,7 +117,7 @@ class _BaseButton(QPushButton):
 
     _CLASS:  str = ""
     _HEIGHT: int = BUTTON_HEIGHT
-    _MIN_WIDTH: int = 64
+    _MIN_WIDTH: int = 90
 
     def __init__(self, text: str, parent: QWidget | None = None) -> None:
         super().__init__(text, parent)
@@ -152,12 +160,15 @@ class SecondaryButton(_BaseButton):
 # --------------------------------------------------------------------------- #
 
 class MutedLabel(QLabel):
-    """Form-key / hint label — small, dim, no background."""
+    """Form-key / hint label — dim, no background. Min width so the label
+    column of a QFormLayout never collapses below readable size."""
 
     def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
         super().__init__(text, parent)
+        self.setMinimumWidth(72)
         self.setStyleSheet(
-            f"color:{theme.FG_MUTED}; font-size:11px; background:transparent;"
+            f"color:{theme.FG_MUTED}; font-size:{FONT_SIZE_LABEL}px;"
+            f" background:transparent;"
         )
 
 
@@ -167,8 +178,9 @@ class MetricLabel(QLabel):
     def __init__(self, text: str = "—", parent: QWidget | None = None) -> None:
         super().__init__(text, parent)
         self.setStyleSheet(
-            f"color:{theme.ACCENT}; font-size:13px; font-weight:bold;"
-            f" font-family:{theme.FONT_MONO}; background:transparent;"
+            f"color:{theme.ACCENT}; font-size:{FONT_SIZE_METRIC}px;"
+            f" font-weight:bold; font-family:{theme.FONT_MONO};"
+            f" background:transparent;"
         )
 
 
@@ -178,7 +190,7 @@ class SectionLabel(QLabel):
     def __init__(self, text: str, parent: QWidget | None = None) -> None:
         super().__init__(text, parent)
         self.setStyleSheet(
-            f"color:{theme.FG}; font-size:11px; font-weight:bold;"
+            f"color:{theme.FG}; font-size:{FONT_SIZE_SECTION}px; font-weight:bold;"
             f" letter-spacing:0.5px; background:transparent;"
             f" padding-top:{SPACING_SM}px;"
         )
@@ -191,8 +203,8 @@ class HeadingLabel(QLabel):
         super().__init__(text, parent)
         self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.setStyleSheet(
-            f"color:{theme.ACCENT}; font-size:18px; font-weight:bold;"
-            f" background:transparent; padding:{SPACING_SM}px 0;"
+            f"color:{theme.ACCENT}; font-size:{FONT_SIZE_HEADING}px; font-weight:bold;"
+            f" background:transparent; padding:{SPACING_MD}px 0;"
         )
 
 

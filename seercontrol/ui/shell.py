@@ -36,10 +36,6 @@ from seercontrol.ui.pages.target_page import TargetPage
 from seercontrol.ui.sidebar import Sidebar
 from seercontrol.ui.statusbar import TopStatusBar
 
-# Pages that need the application Config receive it via constructor; the rest
-# stay parameter-less so swapping them in/out across sprints stays cheap.
-_PAGES_NEEDING_CONFIG = {"imaging"}
-
 logger = logging.getLogger(__name__)
 
 _CFG_GEOMETRY = "ui.shell.geometry"
@@ -110,7 +106,7 @@ class Shell(QMainWindow):
 
         # Page registry — keep references so we can swap them in later sprints.
         self._pages: dict[str, QWidget] = {
-            "equipment": EquipmentPage(),
+            "equipment": EquipmentPage(self._config),
             "target":    TargetPage(),
             "imaging":   ImagingPage(self._config),
             "settings":  SettingsPage(),
@@ -119,7 +115,12 @@ class Shell(QMainWindow):
             mode_id: self._stack.addWidget(page)
             for mode_id, page in self._pages.items()
         }
+        # Track connection state to know when to pulse the next-step hint.
+        self._connection: dict[str, str] = dict.fromkeys(
+            ("mount", "camera", "filterwheel", "focuser"), "disconnected"
+        )
         self._wire_imaging_page()
+        self._wire_equipment_page()
 
     # ------------------------------------------------------------------
     # Menus
@@ -158,13 +159,73 @@ class Shell(QMainWindow):
         self._status.badge_clicked.connect(self._on_badge_clicked)
 
     def _wire_imaging_page(self) -> None:
-        """Connect ImagingPage upward signals to the global status bar."""
+        """Connect ImagingPage upward signals to the global status bar +
+        forward device state to the Equipment page."""
         page = self._pages.get("imaging")
         if not isinstance(page, ImagingPage):
             return
-        page.device_state_changed.connect(self._status.set_device_state)
+        page.device_state_changed.connect(self._on_device_state_changed)
         page.tracking_changed.connect(self._status.set_tracking)
         page.action_changed.connect(self._status.set_action)
+
+    def _wire_equipment_page(self) -> None:
+        """Route EquipmentPage intents into ImagingPage's public API."""
+        equip = self._pages.get("equipment")
+        imaging = self._pages.get("imaging")
+        if not isinstance(equip, EquipmentPage) or not isinstance(imaging, ImagingPage):
+            return
+        equip.discover_requested.connect(imaging.start_discovery)
+        equip.connect_requested.connect(self._on_connect_device)
+        equip.disconnect_requested.connect(self._on_disconnect_device)
+        equip.connect_all_requested.connect(self._on_connect_all)
+        equip.disconnect_all_requested.connect(imaging.disconnect_all)
+        # Discovery → fill the form on EquipmentPage.
+        imaging.discovered_address.connect(equip.set_discovered_address)
+
+    def _on_connect_device(self, device_id: str, host: str, port: int) -> None:
+        imaging = self._pages["imaging"]
+        if not isinstance(imaging, ImagingPage):
+            return
+        if device_id == "mount":
+            imaging.connect_mount(host, port)
+        elif device_id == "camera":
+            imaging.connect_camera(host, port)
+        else:
+            # Filter wheel / focuser not yet wired — show a friendly message.
+            self._status.set_action(
+                f"{device_id.title()} connect — not implemented yet (R5)"
+            )
+
+    def _on_disconnect_device(self, device_id: str) -> None:
+        imaging = self._pages["imaging"]
+        if not isinstance(imaging, ImagingPage):
+            return
+        if device_id == "mount":
+            imaging.disconnect_mount()
+        elif device_id == "camera":
+            imaging.disconnect_camera()
+
+    def _on_connect_all(self, host: str, port: int) -> None:
+        imaging = self._pages["imaging"]
+        if not isinstance(imaging, ImagingPage):
+            return
+        imaging.connect_mount(host, port)
+        imaging.connect_camera(host, port)
+
+    def _on_device_state_changed(self, device_id: str, state: str, info: str) -> None:
+        """Fan one device-state event out to the status bar + Equipment page."""
+        self._status.set_device_state(device_id, state, info)
+        equip = self._pages.get("equipment")
+        if isinstance(equip, EquipmentPage):
+            equip.set_device_state(device_id, state, info)
+
+        # Once Mount + Camera both land, pulse Target as the next step.
+        self._connection[device_id] = state
+        if (
+            self._connection["mount"] == "connected"
+            and self._connection["camera"] == "connected"
+        ):
+            self._sidebar.pulse("target")
 
     def _on_mode_changed(self, mode_id: str) -> None:
         index = self._page_indices.get(mode_id)

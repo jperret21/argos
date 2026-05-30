@@ -1,10 +1,295 @@
-"""Equipment mode — placeholder during R1. Real implementation lands in R3."""
+"""Equipment mode — connect telescope, camera, filter wheel, focuser.
+
+The user comes here once at the start of a session, then never again. The
+page emits intents (``connect_requested``, ``disconnect_requested``,
+``discover_requested``) and the Shell routes them to the device session
+living on ImagingPage. State updates flow back via ``set_device_state``.
+
+Layout::
+
+    ┌─ Equipment ──────────────────────────────────────────────────┐
+    │ Host  [ 192.168.x.x ]  Port [ 32323 ]   [⚡ Auto-discover]   │
+    │                                                              │
+    │ ┌─ Telescope ──────────────────────────────────────────────┐ │
+    │ │ ○ Disconnected                              [↗ Connect]  │ │
+    │ └──────────────────────────────────────────────────────────┘ │
+    │ ┌─ Camera ─────────────────────────────────────────────────┐ │
+    │ │ ● Connected — IMX585 8.3 MP                  [✗ Disc.]   │ │
+    │ └──────────────────────────────────────────────────────────┘ │
+    │ ┌─ Filter Wheel ───────────────────────────────────────────┐ │
+    │ │ ○ Disconnected                              [↗ Connect]  │ │
+    │ └──────────────────────────────────────────────────────────┘ │
+    │ ┌─ Focuser ────────────────────────────────────────────────┐ │
+    │ │ ○ Disconnected                              [↗ Connect]  │ │
+    │ └──────────────────────────────────────────────────────────┘ │
+    │                                                              │
+    │   [▶ Connect all]                       [■ Disconnect all]   │
+    └──────────────────────────────────────────────────────────────┘
+"""
 
 from __future__ import annotations
 
-from seercontrol.ui.pages._placeholder import PlaceholderPage
+import logging
+
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import (
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QScrollArea,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
+
+from seercontrol.core.config import Config
+from seercontrol.ui import design, theme
+
+logger = logging.getLogger(__name__)
 
 
-class EquipmentPage(PlaceholderPage):
-    def __init__(self) -> None:
-        super().__init__("Equipment", sprint_name="R3")
+# (device_id, display label, hint) — one row per device. Order matches the
+# global status bar so connection state reads left-to-right consistently.
+_DEVICES: tuple[tuple[str, str, str], ...] = (
+    ("mount",       "Telescope",    "Mount control via ASCOM Alpaca"),
+    ("camera",      "Camera",       "Telephoto IMX585 sensor"),
+    ("filterwheel", "Filter Wheel", "IR-cut / LP / Dark slots"),
+    ("focuser",     "Focuser",      "Telephoto focuser"),
+)
+
+
+class EquipmentPage(QWidget):
+    """Connection setup page — the user's first stop in every session."""
+
+    discover_requested   = pyqtSignal()
+    connect_requested    = pyqtSignal(str, str, int)   # device_id, host, port
+    disconnect_requested = pyqtSignal(str)             # device_id
+    connect_all_requested    = pyqtSignal(str, int)
+    disconnect_all_requested = pyqtSignal()
+
+    def __init__(self, config: Config, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._config = config
+        self._cards: dict[str, _DeviceCard] = {}
+        self._build_ui()
+        self._load_config()
+
+    # ------------------------------------------------------------------
+    # UI
+    # ------------------------------------------------------------------
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # Make the whole page scrollable so it never crops on small windows.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        root.addWidget(scroll)
+
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
+        layout.setContentsMargins(design.SPACING_XL, design.SPACING_XL,
+                                  design.SPACING_XL, design.SPACING_XL)
+        layout.setSpacing(design.SPACING_LG)
+
+        layout.addWidget(design.HeadingLabel("Equipment"))
+
+        layout.addWidget(self._build_address_card())
+
+        for device_id, label, hint in _DEVICES:
+            card = _DeviceCard(device_id, label, hint)
+            card.connect_clicked.connect(self._on_connect_one)
+            card.disconnect_clicked.connect(self.disconnect_requested)
+            self._cards[device_id] = card
+            layout.addWidget(card)
+
+        # Bulk controls at the bottom — primary action of the page.
+        bulk_row = QHBoxLayout()
+        bulk_row.setSpacing(design.SPACING_MD)
+        self._connect_all_btn = design.SuccessButton("▶  Connect all")
+        self._connect_all_btn.clicked.connect(self._on_connect_all)
+        self._disconnect_all_btn = design.DangerButton("■  Disconnect all")
+        self._disconnect_all_btn.clicked.connect(self.disconnect_all_requested)
+        bulk_row.addWidget(self._connect_all_btn)
+        bulk_row.addStretch()
+        bulk_row.addWidget(self._disconnect_all_btn)
+        layout.addLayout(bulk_row)
+
+        layout.addStretch()
+        scroll.setWidget(inner)
+
+    def _build_address_card(self) -> design.Card:
+        card = design.Card("Address")
+        layout = design.card_layout(card)
+
+        form = QFormLayout()
+        form.setHorizontalSpacing(design.SPACING_MD)
+        form.setVerticalSpacing(design.SPACING_SM)
+
+        self._host_edit = QLineEdit()
+        self._host_edit.setPlaceholderText("192.168.x.x")
+        self._host_edit.textChanged.connect(self._on_host_changed)
+        form.addRow(design.MutedLabel("Host"), self._host_edit)
+
+        self._port_spin = QSpinBox()
+        self._port_spin.setRange(1, 65535)
+        self._port_spin.valueChanged.connect(self._on_port_changed)
+        form.addRow(design.MutedLabel("Port"), self._port_spin)
+
+        layout.addLayout(form)
+
+        discover_row = QHBoxLayout()
+        discover_row.addStretch()
+        self._discover_btn = design.PrimaryButton("⚡  Auto-discover")
+        self._discover_btn.setToolTip("Send an Alpaca UDP discovery broadcast")
+        self._discover_btn.clicked.connect(self.discover_requested)
+        discover_row.addWidget(self._discover_btn)
+        layout.addLayout(discover_row)
+        return card
+
+    # ------------------------------------------------------------------
+    # Config
+    # ------------------------------------------------------------------
+
+    def _load_config(self) -> None:
+        self._host_edit.setText(self._config.alpaca_host or "")
+        self._port_spin.setValue(self._config.alpaca_port or 32323)
+
+    def _on_host_changed(self, text: str) -> None:
+        self._config.alpaca_host = text.strip()
+
+    def _on_port_changed(self, value: int) -> None:
+        self._config.alpaca_port = value
+
+    # ------------------------------------------------------------------
+    # Public slots — called by the Shell with device-state updates
+    # ------------------------------------------------------------------
+
+    def set_device_state(self, device_id: str, state: str, info: str = "") -> None:
+        card = self._cards.get(device_id)
+        if card is not None:
+            card.set_state(state, info)
+
+    def set_discovered_address(self, host: str, port: int) -> None:
+        """Fill in the form when a discovery worker returns an address."""
+        self._host_edit.setText(host)
+        self._port_spin.setValue(port)
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _on_connect_one(self, device_id: str) -> None:
+        host = self._host_edit.text().strip()
+        port = int(self._port_spin.value())
+        if not host:
+            return
+        self.connect_requested.emit(device_id, host, port)
+
+    def _on_connect_all(self) -> None:
+        host = self._host_edit.text().strip()
+        port = int(self._port_spin.value())
+        if not host:
+            return
+        self.connect_all_requested.emit(host, port)
+
+
+# --------------------------------------------------------------------------- #
+# Device card (one per row)                                                    #
+# --------------------------------------------------------------------------- #
+
+class _DeviceCard(design.Card):
+    """A single device row: glyph + name + status text + Connect button."""
+
+    connect_clicked    = pyqtSignal(str)
+    disconnect_clicked = pyqtSignal(str)
+
+    def __init__(self, device_id: str, label: str, hint: str) -> None:
+        super().__init__(label)
+        self._device_id = device_id
+        self._state = "disconnected"
+        self._build_ui(hint)
+        self.set_state("disconnected")
+
+    def _build_ui(self, hint: str) -> None:
+        outer = design.card_layout(self)
+
+        row = QHBoxLayout()
+        row.setSpacing(design.SPACING_MD)
+
+        self._glyph_lbl = QLabel("○")
+        self._glyph_lbl.setStyleSheet(
+            f"color:{theme.FG_MUTED}; font-size:20px; background:transparent;"
+        )
+        self._glyph_lbl.setFixedWidth(28)
+        row.addWidget(self._glyph_lbl)
+
+        text_col = QVBoxLayout()
+        text_col.setSpacing(2)
+        self._status_lbl = QLabel("Disconnected")
+        self._status_lbl.setStyleSheet(
+            f"color:{theme.FG}; font-size:13px; font-weight:bold;"
+            f" background:transparent;"
+        )
+        self._hint_lbl = QLabel(hint)
+        self._hint_lbl.setStyleSheet(
+            f"color:{theme.FG_MUTED}; font-size:11px; background:transparent;"
+        )
+        text_col.addWidget(self._status_lbl)
+        text_col.addWidget(self._hint_lbl)
+        row.addLayout(text_col, 1)
+
+        self._connect_btn = design.PrimaryButton("↗  Connect")
+        self._connect_btn.clicked.connect(self._on_button)
+        row.addWidget(self._connect_btn)
+
+        outer.addLayout(row)
+
+    def set_state(self, state: str, info: str = "") -> None:
+        self._state = state
+        glyph_color = {
+            "disconnected": theme.FG_MUTED,
+            "connected":    theme.SUCCESS,
+            "busy":         theme.WARNING,
+            "error":        theme.DANGER,
+        }.get(state, theme.FG_MUTED)
+        glyph_char = {
+            "disconnected": "○",
+            "connected":    "●",
+            "busy":         "●",
+            "error":        "✗",
+        }.get(state, "○")
+        self._glyph_lbl.setText(glyph_char)
+        self._glyph_lbl.setStyleSheet(
+            f"color:{glyph_color}; font-size:20px; background:transparent;"
+        )
+
+        if state == "connected":
+            self._status_lbl.setText("Connected" + (f" — {info}" if info else ""))
+            self._connect_btn.setText("✗  Disconnect")
+            self._connect_btn.setProperty("class", "danger")
+        elif state == "busy":
+            self._status_lbl.setText(f"Busy — {info}" if info else "Busy")
+            self._connect_btn.setText("✗  Disconnect")
+            self._connect_btn.setProperty("class", "danger")
+        elif state == "error":
+            self._status_lbl.setText(f"Error — {info}" if info else "Error")
+            self._connect_btn.setText("↗  Retry")
+            self._connect_btn.setProperty("class", "primary")
+        else:
+            self._status_lbl.setText("Disconnected")
+            self._connect_btn.setText("↗  Connect")
+            self._connect_btn.setProperty("class", "primary")
+        self._connect_btn.style().unpolish(self._connect_btn)
+        self._connect_btn.style().polish(self._connect_btn)
+
+    def _on_button(self) -> None:
+        if self._state in ("connected", "busy"):
+            self.disconnect_clicked.emit(self._device_id)
+        else:
+            self.connect_clicked.emit(self._device_id)
