@@ -7,7 +7,10 @@ requires-python = ">=3.11,<3.12"
 dependencies = [
     "PyQt6==6.7.1",
     "PyQt6-Qt6==6.7.1",
-    "pyqtgraph>=0.13.0",
+    # pyqtgraph 0.14.0 has a circular import in pyqtgraph.Qt against PyQt6 6.7.1
+    # ("cannot import name 'internals' from partially initialized module
+    # pyqtgraph.Qt"). Pin to the last known-good 0.13 line until upstream fixes it.
+    "pyqtgraph>=0.13.0,<0.14.0",
     "requests>=2.31.0",
     "astropy>=6.0.0",
     "numpy>=1.26.0,<2.0.0",
