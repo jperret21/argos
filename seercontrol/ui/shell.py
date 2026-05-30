@@ -36,6 +36,10 @@ from seercontrol.ui.pages.target_page import TargetPage
 from seercontrol.ui.sidebar import Sidebar
 from seercontrol.ui.statusbar import TopStatusBar
 
+# Pages that need the application Config receive it via constructor; the rest
+# stay parameter-less so swapping them in/out across sprints stays cheap.
+_PAGES_NEEDING_CONFIG = {"imaging"}
+
 logger = logging.getLogger(__name__)
 
 _CFG_GEOMETRY = "ui.shell.geometry"
@@ -108,13 +112,14 @@ class Shell(QMainWindow):
         self._pages: dict[str, QWidget] = {
             "equipment": EquipmentPage(),
             "target":    TargetPage(),
-            "imaging":   ImagingPage(),
+            "imaging":   ImagingPage(self._config),
             "settings":  SettingsPage(),
         }
         self._page_indices: dict[str, int] = {
             mode_id: self._stack.addWidget(page)
             for mode_id, page in self._pages.items()
         }
+        self._wire_imaging_page()
 
     # ------------------------------------------------------------------
     # Menus
@@ -151,6 +156,15 @@ class Shell(QMainWindow):
     def _wire_signals(self) -> None:
         self._sidebar.mode_changed.connect(self._on_mode_changed)
         self._status.badge_clicked.connect(self._on_badge_clicked)
+
+    def _wire_imaging_page(self) -> None:
+        """Connect ImagingPage upward signals to the global status bar."""
+        page = self._pages.get("imaging")
+        if not isinstance(page, ImagingPage):
+            return
+        page.device_state_changed.connect(self._status.set_device_state)
+        page.tracking_changed.connect(self._status.set_tracking)
+        page.action_changed.connect(self._status.set_action)
 
     def _on_mode_changed(self, mode_id: str) -> None:
         index = self._page_indices.get(mode_id)
@@ -237,6 +251,9 @@ class Shell(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        page = self._pages.get("imaging")
+        if isinstance(page, ImagingPage):
+            page.shutdown()
         self._save_state()
         logger.info("Shell closed")
         super().closeEvent(event)
