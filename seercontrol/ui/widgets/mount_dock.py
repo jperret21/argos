@@ -29,22 +29,17 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QGridLayout,
-    QGroupBox,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QVBoxLayout,
     QWidget,
 )
 
-from seercontrol.ui import theme
+from seercontrol.ui import design
 
 logger = logging.getLogger(__name__)
 
 _TRACKING_RATES = ("Sidereal", "Lunar", "Solar")
 
 
-class MountDock(QGroupBox):
+class MountDock(design.Card):
     """Compact mount control group for the right side of the Imaging page."""
 
     goto_clicked              = pyqtSignal(float, float)   # ra_hours, dec_degrees
@@ -65,50 +60,51 @@ class MountDock(QGroupBox):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 14, 8, 8)
-        outer.setSpacing(8)
+        outer = design.card_layout(self)
 
         # Live coordinates — 2×2 grid (RA/Alt on row 0, Dec/Az on row 1)
         coords = QGridLayout()
-        coords.setSpacing(4)
+        coords.setSpacing(design.SPACING_SM)
         coords.setColumnStretch(1, 1)
         coords.setColumnStretch(3, 1)
 
-        self._ra_lbl  = _value("—h —m —s")
-        self._dec_lbl = _value("—° —′ —″")
-        self._alt_lbl = _value("—°")
-        self._az_lbl  = _value("—°")
+        self._ra_lbl  = design.MetricLabel("—h —m —s")
+        self._dec_lbl = design.MetricLabel("—° —′ —″")
+        self._alt_lbl = design.MetricLabel("—°")
+        self._az_lbl  = design.MetricLabel("—°")
 
-        coords.addWidget(_muted("RA"),  0, 0)
-        coords.addWidget(self._ra_lbl,  0, 1)
-        coords.addWidget(_muted("Alt"), 0, 2)
-        coords.addWidget(self._alt_lbl, 0, 3)
-        coords.addWidget(_muted("Dec"), 1, 0)
-        coords.addWidget(self._dec_lbl, 1, 1)
-        coords.addWidget(_muted("Az"),  1, 2)
-        coords.addWidget(self._az_lbl,  1, 3)
+        coords.addWidget(design.MutedLabel("RA"),  0, 0)
+        coords.addWidget(self._ra_lbl,             0, 1)
+        coords.addWidget(design.MutedLabel("Alt"), 0, 2)
+        coords.addWidget(self._alt_lbl,            0, 3)
+        coords.addWidget(design.MutedLabel("Dec"), 1, 0)
+        coords.addWidget(self._dec_lbl,            1, 1)
+        coords.addWidget(design.MutedLabel("Az"),  1, 2)
+        coords.addWidget(self._az_lbl,             1, 3)
         outer.addLayout(coords)
 
-        # Tracking row: status + ON/OFF + rate combo
-        track_row = QHBoxLayout()
-        track_row.setSpacing(6)
-        self._tracking_btn = QPushButton("Tracking ON")
-        self._tracking_btn.setProperty("class", "success")
+        outer.addWidget(design.horizontal_divider())
+
+        # Tracking row — toggle + rate combo
+        self._tracking_btn = design.SuccessButton("Tracking ON")
         self._tracking_btn.setCheckable(True)
         self._tracking_btn.toggled.connect(self._on_tracking_toggle)
-        track_row.addWidget(self._tracking_btn)
         self._rate_combo = QComboBox()
         for label in _TRACKING_RATES:
             self._rate_combo.addItem(label)
         self._rate_combo.currentIndexChanged.connect(self.tracking_rate_changed)
-        track_row.addWidget(self._rate_combo)
-        outer.addLayout(track_row)
+        outer.addLayout(design.button_row(self._tracking_btn))
+        rate_form = QFormLayout()
+        rate_form.setHorizontalSpacing(design.SPACING_MD)
+        rate_form.addRow(design.MutedLabel("Rate"), self._rate_combo)
+        outer.addLayout(rate_form)
+
+        outer.addWidget(design.horizontal_divider())
 
         # Goto form
         goto_form = QFormLayout()
-        goto_form.setHorizontalSpacing(8)
-        goto_form.setVerticalSpacing(5)
+        goto_form.setHorizontalSpacing(design.SPACING_MD)
+        goto_form.setVerticalSpacing(design.SPACING_SM)
         self._goto_ra = QDoubleSpinBox()
         self._goto_ra.setRange(0.0, 23.9999)
         self._goto_ra.setDecimals(4)
@@ -117,42 +113,35 @@ class MountDock(QGroupBox):
         self._goto_dec.setRange(-90.0, 90.0)
         self._goto_dec.setDecimals(4)
         self._goto_dec.setSuffix("  °")
-        goto_form.addRow("Goto RA",  self._goto_ra)
-        goto_form.addRow("Goto Dec", self._goto_dec)
+        goto_form.addRow(design.MutedLabel("Goto RA"),  self._goto_ra)
+        goto_form.addRow(design.MutedLabel("Goto Dec"), self._goto_dec)
         outer.addLayout(goto_form)
 
-        # Action buttons grid
-        btns = QGridLayout()
-        btns.setSpacing(5)
-        self._slew_btn = QPushButton("▶  Slew")
-        self._slew_btn.setProperty("class", "primary")
+        # Action buttons — two rows of two, plus the full-width Jog launcher.
+        self._slew_btn  = design.PrimaryButton("▶  Slew")
         self._slew_btn.clicked.connect(self._on_slew)
-        self._abort_btn = QPushButton("■  Abort")
-        self._abort_btn.setProperty("class", "danger")
+        self._abort_btn = design.DangerButton("■  Abort")
         self._abort_btn.clicked.connect(self.abort_clicked)
-        self._sync_btn  = QPushButton("⟳  Sync")
+        self._sync_btn  = design.SecondaryButton("⟳  Sync")
         self._sync_btn.setToolTip("Sync mount pointing model to current RA/Dec")
         self._sync_btn.clicked.connect(self.sync_to_current_clicked)
-        self._park_btn  = QPushButton("⊙  Park")
+        self._park_btn  = design.SecondaryButton("⊙  Park")
         self._park_btn.clicked.connect(self.park_clicked)
-        self._jog_btn   = QPushButton("✥  Jog…")
+        self._jog_btn   = design.SecondaryButton("✥  Jog…")
         self._jog_btn.setToolTip("Open the manual jog dialog")
         self._jog_btn.clicked.connect(self.manual_control_requested)
-        btns.addWidget(self._slew_btn,  0, 0)
-        btns.addWidget(self._abort_btn, 0, 1)
-        btns.addWidget(self._sync_btn,  1, 0)
-        btns.addWidget(self._park_btn,  1, 1)
-        btns.addWidget(self._jog_btn,   2, 0, 1, 2)
-        outer.addLayout(btns)
+        outer.addLayout(design.button_row(self._slew_btn, self._abort_btn))
+        outer.addLayout(design.button_row(self._sync_btn, self._park_btn))
+        outer.addLayout(design.button_row(self._jog_btn))
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def set_enabled(self, connected: bool) -> None:
+        """Gate only the action buttons; goto coords stay editable always."""
         for w in (
             self._tracking_btn, self._rate_combo,
-            self._goto_ra, self._goto_dec,
             self._slew_btn, self._abort_btn, self._sync_btn,
             self._park_btn, self._jog_btn,
         ):
@@ -197,21 +186,6 @@ class MountDock(QGroupBox):
 # --------------------------------------------------------------------------- #
 # Helpers                                                                      #
 # --------------------------------------------------------------------------- #
-
-def _muted(text: str) -> QLabel:
-    lbl = QLabel(text)
-    lbl.setStyleSheet(f"color:{theme.FG_MUTED}; font-size:11px; background:transparent;")
-    return lbl
-
-
-def _value(text: str) -> QLabel:
-    lbl = QLabel(text)
-    lbl.setStyleSheet(
-        f"color:{theme.ACCENT}; font-size:13px; font-weight:bold;"
-        f" font-family:{theme.FONT_MONO}; background:transparent;"
-    )
-    return lbl
-
 
 def _format_ra(hours: float) -> str:
     total = int(round(hours * 3600))

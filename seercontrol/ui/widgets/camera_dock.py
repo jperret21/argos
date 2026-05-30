@@ -28,18 +28,14 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QProgressBar,
-    QPushButton,
     QSpinBox,
-    QVBoxLayout,
     QWidget,
 )
 
-from seercontrol.ui import theme
+from seercontrol.ui import design, theme
 
 logger = logging.getLogger(__name__)
 
@@ -60,11 +56,13 @@ class CaptureParams:
     frames:      int
 
 
-class CameraDock(QGroupBox):
+class CameraDock(design.Card):
     """Compact camera control group for the right side of the Imaging page."""
 
     take_shot_clicked = pyqtSignal()
-    sequence_toggled  = pyqtSignal(bool)   # True = start, False = stop
+    # sequence_toggled carries True when the user starts a sequence,
+    # False when they stop it mid-flight.
+    sequence_toggled  = pyqtSignal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Camera", parent)
@@ -77,27 +75,25 @@ class CameraDock(QGroupBox):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 14, 8, 8)
-        outer.setSpacing(8)
+        outer = design.card_layout(self)
 
         form = QFormLayout()
-        form.setHorizontalSpacing(8)
-        form.setVerticalSpacing(5)
+        form.setHorizontalSpacing(design.SPACING_MD)
+        form.setVerticalSpacing(design.SPACING_SM)
 
         self._type_combo = QComboBox()
         for ft in _FRAME_TYPES:
             self._type_combo.addItem(ft)
-        form.addRow("Type", self._type_combo)
+        form.addRow(design.MutedLabel("Type"), self._type_combo)
 
         self._object_edit = QLineEdit()
         self._object_edit.setPlaceholderText("M42, T CrB…")
-        form.addRow("Object", self._object_edit)
+        form.addRow(design.MutedLabel("Object"), self._object_edit)
 
         self._filter_combo = QComboBox()
         for f in _DEFAULT_FILTERS:
             self._filter_combo.addItem(f)
-        form.addRow("Filter", self._filter_combo)
+        form.addRow(design.MutedLabel("Filter"), self._filter_combo)
 
         self._exp_spin = QDoubleSpinBox()
         self._exp_spin.setRange(0.001, 600.0)
@@ -105,53 +101,46 @@ class CameraDock(QGroupBox):
         self._exp_spin.setValue(10.0)
         self._exp_spin.setSuffix(" s")
         self._exp_spin.setSingleStep(1.0)
-        form.addRow("Exposure", self._exp_spin)
+        form.addRow(design.MutedLabel("Exposure"), self._exp_spin)
 
         self._gain_spin = QSpinBox()
         self._gain_spin.setRange(0, 600)
         self._gain_spin.setValue(80)
-        form.addRow("Gain", self._gain_spin)
+        form.addRow(design.MutedLabel("Gain"), self._gain_spin)
 
         self._count_spin = QSpinBox()
         self._count_spin.setRange(1, 9999)
         self._count_spin.setValue(10)
-        form.addRow("Frames", self._count_spin)
+        form.addRow(design.MutedLabel("Frames"), self._count_spin)
 
         outer.addLayout(form)
 
         # Quality indicator — live HFD.
         hfd_row = QHBoxLayout()
-        hfd_row.addWidget(QLabel("HFD:"))
-        self._hfd_lbl = QLabel("—")
-        self._hfd_lbl.setStyleSheet(
-            f"color:{theme.FG_MUTED}; font-size:13px; font-weight:bold;"
-            f" font-family:{theme.FONT_MONO};"
-        )
+        hfd_row.setSpacing(design.SPACING_MD)
+        hfd_row.addWidget(design.MutedLabel("HFD"))
+        self._hfd_lbl = design.MetricLabel("—")
         hfd_row.addWidget(self._hfd_lbl)
         hfd_row.addStretch()
         outer.addLayout(hfd_row)
 
-        # Action buttons.
-        self._take_btn = QPushButton("◉  Take Shot")
-        self._take_btn.setProperty("class", "primary")
+        # Action buttons side-by-side. "Sequence" is the dominant workflow
+        # (many frames) so it gets twice the stretch + the success colour.
+        self._take_btn = design.SecondaryButton("◉  Shot")
+        self._take_btn.setToolTip("Take one frame and save it")
         self._take_btn.clicked.connect(self.take_shot_clicked)
-        outer.addWidget(self._take_btn)
-
-        self._seq_btn = QPushButton("▶  Start sequence")
-        self._seq_btn.setProperty("class", "success")
+        self._seq_btn = design.SuccessButton("▶  Sequence")
+        self._seq_btn.setToolTip("Run the configured number of frames")
         self._seq_btn.clicked.connect(self._on_sequence_clicked)
-        outer.addWidget(self._seq_btn)
+        outer.addLayout(design.button_row(self._take_btn, self._seq_btn))
 
         # Progress (hidden until a sequence runs).
         self._progress = QProgressBar()
         self._progress.setVisible(False)
         outer.addWidget(self._progress)
 
-        self._eta_lbl = QLabel("")
+        self._eta_lbl = design.MutedLabel("")
         self._eta_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self._eta_lbl.setStyleSheet(
-            f"color:{theme.FG_MUTED}; font-size:10px; background:transparent;"
-        )
         self._eta_lbl.setVisible(False)
         outer.addWidget(self._eta_lbl)
 
@@ -170,12 +159,14 @@ class CameraDock(QGroupBox):
         )
 
     def set_enabled(self, connected: bool) -> None:
+        """Gate only the action buttons; the form stays editable always.
+
+        Users want to plan their session (set object name, filter, gain,
+        exposure) *before* the camera is connected — the legacy behaviour of
+        graying out everything until connection made the app feel broken.
+        """
         self._take_btn.setEnabled(connected)
         self._seq_btn.setEnabled(connected)
-        # While disconnected, gate edit controls too — keeps the form honest.
-        for w in (self._type_combo, self._filter_combo, self._exp_spin,
-                  self._gain_spin, self._count_spin):
-            w.setEnabled(connected)
 
     def set_filter_options(self, names: list[str]) -> None:
         """Refresh the filter combo from the filter wheel slots."""
@@ -195,10 +186,10 @@ class CameraDock(QGroupBox):
             color = theme.FG_MUTED
         else:
             self._hfd_lbl.setText(f"{value:.1f} px")
-            color = theme.SUCCESS if value < 5 else (theme.WARNING if value < 10 else theme.DANGER)
+            color = design.stat_color(value, ok_below=5, warn_below=10)
         self._hfd_lbl.setStyleSheet(
             f"color:{color}; font-size:13px; font-weight:bold;"
-            f" font-family:{theme.FONT_MONO};"
+            f" font-family:{theme.FONT_MONO}; background:transparent;"
         )
 
     def set_progress(self, current: int, total: int, eta_seconds: float) -> None:
@@ -227,12 +218,12 @@ class CameraDock(QGroupBox):
     def _set_in_sequence(self, running: bool) -> None:
         self._in_sequence = running
         if running:
-            self._seq_btn.setText("■  Stop sequence")
+            self._seq_btn.setText("■  Stop")
             self._seq_btn.setProperty("class", "danger")
             self._progress.setVisible(True)
             self._eta_lbl.setVisible(True)
         else:
-            self._seq_btn.setText("▶  Start sequence")
+            self._seq_btn.setText("▶  Sequence")
             self._seq_btn.setProperty("class", "success")
             self._progress.setVisible(False)
             self._eta_lbl.setVisible(False)

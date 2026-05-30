@@ -16,7 +16,7 @@ import logging
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QVBoxLayout, QWidget
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +43,13 @@ class FitsViewer(QWidget):
 
         pg.setConfigOptions(imageAxisOrder="row-major")
         self._view = pg.ImageView()
+        # pg.ImageView ships with a vertical histogram + ROI + menu strip on
+        # the right. We display the histogram in the dedicated HistogramDock
+        # and our own toolbar drives stretch/levels — hide all built-ins so
+        # the central canvas is just the image.
         self._view.ui.roiBtn.hide()
         self._view.ui.menuBtn.hide()
+        self._view.ui.histogram.hide()
         layout.addWidget(self._view)
 
     def display(self, arr: np.ndarray) -> None:
