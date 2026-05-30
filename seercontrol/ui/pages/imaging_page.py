@@ -70,6 +70,31 @@ logger = logging.getLogger(__name__)
 _SOFTWARE = "SeerControl v0.2.0-redesign"
 
 
+class _JogRunnable(QRunnable):
+    """One-shot off-thread MoveAxis call.
+
+    The first Alpaca call on a fresh TCP connection takes ~600ms. Running it
+    on the main thread would (a) freeze the UI and (b) consume the
+    button-released Qt event before returning — causing an instant stop with
+    zero visible movement. This QRunnable fixes both problems.
+    """
+
+    def __init__(self, telescope, axis: int, rate: float, log_signal) -> None:
+        super().__init__()
+        self._telescope  = telescope
+        self._axis       = axis
+        self._rate       = rate
+        self._log        = log_signal
+
+    def run(self) -> None:
+        try:
+            self._telescope.move_axis(self._axis, self._rate)
+        except AlpacaError as exc:
+            action = "Stop jog" if self._rate == 0.0 else "Jog"
+            level  = "WARN"     if self._rate == 0.0 else "ERROR"
+            self._log.emit(level, f"{action}: {exc}")
+
+
 class ImagingPage(QWidget):
     """The Imaging-mode workspace."""
 
@@ -577,18 +602,16 @@ class ImagingPage(QWidget):
     def _on_jog_start(self, axis: int, rate: float) -> None:
         if not self._telescope:
             return
-        try:
-            self._telescope.move_axis(axis, rate)
-        except AlpacaError as exc:
-            self.log_message.emit("ERROR", f"Jog: {exc}")
+        # Off-thread: first MoveAxis on a fresh TCP connection takes ~600ms.
+        # Calling it synchronously on the UI thread would freeze the UI and,
+        # worse, consume the button-released event before the call returns —
+        # resulting in an immediate stop and zero visible movement.
+        QThreadPool.globalInstance().start(_JogRunnable(self._telescope, axis, rate, self.log_message))
 
     def _on_jog_stop(self, axis: int) -> None:
         if not self._telescope:
             return
-        try:
-            self._telescope.stop_axis(axis)
-        except AlpacaError as exc:
-            self.log_message.emit("WARN", f"Stop jog: {exc}")
+        QThreadPool.globalInstance().start(_JogRunnable(self._telescope, axis, 0.0, self.log_message))
 
     def _open_jog(self) -> None:
         if not self._telescope:
