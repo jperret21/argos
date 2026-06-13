@@ -9,8 +9,20 @@ unset VIRTUAL_ENV
 unset CONDA_PREFIX
 unset CONDA_DEFAULT_ENV
 
+# Locate uv. Prefer PATH, then fall back to known install locations — uv may live
+# in ~/.local/bin (standalone installer) or under Homebrew depending on the machine.
+UV="$(command -v uv || true)"
+for candidate in "$HOME/.local/bin/uv" /opt/homebrew/bin/uv /usr/local/bin/uv; do
+    [ -n "$UV" ] && break
+    [ -x "$candidate" ] && UV="$candidate"
+done
+if [ -z "$UV" ]; then
+    echo "error: uv not found. Install it with 'brew install uv' or see https://docs.astral.sh/uv/" >&2
+    exit 1
+fi
+
 # Sync production dependencies only (dev extras like pytest/simulator not needed to run).
-/opt/homebrew/bin/uv sync --quiet
+"$UV" sync --quiet
 
 # macOS sometimes creates duplicate framework dirs with " 2" / " 3" suffixes inside the
 # PyQt6 wheel, which confuses the dynamic linker. Remove them — safe and idempotent.
@@ -22,4 +34,4 @@ find .venv/lib/python3.11/site-packages/PyQt6 \( -name "* 2.*" -o -name "* 3.*" 
 # Remove quarantine flags — safe and idempotent.
 xattr -dr com.apple.quarantine .venv/ 2>/dev/null || true
 
-exec /opt/homebrew/bin/uv run python main.py "$@"
+exec "$UV" run python main.py "$@"
