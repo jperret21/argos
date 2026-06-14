@@ -1,9 +1,14 @@
-"""Camera dock — right-side capture controls for the Imaging mode.
+"""Camera dock — capture controls for the Acquisition page's Capture tab.
 
 Owns nothing about hardware; the ImagingPage wires this widget's signals
 to the Camera/Telescope/Worker objects. Keeping the dock UI-only makes it
 testable headless and lets the same control surface drive a future
 simulator or remote camera.
+
+Numeric parameters (exposure, gain, frame count) use the ``SliderSpin``
+composite from the design system — a slider for quick coarse changes plus a
+value box for exact entry, the idiom used by NINA / SharpCap. Exposure runs on
+a logarithmic slider because its range spans four orders of magnitude.
 
 Public surface:
     Signals
@@ -26,12 +31,11 @@ from dataclasses import dataclass
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
-    QDoubleSpinBox,
-    QFormLayout,
+    QGridLayout,
     QHBoxLayout,
     QLineEdit,
     QProgressBar,
-    QSpinBox,
+    QSizePolicy,
     QWidget,
 )
 
@@ -57,7 +61,7 @@ class CaptureParams:
 
 
 class CameraDock(design.Card):
-    """Compact camera control group for the right side of the Imaging page."""
+    """Compact camera control group for the Capture tab."""
 
     take_shot_clicked = pyqtSignal()
     # sequence_toggled carries True when the user starts a sequence,
@@ -77,43 +81,47 @@ class CameraDock(design.Card):
     def _build_ui(self) -> None:
         outer = design.card_layout(self)
 
-        form = QFormLayout()
-        form.setHorizontalSpacing(design.SPACING_MD)
-        form.setVerticalSpacing(design.SPACING_SM)
+        # Two-column grid: labels left (fixed), controls right (stretch). Every
+        # control fills the same column width so the form lines up.
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(design.SPACING_MD)
+        grid.setVerticalSpacing(design.SPACING_SM)
+        grid.setColumnStretch(1, 1)
 
-        self._type_combo = QComboBox()
-        for ft in _FRAME_TYPES:
-            self._type_combo.addItem(ft)
-        form.addRow(design.MutedLabel("Type"), self._type_combo)
+        row = 0
+        grid.addWidget(design.MutedLabel("Type"), row, 0)
+        self._type_combo = self._combo(_FRAME_TYPES)
+        grid.addWidget(self._type_combo, row, 1)
 
+        row += 1
+        grid.addWidget(design.MutedLabel("Object"), row, 0)
         self._object_edit = QLineEdit()
         self._object_edit.setPlaceholderText("M42, T CrB…")
-        form.addRow(design.MutedLabel("Object"), self._object_edit)
+        grid.addWidget(self._object_edit, row, 1)
 
-        self._filter_combo = QComboBox()
-        for f in _DEFAULT_FILTERS:
-            self._filter_combo.addItem(f)
-        form.addRow(design.MutedLabel("Filter"), self._filter_combo)
+        row += 1
+        grid.addWidget(design.MutedLabel("Filter"), row, 0)
+        self._filter_combo = self._combo(_DEFAULT_FILTERS)
+        grid.addWidget(self._filter_combo, row, 1)
 
-        self._exp_spin = QDoubleSpinBox()
-        self._exp_spin.setRange(0.001, 600.0)
-        self._exp_spin.setDecimals(2)
-        self._exp_spin.setValue(10.0)
-        self._exp_spin.setSuffix(" s")
-        self._exp_spin.setSingleStep(1.0)
-        form.addRow(design.MutedLabel("Exposure"), self._exp_spin)
+        row += 1
+        grid.addWidget(design.MutedLabel("Exposure"), row, 0)
+        self._exp = design.SliderSpin(
+            0.01, 600.0, 10.0, decimals=2, step=1.0, suffix=" s", logarithmic=True
+        )
+        grid.addWidget(self._exp, row, 1)
 
-        self._gain_spin = QSpinBox()
-        self._gain_spin.setRange(0, 600)
-        self._gain_spin.setValue(80)
-        form.addRow(design.MutedLabel("Gain"), self._gain_spin)
+        row += 1
+        grid.addWidget(design.MutedLabel("Gain"), row, 0)
+        self._gain = design.SliderSpin(0, 600, 80)
+        grid.addWidget(self._gain, row, 1)
 
-        self._count_spin = QSpinBox()
-        self._count_spin.setRange(1, 9999)
-        self._count_spin.setValue(10)
-        form.addRow(design.MutedLabel("Frames"), self._count_spin)
+        row += 1
+        grid.addWidget(design.MutedLabel("Frames"), row, 0)
+        self._count = design.SliderSpin(1, 1000, 10)
+        grid.addWidget(self._count, row, 1)
 
-        outer.addLayout(form)
+        outer.addLayout(grid)
 
         # Quality indicator — live HFD.
         hfd_row = QHBoxLayout()
@@ -124,8 +132,7 @@ class CameraDock(design.Card):
         hfd_row.addStretch()
         outer.addLayout(hfd_row)
 
-        # Action buttons side-by-side. "Sequence" is the dominant workflow
-        # (many frames) so it gets twice the stretch + the success colour.
+        # Action buttons side-by-side. "Sequence" is the dominant workflow.
         self._take_btn = design.SecondaryButton("◉  Shot")
         self._take_btn.setToolTip("Take one frame and save it")
         self._take_btn.clicked.connect(self.take_shot_clicked)
@@ -144,6 +151,15 @@ class CameraDock(design.Card):
         self._eta_lbl.setVisible(False)
         outer.addWidget(self._eta_lbl)
 
+    @staticmethod
+    def _combo(items: tuple[str, ...]) -> QComboBox:
+        """A combo that expands to the grid column so all combos match width."""
+        combo = QComboBox()
+        for item in items:
+            combo.addItem(item)
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        return combo
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -153,17 +169,17 @@ class CameraDock(design.Card):
             frame_type=self._type_combo.currentText(),
             object_name=self._object_edit.text().strip() or "Unknown",
             filter_name=self._filter_combo.currentText(),
-            exposure_s=float(self._exp_spin.value()),
-            gain=int(self._gain_spin.value()),
-            frames=int(self._count_spin.value()),
+            exposure_s=float(self._exp.value()),
+            gain=int(self._gain.value()),
+            frames=int(self._count.value()),
         )
 
     def set_enabled(self, connected: bool) -> None:
         """Gate only the action buttons; the form stays editable always.
 
-        Users want to plan their session (set object name, filter, gain,
-        exposure) *before* the camera is connected — the legacy behaviour of
-        graying out everything until connection made the app feel broken.
+        Users want to plan their session (object, filter, gain, exposure)
+        *before* the camera is connected — graying everything out until
+        connection made the app feel broken.
         """
         self._take_btn.setEnabled(connected)
         self._seq_btn.setEnabled(connected)
@@ -188,7 +204,7 @@ class CameraDock(design.Card):
             self._hfd_lbl.setText(f"{value:.1f} px")
             color = design.stat_color(value, ok_below=5, warn_below=10)
         self._hfd_lbl.setStyleSheet(
-            f"color:{color}; font-size:13px; font-weight:bold;"
+            f"color:{color}; font-size:{design.FONT_SIZE_METRIC}px; font-weight:bold;"
             f" font-family:{theme.FONT_MONO}; background:transparent;"
         )
 
