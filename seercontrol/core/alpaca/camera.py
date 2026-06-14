@@ -27,9 +27,9 @@ logger = logging.getLogger(__name__)
 
 # IMX585 physical characteristics (Seestar S30 Pro)
 PIXEL_SIZE_UM = 2.9
-FOCAL_LENGTH  = 160
+FOCAL_LENGTH = 160
 BAYER_PATTERN = "GRBG"
-INSTRUMENT    = "IMX585"
+INSTRUMENT = "IMX585"
 TELESCOPE_NAME = "ZWO Seestar S30 Pro"
 
 
@@ -50,8 +50,8 @@ class Camera:
     def __init__(self, host: str, port: int) -> None:
         self._cam = _AlpacaCamera(f"{host}:{port}", 0)
         self._connected = False
-        self.width:    int = 3840
-        self.height:   int = 2160
+        self.width: int = 3840
+        self.height: int = 2160
         self.gain_min: int = 0
         self.gain_max: int = 100
 
@@ -75,13 +75,16 @@ class Camera:
         self._connected = True
 
         try:
-            self.width    = int(self._cam.CameraXSize)
-            self.height   = int(self._cam.CameraYSize)
+            self.width = int(self._cam.CameraXSize)
+            self.height = int(self._cam.CameraYSize)
             self.gain_min = int(self._cam.GainMin)
             self.gain_max = int(self._cam.GainMax)
             logger.debug(
                 "Camera metadata: CameraXSize=%d CameraYSize=%d GainMin=%d GainMax=%d",
-                self.width, self.height, self.gain_min, self.gain_max,
+                self.width,
+                self.height,
+                self.gain_min,
+                self.gain_max,
             )
         except Exception as exc:
             logger.warning("Could not read camera metadata (using defaults): %s", exc)
@@ -93,7 +96,11 @@ class Camera:
 
         logger.info(
             "Camera connected: %s  %dx%d  gain %d–%d",
-            name, self.width, self.height, self.gain_min, self.gain_max,
+            name,
+            self.width,
+            self.height,
+            self.gain_min,
+            self.gain_max,
         )
         return name
 
@@ -129,18 +136,24 @@ class Camera:
             raise _wrap(exc) from exc
 
     def get_gain(self) -> int:
-        """Return the current gain value."""
+        """Return the current gain, or ``gain_min`` if the driver lacks Gain."""
         try:
             return int(self._cam.Gain)
+        except (NotImplementedException, InvalidValueException):
+            return self.gain_min
         except Exception as exc:
             raise _wrap(exc) from exc
 
     def set_gain(self, gain: int) -> None:
-        """Set camera gain (clamped to valid range)."""
+        """Set camera gain (clamped to range). No-op if the driver doesn't
+        implement Gain — some cameras / the ASCOM sim don't expose it, and that
+        must not break capture."""
         gain = max(self.gain_min, min(self.gain_max, gain))
         try:
             self._cam.Gain = gain
             logger.debug("Gain set to %d", gain)
+        except (NotImplementedException, InvalidValueException):
+            logger.warning("Camera does not implement Gain — skipping")
         except Exception as exc:
             raise _wrap(exc) from exc
 
@@ -160,7 +173,12 @@ class Camera:
                 if value is None:
                     continue
                 return round(float(value), 2)
-            except (AttributeError, NotImplementedException, InvalidValueException, DriverException):
+            except (
+                AttributeError,
+                NotImplementedException,
+                InvalidValueException,
+                DriverException,
+            ):
                 continue
             except Exception as exc:
                 logger.debug("%s read failed: %s", attr, exc)
@@ -226,15 +244,15 @@ class Camera:
         """
         out: dict = {}
         for key, attr in [
-            ("name",         "Name"),
-            ("sensor_name",  "SensorName"),
-            ("sensor_type",  "SensorType"),
-            ("bayer_off_x",  "BayerOffsetX"),
-            ("bayer_off_y",  "BayerOffsetY"),
-            ("max_bin_x",    "MaxBinX"),
-            ("max_bin_y",    "MaxBinY"),
-            ("driver_info",  "DriverInfo"),
-            ("driver_ver",   "DriverVersion"),
+            ("name", "Name"),
+            ("sensor_name", "SensorName"),
+            ("sensor_type", "SensorType"),
+            ("bayer_off_x", "BayerOffsetX"),
+            ("bayer_off_y", "BayerOffsetY"),
+            ("max_bin_x", "MaxBinX"),
+            ("max_bin_y", "MaxBinY"),
+            ("driver_info", "DriverInfo"),
+            ("driver_ver", "DriverVersion"),
         ]:
             try:
                 value = getattr(self._cam, attr)
@@ -284,19 +302,19 @@ class Camera:
             AlpacaError: On communication or device error.
         """
         _TYPECODE_DTYPE = {
-            'H': np.uint16,
-            'h': np.int16,
-            'i': np.int32,
-            'I': np.uint32,
-            'd': np.float64,
+            "H": np.uint16,
+            "h": np.int16,
+            "i": np.int32,
+            "I": np.uint32,
+            "d": np.float64,
         }
         t0 = time.perf_counter()
 
         try:
             # -- Fast path: ImageBytes (binary, 8x faster than JSON) --------
             # ImageArrayRaw raises InvalidValueException if device returns JSON.
-            raw = self._cam.ImageArrayRaw          # flat array.array
-            meta = self._cam.ImageArrayInfo        # set as side-effect above
+            raw = self._cam.ImageArrayRaw  # flat array.array
+            meta = self._cam.ImageArrayInfo  # set as side-effect above
             dtype = _TYPECODE_DTYPE.get(raw.typecode, np.int32)
 
             # Binary layout: column-major [X][Y] — Dimension1=width, Dimension2=height
@@ -304,22 +322,25 @@ class Camera:
             arr = (
                 np.frombuffer(raw, dtype=dtype)
                 .reshape(meta.Dimension1, meta.Dimension2)
-                .T                                  # (height, width)
-                .astype(np.uint16)                  # makes a writeable copy
+                .T.astype(np.uint16)  # (height, width)  # makes a writeable copy
             )
             if dtype not in (np.uint16,):
                 np.clip(arr, 0, 65535, out=arr)
             logger.info(
                 "Image downloaded (ImageBytes): %.2fs  shape=%s  typecode=%s",
-                time.perf_counter() - t0, arr.shape, raw.typecode,
+                time.perf_counter() - t0,
+                arr.shape,
+                raw.typecode,
             )
             return arr
 
-        except (InvalidValueException, NotImplementedException):
+        except (InvalidValueException, NotImplementedException, ValueError):
             # -- Slow path: JSON nested list, column-major [X][Y] -----------
-            logger.info("ImageBytes not supported — using JSON imagearray")
+            # ValueError = ImageBytes buffer didn't match the reported dimensions
+            # (some drivers/sims disagree); JSON infers the real shape.
+            logger.info("ImageBytes unavailable/mismatched — using JSON imagearray")
             try:
-                raw = self._cam.ImageArray          # List[List[int]]
+                raw = self._cam.ImageArray  # List[List[int]]
             except Exception as exc:
                 raise _wrap(exc) from exc
 
@@ -331,7 +352,10 @@ class Camera:
             arr = np.array(raw, dtype=np.uint16).T  # (height, width)
             logger.info(
                 "Image downloaded (JSON): %.2fs transfer + %.2fs convert = %.2fs total  shape=%s",
-                t1 - t0, time.perf_counter() - t1, time.perf_counter() - t0, arr.shape,
+                t1 - t0,
+                time.perf_counter() - t1,
+                time.perf_counter() - t0,
+                arr.shape,
             )
 
         except Exception as exc:
