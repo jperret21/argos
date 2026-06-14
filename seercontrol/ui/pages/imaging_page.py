@@ -51,8 +51,7 @@ from seercontrol.core.alpaca.client import AlpacaError
 from seercontrol.core.alpaca.focuser import Focuser
 from seercontrol.core.alpaca.telescope import MountPosition, Telescope
 from seercontrol.core.config import Config
-from seercontrol.core.imaging.debayer import VIEW_RAW, VIEW_SUPERPIXEL, render_view
-from seercontrol.core.imaging.metrics import frame_metrics
+from seercontrol.core.imaging.debayer import VIEW_RAW, VIEW_SUPERPIXEL
 from seercontrol.core.imaging.fits_writer import FITSWriter, FrameContext
 from seercontrol.ui import design, theme
 from seercontrol.ui.panels.log_panel import LogPanel
@@ -68,6 +67,7 @@ from seercontrol.workers.autofocus_worker import AutofocusWorker
 from seercontrol.workers.discovery_worker import DiscoveryWorker
 from seercontrol.workers.exposure_worker import LivePreviewWorker
 from seercontrol.workers.polling_worker import MountPollingWorker
+from seercontrol.workers.preview_processor import PreviewProcessor
 from seercontrol.workers.sequence_worker import SequenceWorker
 
 logger = logging.getLogger(__name__)
@@ -131,6 +131,7 @@ class ImagingPage(QWidget):
         self._preview: LivePreviewWorker | None = None
         self._autofocus: AutofocusWorker | None = None
         self._sequence: SequenceWorker | None = None
+        self._processor = PreviewProcessor(self)  # off-thread display compute
         self._jog_dialog: ManualControlDialog | None = None
 
         self._channel = VIEW_SUPERPIXEL
@@ -145,6 +146,8 @@ class ImagingPage(QWidget):
 
         self._build_ui()
         self._wire_signals()
+        self._processor.ready.connect(self._on_processed)
+        self._processor.start()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -418,36 +421,41 @@ class ImagingPage(QWidget):
 
     def _on_channel_changed(self, channel: str) -> None:
         self._channel = channel
-        # Re-render the last frame immediately so the view switch is visible
+        # Re-render the last frame (via the worker) so the view switch is visible
         # even when no live preview is running.
         if self._last_raw is not None:
-            self._viewer.display(render_view(self._last_raw, self._channel))
+            self._processor.submit(self._last_raw, channel)
 
     def _on_saturation_toggled(self, enabled: bool) -> None:
         threshold = int(self._config.get("camera.full_well_adu", 60000))
         self._viewer.set_saturation(enabled, threshold)
 
     def _show_raw(self, full_arr) -> None:
-        """Run a raw frame through the display + metrics pipeline (display only)."""
-        metrics = frame_metrics(full_arr)
-        self._last_metrics = metrics
+        """Submit a raw frame to the preview worker (heavy compute off-thread)."""
         self._last_raw = full_arr
-        self._camera_dock.set_hfd(metrics.hfd)
-        self._focuser_dock.push_metrics(metrics)
-        self._update_stats(metrics, full_arr)
-        # Histogram first: it sets the slider/data range, then the viewer's
-        # auto-stretch emits levels that the dock sliders sync to.
-        self._histogram_dock.update_frame(full_arr)
-        self._viewer.display(render_view(full_arr, self._channel))
+        self._processor.submit(full_arr, self._channel)
 
-    def _update_stats(self, metrics, arr) -> None:
+    @pyqtSlot(object)
+    def _on_processed(self, pf) -> None:
+        """Apply a worker-processed frame to the UI (cheap work, UI thread)."""
+        self._last_metrics = pf.metrics
+        self._camera_dock.set_hfd(pf.metrics.hfd)
+        self._focuser_dock.push_metrics(pf.metrics)
+        self._update_stats(pf)
+        # Histogram first: sets the slider/data range, then the viewer's
+        # auto-stretch emits levels that the dock sliders sync to.
+        self._histogram_dock.set_histogram(pf.centers, pf.r, pf.g, pf.b, pf.lo, pf.hi)
+        self._viewer.display(pf.display)
+
+    def _update_stats(self, pf) -> None:
         """Refresh the live stats strip under the image."""
-        self._sb["HFD"].setText(f"{metrics.hfd:.1f} px" if metrics.hfd is not None else "—")
-        self._sb["Stars"].setText(str(metrics.star_count))
-        self._sb["Sky"].setText(f"{metrics.sky_adu:.0f}")
-        self._sb["Min"].setText(f"{int(arr.min())}")
-        self._sb["Max"].setText(f"{int(arr.max())}")
-        self._sb["Mean"].setText(f"{arr.mean():.0f}")
+        m = pf.metrics
+        self._sb["HFD"].setText(f"{m.hfd:.1f} px" if m.hfd is not None else "—")
+        self._sb["Stars"].setText(str(m.star_count))
+        self._sb["Sky"].setText(f"{m.sky_adu:.0f}")
+        self._sb["Min"].setText(f"{int(pf.vmin)}")
+        self._sb["Max"].setText(f"{int(pf.vmax)}")
+        self._sb["Mean"].setText(f"{pf.vmean:.0f}")
 
     def _on_open_fits(self) -> None:
         start = str(Path.home() / "Downloads")
@@ -974,6 +982,8 @@ class ImagingPage(QWidget):
         self._stop_preview()
         self._stop_polling()
         self._stop_autofocus()
+        self._processor.stop()
+        self._processor.wait(2000)
 
     def closeEvent(self, event) -> None:
         self.shutdown()

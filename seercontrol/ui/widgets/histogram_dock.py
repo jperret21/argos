@@ -18,7 +18,7 @@ import logging
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -29,7 +29,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from seercontrol.core.imaging.stretch import STRETCH_MODES, channel_histograms
+from seercontrol.core.imaging.stretch import STRETCH_MODES
 from seercontrol.ui import design, theme
 
 logger = logging.getLogger(__name__)
@@ -155,27 +155,20 @@ class HistogramDock(design.Card):
     # Frame → histogram + stats
     # ------------------------------------------------------------------
 
-    @pyqtSlot(object)
-    def update_frame(self, raw) -> None:
-        """Refresh per-channel histograms + whole-frame stats from a raw frame."""
-        if raw is None or raw.ndim != 2:
-            return
-        lo = float(raw.min())
-        hi = float(np.percentile(raw, 99.8))
-        if hi <= lo:
-            hi = float(raw.max()) if float(raw.max()) > lo else lo + 1.0
+    def set_histogram(self, centers, r, g, b, lo: float, hi: float) -> None:
+        """Show precomputed per-channel histograms (from the preview worker).
 
-        # Adapt the black/white slider range to the data so they aren't
-        # hyper-sensitive (the whole signal used to sit in <1% of a 0–65535 bar).
+        Also adapts the black/white slider range to the data so they aren't
+        hyper-sensitive (the whole signal used to sit in <1% of a 0–65535 bar).
+        """
         self._guard = True
         self._black.setRange(int(lo), int(hi))
         self._white.setRange(int(lo), int(hi))
         self._guard = False
 
-        centers, rh, gh, bh = channel_histograms(raw, bins=_HIST_BINS, lo=lo, hi=hi)
-        self._r_curve.setData(centers, np.log1p(rh))
-        self._g_curve.setData(centers, np.log1p(gh))
-        self._b_curve.setData(centers, np.log1p(bh))
+        self._r_curve.setData(centers, np.log1p(r))
+        self._g_curve.setData(centers, np.log1p(g))
+        self._b_curve.setData(centers, np.log1p(b))
         self._plot.setXRange(lo, hi, padding=0)
 
     # ------------------------------------------------------------------
