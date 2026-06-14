@@ -20,12 +20,13 @@ import logging
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
+from seercontrol.ui import theme
 from seercontrol.core.imaging.stretch import (
     STRETCH_LINEAR,
     apply_stretch,
-    auto_levels,
+    auto_stf,
     region_stats,
 )
 
@@ -35,8 +36,7 @@ logger = logging.getLogger(__name__)
 class FitsViewer(QWidget):
     """Image viewer with non-destructive stretch + measurement overlays."""
 
-    levels_changed = pyqtSignal(float, float)
-    pixel_info = pyqtSignal(str)
+    levels_changed = pyqtSignal(float, float, float)  # black, white, midtones
     region_info = pyqtSignal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -50,6 +50,7 @@ class FitsViewer(QWidget):
         self._sat_enabled: bool = False
         self._sat_threshold: int = 60000
         self._roi: pg.RectROI | None = None
+        self._crosshair: bool = True  # on by default so it's immediately visible
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -64,6 +65,24 @@ class FitsViewer(QWidget):
         self._view.ui.histogram.hide()
         layout.addWidget(self._view)
 
+        # Crosshair (toggleable) tracking the cursor over the image.
+        self._vline = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen(theme.WARNING, width=1))
+        self._hline = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen(theme.WARNING, width=1))
+        for line in (self._vline, self._hline):
+            line.setVisible(self._crosshair)
+            self._view.getView().addItem(line, ignoreBounds=True)
+
+        # In-image pixel readout — a compact overlay pinned to the top-left,
+        # so the value sits where you point instead of in a side column.
+        self._readout = QLabel(self)
+        self._readout.setStyleSheet(
+            f"background: rgba(13,17,23,190); color: {theme.FG};"
+            f" font-family: {theme.FONT_MONO}; font-size: 11px;"
+            f" padding: 2px 7px; border-radius: 3px;"
+        )
+        self._readout.move(10, 10)
+        self._readout.hide()
+
         self._view.scene.sigMouseMoved.connect(self._on_mouse_moved)
 
     # ------------------------------------------------------------------
@@ -76,8 +95,12 @@ class FitsViewer(QWidget):
             return
         self._last_arr = arr
         if self._auto_on:
-            self._black, self._white = auto_levels(arr)
-            self.levels_changed.emit(self._black, self._white)
+            self._black, self._white, self._midtones = auto_stf(arr)
+            self.levels_changed.emit(self._black, self._white, self._midtones)
+        if self._crosshair:  # centre it so it's visible before the mouse moves
+            h, w = arr.shape[:2]
+            self._vline.setPos(w / 2)
+            self._hline.setPos(h / 2)
         self._render()
         if self._roi is not None:
             self._on_roi_changed()
@@ -122,8 +145,8 @@ class FitsViewer(QWidget):
     def auto_stretch(self) -> None:
         self._auto_on = True
         if self._last_arr is not None:
-            self._black, self._white = auto_levels(self._last_arr)
-            self.levels_changed.emit(self._black, self._white)
+            self._black, self._white, self._midtones = auto_stf(self._last_arr)
+            self.levels_changed.emit(self._black, self._white, self._midtones)
             self._render()
 
     def set_saturation(self, enabled: bool, threshold: int) -> None:
@@ -177,13 +200,24 @@ class FitsViewer(QWidget):
         a = self._last_arr
         h, w = a.shape[:2]
         if 0 <= x < w and 0 <= y < h:
+            if self._crosshair:
+                self._vline.setPos(p.x())
+                self._hline.setPos(p.y())
             if a.ndim == 2:
-                self.pixel_info.emit(f"({x}, {y})  {int(a[y, x])} ADU")
+                self._readout.setText(f"({x}, {y})   {int(a[y, x])} ADU")
             else:
                 r, g, b = (int(v) for v in a[y, x][:3])
-                self.pixel_info.emit(f"({x}, {y})  R {r}  G {g}  B {b}")
+                self._readout.setText(f"({x}, {y})   R {r}  G {g}  B {b}")
+            self._readout.adjustSize()
+            self._readout.show()
+            self._readout.raise_()
         else:
-            self.pixel_info.emit("")
+            self._readout.hide()
+
+    def set_crosshair_enabled(self, enabled: bool) -> None:
+        self._crosshair = bool(enabled)
+        self._vline.setVisible(self._crosshair)
+        self._hline.setVisible(self._crosshair)
 
     # ------------------------------------------------------------------
 

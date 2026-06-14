@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 
+import pyqtgraph as pg
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -25,6 +26,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QSizePolicy,
     QSpinBox,
     QWidget,
 )
@@ -47,6 +49,7 @@ class FocuserDock(design.Card):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Focuser", parent)
         self._autofocus_running = False
+        self._hfd_hist: list[float] = []
         self._build_ui()
         self.set_enabled(False)
 
@@ -130,6 +133,36 @@ class FocuserDock(design.Card):
         self._af_status.hide()
         outer.addWidget(self._af_status)
 
+        # Focus quality — HFD trend + per-frame readouts (§5 / §7).
+        outer.addWidget(design.horizontal_divider())
+        outer.addWidget(design.SectionLabel("Focus quality"))
+        self._trend = pg.PlotWidget()
+        self._trend.setBackground(theme.BG2)
+        self._trend.setMinimumHeight(90)
+        self._trend.setMaximumHeight(120)
+        self._trend.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._trend.showGrid(x=False, y=True, alpha=0.2)
+        self._trend.getAxis("bottom").setTextPen(pg.mkPen(theme.FG_MUTED))
+        self._trend.getAxis("left").setTextPen(pg.mkPen(theme.FG_MUTED))
+        self._trend_curve = self._trend.plot(
+            pen=pg.mkPen(theme.ACCENT, width=2),
+            symbol="o",
+            symbolSize=4,
+            symbolBrush=theme.ACCENT,
+        )
+        outer.addWidget(self._trend)
+
+        qual = QFormLayout()
+        qual.setHorizontalSpacing(design.SPACING_MD)
+        qual.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        self._hfd_q_lbl = design.MetricLabel("—")
+        self._stars_lbl = design.MetricLabel("—")
+        self._sky_lbl = design.MetricLabel("—")
+        qual.addRow(design.MutedLabel("HFD"), self._hfd_q_lbl)
+        qual.addRow(design.MutedLabel("Stars"), self._stars_lbl)
+        qual.addRow(design.MutedLabel("Sky"), self._sky_lbl)
+        outer.addLayout(qual)
+
         # Keep track of all action widgets for set_enabled
         self._action_widgets = [
             self._step_combo,
@@ -186,6 +219,22 @@ class FocuserDock(design.Card):
         self._af_status.setText(text)
         if text:
             self._af_status.show()
+
+    def push_metrics(self, metrics) -> None:
+        """Append a frame's metrics to the HFD trend + quality readouts."""
+        hfd = metrics.hfd
+        if hfd is not None:
+            self._hfd_hist.append(float(hfd))
+            del self._hfd_hist[:-100]  # keep the last 100 frames
+            self._trend_curve.setData(list(range(len(self._hfd_hist))), self._hfd_hist)
+        self._hfd_q_lbl.setText(f"{hfd:.1f} px" if hfd is not None else "—")
+        self._stars_lbl.setText(str(metrics.star_count))
+        self._sky_lbl.setText(f"{metrics.sky_adu:.0f}")
+
+    def clear_metrics(self) -> None:
+        """Reset the HFD trend (e.g. when switching targets)."""
+        self._hfd_hist.clear()
+        self._trend_curve.setData([], [])
 
     # ------------------------------------------------------------------
     # Internals

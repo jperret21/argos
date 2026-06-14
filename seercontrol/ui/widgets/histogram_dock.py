@@ -45,6 +45,7 @@ class HistogramDock(design.Card):
     auto_requested = pyqtSignal()
     saturation_toggled = pyqtSignal(bool)
     roi_toggled = pyqtSignal(bool)
+    crosshair_toggled = pyqtSignal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Display", parent)
@@ -106,39 +107,42 @@ class HistogramDock(design.Card):
         outer.addLayout(design.button_row(self._auto_btn))
 
         # Measurement toggles.
+        self._cross_chk = QCheckBox("Crosshair on image")
+        self._cross_chk.setChecked(True)  # visible by default
+        self._cross_chk.toggled.connect(self.crosshair_toggled)
+        outer.addWidget(self._cross_chk)
         self._sat_chk = QCheckBox("Highlight saturation")
         self._sat_chk.toggled.connect(self.saturation_toggled)
         outer.addWidget(self._sat_chk)
-        self._roi_chk = QCheckBox("Region stats (ROI)")
+        self._roi_chk = QCheckBox("Region stats (drag the box on the image)")
         self._roi_chk.toggled.connect(self.roi_toggled)
         outer.addWidget(self._roi_chk)
 
-        # Readouts.
-        self._pixel_lbl = design.MetricLabel("—")
-        self._region_lbl = design.MutedLabel("")
-        self._region_lbl.setWordWrap(True)
-        read = QFormLayout()
-        read.setHorizontalSpacing(design.SPACING_MD)
-        read.addRow(design.MutedLabel("Pixel"), self._pixel_lbl)
-        outer.addLayout(read)
-        outer.addWidget(self._region_lbl)
-
-        # Whole-frame stats.
-        stats = QFormLayout()
-        stats.setHorizontalSpacing(design.SPACING_MD)
-        stats.setVerticalSpacing(design.SPACING_XS)
-        self._min_lbl = design.MetricLabel("—")
-        self._max_lbl = design.MetricLabel("—")
-        self._mean_lbl = design.MetricLabel("—")
-        self._median_lbl = design.MetricLabel("—")
-        for label, widget in (
-            ("Min", self._min_lbl),
-            ("Max", self._max_lbl),
-            ("Mean", self._mean_lbl),
-            ("Median", self._median_lbl),
+        # ROI stats — compact aligned grid (filled while the ROI is active).
+        outer.addWidget(design.SectionLabel("ROI stats"))
+        rg = QGridLayout()
+        rg.setHorizontalSpacing(design.SPACING_MD)
+        rg.setVerticalSpacing(design.SPACING_XS)
+        rg.setColumnStretch(1, 1)
+        rg.setColumnStretch(3, 1)
+        self._rg_mean = design.MetricLabel("—")
+        self._rg_median = design.MetricLabel("—")
+        self._rg_std = design.MetricLabel("—")
+        self._rg_min = design.MetricLabel("—")
+        self._rg_max = design.MetricLabel("—")
+        self._rg_n = design.MetricLabel("—")
+        for r, (k1, w1, k2, w2) in enumerate(
+            (
+                ("Mean", self._rg_mean, "Median", self._rg_median),
+                ("Std", self._rg_std, "N", self._rg_n),
+                ("Min", self._rg_min, "Max", self._rg_max),
+            )
         ):
-            stats.addRow(design.MutedLabel(label), widget)
-        outer.addLayout(stats)
+            rg.addWidget(design.MutedLabel(k1), r, 0)
+            rg.addWidget(w1, r, 1)
+            rg.addWidget(design.MutedLabel(k2), r, 2)
+            rg.addWidget(w2, r, 3)
+        outer.addLayout(rg)
 
     @staticmethod
     def _slider(lo: int, hi: int, value: int) -> QSlider:
@@ -156,39 +160,54 @@ class HistogramDock(design.Card):
         """Refresh per-channel histograms + whole-frame stats from a raw frame."""
         if raw is None or raw.ndim != 2:
             return
-        centers, rh, gh, bh = channel_histograms(raw, bins=_HIST_BINS, max_val=_MAX_ADU)
+        lo = float(raw.min())
+        hi = float(np.percentile(raw, 99.8))
+        if hi <= lo:
+            hi = float(raw.max()) if float(raw.max()) > lo else lo + 1.0
+
+        # Adapt the black/white slider range to the data so they aren't
+        # hyper-sensitive (the whole signal used to sit in <1% of a 0–65535 bar).
+        self._guard = True
+        self._black.setRange(int(lo), int(hi))
+        self._white.setRange(int(lo), int(hi))
+        self._guard = False
+
+        centers, rh, gh, bh = channel_histograms(raw, bins=_HIST_BINS, lo=lo, hi=hi)
         self._r_curve.setData(centers, np.log1p(rh))
         self._g_curve.setData(centers, np.log1p(gh))
         self._b_curve.setData(centers, np.log1p(bh))
-
-        self._min_lbl.setText(f"{int(raw.min())}")
-        self._max_lbl.setText(f"{int(raw.max())}")
-        self._mean_lbl.setText(f"{raw.mean():.0f}")
-        self._median_lbl.setText(f"{int(np.median(raw))}")
+        self._plot.setXRange(lo, hi, padding=0)
 
     # ------------------------------------------------------------------
     # Sync from the viewer
     # ------------------------------------------------------------------
 
-    def set_levels(self, black: float, white: float) -> None:
-        """Sync the black/white sliders after an auto-stretch (no re-emit)."""
+    def set_levels(self, black: float, white: float, midtones: float) -> None:
+        """Sync the black/white/midtones sliders after an auto-stretch (no re-emit)."""
         self._guard = True
         self._black.setValue(int(black))
         self._white.setValue(int(white))
+        self._mid.setValue(int(round(midtones * 1000)))
         self._guard = False
-
-    def set_pixel_info(self, text: str) -> None:
-        self._pixel_lbl.setText(text or "—")
 
     def set_region_info(self, stats) -> None:
         if not stats:
-            self._region_lbl.setText("")
+            for lbl in (
+                self._rg_mean,
+                self._rg_median,
+                self._rg_std,
+                self._rg_min,
+                self._rg_max,
+                self._rg_n,
+            ):
+                lbl.setText("—")
             return
-        self._region_lbl.setText(
-            f"ROI  n={int(stats['n'])}  mean={stats['mean']:.0f}  "
-            f"median={stats['median']:.0f}  std={stats['std']:.1f}  "
-            f"min={stats['min']:.0f}  max={stats['max']:.0f}"
-        )
+        self._rg_mean.setText(f"{stats['mean']:.0f}")
+        self._rg_median.setText(f"{stats['median']:.0f}")
+        self._rg_std.setText(f"{stats['std']:.1f}")
+        self._rg_min.setText(f"{stats['min']:.0f}")
+        self._rg_max.setText(f"{stats['max']:.0f}")
+        self._rg_n.setText(f"{int(stats['n'])}")
 
     # ------------------------------------------------------------------
     # Internals

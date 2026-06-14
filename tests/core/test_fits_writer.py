@@ -11,10 +11,10 @@ from astropy.io import fits
 
 from seercontrol.core.imaging.fits_writer import FITSWriter, FrameContext
 
-
 # --------------------------------------------------------------------------- #
 # Helpers                                                                      #
 # --------------------------------------------------------------------------- #
+
 
 def _write_frame(
     tmp_path: Path,
@@ -35,6 +35,7 @@ def _write_frame(
 # Mandatory science headers                                                    #
 # --------------------------------------------------------------------------- #
 
+
 def test_minimal_write_still_carries_electron_gain(tmp_path: Path) -> None:
     """Even without a FrameContext, EGAIN must come from IMX585 lookup."""
     hdr = _write_frame(tmp_path)
@@ -42,6 +43,22 @@ def test_minimal_write_still_carries_electron_gain(tmp_path: Path) -> None:
     assert "EPERDN" in hdr
     assert "GAIN_E" in hdr
     assert 0.05 < float(hdr["EGAIN"]) < 30
+
+
+def test_quality_headers_written_when_metrics_present(tmp_path: Path) -> None:
+    """Per-frame QA metrics (§7) land in the FITS header when provided."""
+    ctx = FrameContext(hfd=3.4, star_count=42, sky_adu=812.5)
+    hdr = _write_frame(tmp_path, ctx)
+    assert float(hdr["HFD"]) == 3.4
+    assert int(hdr["NSTARS"]) == 42
+    assert float(hdr["SKYLEVEL"]) == 812.5
+
+
+def test_quality_headers_absent_without_metrics(tmp_path: Path) -> None:
+    hdr = _write_frame(tmp_path)
+    assert "HFD" not in hdr
+    assert "NSTARS" not in hdr
+    assert "SKYLEVEL" not in hdr
 
 
 def test_postprod_pipeline_can_extract_egain(tmp_path: Path) -> None:
@@ -71,6 +88,7 @@ def test_astrometry_frame_headers(tmp_path: Path) -> None:
 # Optional headers — written only when data available                          #
 # --------------------------------------------------------------------------- #
 
+
 def test_pointing_headers_added_when_position_known(tmp_path: Path) -> None:
     ctx = FrameContext(ra=5.59, dec=-5.39, altitude=40.0, azimuth=180.0)
     hdr = _write_frame(tmp_path, context=ctx)
@@ -78,7 +96,7 @@ def test_pointing_headers_added_when_position_known(tmp_path: Path) -> None:
     assert hdr["DEC"] == pytest.approx(-5.39)
     assert hdr["ALTITUDE"] == pytest.approx(40.0)
     assert hdr["AZIMUTH"] == pytest.approx(180.0)
-    assert hdr["OBJCTRA"]  == "05 35 24.00"
+    assert hdr["OBJCTRA"] == "05 35 24.00"
     assert hdr["OBJCTDEC"] == "-05 23 24.0"
 
 
@@ -118,9 +136,13 @@ def test_camera_runtime_state_omitted_when_absent(tmp_path: Path) -> None:
 
 def test_moon_info_when_site_and_target_provided(tmp_path: Path) -> None:
     ctx = FrameContext(
-        ra=5.59, dec=-5.39,
-        target_ra=5.59, target_dec=-5.39,
-        site_lat=48.85, site_lon=2.35, site_elev=35.0,
+        ra=5.59,
+        dec=-5.39,
+        target_ra=5.59,
+        target_dec=-5.39,
+        site_lat=48.85,
+        site_lon=2.35,
+        site_elev=35.0,
     )
     hdr = _write_frame(tmp_path, context=ctx)
     assert "MOONSEP" in hdr

@@ -2,13 +2,14 @@
 
 Layout::
 
-    ┌─ ImageToolbar (channel / γ / auto-stretch) ────────────────────┐
+    ┌─ ImageToolbar (View · Open FITS · "display ≠ data") ───────────┐
     ├──────────────────────────────────────────┬───────────────────┤
-    │                                          │  Rail tabs:        │
-    │            FitsViewer (hero)             │  Capture · Sequence│
-    │                                          │  · Mount · Focus   │
+    │   FitsViewer (hero) + crosshair + pixel  │  Rail tabs:        │
+    │   readout overlay                        │  Capture · Sequence│
+    ├──────────────────────────────────────────┤  · Mount · Focus   │
+    │   Stats bar: HFD·Stars·Sky·Min·Max·Mean  │  · Display         │
     ├──────────────────────────────────────────┴───────────────────┤
-    │  Histogram            │            Session log                 │
+    │                     Session log                                │
     └────────────────────────────────────────────────────────────────┘
 
 The page owns the device handles (Telescope, Camera, Focuser) and orchestrates
@@ -35,6 +36,9 @@ from pathlib import Path
 import numpy as np
 from PyQt6.QtCore import QRunnable, Qt, QThreadPool, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
     QScrollArea,
     QSplitter,
     QTabWidget,
@@ -47,9 +51,10 @@ from seercontrol.core.alpaca.client import AlpacaError
 from seercontrol.core.alpaca.focuser import Focuser
 from seercontrol.core.alpaca.telescope import MountPosition, Telescope
 from seercontrol.core.config import Config
-from seercontrol.core.imaging.debayer import VIEW_SUPERPIXEL, compute_hfd, render_view
+from seercontrol.core.imaging.debayer import VIEW_RAW, VIEW_SUPERPIXEL, render_view
+from seercontrol.core.imaging.metrics import frame_metrics
 from seercontrol.core.imaging.fits_writer import FITSWriter, FrameContext
-from seercontrol.ui import design
+from seercontrol.ui import design, theme
 from seercontrol.ui.panels.log_panel import LogPanel
 from seercontrol.ui.panels.manual_control_dialog import ManualControlDialog
 from seercontrol.ui.widgets.camera_dock import CameraDock
@@ -68,6 +73,15 @@ from seercontrol.workers.sequence_worker import SequenceWorker
 logger = logging.getLogger(__name__)
 
 _SOFTWARE = "SeerControl v0.2.0-redesign"
+
+#: Live frame stats shown in the always-visible bar under the image.
+_STAT_KEYS = ("HFD", "Stars", "Sky", "Min", "Max", "Mean")
+
+
+def _stat_key(text: str) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setStyleSheet(f"color:{theme.FG_MUTED}; font-size:11px; background:transparent;")
+    return lbl
 
 
 class _JogRunnable(QRunnable):
@@ -124,7 +138,7 @@ class ImagingPage(QWidget):
         self._last_raw: np.ndarray | None = None  # last raw frame, for re-rendering
         self._target_ra: float | None = None
         self._target_dec: float | None = None
-        self._full_well = int(self._config.get("camera.full_well_adu", 60000))
+        self._last_metrics = None  # last FrameMetrics, for FITS QA headers
 
         # Single-shot capture: number of upcoming preview frames to save.
         self._capture_pending = 0
@@ -166,10 +180,20 @@ class ImagingPage(QWidget):
         self._rail.addTab(self._tab_page(self._focuser_dock), "Focus")
         self._rail.addTab(self._tab_page(self._histogram_dock), "Display")
 
+        # Image column: the viewer (hero) + a thin always-visible stats strip
+        # (HFD / Stars / Sky / Min / Max / Mean) — what an astrophotographer
+        # glances at constantly while framing and focusing.
+        image_col = QWidget()
+        col = QVBoxLayout(image_col)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(0)
+        col.addWidget(self._viewer, 1)
+        col.addWidget(self._build_stats_bar())
+
         # Top region: the image is the hero (gets the stretch); the rail is capped.
         top = QSplitter(Qt.Orientation.Horizontal)
         top.setChildrenCollapsible(False)
-        top.addWidget(self._viewer)
+        top.addWidget(image_col)
         top.addWidget(self._rail)
         top.setStretchFactor(0, 1)
         top.setStretchFactor(1, 0)
@@ -213,6 +237,22 @@ class ImagingPage(QWidget):
         scroll.setWidget(inner)
         return scroll
 
+    def _build_stats_bar(self) -> QWidget:
+        """Thin always-visible strip of live frame stats under the image."""
+        bar = QWidget()
+        bar.setStyleSheet(f"background:{theme.SURFACE_3}; border-top:1px solid {theme.SURFACE_4};")
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(10, 3, 10, 3)
+        row.setSpacing(design.SPACING_LG)
+        self._sb: dict[str, QLabel] = {}
+        for key in _STAT_KEYS:
+            row.addWidget(_stat_key(key))
+            value = design.MetricLabel("—")
+            self._sb[key] = value
+            row.addWidget(value)
+        row.addStretch()
+        return bar
+
     # ------------------------------------------------------------------
     # Signal wiring
     # ------------------------------------------------------------------
@@ -220,13 +260,14 @@ class ImagingPage(QWidget):
     def _wire_signals(self) -> None:
         # Toolbar
         self._toolbar.channel_changed.connect(self._on_channel_changed)
+        self._toolbar.open_requested.connect(self._on_open_fits)
         # Display pipeline: the Display tab (histogram/stretch) ↔ the viewer.
         self._histogram_dock.stretch_changed.connect(self._viewer.set_stretch)
         self._histogram_dock.auto_requested.connect(self._viewer.auto_stretch)
         self._histogram_dock.saturation_toggled.connect(self._on_saturation_toggled)
         self._histogram_dock.roi_toggled.connect(self._viewer.set_roi_enabled)
+        self._histogram_dock.crosshair_toggled.connect(self._viewer.set_crosshair_enabled)
         self._viewer.levels_changed.connect(self._histogram_dock.set_levels)
-        self._viewer.pixel_info.connect(self._histogram_dock.set_pixel_info)
         self._viewer.region_info.connect(self._histogram_dock.set_region_info)
 
         # Camera dock
@@ -383,7 +424,65 @@ class ImagingPage(QWidget):
             self._viewer.display(render_view(self._last_raw, self._channel))
 
     def _on_saturation_toggled(self, enabled: bool) -> None:
-        self._viewer.set_saturation(enabled, self._full_well)
+        threshold = int(self._config.get("camera.full_well_adu", 60000))
+        self._viewer.set_saturation(enabled, threshold)
+
+    def _show_raw(self, full_arr) -> None:
+        """Run a raw frame through the display + metrics pipeline (display only)."""
+        metrics = frame_metrics(full_arr)
+        self._last_metrics = metrics
+        self._last_raw = full_arr
+        self._camera_dock.set_hfd(metrics.hfd)
+        self._focuser_dock.push_metrics(metrics)
+        self._update_stats(metrics, full_arr)
+        # Histogram first: it sets the slider/data range, then the viewer's
+        # auto-stretch emits levels that the dock sliders sync to.
+        self._histogram_dock.update_frame(full_arr)
+        self._viewer.display(render_view(full_arr, self._channel))
+
+    def _update_stats(self, metrics, arr) -> None:
+        """Refresh the live stats strip under the image."""
+        self._sb["HFD"].setText(f"{metrics.hfd:.1f} px" if metrics.hfd is not None else "—")
+        self._sb["Stars"].setText(str(metrics.star_count))
+        self._sb["Sky"].setText(f"{metrics.sky_adu:.0f}")
+        self._sb["Min"].setText(f"{int(arr.min())}")
+        self._sb["Max"].setText(f"{int(arr.max())}")
+        self._sb["Mean"].setText(f"{arr.mean():.0f}")
+
+    def _on_open_fits(self) -> None:
+        start = str(Path.home() / "Downloads")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open FITS", start, "FITS (*.fits *.fit *.fts);;All files (*)"
+        )
+        if path:
+            self.load_fits(path)
+
+    def load_fits(self, path: str) -> None:
+        """Load a FITS file from disk into the viewer/pipeline (display only).
+
+        The raw array is shown faithfully in the Raw view; switch the View
+        selector to exercise the debayer modes / channel split.
+        """
+        from astropy.io import fits  # heavy import — only on demand
+
+        try:
+            with fits.open(path) as hdul:
+                data = next((h.data for h in hdul if getattr(h, "data", None) is not None), None)
+            if data is None:
+                self.log_message.emit("ERROR", f"No image data in {Path(path).name}")
+                return
+            arr = np.nan_to_num(np.asarray(data, dtype=np.float32), nan=0.0)
+            if arr.ndim == 3:  # colour / cube → collapse to a 2-D plane for display
+                arr = arr.mean(axis=0) if arr.shape[0] <= 4 else arr.mean(axis=2)
+            if arr.ndim != 2:
+                self.log_message.emit("ERROR", f"Unsupported FITS shape {arr.shape}")
+                return
+            self._channel = VIEW_RAW
+            self._toolbar.set_view(VIEW_RAW)
+            self._show_raw(arr)
+            self.log_message.emit("OK", f"Loaded {Path(path).name}  {arr.shape[1]}×{arr.shape[0]}")
+        except Exception as exc:
+            self.log_message.emit("ERROR", f"Open FITS failed: {exc}")
 
     def _on_take_shot(self) -> None:
         self._capture_pending = 1
@@ -447,11 +546,7 @@ class ImagingPage(QWidget):
 
     @pyqtSlot(object)
     def _on_seq_frame_image(self, full_arr) -> None:
-        hfd = compute_hfd(full_arr)
-        self._camera_dock.set_hfd(hfd)
-        self._last_raw = full_arr
-        self._viewer.display(render_view(full_arr, self._channel))
-        self._histogram_dock.update_frame(full_arr)
+        self._show_raw(full_arr)
 
     def _on_seq_frame_saved(self, path: str, _hfd) -> None:
         self.log_message.emit("OK", f"Saved {Path(path).name}")
@@ -547,14 +642,7 @@ class ImagingPage(QWidget):
         if self._preview:
             self._preview.update_settings(params.exposure_s, params.gain, scale=1)
 
-        # HFD on the full frame.
-        hfd = compute_hfd(full_arr)
-        self._camera_dock.set_hfd(hfd)
-
-        # Display view (debayer mode / channel) — display only; FITS stays raw.
-        self._last_raw = full_arr
-        self._viewer.display(render_view(full_arr, self._channel))
-        self._histogram_dock.update_frame(full_arr)
+        self._show_raw(full_arr)
 
         # Single-shot save: persist the requested number of preview frames.
         if self._capture_pending > 0:
@@ -814,6 +902,9 @@ class ImagingPage(QWidget):
             "site_lon": self._config.get("site.longitude"),
             "site_elev": self._config.get("site.elevation"),
             "software": _SOFTWARE,
+            "hfd": self._last_metrics.hfd if self._last_metrics else None,
+            "star_count": self._last_metrics.star_count if self._last_metrics else None,
+            "sky_adu": self._last_metrics.sky_adu if self._last_metrics else None,
         }
 
         camera = self._camera

@@ -92,6 +92,16 @@ def test_render_view_does_not_mutate_raw() -> None:
     assert np.array_equal(arr, before)
 
 
+def test_odd_dimensions_do_not_crash() -> None:
+    """Odd-sized frames (e.g. a loaded science FITS) must split + render cleanly."""
+    arr = (np.random.rand(1061, 1055) * 4000).astype(np.uint16)
+    r, g1, g2, b = d.split_cfa(arr)
+    assert r.shape == g1.shape == g2.shape == b.shape  # planes line up
+    for view in d.VIEWS:
+        out = d.render_view(arr, view)
+        assert out.ndim in (2, 3)
+
+
 def test_views_are_complete() -> None:
     assert d.VIEW_RAW in d.VIEWS
     assert d.VIEW_SUPERPIXEL in d.VIEWS

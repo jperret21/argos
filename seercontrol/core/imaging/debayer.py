@@ -64,13 +64,17 @@ MEASUREMENT_CHANNELS: tuple[str, ...] = (VIEW_R, VIEW_G, VIEW_B, VIEW_G1, VIEW_G
 def split_cfa(arr: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Split a GRBG raw array into ``(r, g1, g2, b)`` real-pixel planes.
 
-    Each plane is a view of the original array (H//2, W//2), same dtype. Real
-    sensor pixels — no interpolation, so noise/flux statistics are preserved.
+    Each plane has shape (H//2, W//2), same dtype — real sensor pixels, no
+    interpolation, so noise/flux statistics are preserved. Odd dimensions are
+    cropped by one row/column so the four planes line up.
     """
-    r = arr[0::2, 1::2]
-    g1 = arr[0::2, 0::2]
-    g2 = arr[1::2, 1::2]
-    b = arr[1::2, 0::2]
+    h = arr.shape[0] - (arr.shape[0] % 2)
+    w = arr.shape[1] - (arr.shape[1] % 2)
+    a = arr[:h, :w]
+    r = a[0::2, 1::2]
+    g1 = a[0::2, 0::2]
+    g2 = a[1::2, 1::2]
+    b = a[1::2, 0::2]
     return r, g1, g2, b
 
 

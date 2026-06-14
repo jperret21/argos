@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 
 from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QWidget
+from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPushButton, QWidget
 
 from seercontrol.core.imaging import debayer
 from seercontrol.ui import theme
@@ -29,9 +29,11 @@ class ImageToolbar(QWidget):
 
     Signals:
         channel_changed(str): the selected view (see ``debayer.VIEWS``).
+        open_requested():     the user wants to open a FITS file from disk.
     """
 
     channel_changed = pyqtSignal(str)
+    open_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -64,6 +66,12 @@ class ImageToolbar(QWidget):
         self._channel_combo.currentTextChanged.connect(self.channel_changed)
         layout.addWidget(self._channel_combo)
 
+        self._open_btn = QPushButton("Open FITS…")
+        self._open_btn.setStyleSheet("font-size: 11px;")
+        self._open_btn.setToolTip("Load a FITS file from disk into the viewer")
+        self._open_btn.clicked.connect(self.open_requested)
+        layout.addWidget(self._open_btn)
+
         layout.addStretch()
 
         # Persistent reminder: the on-screen image is stretched/debayered while
@@ -73,3 +81,12 @@ class ImageToolbar(QWidget):
             f"color: {theme.WARNING}; font-size: 10px; background: transparent;"
         )
         layout.addWidget(indicator)
+
+    def set_view(self, view: str) -> None:
+        """Programmatically select a view without re-emitting ``channel_changed``."""
+        idx = self._channel_combo.findText(view)
+        if idx < 0:
+            return
+        self._channel_combo.blockSignals(True)
+        self._channel_combo.setCurrentIndex(idx)
+        self._channel_combo.blockSignals(False)
