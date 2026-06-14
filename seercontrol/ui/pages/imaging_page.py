@@ -35,6 +35,7 @@ from pathlib import Path
 import numpy as np
 from PyQt6.QtCore import QRunnable, Qt, QThreadPool, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
+    QFileDialog,
     QScrollArea,
     QSplitter,
     QTabWidget,
@@ -47,7 +48,7 @@ from seercontrol.core.alpaca.client import AlpacaError
 from seercontrol.core.alpaca.focuser import Focuser
 from seercontrol.core.alpaca.telescope import MountPosition, Telescope
 from seercontrol.core.config import Config
-from seercontrol.core.imaging.debayer import VIEW_SUPERPIXEL, render_view
+from seercontrol.core.imaging.debayer import VIEW_RAW, VIEW_SUPERPIXEL, render_view
 from seercontrol.core.imaging.metrics import frame_metrics
 from seercontrol.core.imaging.fits_writer import FITSWriter, FrameContext
 from seercontrol.ui import design
@@ -221,6 +222,7 @@ class ImagingPage(QWidget):
     def _wire_signals(self) -> None:
         # Toolbar
         self._toolbar.channel_changed.connect(self._on_channel_changed)
+        self._toolbar.open_requested.connect(self._on_open_fits)
         # Display pipeline: the Display tab (histogram/stretch) ↔ the viewer.
         self._histogram_dock.stretch_changed.connect(self._viewer.set_stretch)
         self._histogram_dock.auto_requested.connect(self._viewer.auto_stretch)
@@ -387,6 +389,51 @@ class ImagingPage(QWidget):
         threshold = int(self._config.get("camera.full_well_adu", 60000))
         self._viewer.set_saturation(enabled, threshold)
 
+    def _show_raw(self, full_arr) -> None:
+        """Run a raw frame through the display + metrics pipeline (display only)."""
+        metrics = frame_metrics(full_arr)
+        self._last_metrics = metrics
+        self._last_raw = full_arr
+        self._camera_dock.set_hfd(metrics.hfd)
+        self._focuser_dock.push_metrics(metrics)
+        self._viewer.display(render_view(full_arr, self._channel))
+        self._histogram_dock.update_frame(full_arr)
+
+    def _on_open_fits(self) -> None:
+        start = str(Path.home() / "Downloads")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open FITS", start, "FITS (*.fits *.fit *.fts);;All files (*)"
+        )
+        if path:
+            self.load_fits(path)
+
+    def load_fits(self, path: str) -> None:
+        """Load a FITS file from disk into the viewer/pipeline (display only).
+
+        The raw array is shown faithfully in the Raw view; switch the View
+        selector to exercise the debayer modes / channel split.
+        """
+        from astropy.io import fits  # heavy import — only on demand
+
+        try:
+            with fits.open(path) as hdul:
+                data = next((h.data for h in hdul if getattr(h, "data", None) is not None), None)
+            if data is None:
+                self.log_message.emit("ERROR", f"No image data in {Path(path).name}")
+                return
+            arr = np.nan_to_num(np.asarray(data, dtype=np.float32), nan=0.0)
+            if arr.ndim == 3:  # colour / cube → collapse to a 2-D plane for display
+                arr = arr.mean(axis=0) if arr.shape[0] <= 4 else arr.mean(axis=2)
+            if arr.ndim != 2:
+                self.log_message.emit("ERROR", f"Unsupported FITS shape {arr.shape}")
+                return
+            self._channel = VIEW_RAW
+            self._toolbar.set_view(VIEW_RAW)
+            self._show_raw(arr)
+            self.log_message.emit("OK", f"Loaded {Path(path).name}  {arr.shape[1]}×{arr.shape[0]}")
+        except Exception as exc:
+            self.log_message.emit("ERROR", f"Open FITS failed: {exc}")
+
     def _on_take_shot(self) -> None:
         self._capture_pending = 1
         if not (self._preview and self._preview.isRunning()):
@@ -449,12 +496,7 @@ class ImagingPage(QWidget):
 
     @pyqtSlot(object)
     def _on_seq_frame_image(self, full_arr) -> None:
-        metrics = frame_metrics(full_arr)
-        self._camera_dock.set_hfd(metrics.hfd)
-        self._focuser_dock.push_metrics(metrics)
-        self._last_raw = full_arr
-        self._viewer.display(render_view(full_arr, self._channel))
-        self._histogram_dock.update_frame(full_arr)
+        self._show_raw(full_arr)
 
     def _on_seq_frame_saved(self, path: str, _hfd) -> None:
         self.log_message.emit("OK", f"Saved {Path(path).name}")
@@ -550,16 +592,7 @@ class ImagingPage(QWidget):
         if self._preview:
             self._preview.update_settings(params.exposure_s, params.gain, scale=1)
 
-        # Per-frame quality metrics (HFD trend + star count + sky) — display only.
-        metrics = frame_metrics(full_arr)
-        self._last_metrics = metrics
-        self._camera_dock.set_hfd(metrics.hfd)
-        self._focuser_dock.push_metrics(metrics)
-
-        # Display view (debayer mode / channel) — display only; FITS stays raw.
-        self._last_raw = full_arr
-        self._viewer.display(render_view(full_arr, self._channel))
-        self._histogram_dock.update_frame(full_arr)
+        self._show_raw(full_arr)
 
         # Single-shot save: persist the requested number of preview frames.
         if self._capture_pending > 0:
