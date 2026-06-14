@@ -48,7 +48,7 @@ from seercontrol.core.alpaca.client import AlpacaError
 from seercontrol.core.alpaca.focuser import Focuser
 from seercontrol.core.alpaca.telescope import MountPosition, Telescope
 from seercontrol.core.config import Config
-from seercontrol.core.imaging.debayer import compute_hfd, extract_channel
+from seercontrol.core.imaging.debayer import VIEW_SUPERPIXEL, compute_hfd, render_view
 from seercontrol.core.imaging.fits_writer import FITSWriter, FrameContext
 from seercontrol.ui import design
 from seercontrol.ui.panels.log_panel import LogPanel
@@ -120,7 +120,7 @@ class ImagingPage(QWidget):
         self._sequence: SequenceWorker | None = None
         self._jog_dialog: ManualControlDialog | None = None
 
-        self._channel = "Raw"
+        self._channel = VIEW_SUPERPIXEL
         self._last_position: MountPosition | None = None
         self._target_ra: float | None = None
         self._target_dec: float | None = None
@@ -445,7 +445,7 @@ class ImagingPage(QWidget):
     def _on_seq_frame_image(self, full_arr) -> None:
         hfd = compute_hfd(full_arr)
         self._camera_dock.set_hfd(hfd)
-        self._viewer.display(extract_channel(full_arr, self._channel))
+        self._viewer.display(render_view(full_arr, self._channel))
         self._histogram_dock.update_frame(full_arr)
 
     def _on_seq_frame_saved(self, path: str, _hfd) -> None:
@@ -546,9 +546,8 @@ class ImagingPage(QWidget):
         hfd = compute_hfd(full_arr)
         self._camera_dock.set_hfd(hfd)
 
-        # Display channel.
-        display = extract_channel(full_arr, self._channel)
-        self._viewer.display(display)
+        # Display view (debayer mode / channel) — display only; FITS stays raw.
+        self._viewer.display(render_view(full_arr, self._channel))
         self._histogram_dock.update_frame(full_arr)
 
         # Single-shot save: persist the requested number of preview frames.

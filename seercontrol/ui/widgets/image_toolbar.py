@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from seercontrol.core.imaging import debayer
 from seercontrol.ui import theme
 
 logger = logging.getLogger(__name__)
@@ -48,8 +49,8 @@ class ImageToolbar(QWidget):
         auto_stretch_requested: Emitted when the Auto-Stretch button is clicked.
     """
 
-    channel_changed        = pyqtSignal(str)
-    gamma_changed          = pyqtSignal(float)
+    channel_changed = pyqtSignal(str)
+    gamma_changed = pyqtSignal(float)
     auto_stretch_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -57,8 +58,7 @@ class ImageToolbar(QWidget):
         self.setMinimumHeight(38)
         self.setMaximumHeight(48)
         self.setStyleSheet(
-            f"background-color: {theme.SURFACE_3};"
-            f"border-bottom: 1px solid {theme.SURFACE_4};"
+            f"background-color: {theme.SURFACE_3};" f"border-bottom: 1px solid {theme.SURFACE_4};"
         )
         self._build_ui()
 
@@ -67,18 +67,20 @@ class ImageToolbar(QWidget):
         layout.setContentsMargins(8, 0, 8, 0)
         layout.setSpacing(8)
 
-        # ── Channel ────────────────────────────────────────────────────
-        layout.addWidget(_lbl("Channel:"))
+        # ── View (debayer mode / CFA channel) ──────────────────────────
+        layout.addWidget(_lbl("View:"))
         self._channel_combo = QComboBox()
-        self._channel_combo.setMinimumWidth(68)
+        self._channel_combo.setMinimumWidth(120)
         self._channel_combo.setStyleSheet("font-size: 11px;")
-        for ch in ["Raw", "R", "G", "B", "RGB"]:
-            self._channel_combo.addItem(ch)
-        self._channel_combo.setCurrentIndex(0)
+        for view in debayer.VIEWS:
+            self._channel_combo.addItem(view)
+        self._channel_combo.setCurrentIndex(0)  # Super-pixel (clean colour preview)
         self._channel_combo.setToolTip(
-            "Raw   — direct sensor data (no debayer)\n"
-            "R/G/B — single Bayer channel, half resolution\n"
-            "RGB   — colour composite, half resolution"
+            "Display only — the saved FITS stays raw, linear, CFA.\n"
+            "Super-pixel  — 2×2→1 RGB, no interpolation (clean preview)\n"
+            "Interpolated — bilinear RGB, cosmetic only\n"
+            "Raw CFA      — the Bayer mosaic (check GRBG alignment / hot pixels)\n"
+            "R/G/B/G1/G2/Luminance — real CFA pixels (measurement-safe)"
         )
         self._channel_combo.currentTextChanged.connect(self.channel_changed)
         layout.addWidget(self._channel_combo)
@@ -116,6 +118,14 @@ class ImageToolbar(QWidget):
         layout.addWidget(self._auto_btn)
 
         layout.addStretch()
+
+        # Persistent reminder: the on-screen image is stretched/debayered while
+        # the data written to disk stays raw + linear (capture_panel.md §0).
+        indicator = QLabel("display stretched · data linear on disk")
+        indicator.setStyleSheet(
+            f"color: {theme.WARNING}; font-size: 10px; background: transparent;"
+        )
+        layout.addWidget(indicator)
 
     # ------------------------------------------------------------------
     # Slots
