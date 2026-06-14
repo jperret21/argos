@@ -42,27 +42,27 @@ _TRACKING_RATES = ("Sidereal", "Lunar", "Solar")
 
 # Jog speed presets (deg/s) — same defaults as ManualControlDialog.
 _JOG_SPEEDS: dict[str, float] = {
-    "Slow":   0.5,
+    "Slow": 0.5,
     "Normal": 2.0,
-    "Fast":   5.0,
+    "Fast": 5.0,
 }
 
 
 class MountDock(design.Card):
     """Compact mount control group for the right side of the Imaging page."""
 
-    goto_clicked              = pyqtSignal(float, float)   # ra_hours, dec_degrees
-    sync_to_current_clicked   = pyqtSignal()
-    tracking_toggled          = pyqtSignal(bool)
-    tracking_rate_changed     = pyqtSignal(int)
-    abort_clicked             = pyqtSignal()
-    park_clicked              = pyqtSignal()
-    manual_control_requested  = pyqtSignal()
+    goto_clicked = pyqtSignal(float, float)  # ra_hours, dec_degrees
+    sync_to_current_clicked = pyqtSignal()
+    tracking_toggled = pyqtSignal(bool)
+    tracking_rate_changed = pyqtSignal(int)
+    abort_clicked = pyqtSignal()
+    park_clicked = pyqtSignal()
+    manual_control_requested = pyqtSignal()
     # Inline jog pad: (axis, rate). Axis 0 = Az (E/W), axis 1 = Alt (N/S).
     # Positive rate = N or E. Listener calls move_axis(axis, rate) on press
     # and stop_axis(axis) on release.
     jog_start = pyqtSignal(int, float)
-    jog_stop  = pyqtSignal(int)
+    jog_stop = pyqtSignal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Mount", parent)
@@ -82,19 +82,19 @@ class MountDock(design.Card):
         coords.setColumnStretch(1, 1)
         coords.setColumnStretch(3, 1)
 
-        self._ra_lbl  = design.MetricLabel("—h —m —s")
+        self._ra_lbl = design.MetricLabel("—h —m —s")
         self._dec_lbl = design.MetricLabel("—° —′ —″")
         self._alt_lbl = design.MetricLabel("—°")
-        self._az_lbl  = design.MetricLabel("—°")
+        self._az_lbl = design.MetricLabel("—°")
 
-        coords.addWidget(design.MutedLabel("RA"),  0, 0)
-        coords.addWidget(self._ra_lbl,             0, 1)
+        coords.addWidget(design.MutedLabel("RA"), 0, 0)
+        coords.addWidget(self._ra_lbl, 0, 1)
         coords.addWidget(design.MutedLabel("Alt"), 0, 2)
-        coords.addWidget(self._alt_lbl,            0, 3)
+        coords.addWidget(self._alt_lbl, 0, 3)
         coords.addWidget(design.MutedLabel("Dec"), 1, 0)
-        coords.addWidget(self._dec_lbl,            1, 1)
-        coords.addWidget(design.MutedLabel("Az"),  1, 2)
-        coords.addWidget(self._az_lbl,             1, 3)
+        coords.addWidget(self._dec_lbl, 1, 1)
+        coords.addWidget(design.MutedLabel("Az"), 1, 2)
+        coords.addWidget(self._az_lbl, 1, 3)
         outer.addLayout(coords)
 
         outer.addWidget(design.horizontal_divider())
@@ -110,6 +110,7 @@ class MountDock(design.Card):
         outer.addLayout(design.button_row(self._tracking_btn))
         rate_form = QFormLayout()
         rate_form.setHorizontalSpacing(design.SPACING_MD)
+        rate_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         rate_form.addRow(design.MutedLabel("Rate"), self._rate_combo)
         outer.addLayout(rate_form)
 
@@ -119,6 +120,7 @@ class MountDock(design.Card):
         goto_form = QFormLayout()
         goto_form.setHorizontalSpacing(design.SPACING_MD)
         goto_form.setVerticalSpacing(design.SPACING_SM)
+        goto_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self._goto_ra = QDoubleSpinBox()
         self._goto_ra.setRange(0.0, 23.9999)
         self._goto_ra.setDecimals(4)
@@ -127,12 +129,12 @@ class MountDock(design.Card):
         self._goto_dec.setRange(-90.0, 90.0)
         self._goto_dec.setDecimals(4)
         self._goto_dec.setSuffix("  °")
-        goto_form.addRow(design.MutedLabel("Goto RA"),  self._goto_ra)
+        goto_form.addRow(design.MutedLabel("Goto RA"), self._goto_ra)
         goto_form.addRow(design.MutedLabel("Goto Dec"), self._goto_dec)
         outer.addLayout(goto_form)
 
         # Goto action row.
-        self._slew_btn  = design.PrimaryButton("▶  Slew")
+        self._slew_btn = design.PrimaryButton("▶  Slew")
         self._slew_btn.clicked.connect(self._on_slew)
         self._abort_btn = design.DangerButton("■  Abort")
         self._abort_btn.clicked.connect(self.abort_clicked)
@@ -144,6 +146,7 @@ class MountDock(design.Card):
         # full Jog… dialog launcher for users who prefer arrow-key control.
         jog_header = QFormLayout()
         jog_header.setHorizontalSpacing(design.SPACING_MD)
+        jog_header.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self._jog_speed_combo = QComboBox()
         for name in _JOG_SPEEDS:
             self._jog_speed_combo.addItem(name)
@@ -156,10 +159,10 @@ class MountDock(design.Card):
         # Build the 4 jog buttons in a cross layout (centered ↑ / ←   → / ↓).
         self._jog_btns: dict[str, QPushButton] = {}
         for label, axis, sign, row, col in (
-            ("↑", 1,  1.0, 0, 1),   # North
-            ("←", 0, -1.0, 1, 0),   # West
-            ("→", 0,  1.0, 1, 2),   # East
-            ("↓", 1, -1.0, 2, 1),   # South
+            ("↑", 1, 1.0, 0, 1),  # North
+            ("←", 0, -1.0, 1, 0),  # West
+            ("→", 0, 1.0, 1, 2),  # East
+            ("↓", 1, -1.0, 2, 1),  # South
         ):
             btn = _JogArrowButton(label)
             btn.pressed.connect(lambda a=axis, s=sign: self._on_jog_pressed(a, s))
@@ -169,9 +172,7 @@ class MountDock(design.Card):
         # Center stop button — also lets the user kill any stuck jog.
         center_stop = _JogArrowButton("■")
         center_stop.setToolTip("Stop")
-        center_stop.clicked.connect(lambda: (
-            self.jog_stop.emit(0), self.jog_stop.emit(1)
-        ))
+        center_stop.clicked.connect(lambda: (self.jog_stop.emit(0), self.jog_stop.emit(1)))
         center_stop.setStyleSheet(
             f"QPushButton {{ color:{theme.DANGER}; }}"
             f"QPushButton:hover {{ background:{theme.DANGER}; color:white; }}"
@@ -187,15 +188,13 @@ class MountDock(design.Card):
         outer.addWidget(design.horizontal_divider())
 
         # Secondary actions.
-        self._sync_btn  = design.SecondaryButton("⟳  Sync")
+        self._sync_btn = design.SecondaryButton("⟳  Sync")
         self._sync_btn.setToolTip("Sync mount pointing model to current RA/Dec")
         self._sync_btn.clicked.connect(self.sync_to_current_clicked)
-        self._park_btn  = design.SecondaryButton("⊙  Park")
+        self._park_btn = design.SecondaryButton("⊙  Park")
         self._park_btn.clicked.connect(self.park_clicked)
-        self._jog_btn   = design.SecondaryButton("✥  Jog dialog…")
-        self._jog_btn.setToolTip(
-            "Open the floating jog dialog (arrow-key navigation, stay-on-top)"
-        )
+        self._jog_btn = design.SecondaryButton("✥  Jog dialog…")
+        self._jog_btn.setToolTip("Open the floating jog dialog (arrow-key navigation, stay-on-top)")
         self._jog_btn.clicked.connect(self.manual_control_requested)
         outer.addLayout(design.button_row(self._sync_btn, self._park_btn))
         outer.addLayout(design.button_row(self._jog_btn))
@@ -207,17 +206,26 @@ class MountDock(design.Card):
     def set_enabled(self, connected: bool) -> None:
         """Gate only the action buttons; goto coords stay editable always."""
         for w in (
-            self._tracking_btn, self._rate_combo,
-            self._slew_btn, self._abort_btn, self._sync_btn,
-            self._park_btn, self._jog_btn, self._jog_speed_combo,
+            self._tracking_btn,
+            self._rate_combo,
+            self._slew_btn,
+            self._abort_btn,
+            self._sync_btn,
+            self._park_btn,
+            self._jog_btn,
+            self._jog_speed_combo,
             *self._jog_btns.values(),
         ):
             w.setEnabled(connected)
 
     def set_position(
         self,
-        ra_h: float, dec_d: float, alt_d: float, az_d: float,
-        tracking: bool, slewing: bool,
+        ra_h: float,
+        dec_d: float,
+        alt_d: float,
+        az_d: float,
+        tracking: bool,
+        slewing: bool,
     ) -> None:
         self._ra_lbl.setText(_format_ra(ra_h))
         self._dec_lbl.setText(_format_dec(dec_d))
@@ -269,6 +277,7 @@ class _JogArrowButton(QPushButton):
 # --------------------------------------------------------------------------- #
 # Helpers                                                                      #
 # --------------------------------------------------------------------------- #
+
 
 def _format_ra(hours: float) -> str:
     total = int(round(hours * 3600))

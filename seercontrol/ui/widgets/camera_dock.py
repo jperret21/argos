@@ -1,26 +1,21 @@
-"""Camera dock — capture controls for the Acquisition page's Capture tab.
+"""Camera dock — single-shot capture controls for the Capture tab.
 
-Owns nothing about hardware; the ImagingPage wires this widget's signals
-to the Camera/Telescope/Worker objects. Keeping the dock UI-only makes it
-testable headless and lets the same control surface drive a future
-simulator or remote camera.
+The Capture tab is where you frame and test-shoot while focusing; the full
+multi-step acquisition plan lives in the Sequence tab. So this dock owns the
+live/single-frame parameters (type, object, filter, exposure, gain) and a
+"Shot" button. Numeric parameters use the ``SliderSpin`` composite (slider +
+value box), the idiom from NINA / SharpCap; exposure runs on a log slider.
 
-Numeric parameters (exposure, gain, frame count) use the ``SliderSpin``
-composite from the design system — a slider for quick coarse changes plus a
-value box for exact entry, the idiom used by NINA / SharpCap. Exposure runs on
-a logarithmic slider because its range spans four orders of magnitude.
+UI-only — the ImagingPage wires the signal to the camera/worker.
 
 Public surface:
     Signals
         take_shot_clicked()
-        sequence_toggled(start: bool)        # True = Start, False = Stop
     Methods (called by ImagingPage)
         params()       -> CaptureParams
         set_enabled(connected: bool)
         set_filter_options(names: list[str])
         set_hfd(value: float | None)
-        set_progress(current: int, total: int, eta_seconds: float)
-        clear_progress()
 """
 
 from __future__ import annotations
@@ -28,13 +23,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
     QGridLayout,
     QHBoxLayout,
     QLineEdit,
-    QProgressBar,
     QSizePolicy,
     QWidget,
 )
@@ -50,27 +44,22 @@ _DEFAULT_FILTERS = ("LP", "IR-cut", "Dark")
 
 @dataclass(frozen=True)
 class CaptureParams:
-    """Snapshot of the form values when the user clicks ▶."""
+    """Snapshot of the live capture form values."""
 
     frame_type: str
     object_name: str
     filter_name: str
     exposure_s: float
     gain: int
-    frames: int
 
 
 class CameraDock(design.Card):
-    """Compact camera control group for the Capture tab."""
+    """Single-shot capture controls for the Capture tab."""
 
     take_shot_clicked = pyqtSignal()
-    # sequence_toggled carries True when the user starts a sequence,
-    # False when they stop it mid-flight.
-    sequence_toggled = pyqtSignal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Camera", parent)
-        self._in_sequence = False
         self._build_ui()
         self.set_enabled(False)
 
@@ -116,11 +105,6 @@ class CameraDock(design.Card):
         self._gain = design.SliderSpin(0, 600, 80)
         grid.addWidget(self._gain, row, 1)
 
-        row += 1
-        grid.addWidget(design.MutedLabel("Frames"), row, 0)
-        self._count = design.SliderSpin(1, 1000, 10)
-        grid.addWidget(self._count, row, 1)
-
         outer.addLayout(grid)
 
         # Quality indicator — live HFD.
@@ -132,24 +116,10 @@ class CameraDock(design.Card):
         hfd_row.addStretch()
         outer.addLayout(hfd_row)
 
-        # Action buttons side-by-side. "Sequence" is the dominant workflow.
-        self._take_btn = design.SecondaryButton("◉  Shot")
-        self._take_btn.setToolTip("Take one frame and save it")
+        self._take_btn = design.PrimaryButton("◉  Take shot")
+        self._take_btn.setToolTip("Expose one frame and save it (for framing / focus checks)")
         self._take_btn.clicked.connect(self.take_shot_clicked)
-        self._seq_btn = design.SuccessButton("▶  Sequence")
-        self._seq_btn.setToolTip("Run the configured number of frames")
-        self._seq_btn.clicked.connect(self._on_sequence_clicked)
-        outer.addLayout(design.button_row(self._take_btn, self._seq_btn))
-
-        # Progress (hidden until a sequence runs).
-        self._progress = QProgressBar()
-        self._progress.setVisible(False)
-        outer.addWidget(self._progress)
-
-        self._eta_lbl = design.MutedLabel("")
-        self._eta_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self._eta_lbl.setVisible(False)
-        outer.addWidget(self._eta_lbl)
+        outer.addLayout(design.button_row(self._take_btn))
 
     @staticmethod
     def _combo(items: tuple[str, ...]) -> QComboBox:
@@ -171,18 +141,12 @@ class CameraDock(design.Card):
             filter_name=self._filter_combo.currentText(),
             exposure_s=float(self._exp.value()),
             gain=int(self._gain.value()),
-            frames=int(self._count.value()),
         )
 
     def set_enabled(self, connected: bool) -> None:
-        """Gate only the action buttons; the form stays editable always.
-
-        Users want to plan their session (object, filter, gain, exposure)
-        *before* the camera is connected — graying everything out until
-        connection made the app feel broken.
-        """
+        """Gate the Shot button; the form stays editable so a session can be
+        planned before the camera is connected."""
         self._take_btn.setEnabled(connected)
-        self._seq_btn.setEnabled(connected)
 
     def set_filter_options(self, names: list[str]) -> None:
         """Refresh the filter combo from the filter wheel slots."""
@@ -207,41 +171,3 @@ class CameraDock(design.Card):
             f"color:{color}; font-size:{design.FONT_SIZE_METRIC}px; font-weight:bold;"
             f" font-family:{theme.FONT_MONO}; background:transparent;"
         )
-
-    def set_progress(self, current: int, total: int, eta_seconds: float) -> None:
-        if not self._in_sequence:
-            self._set_in_sequence(True)
-        self._progress.setRange(0, max(1, total))
-        self._progress.setFormat(f"%v / {total}")
-        self._progress.setValue(current)
-        m, s = divmod(max(0, int(eta_seconds)), 60)
-        self._eta_lbl.setText(f"Frame {current}/{total} — ETA {m}m {s:02d}s")
-
-    def clear_progress(self) -> None:
-        if self._in_sequence:
-            self._set_in_sequence(False)
-        self._progress.setValue(0)
-        self._eta_lbl.setText("")
-
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
-
-    def _on_sequence_clicked(self) -> None:
-        self._set_in_sequence(not self._in_sequence)
-        self.sequence_toggled.emit(self._in_sequence)
-
-    def _set_in_sequence(self, running: bool) -> None:
-        self._in_sequence = running
-        if running:
-            self._seq_btn.setText("■  Stop")
-            self._seq_btn.setProperty("class", "danger")
-            self._progress.setVisible(True)
-            self._eta_lbl.setVisible(True)
-        else:
-            self._seq_btn.setText("▶  Sequence")
-            self._seq_btn.setProperty("class", "success")
-            self._progress.setVisible(False)
-            self._eta_lbl.setVisible(False)
-        self._seq_btn.style().unpolish(self._seq_btn)
-        self._seq_btn.style().polish(self._seq_btn)

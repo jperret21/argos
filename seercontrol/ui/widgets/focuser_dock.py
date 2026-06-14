@@ -39,10 +39,10 @@ _STEP_PRESETS = (1, 10, 50, 100, 500, 1000)
 class FocuserDock(design.Card):
     """Compact focuser control group for the right side of the Imaging page."""
 
-    step_requested        = pyqtSignal(int)     # positive = inward / increase pos
-    halt_requested        = pyqtSignal()
-    autofocus_requested   = pyqtSignal()
-    move_to_requested     = pyqtSignal(int)
+    step_requested = pyqtSignal(int)  # positive = inward / increase pos
+    halt_requested = pyqtSignal()
+    autofocus_requested = pyqtSignal()
+    move_to_requested = pyqtSignal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Focuser", parent)
@@ -63,13 +63,13 @@ class FocuserDock(design.Card):
         status.setColumnStretch(1, 1)
         status.setColumnStretch(3, 1)
 
-        self._pos_lbl  = design.MetricLabel("—")
+        self._pos_lbl = design.MetricLabel("—")
         self._temp_lbl = design.MetricLabel("—")
 
         status.addWidget(design.MutedLabel("Position"), 0, 0)
-        status.addWidget(self._pos_lbl,                 0, 1)
-        status.addWidget(design.MutedLabel("Temp"),     0, 2)
-        status.addWidget(self._temp_lbl,                0, 3)
+        status.addWidget(self._pos_lbl, 0, 1)
+        status.addWidget(design.MutedLabel("Temp"), 0, 2)
+        status.addWidget(self._temp_lbl, 0, 3)
         outer.addLayout(status)
 
         outer.addWidget(design.horizontal_divider())
@@ -77,6 +77,7 @@ class FocuserDock(design.Card):
         # Step-size selector + In / Out buttons
         step_form = QFormLayout()
         step_form.setHorizontalSpacing(design.SPACING_MD)
+        step_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self._step_combo = QComboBox()
         for v in _STEP_PRESETS:
             self._step_combo.addItem(str(v))
@@ -89,7 +90,7 @@ class FocuserDock(design.Card):
         self._out_btn = design.SecondaryButton("◀  Out")
         self._out_btn.setToolTip("Move focuser outward (position decreases)")
         self._out_btn.clicked.connect(self._on_step_out)
-        self._in_btn  = design.SecondaryButton("In  ▶")
+        self._in_btn = design.SecondaryButton("In  ▶")
         self._in_btn.setToolTip("Move focuser inward (position increases)")
         self._in_btn.clicked.connect(self._on_step_in)
         jog_row.addWidget(self._out_btn, 1)
@@ -99,6 +100,7 @@ class FocuserDock(design.Card):
         # Manual go-to (absolute)
         goto_form = QFormLayout()
         goto_form.setHorizontalSpacing(design.SPACING_MD)
+        goto_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self._goto_spin = QSpinBox()
         self._goto_spin.setRange(0, 200_000)
         self._goto_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
@@ -130,8 +132,13 @@ class FocuserDock(design.Card):
 
         # Keep track of all action widgets for set_enabled
         self._action_widgets = [
-            self._step_combo, self._out_btn, self._in_btn,
-            self._goto_spin, goto_btn, self._halt_btn, self._af_btn,
+            self._step_combo,
+            self._out_btn,
+            self._in_btn,
+            self._goto_spin,
+            goto_btn,
+            self._halt_btn,
+            self._af_btn,
         ]
 
     # ------------------------------------------------------------------

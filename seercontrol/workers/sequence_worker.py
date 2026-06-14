@@ -80,6 +80,7 @@ class SequenceWorker(QThread):
     frame_started = pyqtSignal(int, int, object)
     frame_saved = pyqtSignal(str, object)
     progress = pyqtSignal(int, int, float)
+    frame_image = pyqtSignal(object)  # full uint16 array, for live display
     autofocus_due = pyqtSignal()
     error_occurred = pyqtSignal(str)
     finished = pyqtSignal(bool)
@@ -224,6 +225,7 @@ class SequenceWorker(QThread):
 
         arr = self._camera.get_image_array()
         end_dt = datetime.now(timezone.utc)
+        self.frame_image.emit(arr)
 
         ctx = self._make_context(object_name=self._plan.object_name, filter_name=spec.filter_name)
         folder = FITSWriter.session_folder(
