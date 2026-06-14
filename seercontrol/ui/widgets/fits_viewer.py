@@ -50,7 +50,7 @@ class FitsViewer(QWidget):
         self._sat_enabled: bool = False
         self._sat_threshold: int = 60000
         self._roi: pg.RectROI | None = None
-        self._crosshair: bool = False
+        self._crosshair: bool = True  # on by default so it's immediately visible
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -69,7 +69,7 @@ class FitsViewer(QWidget):
         self._vline = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen(theme.WARNING, width=1))
         self._hline = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen(theme.WARNING, width=1))
         for line in (self._vline, self._hline):
-            line.setVisible(False)
+            line.setVisible(self._crosshair)
             self._view.getView().addItem(line, ignoreBounds=True)
 
         # In-image pixel readout — a compact overlay pinned to the top-left,
@@ -97,6 +97,10 @@ class FitsViewer(QWidget):
         if self._auto_on:
             self._black, self._white, self._midtones = auto_stf(arr)
             self.levels_changed.emit(self._black, self._white, self._midtones)
+        if self._crosshair:  # centre it so it's visible before the mouse moves
+            h, w = arr.shape[:2]
+            self._vline.setPos(w / 2)
+            self._hline.setPos(h / 2)
         self._render()
         if self._roi is not None:
             self._on_roi_changed()

@@ -108,6 +108,7 @@ class HistogramDock(design.Card):
 
         # Measurement toggles.
         self._cross_chk = QCheckBox("Crosshair on image")
+        self._cross_chk.setChecked(True)  # visible by default
         self._cross_chk.toggled.connect(self.crosshair_toggled)
         outer.addWidget(self._cross_chk)
         self._sat_chk = QCheckBox("Highlight saturation")
@@ -143,23 +144,6 @@ class HistogramDock(design.Card):
             rg.addWidget(w2, r, 3)
         outer.addLayout(rg)
 
-        # Whole-frame stats.
-        stats = QFormLayout()
-        stats.setHorizontalSpacing(design.SPACING_MD)
-        stats.setVerticalSpacing(design.SPACING_XS)
-        self._min_lbl = design.MetricLabel("—")
-        self._max_lbl = design.MetricLabel("—")
-        self._mean_lbl = design.MetricLabel("—")
-        self._median_lbl = design.MetricLabel("—")
-        for label, widget in (
-            ("Min", self._min_lbl),
-            ("Max", self._max_lbl),
-            ("Mean", self._mean_lbl),
-            ("Median", self._median_lbl),
-        ):
-            stats.addRow(design.MutedLabel(label), widget)
-        outer.addLayout(stats)
-
     @staticmethod
     def _slider(lo: int, hi: int, value: int) -> QSlider:
         s = QSlider(Qt.Orientation.Horizontal)
@@ -193,11 +177,6 @@ class HistogramDock(design.Card):
         self._g_curve.setData(centers, np.log1p(gh))
         self._b_curve.setData(centers, np.log1p(bh))
         self._plot.setXRange(lo, hi, padding=0)
-
-        self._min_lbl.setText(f"{int(raw.min())}")
-        self._max_lbl.setText(f"{int(raw.max())}")
-        self._mean_lbl.setText(f"{raw.mean():.0f}")
-        self._median_lbl.setText(f"{int(np.median(raw))}")
 
     # ------------------------------------------------------------------
     # Sync from the viewer
