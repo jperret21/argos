@@ -38,7 +38,9 @@ import numpy as np
 from PyQt6.QtCore import QRunnable, Qt, QThreadPool, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
     QScrollArea,
+    QSizePolicy,
     QSplitter,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -141,55 +143,83 @@ class ImagingPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # Image toolbar — channel, gamma, auto stretch.
+        # Display controls (channel / gamma / auto-stretch) sit above the image.
         self._toolbar = ImageToolbar()
         root.addWidget(self._toolbar)
 
-        # Center splitter: FitsViewer on the left, vertical right rail on the right.
-        center = QSplitter(Qt.Orientation.Horizontal)
-        center.setChildrenCollapsible(False)
-
+        # Build the control surfaces once; placed into the layout below.
         self._viewer = FitsViewer()
-        center.addWidget(self._viewer)
-
         self._camera_dock = CameraDock()
         self._mount_dock = MountDock()
         self._focuser_dock = FocuserDock()
         self._histogram_dock = HistogramDock()
+        self._log_panel = LogPanel()
 
-        # Right rail wrapped in a scroll area so the stacked docks never get
-        # squished into widget overlap when the window is short.
-        right_inner = QWidget()
-        right_layout = QVBoxLayout(right_inner)
-        right_layout.setContentsMargins(
+        # Right rail = workflow-staged tabs (Capture → Mount → Focus). Tabbing
+        # gives every control group the full rail height instead of cramming
+        # them into one long scroll. Capture is the home base of the session.
+        self._rail = QTabWidget()
+        self._rail.setMinimumWidth(360)
+        self._rail.setMaximumWidth(460)
+        self._rail.addTab(self._tab_page(self._camera_dock), "Capture")
+        self._rail.addTab(self._tab_page(self._mount_dock), "Mount")
+        self._rail.addTab(self._tab_page(self._focuser_dock), "Focus")
+
+        # Top region: the image is the hero (gets the stretch); the rail is capped.
+        top = QSplitter(Qt.Orientation.Horizontal)
+        top.setChildrenCollapsible(False)
+        top.addWidget(self._viewer)
+        top.addWidget(self._rail)
+        top.setStretchFactor(0, 1)
+        top.setStretchFactor(1, 0)
+        top.setSizes([1000, 400])
+
+        # Bottom strip: histogram + session log, side by side under the image.
+        self._histogram_dock.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding
+        )
+        self._log_panel.setMinimumHeight(90)
+        bottom = QSplitter(Qt.Orientation.Horizontal)
+        bottom.setChildrenCollapsible(False)
+        bottom.addWidget(self._histogram_dock)
+        bottom.addWidget(self._log_panel)
+        bottom.setStretchFactor(0, 0)
+        bottom.setStretchFactor(1, 1)
+        bottom.setSizes([440, 720])
+
+        # Vertical split: the image area dominates, the bottom strip is a
+        # resizable band. Everything reflows on window resize.
+        main = QSplitter(Qt.Orientation.Vertical)
+        main.setChildrenCollapsible(False)
+        main.addWidget(top)
+        main.addWidget(bottom)
+        main.setStretchFactor(0, 1)
+        main.setStretchFactor(1, 0)
+        main.setSizes([720, 190])
+        root.addWidget(main, 1)
+
+    @staticmethod
+    def _tab_page(widget: QWidget) -> QScrollArea:
+        """Wrap a control dock in a scrollable, top-aligned tab page.
+
+        The dock keeps its natural (Fixed) height and scrolls if the rail is
+        shorter than the content, instead of being vertically stretched.
+        """
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
+        layout.setContentsMargins(
             design.SPACING_MD, design.SPACING_MD, design.SPACING_MD, design.SPACING_MD
         )
-        right_layout.setSpacing(design.SPACING_MD)
-        right_layout.addWidget(self._camera_dock)
-        right_layout.addWidget(self._mount_dock)
-        right_layout.addWidget(self._focuser_dock)
-        right_layout.addWidget(self._histogram_dock)
-        right_layout.addStretch()
+        layout.setSpacing(design.SPACING_MD)
+        layout.addWidget(widget)
+        layout.addStretch()
 
-        right_scroll = QScrollArea()
-        right_scroll.setWidget(right_inner)
-        right_scroll.setWidgetResizable(True)
-        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        right_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        right_scroll.setMinimumWidth(design.RIGHT_RAIL_MIN_WIDTH)
-        right_scroll.setMaximumWidth(design.RIGHT_RAIL_MAX_WIDTH)
-        center.addWidget(right_scroll)
-
-        center.setStretchFactor(0, 1)
-        center.setStretchFactor(1, 0)
-        center.setSizes([900, design.RIGHT_RAIL_MIN_WIDTH])
-        root.addWidget(center, 1)
-
-        # Bottom: log panel.
-        self._log_panel = LogPanel()
-        self._log_panel.setMinimumHeight(96)
-        self._log_panel.setMaximumHeight(180)
-        root.addWidget(self._log_panel)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(inner)
+        return scroll
 
     # ------------------------------------------------------------------
     # Signal wiring
