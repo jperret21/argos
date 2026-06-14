@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import QVBoxLayout, QWidget
 from seercontrol.core.imaging.stretch import (
     STRETCH_LINEAR,
     apply_stretch,
-    auto_levels,
+    auto_stf,
     region_stats,
 )
 
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 class FitsViewer(QWidget):
     """Image viewer with non-destructive stretch + measurement overlays."""
 
-    levels_changed = pyqtSignal(float, float)
+    levels_changed = pyqtSignal(float, float, float)  # black, white, midtones
     pixel_info = pyqtSignal(str)
     region_info = pyqtSignal(object)
 
@@ -76,8 +76,8 @@ class FitsViewer(QWidget):
             return
         self._last_arr = arr
         if self._auto_on:
-            self._black, self._white = auto_levels(arr)
-            self.levels_changed.emit(self._black, self._white)
+            self._black, self._white, self._midtones = auto_stf(arr)
+            self.levels_changed.emit(self._black, self._white, self._midtones)
         self._render()
         if self._roi is not None:
             self._on_roi_changed()
@@ -122,8 +122,8 @@ class FitsViewer(QWidget):
     def auto_stretch(self) -> None:
         self._auto_on = True
         if self._last_arr is not None:
-            self._black, self._white = auto_levels(self._last_arr)
-            self.levels_changed.emit(self._black, self._white)
+            self._black, self._white, self._midtones = auto_stf(self._last_arr)
+            self.levels_changed.emit(self._black, self._white, self._midtones)
             self._render()
 
     def set_saturation(self, enabled: bool, threshold: int) -> None:

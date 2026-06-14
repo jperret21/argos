@@ -56,6 +56,17 @@ def test_auto_levels_percentiles() -> None:
     assert 94 <= white <= 99
 
 
+def test_auto_stf_returns_sane_levels() -> None:
+    rng = np.random.default_rng(0)
+    arr = rng.normal(12, 3, (200, 200)).clip(0, None).astype(np.float32)
+    arr[50, 50] = 8000.0  # a bright star
+    black, white, mid = s.auto_stf(arr)
+    assert black < white
+    assert 0.0 < mid < 1.0
+    assert black <= 20  # near the ~12 background
+    assert white < 8000  # hottest pixel clipped by the 99.8 percentile
+
+
 def test_region_stats() -> None:
     arr = np.array([[0, 10], [20, 30]], dtype=np.uint16)
     st = s.region_stats(arr)

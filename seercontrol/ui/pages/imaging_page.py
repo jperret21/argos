@@ -396,8 +396,10 @@ class ImagingPage(QWidget):
         self._last_raw = full_arr
         self._camera_dock.set_hfd(metrics.hfd)
         self._focuser_dock.push_metrics(metrics)
-        self._viewer.display(render_view(full_arr, self._channel))
+        # Histogram first: it sets the slider/data range, then the viewer's
+        # auto-stretch emits levels that the dock sliders sync to.
         self._histogram_dock.update_frame(full_arr)
+        self._viewer.display(render_view(full_arr, self._channel))
 
     def _on_open_fits(self) -> None:
         start = str(Path.home() / "Downloads")

@@ -156,10 +156,23 @@ class HistogramDock(design.Card):
         """Refresh per-channel histograms + whole-frame stats from a raw frame."""
         if raw is None or raw.ndim != 2:
             return
-        centers, rh, gh, bh = channel_histograms(raw, bins=_HIST_BINS, max_val=_MAX_ADU)
+        lo = float(raw.min())
+        hi = float(np.percentile(raw, 99.8))
+        if hi <= lo:
+            hi = float(raw.max()) if float(raw.max()) > lo else lo + 1.0
+
+        # Adapt the black/white slider range to the data so they aren't
+        # hyper-sensitive (the whole signal used to sit in <1% of a 0–65535 bar).
+        self._guard = True
+        self._black.setRange(int(lo), int(hi))
+        self._white.setRange(int(lo), int(hi))
+        self._guard = False
+
+        centers, rh, gh, bh = channel_histograms(raw, bins=_HIST_BINS, lo=lo, hi=hi)
         self._r_curve.setData(centers, np.log1p(rh))
         self._g_curve.setData(centers, np.log1p(gh))
         self._b_curve.setData(centers, np.log1p(bh))
+        self._plot.setXRange(lo, hi, padding=0)
 
         self._min_lbl.setText(f"{int(raw.min())}")
         self._max_lbl.setText(f"{int(raw.max())}")
@@ -170,11 +183,12 @@ class HistogramDock(design.Card):
     # Sync from the viewer
     # ------------------------------------------------------------------
 
-    def set_levels(self, black: float, white: float) -> None:
-        """Sync the black/white sliders after an auto-stretch (no re-emit)."""
+    def set_levels(self, black: float, white: float, midtones: float) -> None:
+        """Sync the black/white/midtones sliders after an auto-stretch (no re-emit)."""
         self._guard = True
         self._black.setValue(int(black))
         self._white.setValue(int(white))
+        self._mid.setValue(int(round(midtones * 1000)))
         self._guard = False
 
     def set_pixel_info(self, text: str) -> None:
