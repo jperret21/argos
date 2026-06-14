@@ -29,13 +29,13 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 from seercontrol.ui import theme
-
 
 # --------------------------------------------------------------------------- #
 # Spacing scale — Material-style 4-pt grid                                     #
@@ -51,8 +51,8 @@ SPACING_XL = 24
 CARD_PADDING: tuple[int, int, int, int] = (14, 18, 14, 14)
 
 # Standard widget heights — kept consistent so forms line up across pages.
-INPUT_HEIGHT          = 30
-BUTTON_HEIGHT         = 34
+INPUT_HEIGHT = 30
+BUTTON_HEIGHT = 34
 BUTTON_PRIMARY_HEIGHT = 40
 
 # Right-rail width range used by the Imaging page (and any future page that
@@ -62,16 +62,21 @@ RIGHT_RAIL_MIN_WIDTH = 420
 RIGHT_RAIL_MAX_WIDTH = 580
 
 # Typography sizes (pixel values, no rem/em in Qt stylesheets).
-FONT_SIZE_BODY    = 12
-FONT_SIZE_LABEL   = 12
-FONT_SIZE_METRIC  = 15
-FONT_SIZE_HEADING = 20
-FONT_SIZE_SECTION = 12
+FONT_SIZE_BODY = 13
+FONT_SIZE_LABEL = 13
+FONT_SIZE_METRIC = 16
+FONT_SIZE_HEADING = 22
+FONT_SIZE_SECTION = 13
+
+# Default max content width for sparse, form-style pages so they don't stretch
+# edge-to-edge on wide windows. Dense workspaces (Imaging) ignore this.
+PAGE_MAX_WIDTH = 880
 
 
 # --------------------------------------------------------------------------- #
 # Containers                                                                   #
 # --------------------------------------------------------------------------- #
+
 
 class Card(QGroupBox):
     """Standard dock / panel container.
@@ -108,14 +113,62 @@ def horizontal_divider(parent: QWidget | None = None) -> QFrame:
     return line
 
 
+def scroll_page(max_width: int = PAGE_MAX_WIDTH) -> tuple[QScrollArea, QVBoxLayout]:
+    """Build a vertically-scrolling page body, centered and width-capped.
+
+    Returns ``(scroll_area, content_layout)``: add the scroll area to the page
+    root layout and fill ``content_layout`` with cards/sections. Capping the
+    width stops sparse, form-style pages from stretching edge-to-edge on wide
+    windows (which makes them look empty and unstructured).
+    """
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+    holder = QWidget()
+    outer = QHBoxLayout(holder)
+    outer.setContentsMargins(SPACING_XL, SPACING_LG, SPACING_XL, SPACING_XL)
+
+    column = QWidget()
+    column.setMaximumWidth(max_width)
+    content = QVBoxLayout(column)
+    content.setContentsMargins(0, 0, 0, 0)
+    content.setSpacing(SPACING_LG)
+
+    outer.addStretch(1)
+    outer.addWidget(column, 6)
+    outer.addStretch(1)
+    scroll.setWidget(holder)
+    return scroll, content
+
+
+def two_columns(spacing: int = SPACING_LG) -> tuple[QHBoxLayout, QVBoxLayout, QVBoxLayout]:
+    """Return ``(row, left, right)`` — two equal side-by-side column layouts.
+
+    Add the row to a content layout, then drop cards into ``left`` / ``right``
+    to put several sections next to each other instead of one tall column.
+    """
+    row = QHBoxLayout()
+    row.setSpacing(spacing)
+    left = QVBoxLayout()
+    left.setSpacing(spacing)
+    right = QVBoxLayout()
+    right.setSpacing(spacing)
+    row.addLayout(left, 1)
+    row.addLayout(right, 1)
+    return row, left, right
+
+
 # --------------------------------------------------------------------------- #
 # Buttons                                                                      #
 # --------------------------------------------------------------------------- #
 
+
 class _BaseButton(QPushButton):
     """Common sizing + min-width so buttons in a row never get clipped."""
 
-    _CLASS:  str = ""
+    _CLASS: str = ""
     _HEIGHT: int = BUTTON_HEIGHT
     _MIN_WIDTH: int = 90
 
@@ -132,14 +185,14 @@ class _BaseButton(QPushButton):
 class PrimaryButton(_BaseButton):
     """Blue, used for the dominant action of a card (Slew, Take Shot…)."""
 
-    _CLASS  = "primary"
+    _CLASS = "primary"
     _HEIGHT = BUTTON_PRIMARY_HEIGHT
 
 
 class SuccessButton(_BaseButton):
     """Green, used for "start the long-running thing" (▶ Sequence, ▶ Tracking)."""
 
-    _CLASS  = "success"
+    _CLASS = "success"
     _HEIGHT = BUTTON_PRIMARY_HEIGHT
 
 
@@ -159,6 +212,7 @@ class SecondaryButton(_BaseButton):
 # Labels                                                                       #
 # --------------------------------------------------------------------------- #
 
+
 class MutedLabel(QLabel):
     """Form-key / hint label — dim, no background. Min width so the label
     column of a QFormLayout never collapses below readable size."""
@@ -167,8 +221,7 @@ class MutedLabel(QLabel):
         super().__init__(text, parent)
         self.setMinimumWidth(72)
         self.setStyleSheet(
-            f"color:{theme.FG_MUTED}; font-size:{FONT_SIZE_LABEL}px;"
-            f" background:transparent;"
+            f"color:{theme.FG_MUTED}; font-size:{FONT_SIZE_LABEL}px;" f" background:transparent;"
         )
 
 
@@ -211,6 +264,7 @@ class HeadingLabel(QLabel):
 # --------------------------------------------------------------------------- #
 # Layout helpers                                                               #
 # --------------------------------------------------------------------------- #
+
 
 def button_row(*buttons: QPushButton, stretch_each: bool = True) -> QHBoxLayout:
     """Lay out buttons horizontally with the standard inter-button spacing.

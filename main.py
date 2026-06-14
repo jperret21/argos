@@ -65,19 +65,9 @@ def _setup_logging(level: str) -> None:
 
 
 def _build_window(config: Config):
-    """Return the top-level window.
-
-    The new 3-mode Shell is the default. Set ``SEERCONTROL_LEGACY=1`` to fall
-    back to the old dockable ``MainWindow`` during the redesign sprints —
-    the flag will be removed once the new Shell reaches feature parity.
-    """
-    if os.environ.get("SEERCONTROL_LEGACY"):
-        logging.getLogger(__name__).info(
-            "SEERCONTROL_LEGACY=1 — using the legacy dockable MainWindow"
-        )
-        from seercontrol.ui.main_window import MainWindow
-        return MainWindow(config)
+    """Return the top-level window (the 3-mode Shell)."""
     from seercontrol.ui.shell import Shell
+
     return Shell(config)
 
 

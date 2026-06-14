@@ -43,8 +43,8 @@ TEXT_MUTED    = FG_MUTED
 TEXT_DISABLED = FG_DISABLED
 INFO         = CYAN
 
-FONT_UI   = '"Helvetica Neue", "Helvetica", "Segoe UI", "Arial", sans-serif'
-FONT_MONO = '"Menlo", "JetBrains Mono", "SF Mono", "Consolas", monospace'
+FONT_UI   = '"SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif'
+FONT_MONO = '"SF Mono", "Menlo", "JetBrains Mono", "Consolas", monospace'
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +75,7 @@ QWidget {{
     background-color: {BG};
     color: {FG};
     font-family: {FONT_UI};
-    font-size: 12px;
+    font-size: 13px;
 }}
 
 QMainWindow {{
@@ -174,7 +174,7 @@ QPushButton {{
     border-radius: 3px;
     padding: 7px 14px;
     min-height: 26px;
-    font-size: 12px;
+    font-size: 13px;
     font-family: {FONT_UI};
 }}
 
@@ -243,7 +243,7 @@ QLineEdit, QSpinBox, QDoubleSpinBox {{
     padding: 6px 8px;
     min-height: 26px;
     font-family: {FONT_UI};
-    font-size: 12px;
+    font-size: 13px;
     selection-background-color: {ACCENT};
     selection-color: white;
 }}
@@ -278,7 +278,7 @@ QComboBox {{
     border-radius: 3px;
     padding: 6px 8px;
     min-height: 26px;
-    font-size: 12px;
+    font-size: 13px;
 }}
 
 QComboBox:focus {{
@@ -391,7 +391,7 @@ QGroupBox {{
     border-radius: 3px;
     margin-top: 14px;
     padding-top: 10px;
-    font-size: 12px;
+    font-size: 13px;
     font-family: {FONT_UI};
     font-weight: bold;
     color: {ACCENT};
