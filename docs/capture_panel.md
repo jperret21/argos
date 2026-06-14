@@ -117,12 +117,12 @@ Proposed config keys (defaults to confirm against hardware):
 
 ## Roadmap (MVP → phases)
 
-**MVP (capture-grade):**
-- [x] §0 architecture (FITS writer already saves raw linear CFA; rendering is separate)
-- [ ] **§1 — three debayer modes** (Raw CFA / Super-pixel / Interpolated)  ← *in progress*
-- [ ] **§2 — channel split** R / G / B / G1 / G2 / Luminance via CFA (real pixels)
-- [ ] §3 — stretch (black/mid/white, linear/log/asinh) + per-channel histogram + indicator
-- [ ] §4 — pixel readout, region stats, saturation highlight (full-well from config)
+**MVP (capture-grade) — DONE:**
+- [x] §0 architecture (FITS writer saves raw linear CFA; rendering is separate)
+- [x] §1 — three debayer modes (Raw CFA / Super-pixel / Interpolated)
+- [x] §2 — channel split R / G / B / G1 / G2 / Luminance via CFA (real pixels)
+- [x] §3 — stretch (black/mid/white, linear/log/asinh) + per-channel histogram + indicator
+- [x] §4 — pixel readout, region stats (ROI), saturation highlight (full-well from config)
 
 **Phase 2:**
 - [ ] §5 — FWHM/HFD overlay + 100% loupe + HFD trend graph

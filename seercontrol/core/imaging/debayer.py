@@ -159,16 +159,16 @@ def bilinear_rgb(arr: np.ndarray) -> np.ndarray:
 def render_view(arr: np.ndarray, view: str) -> np.ndarray:
     """Render the raw array for a given display view (see ``VIEWS``).
 
-    Returns either a 2-D uint16 plane (raw / single channel — the viewer
-    auto-stretches it) or a 3-D uint8 RGB image (colour modes, display-normalized).
-    The input ``arr`` is never mutated.
+    Returns a **linear** array — 2-D uint16 (raw / single channel) or 3-D uint16
+    RGB (colour modes). The stretch stage (see ``imaging.stretch``) maps it to
+    the screen; the input ``arr`` is never mutated.
     """
     if view == VIEW_RAW:
         return arr
     if view == VIEW_SUPERPIXEL:
-        return _to_display_rgb(superpixel_rgb(arr))
+        return superpixel_rgb(arr)
     if view == VIEW_INTERP:
-        return _to_display_rgb(bilinear_rgb(arr))
+        return bilinear_rgb(arr)
     return extract_plane(arr, view)
 
 
@@ -191,21 +191,6 @@ def _box3_sum(x: np.ndarray) -> np.ndarray:
         + p[2:, 1:-1]
         + p[2:, 2:]
     )
-
-
-def _to_display_rgb(rgb16: np.ndarray) -> np.ndarray:
-    """Per-channel 1%–99% stretch of a uint16 RGB image to uint8 (display only)."""
-    return np.stack([_norm8(rgb16[:, :, c]) for c in range(3)], axis=2)
-
-
-def _norm8(ch: np.ndarray) -> np.ndarray:
-    """Stretch a uint16 plane to uint8 using 1%–99% percentile (display only)."""
-    ch = ch.astype(np.float32)
-    lo = float(np.percentile(ch, 1))
-    hi = float(np.percentile(ch, 99))
-    if hi <= lo:
-        hi = lo + 1.0
-    return np.clip((ch - lo) / (hi - lo) * 255.0, 0, 255).astype(np.uint8)
 
 
 # --------------------------------------------------------------------------- #

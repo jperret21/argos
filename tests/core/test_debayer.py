@@ -78,10 +78,10 @@ def test_render_view_shapes_and_dtypes() -> None:
     assert plane.shape == (2, 2) and plane.dtype == np.uint16
 
     sp = d.render_view(arr, d.VIEW_SUPERPIXEL)
-    assert sp.shape == (2, 2, 3) and sp.dtype == np.uint8  # display-normalized
+    assert sp.shape == (2, 2, 3) and sp.dtype == np.uint16  # linear; stretch is separate
 
     interp = d.render_view(arr, d.VIEW_INTERP)
-    assert interp.shape == (4, 4, 3) and interp.dtype == np.uint8
+    assert interp.shape == (4, 4, 3) and interp.dtype == np.uint16
 
 
 def test_render_view_does_not_mutate_raw() -> None:
