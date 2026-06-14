@@ -1,13 +1,16 @@
-"""FITS / raw image viewer widget based on PyQtGraph.
+"""FITS / raw image viewer (PyQtGraph) — display stretch + measurement tools.
 
-Displays either:
-  - 2-D numpy uint16 array (H, W) — raw or single channel, with auto-stretch
-  - 3-D numpy uint8  array (H, W, 3) — debayered RGB, levels fixed at 0–255
+Receives a **linear** display array (2-D uint16 plane or 3-D uint16 RGB from
+``debayer.render_view``) and maps it to the screen through the stretch
+(black/white/midtones + linear/log/asinh). The linear array is kept for
+measurement (§4): pixel readout on hover, a region-stats ROI, and a
+saturation/clipping overlay. None of this touches the data written to FITS.
 
-Controls:
-  - Auto Stretch button (grayscale only)
-  - Gamma correction via set_gamma()
-  - Native PyQtGraph zoom / pan and interactive histogram
+Signals:
+    levels_changed(black, white): emitted after an auto-stretch so the
+        histogram dock can sync its sliders.
+    pixel_info(str):   readout under the cursor ("(x,y) … ADU").
+    region_info(dict|None): stats of the ROI region (or None when cleared).
 """
 
 from __future__ import annotations
@@ -16,24 +19,37 @@ import logging
 
 import numpy as np
 import pyqtgraph as pg
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import QVBoxLayout, QWidget
+
+from seercontrol.core.imaging.stretch import (
+    STRETCH_LINEAR,
+    apply_stretch,
+    auto_levels,
+    region_stats,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class FitsViewer(QWidget):
-    """Image viewer with histogram, auto-stretch, and gamma correction.
+    """Image viewer with non-destructive stretch + measurement overlays."""
 
-    Args:
-        parent: Optional parent widget.
-    """
+    levels_changed = pyqtSignal(float, float)
+    pixel_info = pyqtSignal(str)
+    region_info = pyqtSignal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._first_frame = True
-        self._is_rgb = False
-        self._last_arr: np.ndarray | None = None
-        self._gamma: float = 1.0
+        self._last_arr: np.ndarray | None = None  # linear display array
+        self._black: float = 0.0
+        self._white: float = 65535.0
+        self._mode: str = STRETCH_LINEAR
+        self._midtones: float = 0.5
+        self._auto_on: bool = True  # auto-level each frame until the user adjusts
+        self._sat_enabled: bool = False
+        self._sat_threshold: int = 60000
+        self._roi: pg.RectROI | None = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -43,102 +59,137 @@ class FitsViewer(QWidget):
 
         pg.setConfigOptions(imageAxisOrder="row-major")
         self._view = pg.ImageView()
-        # pg.ImageView ships with a vertical histogram + ROI + menu strip on
-        # the right. We display the histogram in the dedicated HistogramDock
-        # and our own toolbar drives stretch/levels — hide all built-ins so
-        # the central canvas is just the image.
         self._view.ui.roiBtn.hide()
         self._view.ui.menuBtn.hide()
         self._view.ui.histogram.hide()
         layout.addWidget(self._view)
 
-    def display(self, arr: np.ndarray) -> None:
-        """Display a new frame.
+        self._view.scene.sigMouseMoved.connect(self._on_mouse_moved)
 
-        Args:
-            arr: Either:
-                 - 2-D uint16 (H, W)   — raw / single channel
-                 - 3-D uint8  (H, W, 3) — debayered RGB
-        """
+    # ------------------------------------------------------------------
+    # Display
+    # ------------------------------------------------------------------
+
+    def display(self, arr: np.ndarray) -> None:
+        """Display a linear array (2-D uint16 plane or 3-D uint16 RGB)."""
         if arr.ndim not in (2, 3):
             return
-
         self._last_arr = arr
-        self._is_rgb = arr.ndim == 3
+        if self._auto_on:
+            self._black, self._white = auto_levels(arr)
+            self.levels_changed.emit(self._black, self._white)
+        self._render()
+        if self._roi is not None:
+            self._on_roi_changed()
 
-        display = self._apply_gamma(arr)
-
+    def _render(self) -> None:
+        if self._last_arr is None:
+            return
+        disp = apply_stretch(self._last_arr, self._black, self._white, self._mode, self._midtones)
+        if self._sat_enabled:
+            disp = self._overlay_saturation(disp)
         self._view.setImage(
-            display,
+            disp,
             autoRange=False,
             autoLevels=False,
             autoHistogramRange=False,
+            levels=(0, 255),
         )
 
-        if self._first_frame or self._is_rgb:
-            self._auto_stretch()
-            self._first_frame = False
+    def _overlay_saturation(self, disp_u8: np.ndarray) -> np.ndarray:
+        """Paint pixels at/above the full-well threshold red (display only)."""
+        a = self._last_arr
+        src = a if a.ndim == 2 else a.max(axis=2)
+        mask = src >= self._sat_threshold
+        if disp_u8.ndim == 2:
+            rgb = np.repeat(disp_u8[:, :, None], 3, axis=2)
+        else:
+            rgb = disp_u8.copy()
+        if mask.any():
+            rgb[mask] = (255, 0, 0)
+        return rgb
 
-    def set_levels(self, black: float, white: float) -> None:
-        """Apply manual black/white point to the display.
+    # ------------------------------------------------------------------
+    # Stretch controls (driven by the histogram dock)
+    # ------------------------------------------------------------------
 
-        Args:
-            black: Black point in pixel units (0–65535 for uint16, 0–255 for uint8).
-            white: White point in pixel units.
-        """
-        if white > black:
-            self._view.setLevels(black, white)
+    def set_stretch(self, black: float, white: float, midtones: float, mode: str) -> None:
+        self._auto_on = False
+        self._black, self._white = float(black), float(white)
+        self._midtones, self._mode = float(midtones), mode
+        self._render()
 
-    def set_gamma(self, value: float) -> None:
-        """Set gamma correction value and re-render the last frame.
-
-        Args:
-            value: Gamma exponent. 1.0 = neutral. < 1.0 darkens, > 1.0 brightens.
-        """
-        self._gamma = max(0.01, value)
+    def auto_stretch(self) -> None:
+        self._auto_on = True
         if self._last_arr is not None:
-            self.display(self._last_arr)
+            self._black, self._white = auto_levels(self._last_arr)
+            self.levels_changed.emit(self._black, self._white)
+            self._render()
 
-    def _apply_gamma(self, arr: np.ndarray) -> np.ndarray:
-        """Apply gamma correction to an array.
+    def set_saturation(self, enabled: bool, threshold: int) -> None:
+        self._sat_enabled = bool(enabled)
+        self._sat_threshold = int(threshold)
+        self._render()
 
-        Args:
-            arr: Input array (uint16 2-D or uint8 3-D).
+    # ------------------------------------------------------------------
+    # Region-stats ROI (§4)
+    # ------------------------------------------------------------------
 
-        Returns:
-            Gamma-corrected array of the same dtype and shape.
-        """
-        if abs(self._gamma - 1.0) < 1e-6:
-            return arr
+    def set_roi_enabled(self, enabled: bool) -> None:
+        if enabled and self._roi is None:
+            self._roi = pg.RectROI([10, 10], [80, 80], pen=pg.mkPen("y", width=1))
+            self._view.getView().addItem(self._roi)
+            self._roi.sigRegionChanged.connect(self._on_roi_changed)
+            self._on_roi_changed()
+        elif not enabled and self._roi is not None:
+            self._view.getView().removeItem(self._roi)
+            self._roi = None
+            self.region_info.emit(None)
 
-        if arr.ndim == 2:
-            # uint16 grayscale
-            f = arr.astype(np.float32) / 65535.0
-            f = np.power(np.clip(f, 0.0, 1.0), 1.0 / self._gamma)
-            return (f * 65535.0).astype(np.uint16)
-        else:
-            # uint8 RGB
-            f = arr.astype(np.float32) / 255.0
-            f = np.power(np.clip(f, 0.0, 1.0), 1.0 / self._gamma)
-            return (f * 255.0).astype(np.uint8)
-
-    def _auto_stretch(self) -> None:
-        """Set display levels to 1%–99% percentile (grayscale) or 0–255 (RGB)."""
-        img = self._view.image
-        if img is None:
+    def _on_roi_changed(self) -> None:
+        if self._last_arr is None or self._roi is None:
             return
-        if self._is_rgb:
-            self._view.setLevels(0, 255)
+        pos, size = self._roi.pos(), self._roi.size()
+        x0 = int(min(pos.x(), pos.x() + size.x()))
+        x1 = int(max(pos.x(), pos.x() + size.x()))
+        y0 = int(min(pos.y(), pos.y() + size.y()))
+        y1 = int(max(pos.y(), pos.y() + size.y()))
+        a = self._last_arr
+        h, w = a.shape[:2]
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(w, x1), min(h, y1)
+        if x1 <= x0 or y1 <= y0:
+            return
+        region = a[y0:y1, x0:x1]
+        if region.ndim == 3:
+            region = region.mean(axis=2)
+        self.region_info.emit(region_stats(region))
+
+    # ------------------------------------------------------------------
+    # Pixel readout (§4)
+    # ------------------------------------------------------------------
+
+    def _on_mouse_moved(self, scene_pos) -> None:
+        if self._last_arr is None:
+            return
+        p = self._view.getImageItem().mapFromScene(scene_pos)
+        x, y = int(p.x()), int(p.y())
+        a = self._last_arr
+        h, w = a.shape[:2]
+        if 0 <= x < w and 0 <= y < h:
+            if a.ndim == 2:
+                self.pixel_info.emit(f"({x}, {y})  {int(a[y, x])} ADU")
+            else:
+                r, g, b = (int(v) for v in a[y, x][:3])
+                self.pixel_info.emit(f"({x}, {y})  R {r}  G {g}  B {b}")
         else:
-            lo = float(np.percentile(img, 1))
-            hi = float(np.percentile(img, 99))
-            if hi <= lo:
-                hi = lo + 1
-            self._view.setLevels(lo, hi)
+            self.pixel_info.emit("")
+
+    # ------------------------------------------------------------------
 
     def reset(self) -> None:
         """Reset viewer state (call when switching targets)."""
-        self._first_frame = True
-        self._is_rgb = False
         self._last_arr = None
-        self._gamma = 1.0
+        self._auto_on = True
+        self._black, self._white = 0.0, 65535.0
+        self._mode, self._midtones = STRETCH_LINEAR, 0.5

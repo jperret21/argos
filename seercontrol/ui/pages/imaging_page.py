@@ -36,7 +36,6 @@ import numpy as np
 from PyQt6.QtCore import QRunnable, Qt, QThreadPool, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
     QScrollArea,
-    QSizePolicy,
     QSplitter,
     QTabWidget,
     QVBoxLayout,
@@ -48,7 +47,7 @@ from seercontrol.core.alpaca.client import AlpacaError
 from seercontrol.core.alpaca.focuser import Focuser
 from seercontrol.core.alpaca.telescope import MountPosition, Telescope
 from seercontrol.core.config import Config
-from seercontrol.core.imaging.debayer import compute_hfd, extract_channel
+from seercontrol.core.imaging.debayer import VIEW_SUPERPIXEL, compute_hfd, render_view
 from seercontrol.core.imaging.fits_writer import FITSWriter, FrameContext
 from seercontrol.ui import design
 from seercontrol.ui.panels.log_panel import LogPanel
@@ -120,10 +119,12 @@ class ImagingPage(QWidget):
         self._sequence: SequenceWorker | None = None
         self._jog_dialog: ManualControlDialog | None = None
 
-        self._channel = "Raw"
+        self._channel = VIEW_SUPERPIXEL
         self._last_position: MountPosition | None = None
+        self._last_raw: np.ndarray | None = None  # last raw frame, for re-rendering
         self._target_ra: float | None = None
         self._target_dec: float | None = None
+        self._full_well = int(self._config.get("camera.full_well_adu", 60000))
 
         # Single-shot capture: number of upcoming preview frames to save.
         self._capture_pending = 0
@@ -163,6 +164,7 @@ class ImagingPage(QWidget):
         self._rail.addTab(self._tab_page(self._sequence_panel), "Sequence")
         self._rail.addTab(self._tab_page(self._mount_dock), "Mount")
         self._rail.addTab(self._tab_page(self._focuser_dock), "Focus")
+        self._rail.addTab(self._tab_page(self._histogram_dock), "Display")
 
         # Top region: the image is the hero (gets the stretch); the rail is capped.
         top = QSplitter(Qt.Orientation.Horizontal)
@@ -173,25 +175,16 @@ class ImagingPage(QWidget):
         top.setStretchFactor(1, 0)
         top.setSizes([1000, 400])
 
-        # Bottom strip: histogram + session log, side by side under the image.
-        self._histogram_dock.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding
-        )
+        # Bottom strip: the session log (full width under the image). The
+        # histogram + stretch controls live in the "Display" rail tab.
         self._log_panel.setMinimumHeight(90)
-        bottom = QSplitter(Qt.Orientation.Horizontal)
-        bottom.setChildrenCollapsible(False)
-        bottom.addWidget(self._histogram_dock)
-        bottom.addWidget(self._log_panel)
-        bottom.setStretchFactor(0, 0)
-        bottom.setStretchFactor(1, 1)
-        bottom.setSizes([440, 720])
+        self._log_panel.setMaximumHeight(220)
 
-        # Vertical split: the image area dominates, the bottom strip is a
-        # resizable band. Everything reflows on window resize.
+        # Vertical split: the image area dominates, the log is a resizable band.
         main = QSplitter(Qt.Orientation.Vertical)
         main.setChildrenCollapsible(False)
         main.addWidget(top)
-        main.addWidget(bottom)
+        main.addWidget(self._log_panel)
         main.setStretchFactor(0, 1)
         main.setStretchFactor(1, 0)
         main.setSizes([720, 190])
@@ -227,8 +220,14 @@ class ImagingPage(QWidget):
     def _wire_signals(self) -> None:
         # Toolbar
         self._toolbar.channel_changed.connect(self._on_channel_changed)
-        self._toolbar.gamma_changed.connect(self._viewer.set_gamma)
-        self._toolbar.auto_stretch_requested.connect(self._viewer._auto_stretch)
+        # Display pipeline: the Display tab (histogram/stretch) ↔ the viewer.
+        self._histogram_dock.stretch_changed.connect(self._viewer.set_stretch)
+        self._histogram_dock.auto_requested.connect(self._viewer.auto_stretch)
+        self._histogram_dock.saturation_toggled.connect(self._on_saturation_toggled)
+        self._histogram_dock.roi_toggled.connect(self._viewer.set_roi_enabled)
+        self._viewer.levels_changed.connect(self._histogram_dock.set_levels)
+        self._viewer.pixel_info.connect(self._histogram_dock.set_pixel_info)
+        self._viewer.region_info.connect(self._histogram_dock.set_region_info)
 
         # Camera dock
         self._camera_dock.take_shot_clicked.connect(self._on_take_shot)
@@ -378,8 +377,13 @@ class ImagingPage(QWidget):
 
     def _on_channel_changed(self, channel: str) -> None:
         self._channel = channel
-        if self._preview and self._preview.isRunning():
-            return  # next frame will use the new channel anyway
+        # Re-render the last frame immediately so the view switch is visible
+        # even when no live preview is running.
+        if self._last_raw is not None:
+            self._viewer.display(render_view(self._last_raw, self._channel))
+
+    def _on_saturation_toggled(self, enabled: bool) -> None:
+        self._viewer.set_saturation(enabled, self._full_well)
 
     def _on_take_shot(self) -> None:
         self._capture_pending = 1
@@ -445,7 +449,8 @@ class ImagingPage(QWidget):
     def _on_seq_frame_image(self, full_arr) -> None:
         hfd = compute_hfd(full_arr)
         self._camera_dock.set_hfd(hfd)
-        self._viewer.display(extract_channel(full_arr, self._channel))
+        self._last_raw = full_arr
+        self._viewer.display(render_view(full_arr, self._channel))
         self._histogram_dock.update_frame(full_arr)
 
     def _on_seq_frame_saved(self, path: str, _hfd) -> None:
@@ -546,9 +551,9 @@ class ImagingPage(QWidget):
         hfd = compute_hfd(full_arr)
         self._camera_dock.set_hfd(hfd)
 
-        # Display channel.
-        display = extract_channel(full_arr, self._channel)
-        self._viewer.display(display)
+        # Display view (debayer mode / channel) — display only; FITS stays raw.
+        self._last_raw = full_arr
+        self._viewer.display(render_view(full_arr, self._channel))
         self._histogram_dock.update_frame(full_arr)
 
         # Single-shot save: persist the requested number of preview frames.
