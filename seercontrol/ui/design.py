@@ -22,8 +22,11 @@ change up automatically.
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+import math
+
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
+    QDoubleSpinBox,
     QFrame,
     QGroupBox,
     QHBoxLayout,
@@ -31,6 +34,8 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -71,6 +76,10 @@ FONT_SIZE_SECTION = 13
 # Default max content width for sparse, form-style pages so they don't stretch
 # edge-to-edge on wide windows. Dense workspaces (Imaging) ignore this.
 PAGE_MAX_WIDTH = 880
+
+# Fixed width for the numeric value box of a SliderSpin, so a column of them
+# lines up (slider stretches, value box stays put).
+VALUE_FIELD_WIDTH = 92
 
 
 # --------------------------------------------------------------------------- #
@@ -158,6 +167,123 @@ def two_columns(spacing: int = SPACING_LG) -> tuple[QHBoxLayout, QVBoxLayout, QV
     row.addLayout(left, 1)
     row.addLayout(right, 1)
     return row, left, right
+
+
+# --------------------------------------------------------------------------- #
+# Composite inputs                                                             #
+# --------------------------------------------------------------------------- #
+
+
+class SliderSpin(QWidget):
+    """Slider + value box kept in sync — the camera-control idiom from NINA /
+    SharpCap (drag for coarse, type for exact).
+
+    Lays out as ``[────── slider ──────] [ value ]`` with the value box at a
+    fixed width so a column of these lines up cleanly. Use ``logarithmic=True``
+    for wide-range values like exposure time, where a linear slider would waste
+    most of its travel on long exposures.
+    """
+
+    valueChanged = pyqtSignal(float)
+
+    _STEPS = 1000
+
+    def __init__(
+        self,
+        minimum: float,
+        maximum: float,
+        value: float,
+        *,
+        decimals: int = 0,
+        step: float = 1.0,
+        suffix: str = "",
+        logarithmic: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._min = float(minimum)
+        self._max = float(maximum)
+        self._decimals = decimals
+        self._log = logarithmic and self._min > 0.0
+        self._guard = False
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(SPACING_SM)
+
+        self._slider = QSlider(Qt.Orientation.Horizontal)
+        self._slider.setRange(0, self._STEPS)
+
+        self._spin: QDoubleSpinBox | QSpinBox
+        if decimals > 0:
+            self._spin = QDoubleSpinBox()
+            self._spin.setDecimals(decimals)
+            self._spin.setSingleStep(step)
+            self._spin.setRange(self._min, self._max)
+        else:
+            self._spin = QSpinBox()
+            self._spin.setSingleStep(int(step) or 1)
+            self._spin.setRange(int(self._min), int(self._max))
+        if suffix:
+            self._spin.setSuffix(suffix)
+        self._spin.setFixedWidth(VALUE_FIELD_WIDTH)
+        self._spin.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        row.addWidget(self._slider, 1)
+        row.addWidget(self._spin, 0)
+
+        self._slider.valueChanged.connect(self._on_slider)
+        self._spin.valueChanged.connect(self._on_spin)
+        self.setValue(value)
+
+    # value <-> slider mapping --------------------------------------------
+
+    def _to_slider(self, value: float) -> int:
+        value = max(self._min, min(self._max, float(value)))
+        if self._log:
+            lo, hi = math.log10(self._min), math.log10(self._max)
+            t = (math.log10(value) - lo) / (hi - lo) if hi > lo else 0.0
+        else:
+            span = self._max - self._min
+            t = (value - self._min) / span if span else 0.0
+        return int(round(t * self._STEPS))
+
+    def _from_slider(self, pos: int) -> float:
+        t = pos / self._STEPS
+        if self._log:
+            lo, hi = math.log10(self._min), math.log10(self._max)
+            return 10 ** (lo + t * (hi - lo))
+        return self._min + t * (self._max - self._min)
+
+    # sync ----------------------------------------------------------------
+
+    def _on_slider(self, pos: int) -> None:
+        if self._guard:
+            return
+        self._guard = True
+        raw = self._from_slider(pos)
+        self._spin.setValue(raw if self._decimals > 0 else int(round(raw)))
+        self._guard = False
+        self.valueChanged.emit(float(self._spin.value()))
+
+    def _on_spin(self, _value: float) -> None:
+        if self._guard:
+            return
+        self._guard = True
+        self._slider.setValue(self._to_slider(self._spin.value()))
+        self._guard = False
+        self.valueChanged.emit(float(self._spin.value()))
+
+    # public --------------------------------------------------------------
+
+    def value(self) -> float:
+        return float(self._spin.value())
+
+    def setValue(self, value: float) -> None:
+        self._guard = True
+        self._spin.setValue(value if self._decimals > 0 else int(round(value)))
+        self._slider.setValue(self._to_slider(value))
+        self._guard = False
 
 
 # --------------------------------------------------------------------------- #

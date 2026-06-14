@@ -63,19 +63,18 @@ def test_shell_three_mode_walkthrough() -> None:
         params = page._camera_dock.params()
         assert isinstance(params, CaptureParams)
         assert params.exposure_s > 0
-        assert params.frames > 0
 
-        # Camera dock signals.
+        # Capture dock take-shot signal.
         shots: list[bool] = []
-        seq: list[bool] = []
         page._camera_dock.take_shot_clicked.connect(lambda: shots.append(True))
-        page._camera_dock.sequence_toggled.connect(seq.append)
         page._camera_dock.set_enabled(True)
         page._camera_dock._take_btn.click()
-        page._camera_dock._seq_btn.click()  # start
-        page._camera_dock._seq_btn.click()  # stop
         assert shots == [True]
-        assert seq == [True, False]
+
+        # Sequence tab builds a plan from its step table.
+        plan = page._sequence_panel.to_plan()
+        assert len(plan.steps) >= 1
+        assert plan.steps[0].count > 0
 
         # Mount dock goto.
         goto: list[tuple[float, float]] = []

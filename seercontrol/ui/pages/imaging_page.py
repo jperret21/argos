@@ -1,36 +1,34 @@
-"""Imaging mode — the work surface where 80% of session time is spent.
+"""Acquisition mode — the work surface where most session time is spent.
 
 Layout::
 
     ┌─ ImageToolbar (channel / γ / auto-stretch) ────────────────────┐
-    ├──────────────────────────────────────────────┬─ Camera dock ──┤
-    │                                              │ Mount  dock    │
-    │           FitsViewer (PyQtGraph)             │ Histogram dock │
-    │                                              │                │
-    ├──────────────────────────────────────────────┴───────────────-─┤
-    ├─ Log panel (4-6 lines visible) ────────────────────────────────┤
+    ├──────────────────────────────────────────┬───────────────────┤
+    │                                          │  Rail tabs:        │
+    │            FitsViewer (hero)             │  Capture · Sequence│
+    │                                          │  · Mount · Focus   │
+    ├──────────────────────────────────────────┴───────────────────┤
+    │  Histogram            │            Session log                 │
     └────────────────────────────────────────────────────────────────┘
 
-The page owns the device handles (Telescope, Camera) and orchestrates the
-existing workers (Discovery, MountPolling, LivePreview). Connection is
-driven from EquipmentPage via the public ``connect_mount(host, port)`` /
-``connect_camera(host, port)`` / ``start_discovery()`` / ``disconnect_all()``
-methods, routed through the Shell.
+The page owns the device handles (Telescope, Camera, Focuser) and orchestrates
+the workers (Discovery, MountPolling, LivePreview, Autofocus, Sequence). The
+Connection page emits connect/disconnect intents that the Shell routes to the
+public ``connect_*`` / ``disconnect_*`` / ``start_discovery`` methods here.
 
-The page emits four upward signals that the Shell wires into the global
-status bar and forwards to the Equipment page:
+Upward signals the Shell wires into the global status bar + Connection page:
 
     device_state_changed(device, state, info)
     tracking_changed(bool | None)
     action_changed(text)
     log_message(level, message)
-    discovered_address(host, port)              # for EquipmentPage to pre-fill
+    discovered_address(host, port)
+    position_updated(ra_h, dec_d, slewing)      # feeds the Stellarium reticle
 """
 
 from __future__ import annotations
 
 import logging
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -38,7 +36,9 @@ import numpy as np
 from PyQt6.QtCore import QRunnable, Qt, QThreadPool, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
     QScrollArea,
+    QSizePolicy,
     QSplitter,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -59,10 +59,12 @@ from seercontrol.ui.widgets.focuser_dock import FocuserDock
 from seercontrol.ui.widgets.histogram_dock import HistogramDock
 from seercontrol.ui.widgets.image_toolbar import ImageToolbar
 from seercontrol.ui.widgets.mount_dock import MountDock
+from seercontrol.ui.widgets.sequence_panel import SequencePanel
 from seercontrol.workers.autofocus_worker import AutofocusWorker
 from seercontrol.workers.discovery_worker import DiscoveryWorker
 from seercontrol.workers.exposure_worker import LivePreviewWorker
 from seercontrol.workers.polling_worker import MountPollingWorker
+from seercontrol.workers.sequence_worker import SequenceWorker
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +117,7 @@ class ImagingPage(QWidget):
         self._polling: MountPollingWorker | None = None
         self._preview: LivePreviewWorker | None = None
         self._autofocus: AutofocusWorker | None = None
+        self._sequence: SequenceWorker | None = None
         self._jog_dialog: ManualControlDialog | None = None
 
         self._channel = "Raw"
@@ -122,12 +125,8 @@ class ImagingPage(QWidget):
         self._target_ra: float | None = None
         self._target_dec: float | None = None
 
-        # Sequence state
+        # Single-shot capture: number of upcoming preview frames to save.
         self._capture_pending = 0
-        self._in_sequence = False
-        self._seq_total = 0
-        self._seq_saved = 0
-        self._seq_start = 0.0
 
         self._build_ui()
         self._wire_signals()
@@ -141,55 +140,85 @@ class ImagingPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # Image toolbar — channel, gamma, auto stretch.
+        # Display controls (channel / gamma / auto-stretch) sit above the image.
         self._toolbar = ImageToolbar()
         root.addWidget(self._toolbar)
 
-        # Center splitter: FitsViewer on the left, vertical right rail on the right.
-        center = QSplitter(Qt.Orientation.Horizontal)
-        center.setChildrenCollapsible(False)
-
+        # Build the control surfaces once; placed into the layout below.
         self._viewer = FitsViewer()
-        center.addWidget(self._viewer)
-
         self._camera_dock = CameraDock()
+        self._sequence_panel = SequencePanel()
         self._mount_dock = MountDock()
         self._focuser_dock = FocuserDock()
         self._histogram_dock = HistogramDock()
+        self._log_panel = LogPanel()
 
-        # Right rail wrapped in a scroll area so the stacked docks never get
-        # squished into widget overlap when the window is short.
-        right_inner = QWidget()
-        right_layout = QVBoxLayout(right_inner)
-        right_layout.setContentsMargins(
+        # Right rail = workflow-staged tabs (Capture → Mount → Focus). Tabbing
+        # gives every control group the full rail height instead of cramming
+        # them into one long scroll. Capture is the home base of the session.
+        self._rail = QTabWidget()
+        self._rail.setMinimumWidth(360)
+        self._rail.setMaximumWidth(460)
+        self._rail.addTab(self._tab_page(self._camera_dock), "Capture")
+        self._rail.addTab(self._tab_page(self._sequence_panel), "Sequence")
+        self._rail.addTab(self._tab_page(self._mount_dock), "Mount")
+        self._rail.addTab(self._tab_page(self._focuser_dock), "Focus")
+
+        # Top region: the image is the hero (gets the stretch); the rail is capped.
+        top = QSplitter(Qt.Orientation.Horizontal)
+        top.setChildrenCollapsible(False)
+        top.addWidget(self._viewer)
+        top.addWidget(self._rail)
+        top.setStretchFactor(0, 1)
+        top.setStretchFactor(1, 0)
+        top.setSizes([1000, 400])
+
+        # Bottom strip: histogram + session log, side by side under the image.
+        self._histogram_dock.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding
+        )
+        self._log_panel.setMinimumHeight(90)
+        bottom = QSplitter(Qt.Orientation.Horizontal)
+        bottom.setChildrenCollapsible(False)
+        bottom.addWidget(self._histogram_dock)
+        bottom.addWidget(self._log_panel)
+        bottom.setStretchFactor(0, 0)
+        bottom.setStretchFactor(1, 1)
+        bottom.setSizes([440, 720])
+
+        # Vertical split: the image area dominates, the bottom strip is a
+        # resizable band. Everything reflows on window resize.
+        main = QSplitter(Qt.Orientation.Vertical)
+        main.setChildrenCollapsible(False)
+        main.addWidget(top)
+        main.addWidget(bottom)
+        main.setStretchFactor(0, 1)
+        main.setStretchFactor(1, 0)
+        main.setSizes([720, 190])
+        root.addWidget(main, 1)
+
+    @staticmethod
+    def _tab_page(widget: QWidget) -> QScrollArea:
+        """Wrap a control dock in a scrollable, top-aligned tab page.
+
+        The dock keeps its natural (Fixed) height and scrolls if the rail is
+        shorter than the content, instead of being vertically stretched.
+        """
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
+        layout.setContentsMargins(
             design.SPACING_MD, design.SPACING_MD, design.SPACING_MD, design.SPACING_MD
         )
-        right_layout.setSpacing(design.SPACING_MD)
-        right_layout.addWidget(self._camera_dock)
-        right_layout.addWidget(self._mount_dock)
-        right_layout.addWidget(self._focuser_dock)
-        right_layout.addWidget(self._histogram_dock)
-        right_layout.addStretch()
+        layout.setSpacing(design.SPACING_MD)
+        layout.addWidget(widget)
+        layout.addStretch()
 
-        right_scroll = QScrollArea()
-        right_scroll.setWidget(right_inner)
-        right_scroll.setWidgetResizable(True)
-        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        right_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        right_scroll.setMinimumWidth(design.RIGHT_RAIL_MIN_WIDTH)
-        right_scroll.setMaximumWidth(design.RIGHT_RAIL_MAX_WIDTH)
-        center.addWidget(right_scroll)
-
-        center.setStretchFactor(0, 1)
-        center.setStretchFactor(1, 0)
-        center.setSizes([900, design.RIGHT_RAIL_MIN_WIDTH])
-        root.addWidget(center, 1)
-
-        # Bottom: log panel.
-        self._log_panel = LogPanel()
-        self._log_panel.setMinimumHeight(96)
-        self._log_panel.setMaximumHeight(180)
-        root.addWidget(self._log_panel)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(inner)
+        return scroll
 
     # ------------------------------------------------------------------
     # Signal wiring
@@ -203,7 +232,8 @@ class ImagingPage(QWidget):
 
         # Camera dock
         self._camera_dock.take_shot_clicked.connect(self._on_take_shot)
-        self._camera_dock.sequence_toggled.connect(self._on_sequence_toggled)
+        self._sequence_panel.start_requested.connect(self._on_sequence_start)
+        self._sequence_panel.stop_requested.connect(self._on_sequence_stop)
 
         # Mount dock
         self._mount_dock.goto_clicked.connect(self._on_goto)
@@ -357,35 +387,123 @@ class ImagingPage(QWidget):
             self._start_preview()
         self.log_message.emit("CMD", "Take shot — saving next frame…")
 
-    def _on_sequence_toggled(self, start: bool) -> None:
-        if start:
-            self._start_sequence()
-        else:
-            self._stop_sequence()
+    # ------------------------------------------------------------------
+    # Advanced sequencer (Sequence tab → SequenceWorker)
+    # ------------------------------------------------------------------
 
-    def _start_sequence(self) -> None:
-        params = self._camera_dock.params()
-        self._seq_total = params.frames
-        self._seq_saved = 0
-        self._seq_start = time.time()
-        self._in_sequence = True
-        self._capture_pending = 0
-        self._camera_dock.set_progress(0, self._seq_total, 0.0)
-        if not (self._preview and self._preview.isRunning()):
-            self._start_preview()
-        self.log_message.emit(
-            "CMD", f"Sequence started: {self._seq_total}× {params.exposure_s:.1f}s"
+    def _on_sequence_start(self, plan) -> None:
+        if not self._camera:
+            self.log_message.emit("WARN", "Connect the camera before running a sequence.")
+            self._sequence_panel.set_running(False)
+            return
+        if self._sequence and self._sequence.isRunning():
+            return
+        self._stop_preview()  # the sequence owns the camera
+
+        self._sequence = SequenceWorker(
+            camera=self._camera,
+            telescope=self._telescope,
+            filterwheel=None,
+            plan=plan,
+            frame_context_provider=self._sequence_frame_context,
+            base_dir=self._sessions_base(),
+            parent=self,
         )
-        self.action_changed.emit(f"Sequence {self._seq_total}× {params.exposure_s:.0f}s")
+        self._sequence.step_started.connect(self._on_seq_step)
+        self._sequence.frame_image.connect(self._on_seq_frame_image)
+        self._sequence.frame_saved.connect(self._on_seq_frame_saved)
+        self._sequence.progress.connect(self._sequence_panel.set_progress)
+        self._sequence.autofocus_due.connect(self._on_seq_autofocus_due)
+        self._sequence.error_occurred.connect(
+            lambda m: self.log_message.emit("ERROR", f"Sequence: {m}")
+        )
+        self._sequence.finished.connect(self._on_seq_finished)
 
-    def _stop_sequence(self) -> None:
-        self._in_sequence = False
-        self._stop_preview()
-        self._camera_dock.clear_progress()
+        self._sequence_panel.set_running(True)
+        self._sequence.start()
+        total = sum(s.count for s in plan.steps if s.enabled and s.count > 0) * max(1, plan.repeat)
+        self.log_message.emit("CMD", f"Sequence started — {total} frame(s).")
+        self.action_changed.emit("Sequence running")
+
+    def _on_sequence_stop(self) -> None:
+        if self._sequence and self._sequence.isRunning():
+            self._sequence.stop()
+            self.log_message.emit("INFO", "Stopping sequence…")
+
+    def _stop_sequence_worker(self) -> None:
+        if self._sequence and self._sequence.isRunning():
+            self._sequence.stop()
+            self._sequence.wait(15000)
+        self._sequence = None
+
+    def _on_seq_step(self, index: int, step) -> None:
+        self._sequence_panel.set_status(
+            f"Step {index + 1}: {step.count}× {step.exposure_s:.1f}s {step.filter_name}"
+        )
+
+    @pyqtSlot(object)
+    def _on_seq_frame_image(self, full_arr) -> None:
+        hfd = compute_hfd(full_arr)
+        self._camera_dock.set_hfd(hfd)
+        self._viewer.display(extract_channel(full_arr, self._channel))
+        self._histogram_dock.update_frame(full_arr)
+
+    def _on_seq_frame_saved(self, path: str, _hfd) -> None:
+        self.log_message.emit("OK", f"Saved {Path(path).name}")
+
+    def _on_seq_autofocus_due(self) -> None:
+        """Run an autofocus pass mid-sequence, then resume the worker."""
+        af_busy = self._autofocus is not None and self._autofocus.isRunning()
+        if not (self._focuser and self._camera) or af_busy:
+            self._resume_sequence()
+            return
+        self.log_message.emit("CMD", "Sequence: autofocus…")
+        self._on_autofocus_requested()
+        if self._autofocus is not None:
+            self._autofocus.finished.connect(self._resume_sequence)
+
+    def _resume_sequence(self) -> None:
+        if self._sequence is not None:
+            self._sequence.resume_after_autofocus()
+
+    def _on_seq_finished(self, completed: bool) -> None:
+        self._sequence_panel.set_running(False)
+        self._sequence = None
         self.log_message.emit(
-            "INFO", f"Sequence stopped — {self._seq_saved}/{self._seq_total} saved."
+            "OK" if completed else "INFO",
+            "Sequence complete." if completed else "Sequence stopped.",
         )
         self.action_changed.emit("Idle")
+
+    def _sequence_frame_context(self, object_name: str, filter_name: str) -> FrameContext:
+        """Build a FrameContext for the worker thread from cached state."""
+        pos = self._last_position
+        cam = self._camera
+        return FrameContext(
+            ra=pos.ra if pos else None,
+            dec=pos.dec if pos else None,
+            altitude=pos.altitude if pos else None,
+            azimuth=pos.azimuth if pos else None,
+            target_ra=self._target_ra,
+            target_dec=self._target_dec,
+            object_name=object_name,
+            filter_name=filter_name,
+            observer=(self._config.get("observer.name") or "").strip(),
+            site_lat=self._config.get("site.latitude"),
+            site_lon=self._config.get("site.longitude"),
+            site_elev=self._config.get("site.elevation"),
+            software=_SOFTWARE,
+            ccd_temp=cam.get_ccd_temperature() if cam else None,
+            egain_driver=cam.get_electrons_per_adu() if cam else None,
+            offset=cam.get_offset() if cam else None,
+            readout_mode=cam.get_readout_mode_name() if cam else None,
+        )
+
+    def _sessions_base(self) -> Path:
+        try:
+            return self._config.sessions_path.parent
+        except AttributeError:
+            return Path.home() / "SeerControl"
 
     def _start_preview(self) -> None:
         if not self._camera:
@@ -415,8 +533,6 @@ class ImagingPage(QWidget):
             self.device_state_changed.emit("camera", "connected", "")
 
     def _on_preview_finished(self) -> None:
-        if self._in_sequence:
-            return
         self._stop_preview()
 
     @pyqtSlot(object, object, object, object)
@@ -435,27 +551,12 @@ class ImagingPage(QWidget):
         self._viewer.display(display)
         self._histogram_dock.update_frame(full_arr)
 
-        # Save logic.
-        should_save = False
+        # Single-shot save: persist the requested number of preview frames.
         if self._capture_pending > 0:
             self._capture_pending -= 1
-            should_save = True
-            if self._capture_pending == 0 and not self._in_sequence:
-                self._stop_preview()
-        elif self._in_sequence:
-            should_save = True
-            self._seq_saved += 1
-            elapsed = max(0.001, time.time() - self._seq_start)
-            fps = self._seq_saved / elapsed
-            remaining = self._seq_total - self._seq_saved
-            eta = remaining / fps if fps > 0 else 0
-            self._camera_dock.set_progress(self._seq_saved, self._seq_total, eta)
-            if self._seq_saved >= self._seq_total:
-                self._stop_sequence()
-                self.log_message.emit("OK", f"Sequence done — {self._seq_saved} frames.")
-
-        if should_save:
             self._save_fits_async(full_arr, start_dt, end_dt)
+            if self._capture_pending == 0:
+                self._stop_preview()
 
     # ------------------------------------------------------------------
     # Mount actions
@@ -691,7 +792,7 @@ class ImagingPage(QWidget):
 
     def _save_fits_async(self, arr: np.ndarray, start_dt: datetime, end_dt: datetime) -> None:
         params = self._camera_dock.params()
-        frame_idx = self._seq_saved if self._in_sequence else 1
+        frame_idx = 1
 
         pos = self._last_position
         ctx_kwargs = {
@@ -773,6 +874,7 @@ class ImagingPage(QWidget):
     # ------------------------------------------------------------------
 
     def shutdown(self) -> None:
+        self._stop_sequence_worker()
         self._stop_preview()
         self._stop_polling()
         self._stop_autofocus()
