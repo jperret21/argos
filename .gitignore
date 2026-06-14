@@ -40,6 +40,12 @@ simulator.log.*
 .env
 .env.*
 
+# Private dev docs (not for public)
+CLAUDE.md
+handoff.md
+docs/plan_*.md
+docs/redesign_*.md
+
 # Tests
 .pytest_cache/
 htmlcov/
