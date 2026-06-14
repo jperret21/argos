@@ -125,8 +125,10 @@ Proposed config keys (defaults to confirm against hardware):
 - [x] §4 — pixel readout, region stats (ROI), saturation highlight (full-well from config)
 
 **Phase 2:**
-- [ ] §5 — FWHM/HFD overlay + 100% loupe + HFD trend graph
-- [ ] §7 — per-frame quality metrics (mini-curves + FITS/session.json)
+- [~] §5 — HFD trend graph + per-frame focus metrics **done** (Focus tab); FWHM
+  overlay on detected stars + 100% loupe still TODO
+- [~] §7 — live per-frame metrics (HFD / star count / sky / peak) **done**;
+  persistence to FITS header / `session.json` still TODO
 - [ ] move the display pipeline (debayer/stretch/channel) into a QThread worker
 - [ ] §8 — expose camera ADC/full-well/egain in config + Configuration UI
 
