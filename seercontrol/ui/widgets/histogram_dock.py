@@ -45,6 +45,7 @@ class HistogramDock(design.Card):
     auto_requested = pyqtSignal()
     saturation_toggled = pyqtSignal(bool)
     roi_toggled = pyqtSignal(bool)
+    crosshair_toggled = pyqtSignal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Display", parent)
@@ -106,22 +107,41 @@ class HistogramDock(design.Card):
         outer.addLayout(design.button_row(self._auto_btn))
 
         # Measurement toggles.
+        self._cross_chk = QCheckBox("Crosshair on image")
+        self._cross_chk.toggled.connect(self.crosshair_toggled)
+        outer.addWidget(self._cross_chk)
         self._sat_chk = QCheckBox("Highlight saturation")
         self._sat_chk.toggled.connect(self.saturation_toggled)
         outer.addWidget(self._sat_chk)
-        self._roi_chk = QCheckBox("Region stats (ROI)")
+        self._roi_chk = QCheckBox("Region stats (drag the box on the image)")
         self._roi_chk.toggled.connect(self.roi_toggled)
         outer.addWidget(self._roi_chk)
 
-        # Readouts.
-        self._pixel_lbl = design.MetricLabel("—")
-        self._region_lbl = design.MutedLabel("")
-        self._region_lbl.setWordWrap(True)
-        read = QFormLayout()
-        read.setHorizontalSpacing(design.SPACING_MD)
-        read.addRow(design.MutedLabel("Pixel"), self._pixel_lbl)
-        outer.addLayout(read)
-        outer.addWidget(self._region_lbl)
+        # ROI stats — compact aligned grid (filled while the ROI is active).
+        outer.addWidget(design.SectionLabel("ROI stats"))
+        rg = QGridLayout()
+        rg.setHorizontalSpacing(design.SPACING_MD)
+        rg.setVerticalSpacing(design.SPACING_XS)
+        rg.setColumnStretch(1, 1)
+        rg.setColumnStretch(3, 1)
+        self._rg_mean = design.MetricLabel("—")
+        self._rg_median = design.MetricLabel("—")
+        self._rg_std = design.MetricLabel("—")
+        self._rg_min = design.MetricLabel("—")
+        self._rg_max = design.MetricLabel("—")
+        self._rg_n = design.MetricLabel("—")
+        for r, (k1, w1, k2, w2) in enumerate(
+            (
+                ("Mean", self._rg_mean, "Median", self._rg_median),
+                ("Std", self._rg_std, "N", self._rg_n),
+                ("Min", self._rg_min, "Max", self._rg_max),
+            )
+        ):
+            rg.addWidget(design.MutedLabel(k1), r, 0)
+            rg.addWidget(w1, r, 1)
+            rg.addWidget(design.MutedLabel(k2), r, 2)
+            rg.addWidget(w2, r, 3)
+        outer.addLayout(rg)
 
         # Whole-frame stats.
         stats = QFormLayout()
@@ -191,18 +211,24 @@ class HistogramDock(design.Card):
         self._mid.setValue(int(round(midtones * 1000)))
         self._guard = False
 
-    def set_pixel_info(self, text: str) -> None:
-        self._pixel_lbl.setText(text or "—")
-
     def set_region_info(self, stats) -> None:
         if not stats:
-            self._region_lbl.setText("")
+            for lbl in (
+                self._rg_mean,
+                self._rg_median,
+                self._rg_std,
+                self._rg_min,
+                self._rg_max,
+                self._rg_n,
+            ):
+                lbl.setText("—")
             return
-        self._region_lbl.setText(
-            f"ROI  n={int(stats['n'])}  mean={stats['mean']:.0f}  "
-            f"median={stats['median']:.0f}  std={stats['std']:.1f}  "
-            f"min={stats['min']:.0f}  max={stats['max']:.0f}"
-        )
+        self._rg_mean.setText(f"{stats['mean']:.0f}")
+        self._rg_median.setText(f"{stats['median']:.0f}")
+        self._rg_std.setText(f"{stats['std']:.1f}")
+        self._rg_min.setText(f"{stats['min']:.0f}")
+        self._rg_max.setText(f"{stats['max']:.0f}")
+        self._rg_n.setText(f"{int(stats['n'])}")
 
     # ------------------------------------------------------------------
     # Internals

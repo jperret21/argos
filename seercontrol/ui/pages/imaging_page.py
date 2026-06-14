@@ -228,8 +228,8 @@ class ImagingPage(QWidget):
         self._histogram_dock.auto_requested.connect(self._viewer.auto_stretch)
         self._histogram_dock.saturation_toggled.connect(self._on_saturation_toggled)
         self._histogram_dock.roi_toggled.connect(self._viewer.set_roi_enabled)
+        self._histogram_dock.crosshair_toggled.connect(self._viewer.set_crosshair_enabled)
         self._viewer.levels_changed.connect(self._histogram_dock.set_levels)
-        self._viewer.pixel_info.connect(self._histogram_dock.set_pixel_info)
         self._viewer.region_info.connect(self._histogram_dock.set_region_info)
 
         # Camera dock
