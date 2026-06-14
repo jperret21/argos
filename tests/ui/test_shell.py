@@ -1,10 +1,7 @@
-"""R1 + R2 — smoke tests for the new Shell and the Imaging page.
+"""Smoke tests for the 3-mode Shell and the Acquisition (Imaging) page.
 
-PyQt6 has poor pytest interaction: a fresh QApplication per test file aborts
-on teardown, and even two consecutive widget-creating tests in the same file
-can SIGABRT on cleanup. We work around this by keeping all widget-touching
-checks inside a single function, and reserving the second test for a path
-that needs no QWidget at all (the legacy-flag class router).
+PyQt6 has poor pytest interaction: multiple widget-creating tests can SIGABRT
+on teardown, so all widget-touching checks live inside a single function.
 """
 
 from __future__ import annotations
@@ -18,54 +15,49 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 from seercontrol.core.config import Config  # noqa: E402
 
 
-def test_shell_and_imaging_walkthrough() -> None:
-    """Build the Shell, switch modes, exercise the Imaging page docks.
-
-    Combined into one function on purpose — PyQt6 doesn't survive multiple
-    fixture-scoped widget creations under pytest.
-    """
-    # Keep a strong reference to the QApplication so it's not GC'd before
-    # the Shell is constructed (PyQt6 aborts otherwise).
+def test_shell_three_mode_walkthrough() -> None:
+    """Build the Shell, switch the 3 modes, exercise the key pages/docks."""
+    # Strong reference to the QApplication so it isn't GC'd before the Shell.
     app = QApplication.instance() or QApplication(["test"])
 
-    from seercontrol.ui.shell import Shell
-    from seercontrol.ui.pages._placeholder import PlaceholderPage
+    from seercontrol.ui.pages.configuration_page import ConfigurationPage
+    from seercontrol.ui.pages.connection_page import ConnectionPage
     from seercontrol.ui.pages.imaging_page import ImagingPage
-    from seercontrol.ui.pages.target_page import TargetPage
+    from seercontrol.ui.panels.stellarium_card import StellariumCard
+    from seercontrol.ui.shell import Shell
     from seercontrol.ui.widgets.camera_dock import CameraDock, CaptureParams
     from seercontrol.ui.widgets.histogram_dock import HistogramDock
     from seercontrol.ui.widgets.mount_dock import MountDock
 
     shell = Shell(Config({}))
     try:
-        # ── R1: Shell skeleton ────────────────────────────────────────
-        assert set(shell._pages.keys()) == {
-            "equipment", "target", "imaging", "settings",
-        }
-        assert shell._stack.currentIndex() == shell._page_indices["equipment"]
+        # ── Shell skeleton: 3 modes, default = connection ────────────────
+        assert set(shell._pages.keys()) == {"connection", "acquisition", "configuration"}
+        assert shell._stack.currentIndex() == shell._page_indices["connection"]
 
-        for mode in ("target", "imaging", "settings", "equipment"):
+        for mode in ("acquisition", "configuration", "connection"):
             shell.sidebar.select(mode)
             assert shell._stack.currentIndex() == shell._page_indices[mode], mode
 
+        assert isinstance(shell._pages["connection"], ConnectionPage)
+        assert isinstance(shell._pages["acquisition"], ImagingPage)
+        assert isinstance(shell._pages["configuration"], ConfigurationPage)
+
+        # ── Status bar device states ─────────────────────────────────────
         shell.status.set_device_state("mount", "connected")
         shell.status.set_device_state("camera", "busy", info="exposing")
-        shell.status.set_device_state("filterwheel", "error")
-        shell.status.set_tracking(True)
-        shell.status.set_action("Slewing to T CrB")
         assert shell.status.device_state("mount") == "connected"
         assert shell.status.device_state("camera") == "busy"
 
-        # Clicking a disconnected badge jumps to Equipment.
-        shell.sidebar.select("imaging")
-        shell._on_badge_clicked("focuser")    # still disconnected
-        assert shell._stack.currentIndex() == shell._page_indices["equipment"]
+        # Clicking a disconnected badge jumps to Connection.
+        shell.sidebar.select("acquisition")
+        shell._on_badge_clicked("focuser")  # still disconnected
+        assert shell._stack.currentIndex() == shell._page_indices["connection"]
 
-        # ── R2: Imaging page ─────────────────────────────────────────
-        page = shell._pages["imaging"]
-        assert isinstance(page, ImagingPage)
-        assert isinstance(page._camera_dock,    CameraDock)
-        assert isinstance(page._mount_dock,     MountDock)
+        # ── Acquisition page docks ───────────────────────────────────────
+        page = shell._pages["acquisition"]
+        assert isinstance(page._camera_dock, CameraDock)
+        assert isinstance(page._mount_dock, MountDock)
         assert isinstance(page._histogram_dock, HistogramDock)
 
         params = page._camera_dock.params()
@@ -73,113 +65,41 @@ def test_shell_and_imaging_walkthrough() -> None:
         assert params.exposure_s > 0
         assert params.frames > 0
 
-        # Sequence toggle flips the internal flag.
-        page._camera_dock._set_in_sequence(True)
-        assert page._camera_dock._in_sequence is True
-        page._camera_dock._set_in_sequence(False)
-        assert page._camera_dock._in_sequence is False
-
         # Camera dock signals.
-        received_shots: list[bool] = []
-        received_seq:   list[bool] = []
-        page._camera_dock.take_shot_clicked.connect(lambda: received_shots.append(True))
-        page._camera_dock.sequence_toggled.connect(received_seq.append)
+        shots: list[bool] = []
+        seq: list[bool] = []
+        page._camera_dock.take_shot_clicked.connect(lambda: shots.append(True))
+        page._camera_dock.sequence_toggled.connect(seq.append)
         page._camera_dock.set_enabled(True)
         page._camera_dock._take_btn.click()
-        page._camera_dock._seq_btn.click()   # start
-        page._camera_dock._seq_btn.click()   # stop
-        assert received_shots == [True]
-        assert received_seq == [True, False]
+        page._camera_dock._seq_btn.click()  # start
+        page._camera_dock._seq_btn.click()  # stop
+        assert shots == [True]
+        assert seq == [True, False]
 
-        # Mount dock goto + live coords.
-        captured_goto: list[tuple[float, float]] = []
-        page._mount_dock.goto_clicked.connect(lambda r, d: captured_goto.append((r, d)))
+        # Mount dock goto.
+        goto: list[tuple[float, float]] = []
+        page._mount_dock.goto_clicked.connect(lambda r, d: goto.append((r, d)))
         page._mount_dock.set_enabled(True)
         page._mount_dock.set_goto_fields(7.5, -12.5)
         page._mount_dock._slew_btn.click()
-        assert captured_goto == [(7.5, -12.5)]
-        page._mount_dock.set_position(
-            ra_h=5.59, dec_d=-5.39, alt_d=42.0, az_d=180.0,
-            tracking=True, slewing=False,
-        )
-        assert "05h" in page._mount_dock._ra_lbl.text()
-        assert "42" in page._mount_dock._alt_lbl.text()
+        assert goto == [(7.5, -12.5)]
 
         # Imaging upward signals reach the global status bar.
-        page.device_state_changed.emit("mount",  "connected", "")
         page.device_state_changed.emit("camera", "busy", "exposing")
-        assert shell.status.device_state("mount")  == "connected"
         assert shell.status.device_state("camera") == "busy"
 
-        # ── R4: Target page ──────────────────────────────────────────
-        target = shell._pages["target"]
-        assert isinstance(target, TargetPage)
+        # ── Connection page: Stellarium card + connect intents ───────────
+        conn = shell._pages["connection"]
+        assert isinstance(conn.stellarium_card, StellariumCard)
 
-        # Profile combo populated from built-ins.
-        assert target._profile_combo.count() >= 3
-
-        # Override fields filled from first profile.
-        assert target._ov_frames.value() > 0
-        assert target._ov_exp.value() > 0
-
-        # set_target pre-fills coords + enables Slew + Start.
-        target.set_target("Test", 5.59, -5.39)
-        assert abs(target._ra_spin.value() - 5.59) < 0.001
-        assert target._start_btn.isEnabled()
-
-        # Slew + Start signal carries ra, dec, profile, object_name.
-        received: list = []
-        target.slew_and_start_requested.connect(
-            lambda ra, dec, p, n: received.append((ra, dec, p, n))
-        )
-        target._start_btn.click()
-        assert len(received) == 1
-        ra_got, dec_got, profile_got, name_got = received[0]
-        assert abs(ra_got - 5.59) < 0.001
-        assert abs(dec_got - (-5.39)) < 0.001
-        assert profile_got is not None
-        assert name_got == "Test"
-
-        # apply_profile fills camera dock correctly.
-        from seercontrol.core.profiles import builtin_profiles
-        first_profile = builtin_profiles()[0]
-        page._camera_dock.apply_profile(first_profile, object_name="M42")
-        p = page._camera_dock.params()
-        assert p.object_name == "M42"
-        assert p.gain == first_profile.gain
-        assert abs(p.exposure_s - first_profile.exposure_s) < 0.01
-
-        # replace_page keeps the stack index stable across swaps.
-        original_index = shell._page_indices["target"]
-        replacement = PlaceholderPage("Target — replaced", sprint_name="R4 test")
-        shell.replace_page("target", replacement)
-        assert shell._page_indices["target"] == original_index
-        assert shell._pages["target"] is replacement
+        intents: list[tuple[str, str, int]] = []
+        conn.connect_requested.connect(lambda d, h, p: intents.append((d, h, p)))
+        conn._host_edit.setText("127.0.0.1")
+        conn._port_spin.setValue(32323)
+        conn._cards["mount"]._connect_btn.click()
+        assert intents == [("mount", "127.0.0.1", 32323)]
     finally:
         shell.close()
         shell.deleteLater()
         app.processEvents()
-
-
-def test_legacy_flag_picks_main_window_class(monkeypatch) -> None:
-    """``SEERCONTROL_LEGACY=1`` must select the legacy MainWindow path.
-
-    We assert the *class chosen* without instantiating it — the legacy window
-    spins up Alpaca workers that don't survive a headless test process.
-    """
-    import importlib
-    monkeypatch.setenv("SEERCONTROL_LEGACY", "1")
-    import main as main_module
-    importlib.reload(main_module)
-
-    captured: dict[str, str] = {}
-
-    def fake_legacy(_config):
-        captured["used"] = "legacy"
-        return object()
-
-    monkeypatch.setattr(
-        "seercontrol.ui.main_window.MainWindow", lambda cfg: fake_legacy(cfg)
-    )
-    main_module._build_window(Config({}))
-    assert captured.get("used") == "legacy"

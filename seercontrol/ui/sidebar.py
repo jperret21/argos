@@ -1,12 +1,12 @@
-"""Left navigation sidebar — switches between the 4 modes.
+"""Left navigation sidebar — switches between the 3 modes.
 
 Vertical toolbar pinned to the left of the Shell. Each entry is a fixed-width
 icon + label; clicking it emits ``mode_changed(mode_id)`` which the Shell uses
 to swap the central QStackedWidget page.
 
 The sidebar exposes a ``pulse(mode_id)`` slot for guidance: when the user
-finishes connecting their devices, the Shell pulses ``"target"`` to hint that
-the next step is to pick what to image.
+finishes connecting their devices, the Shell pulses ``"acquisition"`` to hint
+that the next step is to start imaging.
 """
 
 from __future__ import annotations
@@ -25,20 +25,21 @@ logger = logging.getLogger(__name__)
 # (mode_id, glyph, label, tooltip). Glyphs are plain unicode — avoids shipping
 # icon assets and keeps the file self-contained.
 MODES: tuple[tuple[str, str, str, str], ...] = (
-    ("equipment", "🔌", "Equipment", "Connect telescope, camera, focuser, filter wheel"),
-    ("target",    "🎯", "Target",    "Pick what to image and how"),
-    ("imaging",   "📷", "Imaging",   "Live preview and acquisition"),
-    ("settings",  "⚙",  "Settings",  "Observer, site, preferences"),
+    ("connection", "🔌", "Connection", "Connect the Seestar devices and Stellarium"),
+    ("acquisition", "📷", "Acquisition", "Live preview, focus, capture and sequencing"),
+    ("configuration", "⚙", "Configuration", "Theme, language, paths, observer, credits"),
 )
 
 
 class Sidebar(QToolBar):
-    """Left navigation toolbar with 4 mutually-exclusive mode buttons."""
+    """Left navigation toolbar with 3 mutually-exclusive mode buttons."""
 
-    mode_changed = pyqtSignal(str)   # mode id ('equipment', 'target', ...)
+    mode_changed = pyqtSignal(str)  # mode id ('connection', 'acquisition', ...)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Modes", parent)
+        # objectName is required by QMainWindow.saveState() to persist toolbar layout.
+        self.setObjectName("ModesSidebar")
         self.setMovable(False)
         self.setFloatable(False)
         self.setOrientation(Qt.Orientation.Vertical)
@@ -97,7 +98,7 @@ class Sidebar(QToolBar):
 
     def _select(self, mode_id: str) -> None:
         self.mode_changed.emit(mode_id)
-        # Stop pulsing the target the user just landed on.
+        # Stop pulsing the mode the user just landed on.
         if self._pulse_target == mode_id:
             self.pulse(None)
 
@@ -111,9 +112,7 @@ class Sidebar(QToolBar):
                 action.setText(action.text())  # force redraw
                 widget = self.widgetForAction(action)
                 if widget is not None:
-                    widget.setStyleSheet(
-                        f"background:{theme.ACCENT}; color:white;"
-                    )
+                    widget.setStyleSheet(f"background:{theme.ACCENT}; color:white;")
             else:
                 widget = self.widgetForAction(action)
                 if widget is not None:

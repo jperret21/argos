@@ -22,10 +22,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from seercontrol.core.profiles import Profile
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -52,12 +48,12 @@ _DEFAULT_FILTERS = ("LP", "IR-cut", "Dark")
 class CaptureParams:
     """Snapshot of the form values when the user clicks ▶."""
 
-    frame_type:  str
+    frame_type: str
     object_name: str
     filter_name: str
-    exposure_s:  float
-    gain:        int
-    frames:      int
+    exposure_s: float
+    gain: int
+    frames: int
 
 
 class CameraDock(design.Card):
@@ -66,7 +62,7 @@ class CameraDock(design.Card):
     take_shot_clicked = pyqtSignal()
     # sequence_toggled carries True when the user starts a sequence,
     # False when they stop it mid-flight.
-    sequence_toggled  = pyqtSignal(bool)
+    sequence_toggled = pyqtSignal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Camera", parent)
@@ -210,18 +206,6 @@ class CameraDock(design.Card):
             self._set_in_sequence(False)
         self._progress.setValue(0)
         self._eta_lbl.setText("")
-
-    def apply_profile(self, profile: "Profile", object_name: str = "") -> None:
-        """Pre-fill the capture form from a Profile (called by Target mode)."""
-        self._type_combo.setCurrentText(profile.frame_type)
-        idx = self._filter_combo.findText(profile.filter_name)
-        if idx >= 0:
-            self._filter_combo.setCurrentIndex(idx)
-        self._exp_spin.setValue(profile.exposure_s)
-        self._gain_spin.setValue(profile.gain)
-        self._count_spin.setValue(profile.frames)
-        if object_name:
-            self._object_edit.setText(object_name)
 
     # ------------------------------------------------------------------
     # Internals

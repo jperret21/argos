@@ -53,7 +53,6 @@ from seercontrol.core.imaging.fits_writer import FITSWriter, FrameContext
 from seercontrol.ui import design
 from seercontrol.ui.panels.log_panel import LogPanel
 from seercontrol.ui.panels.manual_control_dialog import ManualControlDialog
-from seercontrol.ui.panels.stellarium_card import StellariumCard
 from seercontrol.ui.widgets.camera_dock import CameraDock
 from seercontrol.ui.widgets.fits_viewer import FitsViewer
 from seercontrol.ui.widgets.focuser_dock import FocuserDock
@@ -81,46 +80,46 @@ class _JogRunnable(QRunnable):
 
     def __init__(self, telescope, axis: int, rate: float, log_signal) -> None:
         super().__init__()
-        self._telescope  = telescope
-        self._axis       = axis
-        self._rate       = rate
-        self._log        = log_signal
+        self._telescope = telescope
+        self._axis = axis
+        self._rate = rate
+        self._log = log_signal
 
     def run(self) -> None:
         try:
             self._telescope.move_axis(self._axis, self._rate)
         except AlpacaError as exc:
             action = "Stop jog" if self._rate == 0.0 else "Jog"
-            level  = "WARN"     if self._rate == 0.0 else "ERROR"
+            level = "WARN" if self._rate == 0.0 else "ERROR"
             self._log.emit(level, f"{action}: {exc}")
 
 
 class ImagingPage(QWidget):
     """The Imaging-mode workspace."""
 
-    device_state_changed = pyqtSignal(str, str, str)   # device, state, info
-    tracking_changed     = pyqtSignal(object)          # bool | None
-    action_changed       = pyqtSignal(str)
-    log_message          = pyqtSignal(str, str)        # level, message
-    discovered_address   = pyqtSignal(str, int)        # host, port
-    position_updated     = pyqtSignal(float, float, bool)  # ra_h, dec_d, slewing
+    device_state_changed = pyqtSignal(str, str, str)  # device, state, info
+    tracking_changed = pyqtSignal(object)  # bool | None
+    action_changed = pyqtSignal(str)
+    log_message = pyqtSignal(str, str)  # level, message
+    discovered_address = pyqtSignal(str, int)  # host, port
+    position_updated = pyqtSignal(float, float, bool)  # ra_h, dec_d, slewing
 
     def __init__(self, config: Config, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = config
 
-        self._telescope:  Telescope  | None = None
-        self._camera:     Camera     | None = None
-        self._focuser:    Focuser    | None = None
-        self._discovery:  DiscoveryWorker     | None = None
-        self._polling:    MountPollingWorker  | None = None
-        self._preview:    LivePreviewWorker   | None = None
-        self._autofocus:  AutofocusWorker     | None = None
+        self._telescope: Telescope | None = None
+        self._camera: Camera | None = None
+        self._focuser: Focuser | None = None
+        self._discovery: DiscoveryWorker | None = None
+        self._polling: MountPollingWorker | None = None
+        self._preview: LivePreviewWorker | None = None
+        self._autofocus: AutofocusWorker | None = None
         self._jog_dialog: ManualControlDialog | None = None
 
         self._channel = "Raw"
         self._last_position: MountPosition | None = None
-        self._target_ra:  float | None = None
+        self._target_ra: float | None = None
         self._target_dec: float | None = None
 
         # Sequence state
@@ -153,28 +152,22 @@ class ImagingPage(QWidget):
         self._viewer = FitsViewer()
         center.addWidget(self._viewer)
 
-        self._camera_dock     = CameraDock()
-        self._mount_dock      = MountDock()
-        self._focuser_dock    = FocuserDock()
-        self._stellarium_card = StellariumCard()
-        self._histogram_dock  = HistogramDock()
-        # Fixed vertical policy so a tight rail doesn't overlap widgets.
-        from PyQt6.QtWidgets import QSizePolicy  # local import — narrow scope
-        self._stellarium_card.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
-        )
+        self._camera_dock = CameraDock()
+        self._mount_dock = MountDock()
+        self._focuser_dock = FocuserDock()
+        self._histogram_dock = HistogramDock()
 
         # Right rail wrapped in a scroll area so the stacked docks never get
         # squished into widget overlap when the window is short.
         right_inner = QWidget()
         right_layout = QVBoxLayout(right_inner)
-        right_layout.setContentsMargins(design.SPACING_MD, design.SPACING_MD,
-                                        design.SPACING_MD, design.SPACING_MD)
+        right_layout.setContentsMargins(
+            design.SPACING_MD, design.SPACING_MD, design.SPACING_MD, design.SPACING_MD
+        )
         right_layout.setSpacing(design.SPACING_MD)
         right_layout.addWidget(self._camera_dock)
         right_layout.addWidget(self._mount_dock)
         right_layout.addWidget(self._focuser_dock)
-        right_layout.addWidget(self._stellarium_card)
         right_layout.addWidget(self._histogram_dock)
         right_layout.addStretch()
 
@@ -400,7 +393,9 @@ class ImagingPage(QWidget):
             return
         params = self._camera_dock.params()
         self._preview = LivePreviewWorker(
-            camera=self._camera, exposure=params.exposure_s, gain=params.gain,
+            camera=self._camera,
+            exposure=params.exposure_s,
+            gain=params.gain,
         )
         self._preview.frame_ready.connect(self._on_frame)
         self._preview.status_updated.connect(self.action_changed)
@@ -471,9 +466,7 @@ class ImagingPage(QWidget):
             return
         self._polling = MountPollingWorker(self._telescope, parent=self)
         self._polling.position_updated.connect(self._on_position)
-        self._polling.error_occurred.connect(
-            lambda m: self.log_message.emit("WARN", f"Poll: {m}")
-        )
+        self._polling.error_occurred.connect(lambda m: self.log_message.emit("WARN", f"Poll: {m}"))
         self._polling.connection_lost.connect(self._on_mount_lost)
         self._polling.start()
 
@@ -487,8 +480,12 @@ class ImagingPage(QWidget):
     def _on_position(self, pos: MountPosition) -> None:
         self._last_position = pos
         self._mount_dock.set_position(
-            pos.ra, pos.dec, pos.altitude, pos.azimuth,
-            pos.tracking, pos.slewing,
+            pos.ra,
+            pos.dec,
+            pos.altitude,
+            pos.azimuth,
+            pos.tracking,
+            pos.slewing,
         )
         self.tracking_changed.emit(pos.tracking)
         # Fan out to the Stellarium worker (via the Shell) so the on-screen
@@ -517,25 +514,6 @@ class ImagingPage(QWidget):
             self.log_message.emit("CMD", f"Slewing → RA {ra_h:.4f}h Dec {dec_d:+.4f}°")
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Goto: {exc}")
-
-    @property
-    def stellarium_card(self) -> StellariumCard:
-        """Expose the card so the Shell can connect its server / pull signals."""
-        return self._stellarium_card
-
-    def slew_and_start(self, ra_h: float, dec_d: float, profile, object_name: str = "") -> None:
-        """Pre-fill the camera dock from a Profile, slew, then start sequence.
-
-        Called by the Shell after the user clicks "▶ Slew + Start" on the
-        Target page. The Shell switches to Imaging mode first, then calls this.
-        """
-        self._camera_dock.apply_profile(profile, object_name)
-        self._target_ra  = ra_h
-        self._target_dec = dec_d
-        if object_name:
-            self.log_message.emit("CMD", f"Target '{object_name}' → RA {ra_h:.4f}h Dec {dec_d:+.4f}°")
-        self._on_goto(ra_h, dec_d)
-        self._start_sequence()
 
     def goto_target(self, ra_h: float, dec_d: float, label: str = "") -> None:
         """Slew to ``(ra, dec)`` from an external source (Stellarium, wizard).
@@ -606,12 +584,16 @@ class ImagingPage(QWidget):
         # Calling it synchronously on the UI thread would freeze the UI and,
         # worse, consume the button-released event before the call returns —
         # resulting in an immediate stop and zero visible movement.
-        QThreadPool.globalInstance().start(_JogRunnable(self._telescope, axis, rate, self.log_message))
+        QThreadPool.globalInstance().start(
+            _JogRunnable(self._telescope, axis, rate, self.log_message)
+        )
 
     def _on_jog_stop(self, axis: int) -> None:
         if not self._telescope:
             return
-        QThreadPool.globalInstance().start(_JogRunnable(self._telescope, axis, 0.0, self.log_message))
+        QThreadPool.globalInstance().start(
+            _JogRunnable(self._telescope, axis, 0.0, self.log_message)
+        )
 
     def _open_jog(self) -> None:
         if not self._telescope:
@@ -672,9 +654,7 @@ class ImagingPage(QWidget):
         )
         self._autofocus.step_done.connect(self._on_af_step)
         self._autofocus.best_found.connect(self._on_af_done)
-        self._autofocus.error_occurred.connect(
-            lambda m: self.log_message.emit("ERROR", f"AF: {m}")
-        )
+        self._autofocus.error_occurred.connect(lambda m: self.log_message.emit("ERROR", f"AF: {m}"))
         self._autofocus.finished.connect(self._on_af_finished)
         self._focuser_dock.set_autofocus_running(True)
         self._autofocus.start()
@@ -693,9 +673,7 @@ class ImagingPage(QWidget):
         self._focuser_dock.set_position(pos)
         hfd_str = f"{hfd:.1f}" if hfd is not None else "—"
         self._focuser_dock.set_autofocus_status(f"Step {step}/{total}  HFD={hfd_str}")
-        self.log_message.emit(
-            "INFO", f"AF {step}/{total}  pos={pos}  HFD={hfd_str}"
-        )
+        self.log_message.emit("INFO", f"AF {step}/{total}  pos={pos}  HFD={hfd_str}")
 
     @pyqtSlot(int, object)
     def _on_af_done(self, best_pos: int, best_hfd) -> None:
@@ -717,19 +695,19 @@ class ImagingPage(QWidget):
 
         pos = self._last_position
         ctx_kwargs = {
-            "ra":       pos.ra        if pos else None,
-            "dec":      pos.dec       if pos else None,
-            "altitude": pos.altitude  if pos else None,
-            "azimuth":  pos.azimuth   if pos else None,
-            "target_ra":  self._target_ra,
+            "ra": pos.ra if pos else None,
+            "dec": pos.dec if pos else None,
+            "altitude": pos.altitude if pos else None,
+            "azimuth": pos.azimuth if pos else None,
+            "target_ra": self._target_ra,
             "target_dec": self._target_dec,
             "object_name": params.object_name,
             "filter_name": params.filter_name,
-            "observer":  (self._config.get("observer.name") or "").strip(),
-            "site_lat":  self._config.get("site.latitude"),
-            "site_lon":  self._config.get("site.longitude"),
+            "observer": (self._config.get("observer.name") or "").strip(),
+            "site_lat": self._config.get("site.latitude"),
+            "site_lon": self._config.get("site.longitude"),
             "site_elev": self._config.get("site.elevation"),
-            "software":  _SOFTWARE,
+            "software": _SOFTWARE,
         }
 
         camera = self._camera
@@ -738,11 +716,19 @@ class ImagingPage(QWidget):
         except AttributeError:
             base = Path.home() / "SeerControl"
         folder = FITSWriter.session_folder(
-            base, params.object_name, start_dt, params.frame_type, params.filter_name,
+            base,
+            params.object_name,
+            start_dt,
+            params.frame_type,
+            params.filter_name,
         )
         filename = FITSWriter.build_filename(
-            params.object_name, params.frame_type, start_dt,
-            params.exposure_s, params.filter_name, frame_idx,
+            params.object_name,
+            params.frame_type,
+            start_dt,
+            params.exposure_s,
+            params.filter_name,
+            frame_idx,
         )
         path = folder / filename
         log_emit = self.log_message.emit
@@ -754,21 +740,27 @@ class ImagingPage(QWidget):
         class _Task(QRunnable):
             def run(self) -> None:
                 ccd_temp = camera.get_ccd_temperature() if camera else None
-                egain_d  = camera.get_electrons_per_adu() if camera else None
+                egain_d = camera.get_electrons_per_adu() if camera else None
                 offset_v = camera.get_offset() if camera else None
-                readout  = camera.get_readout_mode_name() if camera else None
+                readout = camera.get_readout_mode_name() if camera else None
 
                 ctx = FrameContext(
-                    ccd_temp=ccd_temp, egain_driver=egain_d,
-                    offset=offset_v, readout_mode=readout,
+                    ccd_temp=ccd_temp,
+                    egain_driver=egain_d,
+                    offset=offset_v,
+                    readout_mode=readout,
                     **ctx_kwargs,
                 )
                 try:
                     FITSWriter.write(
-                        arr=arr, path=path,
-                        exposure_start=start_dt, exposure_end=end_dt,
-                        exposure_time=exposure, gain=gain,
-                        image_type=frame_type, context=ctx,
+                        arr=arr,
+                        path=path,
+                        exposure_start=start_dt,
+                        exposure_end=end_dt,
+                        exposure_time=exposure,
+                        gain=gain,
+                        image_type=frame_type,
+                        context=ctx,
                     )
                     log_emit("OK", f"Saved {path.name}")
                 except Exception as exc:
