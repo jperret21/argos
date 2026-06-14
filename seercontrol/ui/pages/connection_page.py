@@ -18,13 +18,12 @@ from __future__ import annotations
 
 import logging
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
-    QFormLayout,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -72,77 +71,71 @@ class ConnectionPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll, body = design.scroll_page()
         root.addWidget(scroll)
 
-        inner = QWidget()
-        layout = QVBoxLayout(inner)
-        layout.setContentsMargins(
-            design.SPACING_XL, design.SPACING_XL, design.SPACING_XL, design.SPACING_XL
-        )
-        layout.setSpacing(design.SPACING_LG)
+        body.addWidget(design.HeadingLabel("Connection"))
+        body.addWidget(self._build_address_card())
 
-        layout.addWidget(design.HeadingLabel("Connection"))
-        layout.addWidget(self._build_address_card())
+        body.addWidget(design.SectionLabel("Devices"))
+        body.addLayout(self._build_devices_grid())
+        body.addLayout(self._build_bulk_row())
 
-        for device_id, label, hint in _DEVICES:
-            card = _DeviceCard(device_id, label, hint)
-            card.connect_clicked.connect(self._on_connect_one)
-            card.disconnect_clicked.connect(self.disconnect_requested)
-            self._cards[device_id] = card
-            layout.addWidget(card)
-
-        bulk_row = QHBoxLayout()
-        bulk_row.setSpacing(design.SPACING_MD)
-        self._connect_all_btn = design.SuccessButton("▶  Connect all")
-        self._connect_all_btn.clicked.connect(self._on_connect_all)
-        self._disconnect_all_btn = design.DangerButton("■  Disconnect all")
-        self._disconnect_all_btn.clicked.connect(self.disconnect_all_requested)
-        bulk_row.addWidget(self._connect_all_btn)
-        bulk_row.addStretch()
-        bulk_row.addWidget(self._disconnect_all_btn)
-        layout.addLayout(bulk_row)
-
-        # Stellarium telescope-control server toggle.
+        body.addWidget(design.SectionLabel("Planetarium"))
         host = str(self._config.get("stellarium.host", "127.0.0.1"))
         port = int(self._config.get("stellarium.port", 10001))
         self._stellarium_card = StellariumCard(host=host, tcp_port=port)
-        layout.addWidget(self._stellarium_card)
+        body.addWidget(self._stellarium_card)
 
-        layout.addStretch()
-        scroll.setWidget(inner)
+        body.addStretch()
 
     def _build_address_card(self) -> "design.Card":
         card = design.Card("Address")
         layout = design.card_layout(card)
 
-        form = QFormLayout()
-        form.setHorizontalSpacing(design.SPACING_MD)
-        form.setVerticalSpacing(design.SPACING_SM)
-
+        row = QHBoxLayout()
+        row.setSpacing(design.SPACING_MD)
+        row.addWidget(design.MutedLabel("Host"))
         self._host_edit = QLineEdit()
         self._host_edit.setPlaceholderText("192.168.x.x")
         self._host_edit.textChanged.connect(self._on_host_changed)
-        form.addRow(design.MutedLabel("Host"), self._host_edit)
-
+        row.addWidget(self._host_edit, 1)
+        row.addWidget(design.MutedLabel("Port"))
         self._port_spin = QSpinBox()
         self._port_spin.setRange(1, 65535)
+        self._port_spin.setMaximumWidth(96)
         self._port_spin.valueChanged.connect(self._on_port_changed)
-        form.addRow(design.MutedLabel("Port"), self._port_spin)
-
-        layout.addLayout(form)
-
-        discover_row = QHBoxLayout()
-        discover_row.addStretch()
-        self._discover_btn = design.PrimaryButton("⚡  Auto-discover")
+        row.addWidget(self._port_spin)
+        self._discover_btn = design.PrimaryButton("⚡  Discover")
         self._discover_btn.setToolTip("Send an Alpaca UDP discovery broadcast")
         self._discover_btn.clicked.connect(self.discover_requested)
-        discover_row.addWidget(self._discover_btn)
-        layout.addLayout(discover_row)
+        row.addWidget(self._discover_btn)
+        layout.addLayout(row)
         return card
+
+    def _build_devices_grid(self) -> QGridLayout:
+        grid = QGridLayout()
+        grid.setSpacing(design.SPACING_MD)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        for i, (device_id, label, hint) in enumerate(_DEVICES):
+            card = _DeviceCard(device_id, label, hint)
+            card.connect_clicked.connect(self._on_connect_one)
+            card.disconnect_clicked.connect(self.disconnect_requested)
+            self._cards[device_id] = card
+            grid.addWidget(card, i // 2, i % 2)
+        return grid
+
+    def _build_bulk_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(design.SPACING_MD)
+        self._connect_all_btn = design.SuccessButton("▶  Connect all")
+        self._connect_all_btn.clicked.connect(self._on_connect_all)
+        self._disconnect_all_btn = design.DangerButton("■  Disconnect all")
+        self._disconnect_all_btn.clicked.connect(self.disconnect_all_requested)
+        row.addWidget(self._connect_all_btn)
+        row.addWidget(self._disconnect_all_btn)
+        return row
 
     # ------------------------------------------------------------------
     # Public API
@@ -193,12 +186,12 @@ class ConnectionPage(QWidget):
 
 
 # --------------------------------------------------------------------------- #
-# Device card (one per row)                                                    #
+# Device card (one per grid cell)                                              #
 # --------------------------------------------------------------------------- #
 
 
 class _DeviceCard(design.Card):
-    """A single device row: glyph + name + status text + Connect button."""
+    """A single device tile: glyph + name + status text + Connect button."""
 
     connect_clicked = pyqtSignal(str)
     disconnect_clicked = pyqtSignal(str)
@@ -220,7 +213,7 @@ class _DeviceCard(design.Card):
         self._glyph_lbl.setStyleSheet(
             f"color:{theme.FG_MUTED}; font-size:20px; background:transparent;"
         )
-        self._glyph_lbl.setFixedWidth(28)
+        self._glyph_lbl.setFixedWidth(26)
         row.addWidget(self._glyph_lbl)
 
         text_col = QVBoxLayout()
@@ -230,18 +223,18 @@ class _DeviceCard(design.Card):
             f"color:{theme.FG}; font-size:13px; font-weight:bold;" f" background:transparent;"
         )
         self._hint_lbl = QLabel(hint)
+        self._hint_lbl.setWordWrap(True)
         self._hint_lbl.setStyleSheet(
             f"color:{theme.FG_MUTED}; font-size:11px; background:transparent;"
         )
         text_col.addWidget(self._status_lbl)
         text_col.addWidget(self._hint_lbl)
         row.addLayout(text_col, 1)
+        outer.addLayout(row)
 
         self._connect_btn = design.PrimaryButton("↗  Connect")
         self._connect_btn.clicked.connect(self._on_button)
-        row.addWidget(self._connect_btn)
-
-        outer.addLayout(row)
+        outer.addWidget(self._connect_btn)
 
     def set_state(self, state: str, info: str = "") -> None:
         self._state = state

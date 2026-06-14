@@ -15,10 +15,9 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
-    QFormLayout,
+    QGridLayout,
     QHBoxLayout,
     QLineEdit,
-    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -52,60 +51,68 @@ class ConfigurationPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll, body = design.scroll_page(max_width=940)
         root.addWidget(scroll)
 
-        inner = QWidget()
-        layout = QVBoxLayout(inner)
-        layout.setContentsMargins(
-            design.SPACING_XL, design.SPACING_XL, design.SPACING_XL, design.SPACING_XL
-        )
-        layout.setSpacing(design.SPACING_LG)
+        body.addWidget(design.HeadingLabel("Configuration"))
 
-        layout.addWidget(design.HeadingLabel("Configuration"))
-        layout.addWidget(self._build_observer_card())
-        layout.addWidget(self._build_paths_card())
-        layout.addWidget(self._build_appearance_card())
-        layout.addWidget(self._build_about_card())
-        layout.addStretch()
-        scroll.setWidget(inner)
+        # Two responsive columns: observer/site on the left, the rest stacked
+        # on the right. Both columns share width 1:1 and reflow on resize.
+        row, left, right = design.two_columns()
+        left.addWidget(self._build_observer_card())
+        left.addStretch()
+        right.addWidget(self._build_paths_card())
+        right.addWidget(self._build_appearance_card())
+        right.addWidget(self._build_about_card())
+        right.addStretch()
+        body.addLayout(row)
+        body.addStretch()
 
     def _build_observer_card(self) -> "design.Card":
         card = design.Card("Observer & Site")
         layout = design.card_layout(card)
-        form = QFormLayout()
-        form.setHorizontalSpacing(design.SPACING_MD)
-        form.setVerticalSpacing(design.SPACING_SM)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(design.SPACING_MD)
+        grid.setVerticalSpacing(design.SPACING_SM)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
 
         self._observer_edit = QLineEdit()
         self._observer_edit.editingFinished.connect(self._save_observer)
-        form.addRow(design.MutedLabel("Observer"), self._observer_edit)
+        grid.addWidget(design.MutedLabel("Observer"), 0, 0)
+        grid.addWidget(self._observer_edit, 0, 1, 1, 3)
 
-        self._lat_spin = QDoubleSpinBox()
-        self._lat_spin.setRange(-90.0, 90.0)
-        self._lat_spin.setDecimals(5)
-        self._lat_spin.setSuffix(" °")
+        self._lat_spin = self._make_deg_spin(-90.0, 90.0)
         self._lat_spin.valueChanged.connect(self._save_site)
-        form.addRow(design.MutedLabel("Latitude"), self._lat_spin)
-
-        self._lon_spin = QDoubleSpinBox()
-        self._lon_spin.setRange(-180.0, 180.0)
-        self._lon_spin.setDecimals(5)
-        self._lon_spin.setSuffix(" °")
+        self._lon_spin = self._make_deg_spin(-180.0, 180.0)
         self._lon_spin.valueChanged.connect(self._save_site)
-        form.addRow(design.MutedLabel("Longitude"), self._lon_spin)
+        grid.addWidget(design.MutedLabel("Latitude"), 1, 0)
+        grid.addWidget(self._lat_spin, 1, 1)
+        grid.addWidget(design.MutedLabel("Longitude"), 1, 2)
+        grid.addWidget(self._lon_spin, 1, 3)
 
         self._elev_spin = QDoubleSpinBox()
         self._elev_spin.setRange(-500.0, 9000.0)
         self._elev_spin.setDecimals(1)
         self._elev_spin.setSuffix(" m")
         self._elev_spin.valueChanged.connect(self._save_site)
-        form.addRow(design.MutedLabel("Elevation"), self._elev_spin)
+        grid.addWidget(design.MutedLabel("Elevation"), 2, 0)
+        grid.addWidget(self._elev_spin, 2, 1)
 
-        layout.addLayout(form)
+        layout.addLayout(grid)
+        layout.addWidget(
+            design.MutedLabel("Written to every FITS header (OBSERVER, SITELAT/LONG/ELEV).")
+        )
         return card
+
+    @staticmethod
+    def _make_deg_spin(low: float, high: float) -> QDoubleSpinBox:
+        spin = QDoubleSpinBox()
+        spin.setRange(low, high)
+        spin.setDecimals(5)
+        spin.setSuffix(" °")
+        return spin
 
     def _build_paths_card(self) -> "design.Card":
         card = design.Card("Paths")
@@ -113,9 +120,9 @@ class ConfigurationPage(QWidget):
 
         row = QHBoxLayout()
         row.setSpacing(design.SPACING_MD)
+        row.addWidget(design.MutedLabel("Sessions"))
         self._sessions_edit = QLineEdit()
         self._sessions_edit.editingFinished.connect(self._save_sessions_path)
-        row.addWidget(design.MutedLabel("Sessions"))
         row.addWidget(self._sessions_edit, 1)
         browse = design.PrimaryButton("Browse…")
         browse.clicked.connect(self._browse_sessions_path)
@@ -126,28 +133,33 @@ class ConfigurationPage(QWidget):
     def _build_appearance_card(self) -> "design.Card":
         card = design.Card("Appearance")
         layout = design.card_layout(card)
-        form = QFormLayout()
-        form.setHorizontalSpacing(design.SPACING_MD)
-        form.setVerticalSpacing(design.SPACING_SM)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(design.SPACING_MD)
+        grid.setVerticalSpacing(design.SPACING_SM)
+        grid.setColumnStretch(1, 1)
 
         self._theme_combo = QComboBox()
         for label, value in _THEMES:
             self._theme_combo.addItem(label, value)
-        form.addRow(design.MutedLabel("Theme"), self._theme_combo)
+        grid.addWidget(design.MutedLabel("Theme"), 0, 0)
+        grid.addWidget(self._theme_combo, 0, 1)
 
         self._lang_combo = QComboBox()
         for label, value in _LANGUAGES:
             self._lang_combo.addItem(label, value)
         self._lang_combo.currentIndexChanged.connect(self._save_language)
-        form.addRow(design.MutedLabel("Language"), self._lang_combo)
+        grid.addWidget(design.MutedLabel("Language"), 1, 0)
+        grid.addWidget(self._lang_combo, 1, 1)
 
         self._log_combo = QComboBox()
         for level in _LOG_LEVELS:
             self._log_combo.addItem(level)
         self._log_combo.currentTextChanged.connect(self._save_log_level)
-        form.addRow(design.MutedLabel("Log level"), self._log_combo)
+        grid.addWidget(design.MutedLabel("Log level"), 2, 0)
+        grid.addWidget(self._log_combo, 2, 1)
 
-        layout.addLayout(form)
+        layout.addLayout(grid)
         layout.addWidget(design.MutedLabel("Language change applies after restart."))
         return card
 
