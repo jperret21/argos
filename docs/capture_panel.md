@@ -127,10 +127,11 @@ Proposed config keys (defaults to confirm against hardware):
 **Phase 2:**
 - [~] §5 — HFD trend graph + per-frame focus metrics **done** (Focus tab); FWHM
   overlay on detected stars + 100% loupe still TODO
-- [~] §7 — live per-frame metrics (HFD / star count / sky / peak) **done**;
-  persistence to FITS header / `session.json` still TODO
+- [~] §7 — live per-frame metrics done; **FITS headers HFD/NSTARS/SKYLEVEL written
+  for single-shot frames**; `session.json` + sequence-frame persistence still TODO
 - [ ] move the display pipeline (debayer/stretch/channel) into a QThread worker
-- [ ] §8 — expose camera ADC/full-well/egain in config + Configuration UI
+- [x] §8 — camera ADC/full-well/linearity exposed in config + Configuration UI;
+  the saturation threshold reads full-well from config
 
 **Phase 3:**
 - [ ] §6 — plate solving on G (astrometry.net) + WCS/target overlay

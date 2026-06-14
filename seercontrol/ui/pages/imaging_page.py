@@ -125,7 +125,7 @@ class ImagingPage(QWidget):
         self._last_raw: np.ndarray | None = None  # last raw frame, for re-rendering
         self._target_ra: float | None = None
         self._target_dec: float | None = None
-        self._full_well = int(self._config.get("camera.full_well_adu", 60000))
+        self._last_metrics = None  # last FrameMetrics, for FITS QA headers
 
         # Single-shot capture: number of upcoming preview frames to save.
         self._capture_pending = 0
@@ -384,7 +384,8 @@ class ImagingPage(QWidget):
             self._viewer.display(render_view(self._last_raw, self._channel))
 
     def _on_saturation_toggled(self, enabled: bool) -> None:
-        self._viewer.set_saturation(enabled, self._full_well)
+        threshold = int(self._config.get("camera.full_well_adu", 60000))
+        self._viewer.set_saturation(enabled, threshold)
 
     def _on_take_shot(self) -> None:
         self._capture_pending = 1
@@ -551,6 +552,7 @@ class ImagingPage(QWidget):
 
         # Per-frame quality metrics (HFD trend + star count + sky) — display only.
         metrics = frame_metrics(full_arr)
+        self._last_metrics = metrics
         self._camera_dock.set_hfd(metrics.hfd)
         self._focuser_dock.push_metrics(metrics)
 
@@ -817,6 +819,9 @@ class ImagingPage(QWidget):
             "site_lon": self._config.get("site.longitude"),
             "site_elev": self._config.get("site.elevation"),
             "software": _SOFTWARE,
+            "hfd": self._last_metrics.hfd if self._last_metrics else None,
+            "star_count": self._last_metrics.star_count if self._last_metrics else None,
+            "sky_adu": self._last_metrics.sky_adu if self._last_metrics else None,
         }
 
         camera = self._camera

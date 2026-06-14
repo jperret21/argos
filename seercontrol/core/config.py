@@ -30,8 +30,16 @@ _DEFAULTS: dict[str, Any] = {
     },
     "ui": {
         "log_level": "INFO",
-        "window_state": None,   # base64 QMainWindow.saveState()
+        "window_state": None,  # base64 QMainWindow.saveState()
         "window_geometry": None,
+    },
+    # Sensor characteristics — confirm against hardware (see docs/capture_panel.md §8).
+    # IMX585 Starvis 2: 12-bit ADC scaled to 16-bit; "full_well_adu" is the
+    # saturation/linearity threshold used by the display clipping indicator.
+    "camera": {
+        "adc_bits": 12,
+        "full_well_adu": 60000,
+        "linearity_max_adu": 50000,
     },
 }
 
@@ -132,6 +140,7 @@ class Config:
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+
 
 def _deep_copy(d: dict) -> dict:
     return json.loads(json.dumps(d))

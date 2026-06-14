@@ -15,9 +15,11 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFormLayout,
     QGridLayout,
     QHBoxLayout,
     QLineEdit,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -39,6 +41,7 @@ class ConfigurationPage(QWidget):
     def __init__(self, config: Config, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = config
+        self._loading = False  # guards _save_* while populating fields
         self._build_ui()
         self._load_config()
 
@@ -62,6 +65,7 @@ class ConfigurationPage(QWidget):
         left.addWidget(self._build_observer_card())
         left.addStretch()
         right.addWidget(self._build_paths_card())
+        right.addWidget(self._build_camera_card())
         right.addWidget(self._build_appearance_card())
         right.addWidget(self._build_about_card())
         right.addStretch()
@@ -130,6 +134,37 @@ class ConfigurationPage(QWidget):
         layout.addLayout(row)
         return card
 
+    def _build_camera_card(self) -> "design.Card":
+        card = design.Card("Camera")
+        layout = design.card_layout(card)
+        form = QFormLayout()
+        form.setHorizontalSpacing(design.SPACING_MD)
+        form.setVerticalSpacing(design.SPACING_SM)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+
+        self._fullwell_spin = QSpinBox()
+        self._fullwell_spin.setRange(0, 65535)
+        self._fullwell_spin.setSingleStep(1000)
+        self._fullwell_spin.valueChanged.connect(self._save_camera)
+        form.addRow(design.MutedLabel("Full-well (ADU)"), self._fullwell_spin)
+
+        self._linmax_spin = QSpinBox()
+        self._linmax_spin.setRange(0, 65535)
+        self._linmax_spin.setSingleStep(1000)
+        self._linmax_spin.valueChanged.connect(self._save_camera)
+        form.addRow(design.MutedLabel("Linearity max (ADU)"), self._linmax_spin)
+
+        self._adc_spin = QSpinBox()
+        self._adc_spin.setRange(8, 16)
+        self._adc_spin.valueChanged.connect(self._save_camera)
+        form.addRow(design.MutedLabel("ADC bits"), self._adc_spin)
+
+        layout.addLayout(form)
+        layout.addWidget(
+            design.MutedLabel("Full-well = the saturation/clipping threshold (Display tab).")
+        )
+        return card
+
     def _build_appearance_card(self) -> "design.Card":
         card = design.Card("Appearance")
         layout = design.card_layout(card)
@@ -176,6 +211,7 @@ class ConfigurationPage(QWidget):
     # ------------------------------------------------------------------
 
     def _load_config(self) -> None:
+        self._loading = True
         self._observer_edit.setText(str(self._config.get("observer.name", "") or ""))
         self._lat_spin.setValue(float(self._config.get("site.latitude", 0.0) or 0.0))
         self._lon_spin.setValue(float(self._config.get("site.longitude", 0.0) or 0.0))
@@ -186,6 +222,10 @@ class ConfigurationPage(QWidget):
         idx = self._log_combo.findText(self._config.get("ui.log_level", "INFO"))
         if idx >= 0:
             self._log_combo.setCurrentIndex(idx)
+        self._fullwell_spin.setValue(int(self._config.get("camera.full_well_adu", 60000)))
+        self._linmax_spin.setValue(int(self._config.get("camera.linearity_max_adu", 50000)))
+        self._adc_spin.setValue(int(self._config.get("camera.adc_bits", 12)))
+        self._loading = False
 
     @staticmethod
     def _select_combo_data(combo: QComboBox, value: str) -> None:
@@ -198,9 +238,19 @@ class ConfigurationPage(QWidget):
         self._config.save()
 
     def _save_site(self) -> None:
+        if self._loading:
+            return
         self._config.set("site.latitude", float(self._lat_spin.value()))
         self._config.set("site.longitude", float(self._lon_spin.value()))
         self._config.set("site.elevation", float(self._elev_spin.value()))
+        self._config.save()
+
+    def _save_camera(self) -> None:
+        if self._loading:
+            return
+        self._config.set("camera.full_well_adu", int(self._fullwell_spin.value()))
+        self._config.set("camera.linearity_max_adu", int(self._linmax_spin.value()))
+        self._config.set("camera.adc_bits", int(self._adc_spin.value()))
         self._config.save()
 
     def _save_sessions_path(self) -> None:
@@ -218,9 +268,13 @@ class ConfigurationPage(QWidget):
             self._config.save()
 
     def _save_language(self) -> None:
+        if self._loading:
+            return
         self._config.set("ui.language", self._lang_combo.currentData())
         self._config.save()
 
     def _save_log_level(self, level: str) -> None:
+        if self._loading:
+            return
         self._config.set("ui.log_level", level)
         self._config.save()
