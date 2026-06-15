@@ -178,6 +178,8 @@ class Shell(QMainWindow):
             self._acquisition.connect_mount(host, port)
         elif device_id == "camera":
             self._acquisition.connect_camera(host, port)
+        elif device_id == "filterwheel":
+            self._acquisition.connect_filterwheel(host, port)
         elif device_id == "focuser":
             self._acquisition.connect_focuser(host, port)
         else:
@@ -188,12 +190,15 @@ class Shell(QMainWindow):
             self._acquisition.disconnect_mount()
         elif device_id == "camera":
             self._acquisition.disconnect_camera()
+        elif device_id == "filterwheel":
+            self._acquisition.disconnect_filterwheel()
         elif device_id == "focuser":
             self._acquisition.disconnect_focuser()
 
     def _on_connect_all(self, host: str, port: int) -> None:
         self._acquisition.connect_mount(host, port)
         self._acquisition.connect_camera(host, port)
+        self._acquisition.connect_filterwheel(host, port)
         self._acquisition.connect_focuser(host, port)
 
     # ------------------------------------------------------------------

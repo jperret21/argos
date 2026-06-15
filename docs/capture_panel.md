@@ -124,17 +124,32 @@ Proposed config keys (defaults to confirm against hardware):
 - [x] §3 — stretch (black/mid/white, linear/log/asinh) + per-channel histogram + indicator
 - [x] §4 — pixel readout, region stats (ROI), saturation highlight (full-well from config)
 
-**Phase 2:**
-- [~] §5 — HFD trend graph + per-frame focus metrics **done** (Focus tab); FWHM
-  overlay on detected stars + 100% loupe still TODO
-- [~] §7 — live per-frame metrics done; **FITS headers HFD/NSTARS/SKYLEVEL written
-  for single-shot frames**; `session.json` + sequence-frame persistence still TODO
-- [ ] move the display pipeline (debayer/stretch/channel) into a QThread worker
+**Phase 2 — DONE:**
+- [x] §5 — HFD trend graph + per-frame focus metrics (Focus tab); **FWHM overlay
+  on detected stars** (rings sized by FWHM, `detect_stars` measures FWHM +
+  eccentricity per star) + **100% loupe** (cursor-tracking 1:1 magnifier).
+  Toggles live in the Display tab.
+- [x] §7 — live per-frame metrics; **FITS QA headers (HFD/FWHM/NSTARS/SKYLEVEL/
+  ECCENTR) written for single-shot *and* sequence frames**; **`session.json`**
+  rolls up every sub's metrics (written atomically as the sequence runs).
+- [x] move the display pipeline (debayer/stretch/channel/metrics/detect) into a
+  QThread worker (`workers/preview_processor.py` — latest-frame-wins).
 - [x] §8 — camera ADC/full-well/linearity exposed in config + Configuration UI;
   the saturation threshold reads full-well from config
 
 **Phase 3:**
-- [ ] §6 — plate solving on G (astrometry.net) + WCS/target overlay
+- [x] §6 — plate solving on the green plane via **ASTAP**: solver glue
+  (`core/imaging/platesolve.py` + `workers/solve_worker.py`), an **Astrometry
+  config panel** (ASTAP path/auto-detect, catalog, search radius, downsample,
+  scale hint), and a **Solve** button in the analysis window (centre RA/Dec,
+  scale, rotation). Now also: a **FrameWCS** model (astropy TAN, pixel ↔
+  celestial on the green grid) with **`wcs_grid`** geometry; a **RA/Dec grid +
+  field-centre marker + target reticle** overlay in the viewer (toggle in the
+  Display tab); **per-star RA/Dec** on the clicked star (analysis window *and*
+  live view); and a **live-frame Solve** (toolbar) that uses the mount RA/Dec as
+  the position hint, reports the offset from the goto target, and draws the grid
+  + target circle on the live image. **Future:** name the clicked star from a
+  Gaia/UCAC catalogue (RA/Dec → designation + magnitude).
 
 ### Status
 - `core/imaging/debayer.py` provides the **data-pipeline primitives** (CFA split +

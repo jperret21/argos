@@ -30,6 +30,7 @@ Upward signals the Shell wires into the global status bar + Connection page:
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -48,15 +49,31 @@ from PyQt6.QtWidgets import (
 
 from seercontrol.core.alpaca.camera import Camera
 from seercontrol.core.alpaca.client import AlpacaError
+from seercontrol.core.alpaca.filterwheel import POSITION_NAMES, FilterWheel
 from seercontrol.core.alpaca.focuser import Focuser
 from seercontrol.core.alpaca.telescope import MountPosition, Telescope
 from seercontrol.core.config import Config
-from seercontrol.core.imaging.debayer import VIEW_RAW, VIEW_SUPERPIXEL
+from seercontrol.core.imaging.debayer import VIEW_G, VIEW_SUPERPIXEL, extract_plane
 from seercontrol.core.imaging.fits_writer import FITSWriter, FrameContext
+from seercontrol.core.imaging.metrics import (
+    ARCSEC_PER_FULL_PX,
+    ARCSEC_PER_GREEN_PX,
+    DEFAULT_STAR_RADIUS,
+    measure_star_at,
+)
+from seercontrol.core.imaging.platesolve import (
+    SolveSettings,
+    angular_separation_deg,
+    format_dec_dms,
+    format_ra_hms,
+    frame_wcs,
+    wcs_grid,
+)
 from seercontrol.ui import design, theme
 from seercontrol.ui.panels.log_panel import LogPanel
 from seercontrol.ui.panels.manual_control_dialog import ManualControlDialog
 from seercontrol.ui.widgets.camera_dock import CameraDock
+from seercontrol.ui.widgets.filterwheel_dock import FilterWheelDock
 from seercontrol.ui.widgets.fits_viewer import FitsViewer
 from seercontrol.ui.widgets.focuser_dock import FocuserDock
 from seercontrol.ui.widgets.histogram_dock import HistogramDock
@@ -69,6 +86,7 @@ from seercontrol.workers.exposure_worker import LivePreviewWorker
 from seercontrol.workers.polling_worker import MountPollingWorker
 from seercontrol.workers.preview_processor import PreviewProcessor
 from seercontrol.workers.sequence_worker import SequenceWorker
+from seercontrol.workers.solve_worker import SolveWorker
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +127,33 @@ class _JogRunnable(QRunnable):
             self._log.emit(level, f"{action}: {exc}")
 
 
+class _FilterMoveRunnable(QRunnable):
+    """One-shot off-thread filter-wheel move + settle poll.
+
+    The move is async (the wheel reports position -1 while turning). Running it
+    off the UI thread keeps the UI responsive; the result is reported back via
+    the ``done`` signal as ``(position, name)``.
+    """
+
+    def __init__(self, filterwheel, position: int, done_signal, log_signal) -> None:
+        super().__init__()
+        self._fw = filterwheel
+        self._position = position
+        self._done = done_signal
+        self._log = log_signal
+
+    def run(self) -> None:
+        try:
+            self._fw.set_position(self._position)
+            deadline = time.monotonic() + 20.0
+            while self._fw.get_position() == -1 and time.monotonic() < deadline:
+                time.sleep(0.15)
+            pos = self._fw.get_position()
+            self._done.emit(pos, self._fw.position_name())
+        except AlpacaError as exc:
+            self._log.emit("ERROR", f"Filter move: {exc}")
+
+
 class ImagingPage(QWidget):
     """The Imaging-mode workspace."""
 
@@ -118,6 +163,7 @@ class ImagingPage(QWidget):
     log_message = pyqtSignal(str, str)  # level, message
     discovered_address = pyqtSignal(str, int)  # host, port
     position_updated = pyqtSignal(float, float, bool)  # ra_h, dec_d, slewing
+    _filter_moved = pyqtSignal(int, str)  # internal: wheel settled at (pos, name)
 
     def __init__(self, config: Config, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -126,6 +172,7 @@ class ImagingPage(QWidget):
         self._telescope: Telescope | None = None
         self._camera: Camera | None = None
         self._focuser: Focuser | None = None
+        self._filterwheel: FilterWheel | None = None
         self._discovery: DiscoveryWorker | None = None
         self._polling: MountPollingWorker | None = None
         self._preview: LivePreviewWorker | None = None
@@ -140,6 +187,13 @@ class ImagingPage(QWidget):
         self._target_ra: float | None = None
         self._target_dec: float | None = None
         self._last_metrics = None  # last FrameMetrics, for FITS QA headers
+        self._star_radius = DEFAULT_STAR_RADIUS  # aperture for FWHM (§5)
+        self._green_shape: tuple[int, int] | None = None
+        self._disp_shape: tuple[int, int] | None = None
+        self._selected_green: tuple[float, float] | None = None  # clicked star (green px)
+        self._analysis_windows: list = []  # open Open-FITS analysis windows
+        self._solver: SolveWorker | None = None  # live plate-solve (§6)
+        self._wcs = None  # platesolve.FrameWCS from the last live solve
 
         # Single-shot capture: number of upcoming preview frames to save.
         self._capture_pending = 0
@@ -168,6 +222,7 @@ class ImagingPage(QWidget):
         self._sequence_panel = SequencePanel()
         self._mount_dock = MountDock()
         self._focuser_dock = FocuserDock()
+        self._filterwheel_dock = FilterWheelDock()
         self._histogram_dock = HistogramDock()
         self._log_panel = LogPanel()
 
@@ -181,6 +236,7 @@ class ImagingPage(QWidget):
         self._rail.addTab(self._tab_page(self._sequence_panel), "Sequence")
         self._rail.addTab(self._tab_page(self._mount_dock), "Mount")
         self._rail.addTab(self._tab_page(self._focuser_dock), "Focus")
+        self._rail.addTab(self._tab_page(self._filterwheel_dock), "Filter")
         self._rail.addTab(self._tab_page(self._histogram_dock), "Display")
 
         # Image column: the viewer (hero) + a thin always-visible stats strip
@@ -264,12 +320,18 @@ class ImagingPage(QWidget):
         # Toolbar
         self._toolbar.channel_changed.connect(self._on_channel_changed)
         self._toolbar.open_requested.connect(self._on_open_fits)
+        self._toolbar.solve_requested.connect(self._on_solve_live)
         # Display pipeline: the Display tab (histogram/stretch) ↔ the viewer.
         self._histogram_dock.stretch_changed.connect(self._viewer.set_stretch)
         self._histogram_dock.auto_requested.connect(self._viewer.auto_stretch)
         self._histogram_dock.saturation_toggled.connect(self._on_saturation_toggled)
         self._histogram_dock.roi_toggled.connect(self._viewer.set_roi_enabled)
         self._histogram_dock.crosshair_toggled.connect(self._viewer.set_crosshair_enabled)
+        self._histogram_dock.stars_overlay_toggled.connect(self._viewer.set_star_overlay_enabled)
+        self._histogram_dock.loupe_toggled.connect(self._viewer.set_loupe_enabled)
+        self._histogram_dock.astrometry_toggled.connect(self._viewer.set_astrometry_enabled)
+        self._histogram_dock.star_radius_changed.connect(self._on_star_radius)
+        self._viewer.star_clicked.connect(self._on_star_clicked)
         self._viewer.levels_changed.connect(self._histogram_dock.set_levels)
         self._viewer.region_info.connect(self._histogram_dock.set_region_info)
 
@@ -277,6 +339,10 @@ class ImagingPage(QWidget):
         self._camera_dock.take_shot_clicked.connect(self._on_take_shot)
         self._sequence_panel.start_requested.connect(self._on_sequence_start)
         self._sequence_panel.stop_requested.connect(self._on_sequence_stop)
+
+        # Filter wheel dock
+        self._filterwheel_dock.move_requested.connect(self._on_filter_move)
+        self._filter_moved.connect(self._on_filter_moved)
 
         # Mount dock
         self._mount_dock.goto_clicked.connect(self._on_goto)
@@ -378,6 +444,53 @@ class ImagingPage(QWidget):
         self.device_state_changed.emit("camera", "disconnected", "")
         self.log_message.emit("INFO", "Camera disconnected.")
 
+    def connect_filterwheel(self, host: str, port: int) -> None:
+        self._config.alpaca_host = host
+        self._config.alpaca_port = port
+        self.action_changed.emit(f"Connecting filter wheel {host}:{port}…")
+        try:
+            fw = FilterWheel(host=host, port=port)
+            fw.connect()
+            self._filterwheel = fw
+            names = [POSITION_NAMES[i] for i in sorted(POSITION_NAMES)]
+            self._filterwheel_dock.set_filters(names)
+            self._filterwheel_dock.set_enabled(True)
+            self._camera_dock.set_filter_options(names)
+            self._sequence_panel.set_filter_options(names)
+            pos = fw.get_position()
+            self._filterwheel_dock.set_position(pos, fw.position_name())
+            self.log_message.emit("OK", f"Filter wheel connected — {fw.position_name()}")
+            self.device_state_changed.emit("filterwheel", "connected", fw.position_name())
+        except AlpacaError as exc:
+            self.log_message.emit("ERROR", f"Filter wheel: {exc}")
+            self.device_state_changed.emit("filterwheel", "error", str(exc)[:48])
+
+    def disconnect_filterwheel(self) -> None:
+        if self._filterwheel:
+            try:
+                self._filterwheel.disconnect()
+            except AlpacaError:
+                pass
+            self._filterwheel = None
+        self._filterwheel_dock.set_enabled(False)
+        self.device_state_changed.emit("filterwheel", "disconnected", "")
+        self.log_message.emit("INFO", "Filter wheel disconnected.")
+
+    def _on_filter_move(self, position: int) -> None:
+        if not self._filterwheel:
+            return
+        self._filterwheel_dock.set_position(-1, "")  # show "Moving…"
+        self.device_state_changed.emit("filterwheel", "busy", "moving")
+        QThreadPool.globalInstance().start(
+            _FilterMoveRunnable(self._filterwheel, position, self._filter_moved, self.log_message)
+        )
+
+    @pyqtSlot(int, str)
+    def _on_filter_moved(self, position: int, name: str) -> None:
+        self._filterwheel_dock.set_position(position, name)
+        self.device_state_changed.emit("filterwheel", "connected", name)
+        self.log_message.emit("CMD", f"Filter → {name}")
+
     def connect_focuser(self, host: str, port: int) -> None:
         self._config.alpaca_host = host
         self._config.alpaca_port = port
@@ -412,6 +525,7 @@ class ImagingPage(QWidget):
     def disconnect_all(self) -> None:
         self.disconnect_camera()
         self.disconnect_mount()
+        self.disconnect_filterwheel()
         self.disconnect_focuser()
         self.action_changed.emit("Disconnected")
 
@@ -439,13 +553,18 @@ class ImagingPage(QWidget):
     def _on_processed(self, pf) -> None:
         """Apply a worker-processed frame to the UI (cheap work, UI thread)."""
         self._last_metrics = pf.metrics
+        self._green_shape = pf.green_shape
+        self._disp_shape = pf.display.shape[:2]
         self._camera_dock.set_hfd(pf.metrics.hfd)
         self._focuser_dock.push_metrics(pf.metrics)
         self._update_stats(pf)
         # Histogram first: sets the slider/data range, then the viewer's
         # auto-stretch emits levels that the dock sliders sync to.
         self._histogram_dock.set_histogram(pf.centers, pf.r, pf.g, pf.b, pf.lo, pf.hi)
+        self._viewer.set_stars(pf.stars, pf.green_shape)
         self._viewer.display(pf.display)
+        # Keep a clicked star's FWHM readout live as new frames arrive.
+        self._remeasure_selection()
 
     def _update_stats(self, pf) -> None:
         """Refresh the live stats strip under the image."""
@@ -457,6 +576,91 @@ class ImagingPage(QWidget):
         self._sb["Max"].setText(f"{int(pf.vmax)}")
         self._sb["Mean"].setText(f"{pf.vmean:.0f}")
 
+    # ------------------------------------------------------------------
+    # Star measurement on click (§5)
+    # ------------------------------------------------------------------
+
+    def _on_star_radius(self, radius: int) -> None:
+        """User changed the FWHM aperture — re-render overlay + selection."""
+        self._star_radius = max(2, int(radius))
+        self._processor.set_radius(self._star_radius)
+        if self._last_raw is not None:
+            self._processor.submit(self._last_raw, self._channel)  # refresh overlay
+
+    def _on_star_clicked(self, x_disp: float, y_disp: float) -> None:
+        """Measure the star under the click and pin its readout to the image."""
+        gp = self._disp_to_green(x_disp, y_disp)
+        if gp is None or self._last_raw is None:
+            return
+        meas = measure_star_at(self._last_raw, gp[0], gp[1], self._star_radius)
+        if meas is None:
+            self._viewer.clear_selection()
+            self._selected_green = None
+            return
+        self._selected_green = (meas.x, meas.y)
+        self._show_selection(meas)
+
+    def _remeasure_selection(self) -> None:
+        """Re-measure the pinned star on the new frame so its FWHM stays live."""
+        if self._selected_green is None or self._last_raw is None:
+            return
+        meas = measure_star_at(
+            self._last_raw, self._selected_green[0], self._selected_green[1], self._star_radius
+        )
+        if meas is None:
+            return
+        self._selected_green = (meas.x, meas.y)  # follow small tracking drift
+        self._show_selection(meas)
+
+    def _show_selection(self, meas) -> None:
+        dp = self._green_to_disp(meas.x, meas.y)
+        if dp is None:
+            return
+        self._viewer.mark_selection(dp[0], dp[1], self._format_star_text(meas))
+
+    def _format_star_text(self, meas) -> str:
+        parts = ["★ selected star"]
+        if meas.fwhm is not None:
+            parts.append(f"FWHM {meas.fwhm * ARCSEC_PER_GREEN_PX:.1f}″")
+        if meas.hfd is not None:
+            parts.append(f"HFD {meas.hfd * ARCSEC_PER_GREEN_PX:.1f}″")
+        if meas.eccentricity is not None:
+            parts.append(f"ecc {meas.eccentricity:.2f}")
+        parts.append(f"SNR {meas.snr:.0f}")
+        parts.append(f"peak {meas.peak_adu} ADU")
+        line1 = "   ".join(parts)
+        # Frame astrometry: pointing from the mount + plate scale (no solve yet).
+        pos = self._last_position
+        if pos is not None:
+            line2 = (
+                f"field  RA {pos.ra:.3f}h  Dec {pos.dec:+.2f}°   ·   {ARCSEC_PER_FULL_PX:.2f}″/px"
+            )
+        else:
+            line2 = f"scale  {ARCSEC_PER_FULL_PX:.2f}″/px   (mount not connected)"
+        text = f"{line1}\n{line2}"
+        if self._wcs is not None:  # plate-solved → the star's true celestial position
+            ra_h, dec_d = self._wcs.pixel_to_radec(meas.x, meas.y)
+            text += f"\nstar   RA {format_ra_hms(ra_h)}  Dec {format_dec_dms(dec_d)}"
+        return text
+
+    def _disp_to_green(self, x_disp: float, y_disp: float) -> tuple[float, float] | None:
+        if self._green_shape is None or self._disp_shape is None:
+            return None
+        gh, gw = self._green_shape
+        dh, dw = self._disp_shape
+        if dw <= 0 or dh <= 0:
+            return None
+        return x_disp * gw / dw, y_disp * gh / dh
+
+    def _green_to_disp(self, x_green: float, y_green: float) -> tuple[float, float] | None:
+        if self._green_shape is None or self._disp_shape is None:
+            return None
+        gh, gw = self._green_shape
+        dh, dw = self._disp_shape
+        if gw <= 0 or gh <= 0:
+            return None
+        return x_green * dw / gw, y_green * dh / gh
+
     def _on_open_fits(self) -> None:
         start = str(Path.home() / "Downloads")
         path, _ = QFileDialog.getOpenFileName(
@@ -466,31 +670,106 @@ class ImagingPage(QWidget):
             self.load_fits(path)
 
     def load_fits(self, path: str) -> None:
-        """Load a FITS file from disk into the viewer/pipeline (display only).
+        """Open a saved FITS for analysis (alias kept for external callers)."""
+        self.open_analysis(path)
 
-        The raw array is shown faithfully in the Raw view; switch the View
-        selector to exercise the debayer modes / channel split.
+    def open_analysis(self, path: str) -> None:
+        """Open a saved FITS in a floating analysis window.
+
+        The main viewer keeps following the live camera; deep inspection of an
+        already-captured sub (stretch, channels, FWHM, region stats) happens in
+        a separate, independent window so the two never fight over the display.
         """
-        from astropy.io import fits  # heavy import — only on demand
+        from seercontrol.ui.analysis_window import AnalysisWindow
 
-        try:
-            with fits.open(path) as hdul:
-                data = next((h.data for h in hdul if getattr(h, "data", None) is not None), None)
-            if data is None:
-                self.log_message.emit("ERROR", f"No image data in {Path(path).name}")
-                return
-            arr = np.nan_to_num(np.asarray(data, dtype=np.float32), nan=0.0)
-            if arr.ndim == 3:  # colour / cube → collapse to a 2-D plane for display
-                arr = arr.mean(axis=0) if arr.shape[0] <= 4 else arr.mean(axis=2)
-            if arr.ndim != 2:
-                self.log_message.emit("ERROR", f"Unsupported FITS shape {arr.shape}")
-                return
-            self._channel = VIEW_RAW
-            self._toolbar.set_view(VIEW_RAW)
-            self._show_raw(arr)
-            self.log_message.emit("OK", f"Loaded {Path(path).name}  {arr.shape[1]}×{arr.shape[0]}")
-        except Exception as exc:
-            self.log_message.emit("ERROR", f"Open FITS failed: {exc}")
+        win = AnalysisWindow(self._config)
+        if not win.load(path):
+            self.log_message.emit("ERROR", f"Could not open {Path(path).name}")
+            win.deleteLater()
+            return
+        win.show()
+        win.raise_()
+        # Keep references so the windows aren't GC'd; prune closed ones.
+        self._analysis_windows = [w for w in self._analysis_windows if w.isVisible()]
+        self._analysis_windows.append(win)
+        self.log_message.emit("OK", f"Analysing {Path(path).name} in a separate window")
+
+    # ------------------------------------------------------------------
+    # Plate solving the live frame (§6) — ASTAP with the mount as a hint
+    # ------------------------------------------------------------------
+
+    def _cfg(self, key: str, default):
+        value = self._config.get(key, default)
+        return default if value is None else value
+
+    def _on_solve_live(self) -> None:
+        """Plate-solve the current live frame; show RA/Dec + a WCS grid overlay."""
+        if self._last_raw is None:
+            self.log_message.emit("WARN", "No frame to solve yet — start a preview first.")
+            return
+        if self._solver is not None and self._solver.isRunning():
+            return
+        green = extract_plane(self._last_raw, VIEW_G)
+        gh = green.shape[0]
+        use_hint = bool(self._cfg("astrometry.use_scale_hint", True))
+        pos = self._last_position
+        settings = SolveSettings(
+            astap_path=str(self._cfg("astrometry.astap_path", "")),
+            database=str(self._cfg("astrometry.database", "")),
+            search_radius_deg=float(self._cfg("astrometry.search_radius_deg", 30)),
+            downsample=int(self._cfg("astrometry.downsample", 2)),
+            fov_hint_deg=(gh * ARCSEC_PER_GREEN_PX / 3600.0) if use_hint else None,
+            ra_hint_hours=pos.ra if pos else None,
+            dec_hint_deg=pos.dec if pos else None,
+        )
+        hint = f" (hint RA {pos.ra:.3f}h Dec {pos.dec:+.2f}°)" if pos else " (blind — no mount)"
+        self.log_message.emit("CMD", f"Plate-solving current frame…{hint}")
+        self.action_changed.emit("Plate-solving…")
+        self._solver = SolveWorker(green, settings, parent=self)
+        self._solver.solved.connect(self._on_live_solved)
+        self._solver.start()
+
+    @pyqtSlot(object)
+    def _on_live_solved(self, result) -> None:
+        self.action_changed.emit("Idle")
+        if not result.solved:
+            self.log_message.emit("ERROR", f"Solve: {result.message}")
+            return
+        self._wcs = frame_wcs(result.fields, self._green_shape)
+        bits = [f"Solved — RA {result.ra_hours:.4f}h", f"Dec {result.dec_deg:+.4f}°"]
+        if result.scale_arcsec:  # ASTAP solved the green plane → ÷2 for full-res
+            bits.append(f"{result.scale_arcsec / 2:.2f}″/px")
+        if result.rotation_deg is not None:
+            bits.append(f"rot {result.rotation_deg:.1f}°")
+        if self._target_ra is not None and self._target_dec is not None:
+            sep = angular_separation_deg(
+                result.ra_hours, result.dec_deg, self._target_ra, self._target_dec
+            )
+            bits.append(f"Δtarget {sep * 60.0:.1f}′")
+        self.log_message.emit("OK", "  ".join(bits))
+        if self._wcs is not None:
+            self._update_astrometry_overlay()
+            self._viewer.set_astrometry_enabled(True)
+            self._histogram_dock.set_astrometry_available(True)
+            self._histogram_dock.set_astrometry_checked(True)
+            self._remeasure_selection()  # refresh the clicked star's RA/Dec
+
+    def _update_astrometry_overlay(self) -> None:
+        if self._wcs is None or self._green_shape is None:
+            self._viewer.set_astrometry_overlay(None, self._green_shape)
+            return
+        target = None
+        if self._target_ra is not None and self._target_dec is not None:
+            target = (self._target_ra, self._target_dec)
+        overlay = wcs_grid(self._wcs, self._green_shape, target_radec=target)
+        self._viewer.set_astrometry_overlay(overlay, self._green_shape)
+
+    def _clear_astrometry(self) -> None:
+        """Drop the WCS overlay — a slew/goto invalidates the previous solve."""
+        self._wcs = None
+        self._viewer.set_astrometry_overlay(None)
+        self._histogram_dock.set_astrometry_available(False)
+        self._histogram_dock.set_astrometry_checked(False)
 
     def _on_take_shot(self) -> None:
         self._capture_pending = 1
@@ -514,7 +793,7 @@ class ImagingPage(QWidget):
         self._sequence = SequenceWorker(
             camera=self._camera,
             telescope=self._telescope,
-            filterwheel=None,
+            filterwheel=self._filterwheel,
             plan=plan,
             frame_context_provider=self._sequence_frame_context,
             base_dir=self._sessions_base(),
@@ -556,8 +835,15 @@ class ImagingPage(QWidget):
     def _on_seq_frame_image(self, full_arr) -> None:
         self._show_raw(full_arr)
 
-    def _on_seq_frame_saved(self, path: str, _hfd) -> None:
-        self.log_message.emit("OK", f"Saved {Path(path).name}")
+    def _on_seq_frame_saved(self, path: str, record) -> None:
+        name = Path(path).name
+        if record is not None and record.hfd is not None:
+            fwhm = f" FWHM={record.fwhm:.1f}" if record.fwhm is not None else ""
+            self.log_message.emit(
+                "OK", f"Saved {name}  HFD={record.hfd:.1f}{fwhm}  ★{record.star_count}"
+            )
+        else:
+            self.log_message.emit("OK", f"Saved {name}")
 
     def _on_seq_autofocus_due(self) -> None:
         """Run an autofocus pass mid-sequence, then resume the worker."""
@@ -713,6 +999,7 @@ class ImagingPage(QWidget):
             self._telescope.set_tracking(True)
             self._telescope.slew_to(ra_h, dec_d)
             self._target_ra, self._target_dec = ra_h, dec_d
+            self._clear_astrometry()  # the slew invalidates the previous solve
             self.log_message.emit("CMD", f"Slewing → RA {ra_h:.4f}h Dec {dec_d:+.4f}°")
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Goto: {exc}")
@@ -978,10 +1265,15 @@ class ImagingPage(QWidget):
     # ------------------------------------------------------------------
 
     def shutdown(self) -> None:
+        for win in self._analysis_windows:
+            win.close()
+        self._analysis_windows.clear()
         self._stop_sequence_worker()
         self._stop_preview()
         self._stop_polling()
         self._stop_autofocus()
+        if self._solver is not None and self._solver.isRunning():
+            self._solver.wait(2000)
         self._processor.stop()
         self._processor.wait(2000)
 

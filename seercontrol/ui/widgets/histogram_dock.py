@@ -46,6 +46,10 @@ class HistogramDock(design.Card):
     saturation_toggled = pyqtSignal(bool)
     roi_toggled = pyqtSignal(bool)
     crosshair_toggled = pyqtSignal(bool)
+    stars_overlay_toggled = pyqtSignal(bool)
+    loupe_toggled = pyqtSignal(bool)
+    star_radius_changed = pyqtSignal(int)
+    astrometry_toggled = pyqtSignal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Display", parent)
@@ -117,6 +121,36 @@ class HistogramDock(design.Card):
         self._roi_chk = QCheckBox("Region stats (drag the box on the image)")
         self._roi_chk.toggled.connect(self.roi_toggled)
         outer.addWidget(self._roi_chk)
+
+        # Focus tools (§5): star/FWHM rings + a 1:1 magnifier that follows the cursor.
+        self._stars_chk = QCheckBox("Star FWHM overlay")
+        self._stars_chk.setToolTip("Ring each detected star; ring size grows with FWHM")
+        self._stars_chk.toggled.connect(self.stars_overlay_toggled)
+        outer.addWidget(self._stars_chk)
+        self._loupe_chk = QCheckBox("Loupe (100% zoom at cursor)")
+        self._loupe_chk.setToolTip("Magnified 1:1 inset for fine manual focus")
+        self._loupe_chk.toggled.connect(self.loupe_toggled)
+        outer.addWidget(self._loupe_chk)
+
+        # Astrometry (§6): RA/Dec grid + field-centre overlay (after a plate-solve).
+        self._astro_chk = QCheckBox("WCS grid overlay")
+        self._astro_chk.setToolTip("RA/Dec grid + field centre — needs a plate-solve first")
+        self._astro_chk.setEnabled(False)  # enabled once a solve provides a WCS
+        self._astro_chk.toggled.connect(self.astrometry_toggled)
+        outer.addWidget(self._astro_chk)
+
+        # Star-measurement aperture radius (drives the overlay + click-to-measure).
+        radius_form = QFormLayout()
+        radius_form.setHorizontalSpacing(design.SPACING_MD)
+        radius_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        self._radius = design.SliderSpin(2, 30, 5, suffix=" px")
+        self._radius.setToolTip(
+            "Aperture radius for FWHM/HFD measurement (green plane px).\n"
+            "Smaller = tight on the core; larger = more wings (tune per seeing)."
+        )
+        self._radius.valueChanged.connect(lambda v: self.star_radius_changed.emit(int(v)))
+        radius_form.addRow(design.MutedLabel("Star aperture"), self._radius)
+        outer.addLayout(radius_form)
 
         # ROI stats — compact aligned grid (filled while the ROI is active).
         outer.addWidget(design.SectionLabel("ROI stats"))
@@ -201,6 +235,16 @@ class HistogramDock(design.Card):
         self._rg_min.setText(f"{stats['min']:.0f}")
         self._rg_max.setText(f"{stats['max']:.0f}")
         self._rg_n.setText(f"{int(stats['n'])}")
+
+    def set_astrometry_available(self, available: bool) -> None:
+        """Enable the WCS-grid toggle once a solve provides a WCS."""
+        self._astro_chk.setEnabled(bool(available))
+
+    def set_astrometry_checked(self, checked: bool) -> None:
+        """Tick the WCS-grid toggle (e.g. auto-on after a solve), no re-emit."""
+        self._astro_chk.blockSignals(True)
+        self._astro_chk.setChecked(bool(checked))
+        self._astro_chk.blockSignals(False)
 
     # ------------------------------------------------------------------
     # Internals

@@ -19,7 +19,8 @@ import logging
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from seercontrol.ui import theme
@@ -32,12 +33,26 @@ from seercontrol.core.imaging.stretch import (
 
 logger = logging.getLogger(__name__)
 
+#: Loupe: on-screen size (px) and the source window it magnifies (display px).
+_LOUPE_PX = 168
+_LOUPE_SRC = 42
+
+
+def _to_qimage(arr: np.ndarray) -> QImage:
+    """Build a QImage from a uint8 grayscale (H,W) or RGB (H,W,3) array."""
+    arr = np.ascontiguousarray(arr)
+    h, w = arr.shape[:2]
+    if arr.ndim == 2:
+        return QImage(arr.data, w, h, w, QImage.Format.Format_Grayscale8).copy()
+    return QImage(arr.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
+
 
 class FitsViewer(QWidget):
     """Image viewer with non-destructive stretch + measurement overlays."""
 
     levels_changed = pyqtSignal(float, float, float)  # black, white, midtones
     region_info = pyqtSignal(object)
+    star_clicked = pyqtSignal(float, float)  # display-px (x, y) of a click
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -51,6 +66,15 @@ class FitsViewer(QWidget):
         self._sat_threshold: int = 60000
         self._roi: pg.RectROI | None = None
         self._crosshair: bool = True  # on by default so it's immediately visible
+        self._disp_u8: np.ndarray | None = None  # last stretched display (for the loupe)
+        # §5 focus tools: star/FWHM overlay + 100% loupe.
+        self._stars: tuple = ()
+        self._green_shape: tuple[int, int] | None = None
+        self._star_overlay: bool = False
+        self._loupe: bool = False
+        # §6 astrometry overlay: RA/Dec grid + field-centre + target reticle.
+        self._wcs_overlay = None  # platesolve.WCSOverlay (green-plane coords)
+        self._wcs_on: bool = False
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -83,7 +107,61 @@ class FitsViewer(QWidget):
         self._readout.move(10, 10)
         self._readout.hide()
 
+        # §5 star/FWHM overlay — hollow rings on detected stars (size ∝ FWHM).
+        self._scatter = pg.ScatterPlotItem(
+            pen=pg.mkPen(theme.SUCCESS, width=1), brush=None, pxMode=True, size=14
+        )
+        self._scatter.setVisible(False)
+        self._view.getView().addItem(self._scatter, ignoreBounds=True)
+
+        # §5 selected-star highlight (distinct from the green detection rings) +
+        # a persistent readout pinned bottom-left with the clicked star's metrics.
+        self._sel_scatter = pg.ScatterPlotItem(
+            pen=pg.mkPen(theme.ACCENT, width=2), brush=None, pxMode=True, size=24, symbol="o"
+        )
+        self._sel_scatter.setVisible(False)
+        self._view.getView().addItem(self._sel_scatter, ignoreBounds=True)
+
+        self._sel_label = QLabel(self)
+        self._sel_label.setStyleSheet(
+            f"background: rgba(13,17,23,205); color: {theme.FG};"
+            f" font-family: {theme.FONT_MONO}; font-size: 11px;"
+            f" padding: 4px 8px; border-radius: 3px; border: 1px solid {theme.ACCENT};"
+        )
+        self._sel_label.hide()
+
+        # §5 loupe — a magnified 1:1 inset following the cursor (top-right).
+        self._loupe_label = QLabel(self)
+        self._loupe_label.setFixedSize(_LOUPE_PX, _LOUPE_PX)
+        self._loupe_label.setStyleSheet(f"background: #000; border: 1px solid {theme.WARNING};")
+        self._loupe_label.hide()
+
+        # §6 astrometry overlay — RA/Dec grid (one NaN-broken curve), the solved
+        # field centre (⌖), and an optional target reticle. All hidden until a
+        # solve provides a WCS and the user enables the overlay.
+        self._grid_item = pg.PlotDataItem(
+            pen=pg.mkPen(theme.ACCENT, width=1, style=Qt.PenStyle.DotLine)
+        )
+        self._grid_item.setVisible(False)
+        self._view.getView().addItem(self._grid_item, ignoreBounds=True)
+        self._center_item = pg.ScatterPlotItem(
+            pen=pg.mkPen(theme.WARNING, width=2), brush=None, pxMode=True, size=22, symbol="+"
+        )
+        self._center_item.setVisible(False)
+        self._view.getView().addItem(self._center_item, ignoreBounds=True)
+        self._target_item = pg.PlotDataItem(pen=pg.mkPen(theme.SUCCESS, width=2))
+        self._target_item.setVisible(False)
+        self._view.getView().addItem(self._target_item, ignoreBounds=True)
+        self._astro_label = QLabel(self)
+        self._astro_label.setStyleSheet(
+            f"background: rgba(13,17,23,205); color: {theme.FG};"
+            f" font-family: {theme.FONT_MONO}; font-size: 11px;"
+            f" padding: 3px 7px; border-radius: 3px; border: 1px solid {theme.ACCENT};"
+        )
+        self._astro_label.hide()
+
         self._view.scene.sigMouseMoved.connect(self._on_mouse_moved)
+        self._view.scene.sigMouseClicked.connect(self._on_mouse_clicked)
 
     # ------------------------------------------------------------------
     # Display
@@ -102,6 +180,8 @@ class FitsViewer(QWidget):
             self._vline.setPos(w / 2)
             self._hline.setPos(h / 2)
         self._render()
+        self._refresh_overlay()
+        self._refresh_astrometry()
         if self._roi is not None:
             self._on_roi_changed()
 
@@ -111,6 +191,7 @@ class FitsViewer(QWidget):
         disp = apply_stretch(self._last_arr, self._black, self._white, self._mode, self._midtones)
         if self._sat_enabled:
             disp = self._overlay_saturation(disp)
+        self._disp_u8 = disp  # kept for the loupe (what the eye sees)
         self._view.setImage(
             disp,
             autoRange=False,
@@ -211,8 +292,12 @@ class FitsViewer(QWidget):
             self._readout.adjustSize()
             self._readout.show()
             self._readout.raise_()
+            if self._loupe:
+                self._update_loupe(x, y)
         else:
             self._readout.hide()
+            if self._loupe:
+                self._loupe_label.hide()
 
     def set_crosshair_enabled(self, enabled: bool) -> None:
         self._crosshair = bool(enabled)
@@ -220,10 +305,191 @@ class FitsViewer(QWidget):
         self._hline.setVisible(self._crosshair)
 
     # ------------------------------------------------------------------
+    # Focus tools (§5): star/FWHM overlay + 100% loupe
+    # ------------------------------------------------------------------
+
+    def set_stars(self, starfield, green_shape: tuple[int, int]) -> None:
+        """Receive detected stars (green-plane coords) for the overlay."""
+        self._stars = tuple(getattr(starfield, "stars", ()) or ())
+        self._green_shape = green_shape
+        self._refresh_overlay()
+
+    def set_star_overlay_enabled(self, enabled: bool) -> None:
+        self._star_overlay = bool(enabled)
+        self._refresh_overlay()
+
+    def _refresh_overlay(self) -> None:
+        """Redraw star rings, scaled from green-plane to the active view."""
+        if not (self._star_overlay and self._stars and self._last_arr is not None):
+            self._scatter.setVisible(False)
+            return
+        gh, gw = self._green_shape or (0, 0)
+        if gh <= 0 or gw <= 0:
+            self._scatter.setVisible(False)
+            return
+        dh, dw = self._last_arr.shape[:2]
+        sx, sy = dw / gw, dh / gh  # green-plane → display px (×1 super-pixel, ×2 raw)
+        spots = []
+        for s in self._stars:
+            size = float(np.clip(10.0 + s.fwhm * 2.0, 10.0, 36.0))
+            spots.append({"pos": (s.x * sx, s.y * sy), "size": size})
+        self._scatter.setData(spots)
+        self._scatter.setVisible(True)
+
+    # ------------------------------------------------------------------
+    # Astrometry overlay (§6): RA/Dec grid + field centre + target reticle
+    # ------------------------------------------------------------------
+
+    def set_astrometry_overlay(self, overlay, green_shape: tuple[int, int] | None = None) -> None:
+        """Receive grid/centre/target geometry (green-plane coords) from a solve."""
+        self._wcs_overlay = overlay
+        if green_shape is not None:
+            self._green_shape = green_shape
+        self._refresh_astrometry()
+
+    def set_astrometry_enabled(self, enabled: bool) -> None:
+        self._wcs_on = bool(enabled)
+        self._refresh_astrometry()
+
+    def _refresh_astrometry(self) -> None:
+        """Redraw the WCS grid/centre/target, scaled green-plane → active view."""
+        ov = self._wcs_overlay
+        show = self._wcs_on and ov is not None and self._last_arr is not None
+        gh, gw = self._green_shape or (0, 0)
+        if not show or gh <= 0 or gw <= 0:
+            self._grid_item.setVisible(False)
+            self._center_item.setVisible(False)
+            self._target_item.setVisible(False)
+            self._astro_label.hide()
+            return
+        dh, dw = self._last_arr.shape[:2]
+        sx, sy = dw / gw, dh / gh  # green-plane px → display px
+
+        xs_parts, ys_parts = [], []
+        gap = np.array([np.nan])
+        for xs, ys in ov.lines:
+            xs_parts.extend((np.asarray(xs, dtype=float) * sx, gap))
+            ys_parts.extend((np.asarray(ys, dtype=float) * sy, gap))
+        if xs_parts:
+            self._grid_item.setData(
+                np.concatenate(xs_parts), np.concatenate(ys_parts), connect="finite"
+            )
+            self._grid_item.setVisible(True)
+        else:
+            self._grid_item.setVisible(False)
+
+        if ov.center is not None:
+            self._center_item.setData([{"pos": (ov.center[0] * sx, ov.center[1] * sy)}])
+            self._center_item.setVisible(True)
+        else:
+            self._center_item.setVisible(False)
+
+        if ov.target is not None:
+            tx, ty = ov.target[0] * sx, ov.target[1] * sy
+            rr = 0.05 * min(dw, dh)
+            th = np.linspace(0.0, 2.0 * np.pi, 49)
+            self._target_item.setData(tx + rr * np.cos(th), ty + rr * np.sin(th))
+            self._target_item.setVisible(True)
+        else:
+            self._target_item.setVisible(False)
+
+        if ov.center_label:
+            self._astro_label.setText(ov.center_label)
+            self._astro_label.adjustSize()
+            self._astro_label.move(10, 36)
+            self._astro_label.show()
+            self._astro_label.raise_()
+        else:
+            self._astro_label.hide()
+
+    def set_loupe_enabled(self, enabled: bool) -> None:
+        self._loupe = bool(enabled)
+        if not self._loupe:
+            self._loupe_label.hide()
+
+    def _on_mouse_clicked(self, ev) -> None:
+        """Left-click on the image → emit the display-px position to measure."""
+        if self._last_arr is None:
+            return
+        try:
+            if ev.button() != Qt.MouseButton.LeftButton:
+                return
+        except Exception:  # pragma: no cover - defensive against event shape
+            pass
+        p = self._view.getImageItem().mapFromScene(ev.scenePos())
+        x, y = p.x(), p.y()
+        h, w = self._last_arr.shape[:2]
+        if 0 <= x < w and 0 <= y < h:
+            self.star_clicked.emit(float(x), float(y))
+
+    def mark_selection(self, x_disp: float, y_disp: float, text: str) -> None:
+        """Highlight the selected star at display px (x, y) and show its readout."""
+        self._sel_scatter.setData([{"pos": (x_disp, y_disp), "size": 24}])
+        self._sel_scatter.setVisible(True)
+        self._sel_label.setText(text)
+        self._sel_label.adjustSize()
+        self._sel_label.move(10, max(10, self.height() - self._sel_label.height() - 10))
+        self._sel_label.show()
+        self._sel_label.raise_()
+
+    def clear_selection(self) -> None:
+        self._sel_scatter.setVisible(False)
+        self._sel_label.hide()
+
+    def _update_loupe(self, cx: int, cy: int) -> None:
+        """Refresh the 1:1 magnified inset centred on display pixel (cx, cy)."""
+        disp = self._disp_u8
+        if disp is None:
+            self._loupe_label.hide()
+            return
+        h, w = disp.shape[:2]
+        r = _LOUPE_SRC // 2
+        # Fixed-size source window, zero-padded near the edges.
+        if disp.ndim == 2:
+            crop = np.zeros((_LOUPE_SRC, _LOUPE_SRC), dtype=np.uint8)
+        else:
+            crop = np.zeros((_LOUPE_SRC, _LOUPE_SRC, 3), dtype=np.uint8)
+        sx0, sy0 = max(0, cx - r), max(0, cy - r)
+        sx1, sy1 = min(w, cx - r + _LOUPE_SRC), min(h, cy - r + _LOUPE_SRC)
+        if sx1 <= sx0 or sy1 <= sy0:
+            self._loupe_label.hide()
+            return
+        dx0, dy0 = sx0 - (cx - r), sy0 - (cy - r)
+        crop[dy0 : dy0 + (sy1 - sy0), dx0 : dx0 + (sx1 - sx0)] = disp[sy0:sy1, sx0:sx1]
+
+        pix = QPixmap.fromImage(_to_qimage(crop)).scaled(
+            _LOUPE_PX,
+            _LOUPE_PX,
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.FastTransformation,  # nearest-neighbour → real pixels
+        )
+        self._draw_loupe_crosshair(pix)
+        self._loupe_label.setPixmap(pix)
+        self._loupe_label.move(self.width() - _LOUPE_PX - 10, 10)
+        self._loupe_label.show()
+        self._loupe_label.raise_()
+
+    @staticmethod
+    def _draw_loupe_crosshair(pix: QPixmap) -> None:
+        painter = QPainter(pix)
+        painter.setPen(QPen(QColor(theme.WARNING), 1))
+        mid = _LOUPE_PX // 2
+        painter.drawLine(mid, 0, mid, _LOUPE_PX)
+        painter.drawLine(0, mid, _LOUPE_PX, mid)
+        painter.end()
+
+    # ------------------------------------------------------------------
 
     def reset(self) -> None:
         """Reset viewer state (call when switching targets)."""
         self._last_arr = None
+        self._disp_u8 = None
+        self._stars = ()
+        self._scatter.setVisible(False)
+        self._loupe_label.hide()
+        self._wcs_overlay = None
+        self._refresh_astrometry()
+        self.clear_selection()
         self._auto_on = True
         self._black, self._white = 0.0, 65535.0
         self._mode, self._midtones = STRETCH_LINEAR, 0.5

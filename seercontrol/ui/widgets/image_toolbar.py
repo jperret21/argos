@@ -30,10 +30,12 @@ class ImageToolbar(QWidget):
     Signals:
         channel_changed(str): the selected view (see ``debayer.VIEWS``).
         open_requested():     the user wants to open a FITS file from disk.
+        solve_requested():    plate-solve the current live frame (§6).
     """
 
     channel_changed = pyqtSignal(str)
     open_requested = pyqtSignal()
+    solve_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -71,6 +73,15 @@ class ImageToolbar(QWidget):
         self._open_btn.setToolTip("Load a FITS file from disk into the viewer")
         self._open_btn.clicked.connect(self.open_requested)
         layout.addWidget(self._open_btn)
+
+        self._solve_btn = QPushButton("🔭 Solve")
+        self._solve_btn.setStyleSheet("font-size: 11px;")
+        self._solve_btn.setToolTip(
+            "Plate-solve the current live frame via ASTAP (uses the mount as a\n"
+            "position hint). Shows centre RA/Dec + an RA/Dec grid overlay."
+        )
+        self._solve_btn.clicked.connect(self.solve_requested)
+        layout.addWidget(self._solve_btn)
 
         layout.addStretch()
 

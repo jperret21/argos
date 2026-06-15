@@ -26,6 +26,7 @@ def test_shell_three_mode_walkthrough() -> None:
     from seercontrol.ui.panels.stellarium_card import StellariumCard
     from seercontrol.ui.shell import Shell
     from seercontrol.ui.widgets.camera_dock import CameraDock, CaptureParams
+    from seercontrol.ui.widgets.filterwheel_dock import FilterWheelDock
     from seercontrol.ui.widgets.histogram_dock import HistogramDock
     from seercontrol.ui.widgets.mount_dock import MountDock
 
@@ -83,6 +84,88 @@ def test_shell_three_mode_walkthrough() -> None:
         page._mount_dock.set_goto_fields(7.5, -12.5)
         page._mount_dock._slew_btn.click()
         assert goto == [(7.5, -12.5)]
+
+        # Filter wheel dock: populate + manual move emits the target slot.
+        assert isinstance(page._filterwheel_dock, FilterWheelDock)
+        page._filterwheel_dock.set_filters(["Dark", "IR", "LP"])
+        page._filterwheel_dock.set_enabled(True)
+        moves: list[int] = []
+        page._filterwheel_dock.move_requested.connect(moves.append)
+        page._filterwheel_dock._combo.setCurrentIndex(2)  # LP
+        page._filterwheel_dock._move_btn.click()
+        assert moves == [2]
+
+        # Open FITS → a floating analysis window (the live viewer is untouched).
+        import tempfile
+
+        import numpy as np
+        from astropy.io import fits
+
+        from seercontrol.ui.analysis_window import AnalysisWindow
+
+        with tempfile.TemporaryDirectory() as d:
+            yy, xx = np.mgrid[0:96, 0:96]
+            arr = np.full((96, 96), 500, np.float32)
+            arr += 30000 * np.exp(-((xx - 40) ** 2 + (yy - 40) ** 2) / 8.0)
+            arr = np.clip(arr, 0, 65535).astype(np.uint16)
+            fpath = os.path.join(d, "frame.fits")
+            fits.PrimaryHDU(arr).writeto(fpath)
+            awin = AnalysisWindow()
+            try:
+                assert awin.load(fpath) is True
+                assert awin._green_shape == (48, 48)
+                awin._on_star_clicked(40.0, 40.0)  # click the star → measured
+                assert awin._selected_green is not None
+
+                # §6 astrometry: a synthetic WCS drives the grid + per-star RA/Dec.
+                from seercontrol.core.imaging.platesolve import frame_wcs, wcs_grid
+
+                fields = {
+                    "CRVAL1": "83.6",
+                    "CRVAL2": "22.0",
+                    "CRPIX1": "24.5",
+                    "CRPIX2": "24.5",
+                    "CD1_1": "-0.002",
+                    "CD1_2": "0.0",
+                    "CD2_1": "0.0",
+                    "CD2_2": "0.002",
+                }
+                awin._wcs = frame_wcs(fields, awin._green_shape)
+                assert awin._wcs is not None
+                assert wcs_grid(awin._wcs, awin._green_shape).lines  # grid crosses frame
+                awin._update_astrometry_overlay()
+                awin._viewer.set_astrometry_enabled(True)
+                awin._histogram.set_astrometry_available(True)
+                awin._histogram.set_astrometry_checked(True)
+                awin._remeasure_selection()  # clicked star now reports RA/Dec
+                assert "RA" in awin._viewer._sel_label.text()
+            finally:
+                awin.close()
+                awin.deleteLater()
+
+        # §6 live-frame astrometry overlay path (toolbar Solve → grid on viewer).
+        from seercontrol.core.imaging.platesolve import frame_wcs as _frame_wcs
+
+        page._green_shape = (48, 48)
+        page._viewer.display(np.zeros((48, 48), np.uint16))
+        page._wcs = _frame_wcs(
+            {
+                "CRVAL1": "83.6",
+                "CRVAL2": "22.0",
+                "CRPIX1": "24.5",
+                "CRPIX2": "24.5",
+                "CD1_1": "-0.002",
+                "CD1_2": "0.0",
+                "CD2_1": "0.0",
+                "CD2_2": "0.002",
+            },
+            (48, 48),
+        )
+        assert page._wcs is not None
+        page._update_astrometry_overlay()
+        page._viewer.set_astrometry_enabled(True)
+        page._clear_astrometry()  # a goto/slew invalidates the solve
+        assert page._wcs is None
 
         # Imaging upward signals reach the global status bar.
         page.device_state_changed.emit("camera", "busy", "exposing")
