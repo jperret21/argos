@@ -21,13 +21,18 @@ from seercontrol.core.alpaca.camera import Camera
 from seercontrol.core.alpaca.client import AlpacaError
 from seercontrol.core.alpaca.filterwheel import POSITION_NAMES, FilterWheel
 from seercontrol.core.alpaca.telescope import Telescope
-from seercontrol.core.imaging.debayer import compute_hfd
 from seercontrol.core.imaging.fits_writer import FITSWriter, FrameContext
+from seercontrol.core.imaging.metrics import detect_stars, frame_metrics
 from seercontrol.core.imaging.sequencer import (
     FrameSpec,
     SequencePlan,
     expand_plan,
     total_frames,
+)
+from seercontrol.core.imaging.session_log import (
+    SESSION_FILENAME,
+    FrameRecord,
+    SessionLog,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,6 +41,8 @@ logger = logging.getLogger(__name__)
 _DOWNLOAD_MARGIN_S = 15.0
 #: Polling interval while waiting for ImageReady.
 _POLL_MS = 200
+#: Max time to wait for the filter wheel to settle after a move.
+_FILTER_SETTLE_S = 20.0
 
 #: Callback that builds a fresh FrameContext for the current frame. Called with
 #: keyword args ``object_name`` and ``filter_name``; returns a FrameContext.
@@ -68,7 +75,7 @@ class SequenceWorker(QThread):
     Signals:
         step_started(int, object):       step_index, SequenceStep — a new step begins.
         frame_started(int, int, object): frames_done, total, FrameSpec — before exposing.
-        frame_saved(str, object):        absolute path, hfd|None — a frame was written.
+        frame_saved(str, object):        absolute path, FrameRecord — a frame was written.
         progress(int, int, float):       frames_done, total, eta_seconds.
         autofocus_due():                 the controller should run autofocus, then call
                                          :meth:`resume_after_autofocus`.
@@ -141,6 +148,8 @@ class SequenceWorker(QThread):
         current_filter: str | None = None
         current_step = -1
         frames_since_af = 0
+        self._session_log: SessionLog | None = None
+        self._session_root: Path | None = None
 
         logger.info("Sequence start: %d frame(s) → %s", total, self._base_dir)
 
@@ -174,13 +183,13 @@ class SequenceWorker(QThread):
                     return False
 
             self.frame_started.emit(done, total, spec)
-            path, hfd = self._shoot_one(spec)
+            path, record = self._shoot_one(spec)
             if path is None:
                 return False  # stop requested or error already emitted
 
             done += 1
             frames_since_af += 1
-            self.frame_saved.emit(path, hfd)
+            self.frame_saved.emit(path, record)
 
             elapsed = time.monotonic() - started
             avg = elapsed / done
@@ -204,9 +213,20 @@ class SequenceWorker(QThread):
             logger.warning("No wheel position matches filter '%s' — skipping", filter_name)
             return
         self._filterwheel.set_position(pos)
+        # The move is async (the wheel reports position -1 while turning); wait
+        # for it to settle so we never expose mid-rotation.
+        deadline = time.monotonic() + _FILTER_SETTLE_S
+        while self._filterwheel.get_position() == -1:
+            if self._stop_flag or time.monotonic() > deadline:
+                break
+            self.msleep(_POLL_MS)
+        logger.info("Filter → %s (position %d)", filter_name, pos)
 
-    def _shoot_one(self, spec: FrameSpec) -> tuple[str | None, float | None]:
-        """Expose, wait for ImageReady, write the FITS. Returns (path, hfd)."""
+    def _shoot_one(self, spec: FrameSpec) -> tuple[str | None, FrameRecord | None]:
+        """Expose, wait for ImageReady, write FITS + session record.
+
+        Returns ``(path, FrameRecord)``, or ``(None, None)`` on stop/timeout.
+        """
         start_dt = datetime.now(timezone.utc)
         self._camera.set_gain(spec.gain)
         self._camera.start_exposure(spec.exposure_s, light=spec.is_light)
@@ -227,7 +247,25 @@ class SequenceWorker(QThread):
         end_dt = datetime.now(timezone.utc)
         self.frame_image.emit(arr)
 
+        # Per-frame QA metrics (§7) — computed here so they land in the FITS
+        # header *and* the session log. Best-effort: a bad frame must not abort.
+        metrics = fwhm = ecc = None
+        try:
+            metrics = frame_metrics(arr)
+            field = detect_stars(arr)
+            fwhm, ecc = field.mean_fwhm, field.mean_eccentricity
+        except Exception:  # pragma: no cover - metrics are best-effort
+            logger.warning("Frame metrics failed — writing frame without QA", exc_info=True)
+
         ctx = self._make_context(object_name=self._plan.object_name, filter_name=spec.filter_name)
+        self._software = ctx.software
+        if metrics is not None:
+            ctx.hfd = metrics.hfd
+            ctx.star_count = metrics.star_count
+            ctx.sky_adu = metrics.sky_adu
+            ctx.fwhm = fwhm
+            ctx.eccentricity = ecc
+
         folder = FITSWriter.session_folder(
             self._base_dir, self._plan.object_name, start_dt, spec.image_type, spec.filter_name
         )
@@ -244,13 +282,39 @@ class SequenceWorker(QThread):
             arr, path, start_dt, end_dt, spec.exposure_s, spec.gain, spec.image_type, context=ctx
         )
 
-        hfd: float | None = None
-        if spec.is_light:
-            try:
-                hfd = compute_hfd(arr)
-            except Exception:  # pragma: no cover - HFD is best-effort
-                hfd = None
-        return str(path), hfd
+        record = FrameRecord(
+            filename=filename,
+            image_type=spec.image_type,
+            filter_name=spec.filter_name,
+            exposure_s=spec.exposure_s,
+            gain=spec.gain,
+            timestamp=start_dt.isoformat(),
+            hfd=metrics.hfd if metrics else None,
+            fwhm=fwhm,
+            star_count=metrics.star_count if metrics else None,
+            sky_adu=round(metrics.sky_adu, 1) if metrics else None,
+            peak_adu=metrics.peak_adu if metrics else None,
+            eccentricity=ecc,
+        )
+        self._append_session(start_dt, record)
+        return str(path), record
+
+    def _append_session(self, start_dt: datetime, record: FrameRecord) -> None:
+        """Add a frame to the session log and rewrite ``session.json`` atomically."""
+        if self._session_log is None:
+            self._session_root = FITSWriter.session_root(
+                self._base_dir, self._plan.object_name, start_dt
+            )
+            self._session_log = SessionLog(
+                object_name=self._plan.object_name,
+                software=self._software,
+                started_utc=start_dt.isoformat(),
+            )
+        self._session_log.add(record)
+        try:
+            self._session_log.write(self._session_root / SESSION_FILENAME)
+        except OSError:  # pragma: no cover - disk hiccup must not abort the run
+            logger.warning("Could not write %s", SESSION_FILENAME, exc_info=True)
 
     def _safe_stop_exposure(self) -> None:
         try:

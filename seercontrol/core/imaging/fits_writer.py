@@ -83,6 +83,8 @@ class FrameContext:
     hfd: float | None = None
     star_count: int | None = None
     sky_adu: float | None = None
+    fwhm: float | None = None
+    eccentricity: float | None = None
 
     # Camera metadata snapshot for diagnostics (passed through, not written)
     sensor_meta: dict = field(default_factory=dict)
@@ -268,6 +270,26 @@ class FITSWriter:
 
         return base_dir / "sessions" / f"{date}_{obj}" / typ / filt
 
+    @staticmethod
+    def session_root(base_dir: Path, object_name: str, exposure_start: datetime) -> Path:
+        """Return the per-session root folder (where ``session.json`` lives).
+
+        Structure: ``{base_dir}/sessions/{YYYYMMDD}_{OBJECT}/`` — the parent of
+        every ``{ImageType}/{Filter}/`` sub-folder produced by
+        :meth:`session_folder` for the same target/date.
+
+        Args:
+            base_dir:       Root output directory (from config).
+            object_name:    Target name.
+            exposure_start: Reference timestamp (typically the first frame).
+
+        Returns:
+            Path to the session root folder (not yet created).
+        """
+        obj = _sanitize(object_name) or "Unknown"
+        date = exposure_start.strftime("%Y%m%d")
+        return base_dir / "sessions" / f"{date}_{obj}"
+
 
 # --------------------------------------------------------------------------- #
 # Helpers                                                                      #
@@ -436,10 +458,14 @@ def _add_software_headers(hdr: fits.Header, ctx: "FrameContext") -> None:
 
 
 def _add_quality_headers(hdr: fits.Header, ctx: "FrameContext") -> None:
-    """Per-frame quality metrics (HFD, star count, sky level) when available."""
+    """Per-frame quality metrics (HFD, FWHM, star count, sky level) when available."""
     if ctx.hfd is not None:
         hdr["HFD"] = (round(float(ctx.hfd), 2), "[px] half-flux diameter (subsampled)")
+    if ctx.fwhm is not None:
+        hdr["FWHM"] = (round(float(ctx.fwhm), 2), "[px] mean star FWHM (green plane)")
     if ctx.star_count is not None:
         hdr["NSTARS"] = (int(ctx.star_count), "detected stars")
     if ctx.sky_adu is not None:
         hdr["SKYLEVEL"] = (round(float(ctx.sky_adu), 1), "[ADU] median sky background")
+    if ctx.eccentricity is not None:
+        hdr["ECCENTR"] = (round(float(ctx.eccentricity), 3), "mean star eccentricity (0=round)")
