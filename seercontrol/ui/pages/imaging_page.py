@@ -619,7 +619,7 @@ class ImagingPage(QWidget):
         self._viewer.mark_selection(dp[0], dp[1], self._format_star_text(meas))
 
     def _format_star_text(self, meas) -> str:
-        parts = ["★ selected star"]
+        parts = ["Selected star"]
         if meas.fwhm is not None:
             parts.append(f"FWHM {meas.fwhm * ARCSEC_PER_GREEN_PX:.1f}″")
         if meas.hfd is not None:
@@ -840,7 +840,7 @@ class ImagingPage(QWidget):
         if record is not None and record.hfd is not None:
             fwhm = f" FWHM={record.fwhm:.1f}" if record.fwhm is not None else ""
             self.log_message.emit(
-                "OK", f"Saved {name}  HFD={record.hfd:.1f}{fwhm}  ★{record.star_count}"
+                "OK", f"Saved {name}  HFD={record.hfd:.1f}{fwhm}  stars={record.star_count}"
             )
         else:
             self.log_message.emit("OK", f"Saved {name}")

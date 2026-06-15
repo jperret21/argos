@@ -74,7 +74,7 @@ class ImageToolbar(QWidget):
         self._open_btn.clicked.connect(self.open_requested)
         layout.addWidget(self._open_btn)
 
-        self._solve_btn = QPushButton("🔭 Solve")
+        self._solve_btn = QPushButton("Solve")
         self._solve_btn.setStyleSheet("font-size: 11px;")
         self._solve_btn.setToolTip(
             "Plate-solve the current live frame via ASTAP (uses the mount as a\n"

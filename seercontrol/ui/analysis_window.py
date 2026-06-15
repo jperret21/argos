@@ -121,7 +121,7 @@ class AnalysisWindow(QMainWindow):
         brow = QHBoxLayout(bar)
         brow.setContentsMargins(10, 4, 10, 4)
         brow.setSpacing(10)
-        self._solve_btn = QPushButton("🔭  Solve (ASTAP)")
+        self._solve_btn = QPushButton("Solve (ASTAP)")
         self._solve_btn.setToolTip(
             "Plate-solve the green channel via ASTAP (configure in Settings)"
         )
@@ -314,7 +314,7 @@ class AnalysisWindow(QMainWindow):
         self._viewer.mark_selection(dp[0], dp[1], self._format_star_text(meas))
 
     def _format_star_text(self, meas) -> str:
-        parts = ["★ selected star"]
+        parts = ["Selected star"]
         if meas.fwhm is not None:
             parts.append(f"FWHM {meas.fwhm * ARCSEC_PER_GREEN_PX:.1f}″")
         if meas.hfd is not None:

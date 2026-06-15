@@ -137,7 +137,7 @@ class FitsViewer(QWidget):
         self._loupe_label.hide()
 
         # §6 astrometry overlay — RA/Dec grid (one NaN-broken curve), the solved
-        # field centre (⌖), and an optional target reticle. All hidden until a
+        # field centre marker, and an optional target reticle. All hidden until a
         # solve provides a WCS and the user enables the overlay.
         self._grid_item = pg.PlotDataItem(
             pen=pg.mkPen(theme.ACCENT, width=1, style=Qt.PenStyle.DotLine)

@@ -373,7 +373,7 @@ def wcs_grid(
     cx, cy = wcs.world_to_pixel_deg(wcs.crval1, wcs.crval2)
     center = (float(cx), float(cy))
     center_label = (
-        f"⌖ centre  RA {format_ra_hms(wcs.crval1 / 15.0)}  Dec {format_dec_dms(wcs.crval2)}"
+        f"Centre  RA {format_ra_hms(wcs.crval1 / 15.0)}  Dec {format_dec_dms(wcs.crval2)}"
     )
     target = None
     if target_radec is not None:
