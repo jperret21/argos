@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -25,6 +26,7 @@ from PyQt6.QtWidgets import (
 )
 
 from seercontrol.core.config import Config
+from seercontrol.core.imaging.platesolve import find_astap
 from seercontrol.ui import design
 
 logger = logging.getLogger(__name__)
@@ -33,6 +35,10 @@ _LANGUAGES = (("English", "en"), ("Français", "fr"))
 _THEMES = (("Dark", "dark"),)
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 _APP_VERSION = "0.2.0-redesign"
+#: ASTAP star databases (FOV-dependent). "" = let ASTAP auto-pick.
+_ASTAP_DATABASES = ("Auto", "D05", "D20", "D50", "D80", "G17", "H17", "H18", "V17", "W08")
+#: Downsample options (label → ASTAP -z value; 0 = auto).
+_DOWNSAMPLE = (("Auto", 0), ("1×", 1), ("2×", 2), ("3×", 3), ("4×", 4))
 
 
 class ConfigurationPage(QWidget):
@@ -63,6 +69,7 @@ class ConfigurationPage(QWidget):
         # on the right. Both columns share width 1:1 and reflow on resize.
         row, left, right = design.two_columns()
         left.addWidget(self._build_observer_card())
+        left.addWidget(self._build_astrometry_card())
         left.addStretch()
         right.addWidget(self._build_paths_card())
         right.addWidget(self._build_camera_card())
@@ -165,6 +172,67 @@ class ConfigurationPage(QWidget):
         )
         return card
 
+    def _build_astrometry_card(self) -> "design.Card":
+        card = design.Card("Astrometry (plate solving)")
+        layout = design.card_layout(card)
+
+        # ASTAP binary path + Browse, with a live "detected/not found" status.
+        path_row = QHBoxLayout()
+        path_row.setSpacing(design.SPACING_SM)
+        path_row.addWidget(design.MutedLabel("ASTAP"))
+        self._astap_edit = QLineEdit()
+        self._astap_edit.setPlaceholderText("auto-detect (astap_cli on PATH)")
+        self._astap_edit.editingFinished.connect(self._save_astrometry)
+        path_row.addWidget(self._astap_edit, 1)
+        browse = design.SecondaryButton("Browse…")
+        browse.clicked.connect(self._browse_astap)
+        path_row.addWidget(browse)
+        layout.addLayout(path_row)
+
+        self._astap_status = design.MutedLabel("")
+        layout.addWidget(self._astap_status)
+
+        form = QFormLayout()
+        form.setHorizontalSpacing(design.SPACING_MD)
+        form.setVerticalSpacing(design.SPACING_SM)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+
+        self._catalog_combo = QComboBox()
+        self._catalog_combo.addItems(_ASTAP_DATABASES)
+        self._catalog_combo.setToolTip(
+            "Star database ASTAP matches against. 'Auto' lets ASTAP pick by field\n"
+            "of view (recommended). For the Seestar's ~1° field, D50/D80 or V17 fit."
+        )
+        self._catalog_combo.currentTextChanged.connect(self._save_astrometry)
+        form.addRow(design.MutedLabel("Catalog"), self._catalog_combo)
+
+        self._radius_spin = QSpinBox()
+        self._radius_spin.setRange(0, 180)
+        self._radius_spin.setSuffix(" °")
+        self._radius_spin.setToolTip("Search radius around the hint (0 = blind, whole sky).")
+        self._radius_spin.valueChanged.connect(self._save_astrometry)
+        form.addRow(design.MutedLabel("Search radius"), self._radius_spin)
+
+        self._downsample_combo = QComboBox()
+        for label, _v in _DOWNSAMPLE:
+            self._downsample_combo.addItem(label)
+        self._downsample_combo.currentTextChanged.connect(self._save_astrometry)
+        form.addRow(design.MutedLabel("Downsample"), self._downsample_combo)
+
+        layout.addLayout(form)
+
+        self._scale_hint_chk = QCheckBox("Use the known plate scale as a hint (faster solve)")
+        self._scale_hint_chk.toggled.connect(self._save_astrometry)
+        layout.addWidget(self._scale_hint_chk)
+
+        layout.addWidget(
+            design.MutedLabel(
+                "Solving runs on the green channel. Install ASTAP + a star database from "
+                "hnsky.org/astap.htm, then 'Solve' from a loaded FITS."
+            )
+        )
+        return card
+
     def _build_appearance_card(self) -> "design.Card":
         card = design.Card("Appearance")
         layout = design.card_layout(card)
@@ -225,6 +293,15 @@ class ConfigurationPage(QWidget):
         self._fullwell_spin.setValue(int(self._config.get("camera.full_well_adu", 60000)))
         self._linmax_spin.setValue(int(self._config.get("camera.linearity_max_adu", 50000)))
         self._adc_spin.setValue(int(self._config.get("camera.adc_bits", 12)))
+        # Astrometry
+        self._astap_edit.setText(str(self._config.get("astrometry.astap_path", "") or ""))
+        cat = str(self._config.get("astrometry.database", "") or "")
+        idx = self._catalog_combo.findText(cat) if cat else 0
+        self._catalog_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._radius_spin.setValue(int(self._config.get("astrometry.search_radius_deg", 30)))
+        self._select_downsample(int(self._config.get("astrometry.downsample", 2)))
+        self._scale_hint_chk.setChecked(bool(self._config.get("astrometry.use_scale_hint", True)))
+        self._refresh_astap_status()
         self._loading = False
 
     @staticmethod
@@ -266,6 +343,40 @@ class ConfigurationPage(QWidget):
             self._sessions_edit.setText(chosen)
             self._config.sessions_path = chosen
             self._config.save()
+
+    def _select_downsample(self, value: int) -> None:
+        for i, (_label, v) in enumerate(_DOWNSAMPLE):
+            if v == value:
+                self._downsample_combo.setCurrentIndex(i)
+                return
+        self._downsample_combo.setCurrentIndex(0)
+
+    def _save_astrometry(self) -> None:
+        if self._loading:
+            return
+        cat = self._catalog_combo.currentText()
+        self._config.set("astrometry.astap_path", self._astap_edit.text().strip())
+        self._config.set("astrometry.database", "" if cat == "Auto" else cat)
+        self._config.set("astrometry.search_radius_deg", int(self._radius_spin.value()))
+        self._config.set(
+            "astrometry.downsample", _DOWNSAMPLE[self._downsample_combo.currentIndex()][1]
+        )
+        self._config.set("astrometry.use_scale_hint", self._scale_hint_chk.isChecked())
+        self._config.save()
+        self._refresh_astap_status()
+
+    def _browse_astap(self) -> None:
+        chosen, _ = QFileDialog.getOpenFileName(self, "Locate the ASTAP executable", "/")
+        if chosen:
+            self._astap_edit.setText(chosen)
+            self._save_astrometry()
+
+    def _refresh_astap_status(self) -> None:
+        found = find_astap(self._astap_edit.text().strip())
+        if found:
+            self._astap_status.setText(f"✓ ASTAP detected: {found}")
+        else:
+            self._astap_status.setText("✗ ASTAP not found — install it or set the path above")
 
     def _save_language(self) -> None:
         if self._loading:
