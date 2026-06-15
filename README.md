@@ -38,6 +38,9 @@ uv sync --extra dev
 
 See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for development setup and workflow.
 
+No telescope on hand? Run the whole app against the ASCOM Alpaca simulator —
+see [simulator_testing.md](docs/simulator_testing.md).
+
 ---
 
 ## Project Goals
