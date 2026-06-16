@@ -82,6 +82,11 @@ class FitsViewer(QWidget):
         self._comparisons: tuple = ()  # (x_green, y_green, label) per object
         self._comparisons_on: bool = False
         self._comp_labels: list = []  # pg.TextItem pool, rebuilt on each refresh
+        # §6 P1: saved-target markers (green px) — bold amber ring + name label.
+        self._targets: tuple = ()  # (x_green, y_green, name) per saved target
+        self._targets_on: bool = False
+        self._target_labels: list = []
+        self._grid_labels: list = []  # RA/Dec edge labels (pooled)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -172,6 +177,12 @@ class FitsViewer(QWidget):
         )
         self._comparison_item.setVisible(False)
         self._view.getView().addItem(self._comparison_item, ignoreBounds=True)
+        # §6 P1 — saved targets as a bold amber ring (must stand out) + name label.
+        self._targets_item = pg.ScatterPlotItem(
+            pen=pg.mkPen(theme.WARNING, width=3), brush=None, pxMode=True, size=24, symbol="o"
+        )
+        self._targets_item.setVisible(False)
+        self._view.getView().addItem(self._targets_item, ignoreBounds=True)
         self._astro_label = QLabel(self)
         self._astro_label.setStyleSheet(
             f"background: rgba(13,17,23,205); color: {theme.FG};"
@@ -200,6 +211,7 @@ class FitsViewer(QWidget):
         self._refresh_astrometry()
         self._refresh_catalog()
         self._refresh_comparisons()
+        self._refresh_targets()
         if self._roi is not None:
             self._on_roi_changed()
 
@@ -384,9 +396,11 @@ class FitsViewer(QWidget):
             self._grid_item.setVisible(False)
             self._target_item.setVisible(False)
             self._astro_label.hide()
+            self._clear_grid_labels()
             return
         dh, dw = self._last_arr.shape[:2]
         sx, sy = dw / gw, dh / gh  # green-plane px → display px
+        self._draw_grid_labels(getattr(ov, "labels", ()), sx, sy)
 
         xs_parts, ys_parts = [], []
         gap = np.array([np.nan])
@@ -418,6 +432,22 @@ class FitsViewer(QWidget):
             self._astro_label.raise_()
         else:
             self._astro_label.hide()
+
+    def _clear_grid_labels(self) -> None:
+        view = self._view.getView()
+        for t in self._grid_labels:
+            view.removeItem(t)
+        self._grid_labels = []
+
+    def _draw_grid_labels(self, labels, sx: float, sy: float) -> None:
+        """Place RA/Dec coordinate labels at the frame borders (green px → view)."""
+        self._clear_grid_labels()
+        view = self._view.getView()
+        for x, y, text in labels or ():
+            t = pg.TextItem(text=str(text), color=theme.ACCENT, anchor=(0.0, 0.0))
+            t.setPos(x * sx, y * sy)
+            view.addItem(t, ignoreBounds=True)
+            self._grid_labels.append(t)
 
     # ------------------------------------------------------------------
     # Catalog overlay (§6): VSX variable-star markers
@@ -507,6 +537,47 @@ class FitsViewer(QWidget):
         self._comparison_item.setData(spots)
         self._comparison_item.setVisible(True)
 
+    # ------------------------------------------------------------------
+    # Target overlay (§6 P1): the night's selected stars (amber ring + name)
+    # ------------------------------------------------------------------
+
+    def set_target_markers(self, points, green_shape: tuple[int, int] | None = None) -> None:
+        """Receive saved-target markers as ``(x_green, y_green, name)`` tuples."""
+        self._targets = tuple(points or ())
+        if green_shape is not None:
+            self._green_shape = green_shape
+        self._refresh_targets()
+
+    def set_target_enabled(self, enabled: bool) -> None:
+        self._targets_on = bool(enabled)
+        self._refresh_targets()
+
+    def _refresh_targets(self) -> None:
+        view = self._view.getView()
+        for t in self._target_labels:
+            view.removeItem(t)
+        self._target_labels = []
+        if not (self._targets_on and self._targets and self._last_arr is not None):
+            self._targets_item.setVisible(False)
+            return
+        gh, gw = self._green_shape or (0, 0)
+        if gh <= 0 or gw <= 0:
+            self._targets_item.setVisible(False)
+            return
+        dh, dw = self._last_arr.shape[:2]
+        sx, sy = dw / gw, dh / gh
+        spots = []
+        for x, y, name in self._targets:
+            px, py = x * sx, y * sy
+            spots.append({"pos": (px, py)})
+            if name:
+                t = pg.TextItem(text=str(name), color=theme.WARNING, anchor=(0.0, 1.4))
+                t.setPos(px, py)
+                view.addItem(t, ignoreBounds=True)
+                self._target_labels.append(t)
+        self._targets_item.setData(spots)
+        self._targets_item.setVisible(True)
+
     def set_loupe_enabled(self, enabled: bool) -> None:
         self._loupe = bool(enabled)
         if not self._loupe:
@@ -528,12 +599,19 @@ class FitsViewer(QWidget):
             self.star_clicked.emit(float(x), float(y))
 
     def mark_selection(
-        self, x_disp: float, y_disp: float, text: str, radius_disp: float | None = None
+        self,
+        x_disp: float,
+        y_disp: float,
+        text: str,
+        radius_disp: float | None = None,
+        show_label: bool = True,
     ) -> None:
         """Mark the selection at display px (x, y) and show its readout.
 
         ``radius_disp`` (display px) draws the measurement aperture as a ring
         around the centre dot; ``None`` (e.g. a catalog pick) shows the dot only.
+        ``show_label=False`` draws only the ring (the live page shows the richer
+        info in its on-image card instead of this built-in label).
         """
         self._sel_center.setData([{"pos": (x_disp, y_disp), "size": 6}])
         self._sel_center.setVisible(True)
@@ -545,6 +623,9 @@ class FitsViewer(QWidget):
             self._sel_ring.setVisible(True)
         else:
             self._sel_ring.setVisible(False)
+        if not show_label:
+            self._sel_label.hide()
+            return
         self._sel_label.setText(text)
         self._sel_label.adjustSize()
         self._sel_label.move(10, max(10, self.height() - self._sel_label.height() - 10))
@@ -613,6 +694,8 @@ class FitsViewer(QWidget):
         self._refresh_catalog()
         self._comparisons = ()
         self._refresh_comparisons()
+        self._targets = ()
+        self._refresh_targets()
         self.clear_selection()
         self._auto_on = True
         self._black, self._white = 0.0, 65535.0

@@ -84,6 +84,7 @@ class WCSOverlay:
     center: tuple[float, float] | None  # field centre (CRVAL) in green px
     center_label: str  # human-readable centre RA/Dec
     target: tuple[float, float] | None  # intended target in green px (or None)
+    labels: list = field(default_factory=list)  # (x_green, y_green, text) edge labels
 
 
 def find_astap(explicit: str = "") -> str | None:
@@ -422,24 +423,30 @@ def wcs_grid(
         dec_step = _nice_step(dec_max - dec_min, target_lines)
     margin = 2.0
     lines: list = []
+    labels: list = []  # (x_green, y_green, text) anchored where a line meets a border
 
-    def _line(ra_arr: np.ndarray, dec_arr: np.ndarray) -> None:
+    def _line(ra_arr: np.ndarray, dec_arr: np.ndarray, text: str | None = None) -> None:
         xs, ys = wcs.world_to_pixel_deg(np.asarray(ra_arr), np.asarray(dec_arr))
         xs = np.asarray(xs, dtype=float)
         ys = np.asarray(ys, dtype=float)
         off = (xs < -margin) | (xs > gw + margin) | (ys < -margin) | (ys > gh + margin)
         xs[off] = np.nan
         ys[off] = np.nan
-        if np.isfinite(xs).any():
+        finite = np.isfinite(xs) & np.isfinite(ys)
+        if finite.any():
             lines.append((xs, ys))
+            if text:  # anchor at the first in-frame sample → near a frame border
+                i = int(np.argmax(finite))
+                labels.append((float(xs[i]), float(ys[i]), text))
 
     d = math.ceil(dec_min / dec_step) * dec_step
     while d <= dec_max + 1e-9:  # iso-Dec lines (constant Dec, varying RA)
-        _line(np.linspace(ra_min, ra_max, samples), np.full(samples, d))
+        _line(np.linspace(ra_min, ra_max, samples), np.full(samples, d), format_dec_dms(d))
         d += dec_step
     a = math.ceil(ra_min / ra_step) * ra_step
     while a <= ra_max + 1e-9:  # iso-RA lines (constant RA, varying Dec)
-        _line(np.full(samples, a), np.linspace(dec_min, dec_max, samples))
+        _line(np.full(samples, a), np.linspace(dec_min, dec_max, samples),
+              format_ra_hms((a % 360.0) / 15.0))
         a += ra_step
 
     cx, cy = wcs.world_to_pixel_deg(wcs.crval1, wcs.crval2)
@@ -451,7 +458,9 @@ def wcs_grid(
     if target_radec is not None:
         tx, ty = wcs.world_to_pixel_deg(target_radec[0] * 15.0, target_radec[1])
         target = (float(tx), float(ty))
-    return WCSOverlay(lines=lines, center=center, center_label=center_label, target=target)
+    return WCSOverlay(
+        lines=lines, center=center, center_label=center_label, target=target, labels=labels
+    )
 
 
 # --------------------------------------------------------------------------- #

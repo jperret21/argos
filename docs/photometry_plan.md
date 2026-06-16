@@ -212,27 +212,40 @@ keeps the previous grid; auto-solve tracks a sequence without freezing the UI;
 
 The main page is where the night is spent. Add to `imaging_page.py`:
 
+> **Confirmed UX (2026-06-16):** click-a-star info lives in an **on-image info card**
+> (anchored bottom-left, semi-transparent, with role buttons); overlay toggles live in
+> a **slim chip bar directly under the image toolbar**. (Resolves §11 Q2.)
+
 ### B1. Catalog + target overlays on the live frame (kills D2)
 - After each (auto) solve, fetch VSX/VSP via `CatalogWorker` (same as analysis), then
   `project_points` variables + comparisons + **saved targets** to green px and push to
   the viewer layers (`set_catalog_markers`, `set_comparison_markers`, plus a NEW
   **target layer**, see B4).
-- Toolbar/overlay toggles mirrored from the analysis bar: **Grid · Variables ·
-  Comparisons · Targets · Auto-solve**. Reuse the existing `fits_viewer` layers; the
-  only new viewer layer is "selected targets" (distinct colour, e.g. `theme.SUCCESS`
-  filled ring + label = role).
+- **Overlay toggle bar** — a slim second row under `ImageToolbar`: chips
+  **Grid · Stars · Variables · Comparisons · Targets** (a small reusable
+  `ui/widgets/overlay_bar.py`, checkable chips, each `…_toggled(bool)`). Chips are
+  **disabled until their data exists** (Variables/Comparisons/Targets after
+  solve+catalog). This removes the live-page reliance on the far-away Display-tab
+  checkboxes for overlays; keep Display-tab toggles for the focus tools (loupe/ROI).
+- **Marker visual language** (one colour = one meaning, theme palette, no emoji):
+  field stars = thin green rings (∝FWHM, existing); VSX variables = purple diamonds
+  (existing); VSP comparisons = cyan squares + label (existing); **tonight's target(s)
+  = a NEW bold amber double-ring + name label** so it is unmistakable among the rest
+  (new `fits_viewer` target layer: `set_target_markers`/`set_target_enabled`).
 
-### B2. Click-a-star info popup (the "bandeau ou popup")
-New `ui/widgets/star_info_panel.py` — a compact non-modal panel (dock on the right
-rail **or** a small frameless popup near the click; recommend a **rail tab "Inspect"**
-so it doesn't occlude the image). On `star_clicked`:
-- Resolve in priority order (reuse analysis hit-test): **saved target → VSX variable →
-  VSP comparison → measured field star**.
-- Show: pixel (raw+green), RA/Dec (if solved), catalog id (AUID/name), catalog mags
-  per band, var type/period (variables), FWHM/HFD (″ via plate scale), ecc, SNR, peak
-  ADU, sky. (All already computed by `measure_star_at` / catalog dataclasses.)
-- Actions: **Set role → Target / Comparison / Check / Ignore**, **Show comparisons**
-  (variables), **Centre/loupe**. "Set role" writes into the `TargetSet` (B4).
+### B2. Click-a-star info card (the confirmed on-image card)
+New `ui/widgets/star_info_card.py` — a compact, **corner-anchored overlay card** on the
+image (bottom-left, semi-transparent, a small `[x]` to dismiss), upgrading today's
+`fits_viewer.mark_selection` readout label into an interactive card. It never follows
+the cursor (stable under zoom/pan) and barely occludes the field. On `star_clicked`:
+- Resolve in priority order (reuse the analysis hit-test): **saved target → VSX variable
+  → VSP comparison → measured field star**; ring the star (`mark_selection`).
+- Show: catalog id (AUID/name), RA/Dec (if solved), catalog mags per band, var
+  type/period (variables), then measured FWHM/HFD (″ via plate scale), ecc, SNR, peak
+  ADU, sky. (All already computed by `measure_star_at` / the catalog dataclasses.)
+- Actions (the role buttons): **Target · Comparison · Check · Clear** (variables also
+  get **Show comparisons**). A role button writes/updates a `TargetStar` in the
+  `TargetSet` (B4) and saves. Empty/field-star cards offer **Add as Comparison / Check**.
 - This unifies today's `fits_viewer.mark_selection` readout label with the catalog
   click — one info surface, richer.
 
@@ -478,8 +491,9 @@ Each phase ends **green** (`uv run --extra dev pytest`) and is independently shi
 
 1. **Photometry window**: floating (second monitor) vs docked rail tab? (Recommend
    floating, mirrors the analysis window.)
-2. **Star-info on click**: right-rail "Inspect" tab vs frameless popup at the cursor?
-   (Recommend rail tab — never occludes the field; popup is fiddly on zoom.)
+2. **Star-info on click**: ✅ RESOLVED 2026-06-16 → **on-image info card** (corner-
+   anchored, with role buttons); overlay toggles in a **slim chip bar under the
+   toolbar**. (User picked the card over a rail tab / cursor popup.)
 3. **Auto-solve default**: on or off at startup? (Recommend off; user arms it — solving
    every frame costs CPU and only matters once framed.)
 4. **Band for differential**: lock to TG (green) for v1, expose B/V later? (Recommend

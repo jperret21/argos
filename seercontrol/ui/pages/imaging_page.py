@@ -53,6 +53,8 @@ from seercontrol.core.alpaca.filterwheel import POSITION_NAMES, FilterWheel
 from seercontrol.core.alpaca.focuser import Focuser
 from seercontrol.core.alpaca.telescope import MountPosition, Telescope
 from seercontrol.core.config import Config
+from seercontrol.core.catalog.targets import TargetSet, TargetStar
+from seercontrol.core.imaging.astrometry_session import field_geometry, project_points
 from seercontrol.core.imaging.debayer import VIEW_SUPERPIXEL
 from seercontrol.core.imaging.fits_writer import FITSWriter, FrameContext
 from seercontrol.core.imaging.metrics import (
@@ -62,7 +64,11 @@ from seercontrol.core.imaging.metrics import (
     TRACK_SNAP_SEARCH,
     measure_star_at,
 )
-from seercontrol.core.imaging.platesolve import format_dec_dms, format_ra_hms
+from seercontrol.core.imaging.platesolve import (
+    angular_separation_deg,
+    format_dec_dms,
+    format_ra_hms,
+)
 from seercontrol.ui import design, theme
 from seercontrol.ui.panels.log_panel import LogPanel
 from seercontrol.ui.panels.manual_control_dialog import ManualControlDialog
@@ -73,12 +79,15 @@ from seercontrol.ui.widgets.focuser_dock import FocuserDock
 from seercontrol.ui.widgets.histogram_dock import HistogramDock
 from seercontrol.ui.widgets.image_toolbar import ImageToolbar
 from seercontrol.ui.widgets.mount_dock import MountDock
+from seercontrol.ui.widgets.overlay_bar import OverlayBar
 from seercontrol.ui.widgets.sequence_panel import SequencePanel
+from seercontrol.ui.widgets.star_info_card import StarInfoCard
+from seercontrol.workers.astrometry_controller import AstrometryController
 from seercontrol.workers.autofocus_worker import AutofocusWorker
+from seercontrol.workers.catalog_worker import CatalogRequest, CatalogWorker
 from seercontrol.workers.discovery_worker import DiscoveryWorker
 from seercontrol.workers.exposure_worker import LivePreviewWorker
 from seercontrol.workers.polling_worker import MountPollingWorker
-from seercontrol.workers.astrometry_controller import AstrometryController
 from seercontrol.workers.preview_processor import PreviewProcessor
 from seercontrol.workers.sequence_worker import SequenceWorker
 
@@ -188,6 +197,17 @@ class ImagingPage(QWidget):
         self._analysis_windows: list = []  # open Open-FITS analysis windows
         # Live plate-solve lifecycle + auto-solve policy (§6, shared pipeline).
         self._astrometry = AstrometryController(self._cfg, self)
+        # §6 P1: live catalog (VSX/VSP) + persistent target set.
+        self._catalog_worker: CatalogWorker | None = None
+        self._variables: list = []
+        self._comparisons: list = []
+        self._var_green: list = []  # parallel to _variables (None = off-frame)
+        self._comp_green: list = []
+        self._target_green: list = []
+        self._catalog_centre: tuple[float, float] | None = None  # (ra_deg, dec_deg)
+        self._target_set: TargetSet | None = None
+        self._pending_star: dict | None = None  # the clicked star awaiting a role
+        self._armed: set = set()  # overlays auto-shown once when first available
 
         # Single-shot capture: number of upcoming preview frames to save.
         self._capture_pending = 0
@@ -209,9 +229,14 @@ class ImagingPage(QWidget):
         # Display controls (channel / gamma / auto-stretch) sit above the image.
         self._toolbar = ImageToolbar()
         root.addWidget(self._toolbar)
+        # Slim overlay-toggle chips under the toolbar (Grid/Stars/Variables/…).
+        self._overlay_bar = OverlayBar()
+        root.addWidget(self._overlay_bar)
 
         # Build the control surfaces once; placed into the layout below.
         self._viewer = FitsViewer()
+        # On-image star-info card (bottom-left overlay) for click → info + roles.
+        self._info_card = StarInfoCard(self._viewer)
         self._camera_dock = CameraDock()
         self._sequence_panel = SequencePanel()
         self._mount_dock = MountDock()
@@ -320,6 +345,10 @@ class ImagingPage(QWidget):
         self._astrometry.solved.connect(self._on_astrometry_solved)
         self._astrometry.failed.connect(lambda m: self.log_message.emit("ERROR", f"Solve: {m}"))
         self._astrometry.state.connect(self.action_changed)
+        # Overlay chips + the on-image star-info card.
+        self._overlay_bar.toggled.connect(self._on_overlay_toggled)
+        self._info_card.role_selected.connect(self._on_card_role)
+        self._info_card.cleared.connect(self._on_card_cleared)
         # Display pipeline: the Display tab (histogram/stretch) ↔ the viewer.
         self._histogram_dock.stretch_changed.connect(self._viewer.set_stretch)
         self._histogram_dock.auto_requested.connect(self._viewer.auto_stretch)
@@ -564,6 +593,7 @@ class ImagingPage(QWidget):
         self._viewer.display(pf.display)
         # Keep a clicked star's FWHM readout live as new frames arrive.
         self._remeasure_selection()
+        self._overlay_bar.set_available("stars", True)  # detected-star overlay always usable
         # Auto-solve policy (no-op unless armed + due): re-solve the live frame so
         # the WCS grid tracks the sequence instead of going stale.
         if self._last_raw is not None and self._green_shape is not None:
@@ -593,17 +623,137 @@ class ImagingPage(QWidget):
             self._processor.submit(self._last_raw, self._channel)  # refresh overlay
 
     def _on_star_clicked(self, x_disp: float, y_disp: float) -> None:
-        """Measure the star under the click and pin its readout to the image."""
+        """Hit-test the click (target → variable → comparison → field star) and
+        show the on-image info card with role actions."""
         gp = self._disp_to_green(x_disp, y_disp)
         if gp is None or self._last_raw is None:
             return
-        meas = measure_star_at(self._last_raw, gp[0], gp[1], self._star_radius)
+        gx, gy = gp
+        # 1) a saved target (only if its markers are showing)
+        i = self._nearest(self._target_green, gx, gy) if self._overlay_bar.is_checked("targets") else None
+        if i is not None:
+            s = self._ensure_target_set().stars[i]
+            self._present_card(
+                self._target_green[i],
+                f"Target · {s.display_name}",
+                self._target_body(s),
+                dict(ra_deg=s.ra_deg, dec_deg=s.dec_deg, auid=s.auid, name=s.name,
+                     source=s.source, mags=dict(s.mags)),
+            )
+            return
+        # 2) a VSX variable
+        i = self._nearest(self._var_green, gx, gy)
+        if i is not None:
+            v = self._variables[i]
+            self._present_card(
+                self._var_green[i],
+                f"Variable · {v.name}",
+                self._variable_body(v),
+                dict(ra_deg=v.ra_deg, dec_deg=v.dec_deg, auid=v.auid, name=v.name,
+                     source="vsx", mags={}),
+            )
+            return
+        # 3) a VSP comparison (only if its markers are showing)
+        i = self._nearest(self._comp_green, gx, gy) if self._overlay_bar.is_checked("comparisons") else None
+        if i is not None:
+            c = self._comparisons[i]
+            self._present_card(
+                self._comp_green[i],
+                f"Comparison · {c.label or c.auid}",
+                self._comparison_body(c),
+                dict(ra_deg=c.ra_deg, dec_deg=c.dec_deg, auid=c.auid, name=c.label,
+                     source="vsp", mags={b.band: b.mag for b in c.bands}),
+            )
+            return
+        # 4) a measured field star
+        meas = measure_star_at(self._last_raw, gx, gy, self._star_radius)
         if meas is None:
             self._viewer.clear_selection()
+            self._info_card.hide()
             self._selected_green = None
+            self._pending_star = None
             return
         self._selected_green = (meas.x, meas.y)
-        self._show_selection(meas)
+        self._present_field_card(meas)
+
+    def _nearest(self, positions, gx: float, gy: float) -> int | None:
+        """Index of the marker nearest (gx, gy) green px within tolerance."""
+        if not positions:
+            return None
+        tol = 10.0
+        if self._green_shape and self._disp_shape and self._disp_shape[1] > 0:
+            tol = max(6.0, 14.0 * self._green_shape[1] / self._disp_shape[1])
+        best_i, best_d = None, tol
+        for i, p in enumerate(positions):
+            if p is None:
+                continue
+            d = ((p[0] - gx) ** 2 + (p[1] - gy) ** 2) ** 0.5
+            if d <= best_d:
+                best_i, best_d = i, d
+        return best_i
+
+    def _present_card(self, green_pos, title: str, body: str, pending: dict) -> None:
+        """Ring a catalog/target pick and show its info card (roles enabled)."""
+        self._selected_green = None  # a catalog pick, not a measured field star
+        self._pending_star = pending
+        dp = self._green_to_disp(green_pos[0], green_pos[1])
+        if dp is not None:
+            self._viewer.mark_selection(dp[0], dp[1], "", show_label=False)
+        self._info_card.show_star(title, body, roles_enabled=True)
+        self._info_card.reposition()
+
+    def _present_field_card(self, meas) -> None:
+        """Ring a measured field star; role buttons need a solve for its RA/Dec."""
+        wcs = self._astrometry.wcs
+        pending = None
+        if wcs is not None:
+            ra_h, dec_d = wcs.pixel_to_radec(meas.x, meas.y)
+            pending = dict(ra_deg=ra_h * 15.0, dec_deg=dec_d, auid=None, name=None,
+                           source="manual", mags={})
+        self._pending_star = pending
+        dp = self._green_to_disp(meas.x, meas.y)
+        if dp is not None:
+            self._viewer.mark_selection(
+                dp[0], dp[1], "", self._green_len_to_disp(meas.radius), show_label=False
+            )
+        self._info_card.show_star("Field star", self._format_star_text(meas),
+                                  roles_enabled=pending is not None)
+        self._info_card.reposition()
+
+    def _variable_body(self, v) -> str:
+        lines = []
+        if v.var_type:
+            lines.append(f"type {v.var_type}" + ("  (suspected)" if v.is_suspected else ""))
+        rng = []
+        if v.max_mag:
+            rng.append(f"max {v.max_mag}")
+        if v.min_mag and v.min_mag != "?":
+            rng.append(f"min {v.min_mag}")
+        if rng:
+            lines.append("  ".join(rng))
+        if v.period:
+            lines.append(f"period {v.period:g} d")
+        if v.auid:
+            lines.append(f"AUID {v.auid}")
+        lines.append(f"RA {format_ra_hms(v.ra_deg / 15.0)}  Dec {format_dec_dms(v.dec_deg)}")
+        return "\n".join(lines)
+
+    def _comparison_body(self, c) -> str:
+        lines = []
+        mags = [f"{b.band} {b.mag:.3f}" for b in c.bands]
+        if mags:
+            lines.append("  ".join(mags))
+        if c.label:
+            lines.append(f"chart label {c.label}")
+        lines.append(f"RA {format_ra_hms(c.ra_deg / 15.0)}  Dec {format_dec_dms(c.dec_deg)}")
+        return "\n".join(lines)
+
+    def _target_body(self, s) -> str:
+        lines = [f"role {s.role}  ·  source {s.source}"]
+        if s.mags:
+            lines.append("  ".join(f"{b} {m:.3f}" for b, m in s.mags.items()))
+        lines.append(f"RA {format_ra_hms(s.ra_deg / 15.0)}  Dec {format_dec_dms(s.dec_deg)}")
+        return "\n".join(lines)
 
     def _remeasure_selection(self) -> None:
         """Re-measure the pinned star (new frame / radius change), centre stable."""
@@ -624,11 +774,13 @@ class ImagingPage(QWidget):
         self._show_selection(meas)
 
     def _show_selection(self, meas) -> None:
+        # Keep the tracked field star's ring following small drift; the info is in
+        # the on-image card (drawn once on click), so suppress the viewer label.
         dp = self._green_to_disp(meas.x, meas.y)
         if dp is None:
             return
         radius_disp = self._green_len_to_disp(meas.radius)
-        self._viewer.mark_selection(dp[0], dp[1], self._format_star_text(meas), radius_disp)
+        self._viewer.mark_selection(dp[0], dp[1], "", radius_disp, show_label=False)
 
     def _format_star_text(self, meas) -> str:
         parts = ["Selected star"]
@@ -749,20 +901,152 @@ class ImagingPage(QWidget):
 
     @pyqtSlot(object, object, str)
     def _on_astrometry_solved(self, _wcs, overlay, summary: str) -> None:
-        """A fresh solution arrived from the controller — apply grid + readouts."""
+        """A fresh solution arrived from the controller — apply grid + catalog."""
         self.log_message.emit("OK", summary)
         self._viewer.set_astrometry_overlay(overlay, self._green_shape)
-        self._viewer.set_astrometry_enabled(True)
+        self._arm_overlay("grid", True, self._viewer.set_astrometry_enabled)
         self._histogram_dock.set_astrometry_available(True)
-        self._histogram_dock.set_astrometry_checked(True)
+        self._histogram_dock.set_astrometry_checked(self._overlay_bar.is_checked("grid"))
         self._remeasure_selection()  # refresh the clicked star's RA/Dec
+        self._maybe_fetch_catalog()  # VSX/VSP once per field
+        self._project_catalog()  # re-project cached catalog + targets onto the new WCS
+
+    # ------------------------------------------------------------------
+    # Overlays, catalog + target set (§6 P1)
+    # ------------------------------------------------------------------
+
+    def _on_overlay_toggled(self, name: str, on: bool) -> None:
+        {
+            "grid": self._viewer.set_astrometry_enabled,
+            "stars": self._viewer.set_star_overlay_enabled,
+            "variables": self._viewer.set_catalog_enabled,
+            "comparisons": self._viewer.set_comparison_enabled,
+            "targets": self._viewer.set_target_enabled,
+        }[name](on)
+
+    def _arm_overlay(self, name: str, has: bool, setter) -> None:
+        """Enable a chip when its data exists; auto-show it the first time only."""
+        self._overlay_bar.set_available(name, has)
+        if has and name not in self._armed:
+            self._armed.add(name)
+            self._overlay_bar.set_checked(name, True)
+            setter(True)
+
+    def _maybe_fetch_catalog(self) -> None:
+        """Fetch VSX/VSP once per field (re-fetch only when the centre moves)."""
+        if self._catalog_worker is not None and self._catalog_worker.isRunning():
+            return
+        geom = field_geometry(self._astrometry.wcs, self._green_shape)
+        if geom is None:
+            return
+        ra_deg, dec_deg, radius_deg, fov_arcmin = geom
+        if self._catalog_centre is not None and (self._variables or self._comparisons):
+            moved = angular_separation_deg(
+                ra_deg / 15.0, dec_deg, self._catalog_centre[0] / 15.0, self._catalog_centre[1]
+            )
+            if moved < radius_deg:
+                return  # same field → reuse the cached catalog
+        self._catalog_centre = (ra_deg, dec_deg)
+        req = CatalogRequest(
+            ra_deg=ra_deg,
+            dec_deg=dec_deg,
+            radius_deg=radius_deg,
+            fov_arcmin=fov_arcmin,
+            mag_limit=float(self._cfg("catalog.mag_limit", 15.0)),
+            max_results=int(self._cfg("catalog.max_results", 250)),
+            include_suspected=bool(self._cfg("catalog.include_suspected", True)),
+        )
+        self._catalog_worker = CatalogWorker(req, parent=self)
+        self._catalog_worker.fetched.connect(self._on_catalog)
+        self._catalog_worker.start()
+
+    @pyqtSlot(object)
+    def _on_catalog(self, result) -> None:
+        if not result.ok:
+            self.log_message.emit("WARN", f"Catalog: {result.error}")
+            return
+        self._variables = list(result.variables)
+        self._comparisons = list(result.comparisons)
+        self._project_catalog()
+        if self._variables:
+            self.log_message.emit("OK", f"Catalog: {len(self._variables)} variable(s) in field")
+
+    def _project_catalog(self) -> None:
+        """Re-project the cached variables/comparisons/targets onto the live WCS."""
+        wcs, gs = self._astrometry.wcs, self._green_shape
+        self._var_green = project_points(wcs, gs, ((v.ra_deg, v.dec_deg) for v in self._variables))
+        var_pts = [(p[0], p[1], v.is_suspected) for p, v in zip(self._var_green, self._variables) if p]
+        self._viewer.set_catalog_markers(var_pts, gs)
+        self._comp_green = project_points(
+            wcs, gs, ((c.ra_deg, c.dec_deg) for c in self._comparisons)
+        )
+        comp_pts = [(p[0], p[1], c.label) for p, c in zip(self._comp_green, self._comparisons) if p]
+        self._viewer.set_comparison_markers(comp_pts, gs)
+        self._arm_overlay("variables", bool(var_pts), self._viewer.set_catalog_enabled)
+        self._arm_overlay("comparisons", bool(comp_pts), self._viewer.set_comparison_enabled)
+        self._project_targets()
+
+    def _project_targets(self) -> None:
+        tset = self._ensure_target_set()
+        wcs, gs = self._astrometry.wcs, self._green_shape
+        self._target_green = project_points(wcs, gs, ((s.ra_deg, s.dec_deg) for s in tset.stars))
+        pts = [(p[0], p[1], s.display_name) for p, s in zip(self._target_green, tset.stars) if p]
+        self._viewer.set_target_markers(pts, gs)
+        self._arm_overlay("targets", bool(pts), self._viewer.set_target_enabled)
+
+    # ------------------------------------------------------------------
+    # Target set persistence (targets.json per object)
+    # ------------------------------------------------------------------
+
+    def _target_path(self, obj: str):
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in (obj or "untitled"))
+        return self._sessions_base() / "targets" / f"{safe or 'untitled'}.json"
+
+    def _ensure_target_set(self) -> TargetSet:
+        obj = (self._camera_dock.params().object_name or "untitled").strip() or "untitled"
+        if self._target_set is None or self._target_set.object_name != obj:
+            self._target_set = TargetSet.load(self._target_path(obj))
+            self._target_set.object_name = obj
+        return self._target_set
+
+    def _on_card_role(self, role: str) -> None:
+        if self._pending_star is None:
+            return
+        tset = self._ensure_target_set()
+        star = TargetStar(role=role, **self._pending_star)
+        tset.set_role(star)
+        try:
+            tset.save(self._target_path(tset.object_name))
+        except OSError as exc:
+            self.log_message.emit("ERROR", f"Save targets: {exc}")
+        self._project_targets()
+        self.log_message.emit("OK", f"{role.capitalize()}: {star.display_name}")
+
+    def _on_card_cleared(self) -> None:
+        self._viewer.clear_selection()
+        self._selected_green = None
+        self._pending_star = None
 
     def _clear_astrometry(self) -> None:
-        """Drop the WCS overlay — a slew/goto invalidates the previous solve."""
+        """Drop the WCS + catalog overlays — a slew/goto changes the field."""
         self._astrometry.invalidate()
         self._viewer.set_astrometry_overlay(None)
         self._histogram_dock.set_astrometry_available(False)
         self._histogram_dock.set_astrometry_checked(False)
+        # The field changed → drop the catalog/target projections (re-fetched on
+        # the next solve) and re-arm so they auto-show again for the new field.
+        self._variables = []
+        self._comparisons = []
+        self._var_green = []
+        self._comp_green = []
+        self._target_green = []
+        self._catalog_centre = None
+        self._armed.clear()
+        self._viewer.set_catalog_markers((), self._green_shape)
+        self._viewer.set_comparison_markers((), self._green_shape)
+        self._viewer.set_target_markers((), self._green_shape)
+        for name in ("grid", "variables", "comparisons", "targets"):
+            self._overlay_bar.set_available(name, False)
 
     def _on_take_shot(self) -> None:
         self._capture_pending = 1
@@ -1266,8 +1550,15 @@ class ImagingPage(QWidget):
         self._stop_polling()
         self._stop_autofocus()
         self._astrometry.wait(2000)
+        if self._catalog_worker is not None and self._catalog_worker.isRunning():
+            self._catalog_worker.wait(2000)
         self._processor.stop()
         self._processor.wait(2000)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().resizeEvent(event)
+        if self._info_card.isVisible():
+            self._info_card.reposition()
 
     def closeEvent(self, event) -> None:
         self.shutdown()
