@@ -17,12 +17,18 @@ import math
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+#: Don't let downsampling shrink the solved frame's short side below this many
+#: pixels — ASTAP needs enough stars/quads to match. Frames from the Seestar are
+#: large enough that ``-z 2`` is fine; a small frame (e.g. the 800×600 ASCOM
+#: simulator image → 400×300 green plane) would lose its stars at ``-z 2``.
+_MIN_SOLVE_PX = 256
 
 #: Executable names to look for on PATH.
 _ASTAP_NAMES = ("astap_cli", "astap")
@@ -158,39 +164,80 @@ def solve_array(green: np.ndarray, settings: SolveSettings) -> SolveResult:
     if green.ndim != 2:
         return SolveResult(False, message=f"expected a 2-D plane, got {green.shape}")
 
+    # Don't downsample a frame that's already small into too few stars (no-op for
+    # the large Seestar frames this is tuned for; rescues small sim/cropped ones).
+    eff = settings
+    short = int(min(green.shape))
+    down = _clamp_downsample(short, settings.downsample)
+    if down != settings.downsample:
+        logger.info("ASTAP: downsample %d→%d (short side %dpx)", settings.downsample, down, short)
+        eff = replace(settings, downsample=down)
+
     with tempfile.TemporaryDirectory() as tmp:
         fits_path = Path(tmp) / "solve.fits"
         fits.PrimaryHDU(data=green.astype(np.uint16)).writeto(fits_path, overwrite=True)
-        cmd = _build_command(astap, fits_path, settings)
-        logger.info("ASTAP: %s", " ".join(cmd))
-        try:
-            subprocess.run(
-                cmd,
-                cwd=tmp,
-                capture_output=True,
-                timeout=settings.timeout_s,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            return SolveResult(False, message=f"ASTAP timed out after {settings.timeout_s:.0f}s")
-        except OSError as exc:
-            return SolveResult(False, message=f"could not run ASTAP: {exc}")
 
-        ini = fits_path.with_suffix(".ini")
-        wcs = fits_path.with_suffix(".wcs")
-        for out in (ini, wcs):
-            if out.exists():
-                return parse_astap_ini(out.read_text(errors="ignore"))
+        result = _run_astap(astap, fits_path, eff)
+        # A hinted (local-radius) solve trusts the pointing hint. If it failed,
+        # the hint may be wrong or stale (mount not actually on target), so the
+        # local radius scanned the wrong patch of sky — retry once whole-sky.
+        local = eff.search_radius_deg and eff.search_radius_deg > 0
+        hinted = eff.ra_hint_hours is not None and eff.dec_hint_deg is not None
+        if not result.solved and hinted and local:
+            logger.info("ASTAP: hinted solve failed — retrying blind (whole-sky)")
+            result = _run_astap(
+                astap, fits_path, replace(eff, ra_hint_hours=None, dec_hint_deg=None)
+            )
+        return result
+
+
+def _run_astap(astap: str, fits_path: Path, s: SolveSettings) -> SolveResult:
+    """Run ASTAP once on ``fits_path`` and parse its ``.ini``/``.wcs`` output."""
+    cmd = _build_command(astap, fits_path, s)
+    logger.info("ASTAP: %s", " ".join(cmd))
+    try:
+        subprocess.run(
+            cmd,
+            cwd=str(fits_path.parent),
+            capture_output=True,
+            timeout=s.timeout_s,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return SolveResult(False, message=f"ASTAP timed out after {s.timeout_s:.0f}s")
+    except OSError as exc:
+        return SolveResult(False, message=f"could not run ASTAP: {exc}")
+
+    for out in (fits_path.with_suffix(".ini"), fits_path.with_suffix(".wcs")):
+        if out.exists():
+            return parse_astap_ini(out.read_text(errors="ignore"))
     return SolveResult(False, message="ASTAP produced no solution file")
+
+
+def _clamp_downsample(short_px: int, downsample: int) -> int:
+    """Reduce the downsample factor so the short side stays >= ``_MIN_SOLVE_PX``.
+
+    ``downsample=0`` (ASTAP auto) is left untouched. Large frames keep their
+    configured factor; small frames are protected from losing all their stars.
+    """
+    down = downsample
+    while down > 1 and short_px // down < _MIN_SOLVE_PX:
+        down -= 1
+    return down
 
 
 def _build_command(astap: str, fits_path: Path, s: SolveSettings) -> list[str]:
     """Assemble the ASTAP CLI command for a (hinted or blind) solve."""
     cmd = [astap, "-f", str(fits_path), "-wcs"]
-    if s.search_radius_deg and s.search_radius_deg > 0:
+    has_pos = s.ra_hint_hours is not None and s.dec_hint_deg is not None
+    if has_pos and s.search_radius_deg and s.search_radius_deg > 0:
         cmd += ["-r", f"{s.search_radius_deg:g}"]
     else:
-        cmd += ["-r", "180"]  # blind: search the whole sky
+        # A search radius is a radius *around a position*. With no pointing hint
+        # there is no centre, so a local radius would scan the wrong patch of sky
+        # (the bug behind "no star found" on un-pointed frames). Search the whole
+        # sky instead — slower, but it actually finds the field.
+        cmd += ["-r", "180"]
     if s.downsample and s.downsample > 0:
         cmd += ["-z", str(int(s.downsample))]
     if s.fov_hint_deg and s.fov_hint_deg > 0:
@@ -198,7 +245,14 @@ def _build_command(astap: str, fits_path: Path, s: SolveSettings) -> list[str]:
     if s.ra_hint_hours is not None and s.dec_hint_deg is not None:
         cmd += ["-ra", f"{s.ra_hint_hours:g}", "-spd", f"{s.dec_hint_deg + 90.0:g}"]
     if s.database:
-        cmd += ["-d", s.database]
+        # ASTAP distinguishes ``-D <abbreviation>`` (e.g. "D05") from
+        # ``-d <path>`` (a database directory). The config exposes
+        # abbreviations, so pick the matching flag: a path-looking value uses
+        # ``-d``, anything else is treated as an abbreviation via ``-D``.
+        if "/" in s.database or Path(s.database).is_dir():
+            cmd += ["-d", s.database]
+        else:
+            cmd += ["-D", s.database]
     return cmd
 
 

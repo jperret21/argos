@@ -65,7 +65,7 @@ class FitsViewer(QWidget):
         self._sat_enabled: bool = False
         self._sat_threshold: int = 60000
         self._roi: pg.RectROI | None = None
-        self._crosshair: bool = True  # on by default so it's immediately visible
+        self._crosshair: bool = False  # off by default; when on, follows the cursor only
         self._disp_u8: np.ndarray | None = None  # last stretched display (for the loupe)
         # §5 focus tools: star/FWHM overlay + 100% loupe.
         self._stars: tuple = ()
@@ -75,6 +75,9 @@ class FitsViewer(QWidget):
         # §6 astrometry overlay: RA/Dec grid + field-centre + target reticle.
         self._wcs_overlay = None  # platesolve.WCSOverlay (green-plane coords)
         self._wcs_on: bool = False
+        # §6 catalog overlay: VSX variable-star markers (green-plane coords).
+        self._catalog: tuple = ()  # (x_green, y_green, suspected) per object
+        self._catalog_on: bool = False
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -89,11 +92,12 @@ class FitsViewer(QWidget):
         self._view.ui.histogram.hide()
         layout.addWidget(self._view)
 
-        # Crosshair (toggleable) tracking the cursor over the image.
+        # Crosshair (toggleable) — only shown while the cursor is over the image
+        # (it never parks in the centre at rest).
         self._vline = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen(theme.WARNING, width=1))
         self._hline = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen(theme.WARNING, width=1))
         for line in (self._vline, self._hline):
-            line.setVisible(self._crosshair)
+            line.setVisible(False)
             self._view.getView().addItem(line, ignoreBounds=True)
 
         # In-image pixel readout — a compact overlay pinned to the top-left,
@@ -114,13 +118,17 @@ class FitsViewer(QWidget):
         self._scatter.setVisible(False)
         self._view.getView().addItem(self._scatter, ignoreBounds=True)
 
-        # §5 selected-star highlight (distinct from the green detection rings) +
-        # a persistent readout pinned bottom-left with the clicked star's metrics.
-        self._sel_scatter = pg.ScatterPlotItem(
-            pen=pg.mkPen(theme.ACCENT, width=2), brush=None, pxMode=True, size=24, symbol="o"
+        # §5 selected-star highlight: a ring drawn at the *actual* measurement
+        # aperture (data-space, so it grows/shrinks with the radius) around a
+        # small fixed centre dot — plus a readout pinned bottom-left.
+        self._sel_ring = pg.PlotDataItem(pen=pg.mkPen(theme.ACCENT, width=2))
+        self._sel_ring.setVisible(False)
+        self._view.getView().addItem(self._sel_ring, ignoreBounds=True)
+        self._sel_center = pg.ScatterPlotItem(
+            pen=None, brush=pg.mkBrush(theme.ACCENT), pxMode=True, size=6, symbol="o"
         )
-        self._sel_scatter.setVisible(False)
-        self._view.getView().addItem(self._sel_scatter, ignoreBounds=True)
+        self._sel_center.setVisible(False)
+        self._view.getView().addItem(self._sel_center, ignoreBounds=True)
 
         self._sel_label = QLabel(self)
         self._sel_label.setStyleSheet(
@@ -136,22 +144,23 @@ class FitsViewer(QWidget):
         self._loupe_label.setStyleSheet(f"background: #000; border: 1px solid {theme.WARNING};")
         self._loupe_label.hide()
 
-        # §6 astrometry overlay — RA/Dec grid (one NaN-broken curve), the solved
-        # field centre marker, and an optional target reticle. All hidden until a
-        # solve provides a WCS and the user enables the overlay.
+        # §6 astrometry overlay — RA/Dec grid (one NaN-broken curve) and an
+        # optional target reticle. The solved centre RA/Dec is shown as text (no
+        # centre marker). All hidden until a solve provides a WCS and it's on.
         self._grid_item = pg.PlotDataItem(
             pen=pg.mkPen(theme.ACCENT, width=1, style=Qt.PenStyle.DotLine)
         )
         self._grid_item.setVisible(False)
         self._view.getView().addItem(self._grid_item, ignoreBounds=True)
-        self._center_item = pg.ScatterPlotItem(
-            pen=pg.mkPen(theme.WARNING, width=2), brush=None, pxMode=True, size=22, symbol="+"
-        )
-        self._center_item.setVisible(False)
-        self._view.getView().addItem(self._center_item, ignoreBounds=True)
         self._target_item = pg.PlotDataItem(pen=pg.mkPen(theme.SUCCESS, width=2))
         self._target_item.setVisible(False)
         self._view.getView().addItem(self._target_item, ignoreBounds=True)
+
+        # §6 catalog overlay — VSX variable stars as hollow diamonds (purple).
+        # Per-spot pen lets suspected variables render dashed/dimmer.
+        self._catalog_item = pg.ScatterPlotItem(brush=None, pxMode=True, size=18, symbol="d")
+        self._catalog_item.setVisible(False)
+        self._view.getView().addItem(self._catalog_item, ignoreBounds=True)
         self._astro_label = QLabel(self)
         self._astro_label.setStyleSheet(
             f"background: rgba(13,17,23,205); color: {theme.FG};"
@@ -175,13 +184,10 @@ class FitsViewer(QWidget):
         if self._auto_on:
             self._black, self._white, self._midtones = auto_stf(arr)
             self.levels_changed.emit(self._black, self._white, self._midtones)
-        if self._crosshair:  # centre it so it's visible before the mouse moves
-            h, w = arr.shape[:2]
-            self._vline.setPos(w / 2)
-            self._hline.setPos(h / 2)
         self._render()
         self._refresh_overlay()
         self._refresh_astrometry()
+        self._refresh_catalog()
         if self._roi is not None:
             self._on_roi_changed()
 
@@ -284,6 +290,8 @@ class FitsViewer(QWidget):
             if self._crosshair:
                 self._vline.setPos(p.x())
                 self._hline.setPos(p.y())
+                self._vline.setVisible(True)
+                self._hline.setVisible(True)
             if a.ndim == 2:
                 self._readout.setText(f"({x}, {y})   {int(a[y, x])} ADU")
             else:
@@ -296,13 +304,17 @@ class FitsViewer(QWidget):
                 self._update_loupe(x, y)
         else:
             self._readout.hide()
+            self._vline.setVisible(False)
+            self._hline.setVisible(False)
             if self._loupe:
                 self._loupe_label.hide()
 
     def set_crosshair_enabled(self, enabled: bool) -> None:
+        # Only toggles the feature; the lines appear on hover, never at rest.
         self._crosshair = bool(enabled)
-        self._vline.setVisible(self._crosshair)
-        self._hline.setVisible(self._crosshair)
+        if not self._crosshair:
+            self._vline.setVisible(False)
+            self._hline.setVisible(False)
 
     # ------------------------------------------------------------------
     # Focus tools (§5): star/FWHM overlay + 100% loupe
@@ -358,7 +370,6 @@ class FitsViewer(QWidget):
         gh, gw = self._green_shape or (0, 0)
         if not show or gh <= 0 or gw <= 0:
             self._grid_item.setVisible(False)
-            self._center_item.setVisible(False)
             self._target_item.setVisible(False)
             self._astro_label.hide()
             return
@@ -378,12 +389,6 @@ class FitsViewer(QWidget):
         else:
             self._grid_item.setVisible(False)
 
-        if ov.center is not None:
-            self._center_item.setData([{"pos": (ov.center[0] * sx, ov.center[1] * sy)}])
-            self._center_item.setVisible(True)
-        else:
-            self._center_item.setVisible(False)
-
         if ov.target is not None:
             tx, ty = ov.target[0] * sx, ov.target[1] * sy
             rr = 0.05 * min(dw, dh)
@@ -401,6 +406,44 @@ class FitsViewer(QWidget):
             self._astro_label.raise_()
         else:
             self._astro_label.hide()
+
+    # ------------------------------------------------------------------
+    # Catalog overlay (§6): VSX variable-star markers
+    # ------------------------------------------------------------------
+
+    def set_catalog_markers(self, points, green_shape: tuple[int, int] | None = None) -> None:
+        """Receive variable-star marker positions (green-plane coords).
+
+        ``points`` is an iterable of ``(x_green, y_green, suspected)`` tuples.
+        """
+        self._catalog = tuple(points or ())
+        if green_shape is not None:
+            self._green_shape = green_shape
+        self._refresh_catalog()
+
+    def set_catalog_enabled(self, enabled: bool) -> None:
+        self._catalog_on = bool(enabled)
+        self._refresh_catalog()
+
+    def _refresh_catalog(self) -> None:
+        """Redraw variable-star diamonds, scaled green-plane → active view."""
+        if not (self._catalog_on and self._catalog and self._last_arr is not None):
+            self._catalog_item.setVisible(False)
+            return
+        gh, gw = self._green_shape or (0, 0)
+        if gh <= 0 or gw <= 0:
+            self._catalog_item.setVisible(False)
+            return
+        dh, dw = self._last_arr.shape[:2]
+        sx, sy = dw / gw, dh / gh  # green-plane px → display px
+        confirmed = pg.mkPen(theme.VARIABLE, width=2)
+        suspected = pg.mkPen(theme.VARIABLE, width=1, style=Qt.PenStyle.DashLine)
+        spots = [
+            {"pos": (x * sx, y * sy), "pen": (suspected if s else confirmed)}
+            for (x, y, s) in self._catalog
+        ]
+        self._catalog_item.setData(spots)
+        self._catalog_item.setVisible(True)
 
     def set_loupe_enabled(self, enabled: bool) -> None:
         self._loupe = bool(enabled)
@@ -422,10 +465,24 @@ class FitsViewer(QWidget):
         if 0 <= x < w and 0 <= y < h:
             self.star_clicked.emit(float(x), float(y))
 
-    def mark_selection(self, x_disp: float, y_disp: float, text: str) -> None:
-        """Highlight the selected star at display px (x, y) and show its readout."""
-        self._sel_scatter.setData([{"pos": (x_disp, y_disp), "size": 24}])
-        self._sel_scatter.setVisible(True)
+    def mark_selection(
+        self, x_disp: float, y_disp: float, text: str, radius_disp: float | None = None
+    ) -> None:
+        """Mark the selection at display px (x, y) and show its readout.
+
+        ``radius_disp`` (display px) draws the measurement aperture as a ring
+        around the centre dot; ``None`` (e.g. a catalog pick) shows the dot only.
+        """
+        self._sel_center.setData([{"pos": (x_disp, y_disp), "size": 6}])
+        self._sel_center.setVisible(True)
+        if radius_disp is not None and radius_disp > 0:
+            th = np.linspace(0.0, 2.0 * np.pi, 60)
+            self._sel_ring.setData(
+                x_disp + radius_disp * np.cos(th), y_disp + radius_disp * np.sin(th)
+            )
+            self._sel_ring.setVisible(True)
+        else:
+            self._sel_ring.setVisible(False)
         self._sel_label.setText(text)
         self._sel_label.adjustSize()
         self._sel_label.move(10, max(10, self.height() - self._sel_label.height() - 10))
@@ -433,7 +490,8 @@ class FitsViewer(QWidget):
         self._sel_label.raise_()
 
     def clear_selection(self) -> None:
-        self._sel_scatter.setVisible(False)
+        self._sel_ring.setVisible(False)
+        self._sel_center.setVisible(False)
         self._sel_label.hide()
 
     def _update_loupe(self, cx: int, cy: int) -> None:
@@ -489,6 +547,8 @@ class FitsViewer(QWidget):
         self._loupe_label.hide()
         self._wcs_overlay = None
         self._refresh_astrometry()
+        self._catalog = ()
+        self._refresh_catalog()
         self.clear_selection()
         self._auto_on = True
         self._black, self._white = 0.0, 65535.0

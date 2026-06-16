@@ -32,10 +32,12 @@ from seercontrol.core.imaging.metrics import (
     ARCSEC_PER_FULL_PX,
     ARCSEC_PER_GREEN_PX,
     DEFAULT_STAR_RADIUS,
+    TRACK_SNAP_SEARCH,
     measure_star_at,
 )
 from seercontrol.core.imaging.platesolve import (
     SolveSettings,
+    angular_separation_deg,
     format_dec_dms,
     format_ra_hms,
     frame_wcs,
@@ -45,6 +47,7 @@ from seercontrol.ui import theme
 from seercontrol.ui.widgets.fits_viewer import FitsViewer
 from seercontrol.ui.widgets.histogram_dock import HistogramDock
 from seercontrol.ui.widgets.image_toolbar import ImageToolbar
+from seercontrol.workers.catalog_worker import CatalogRequest, CatalogWorker
 from seercontrol.workers.preview_processor import build_processed_frame
 from seercontrol.workers.solve_worker import SolveWorker
 
@@ -84,6 +87,13 @@ class AnalysisWindow(QMainWindow):
         self._selected_green: tuple[float, float] | None = None
         self._solver: SolveWorker | None = None
         self._wcs = None  # platesolve.FrameWCS once solved
+        # §6 catalog: VSX variables + their green-plane positions (for hit-test).
+        self._catalog_worker: CatalogWorker | None = None
+        self._variables: list = []
+        self._var_green: list[tuple[float, float]] = []
+        self._comparisons: list = []
+        self._comp_rows: list = []  # R5: ranked comparisons for the selected variable
+        self._comp_dock = None  # created lazily on first variable selection
 
         self._build_ui()
         self._wire()
@@ -150,6 +160,7 @@ class AnalysisWindow(QMainWindow):
         self._histogram.stars_overlay_toggled.connect(self._viewer.set_star_overlay_enabled)
         self._histogram.loupe_toggled.connect(self._viewer.set_loupe_enabled)
         self._histogram.astrometry_toggled.connect(self._viewer.set_astrometry_enabled)
+        self._histogram.astrometry_toggled.connect(self._viewer.set_catalog_enabled)
         self._histogram.star_radius_changed.connect(self._on_radius)
         self._viewer.levels_changed.connect(self._histogram.set_levels)
         self._viewer.region_info.connect(self._histogram.set_region_info)
@@ -173,6 +184,7 @@ class AnalysisWindow(QMainWindow):
         self._viewer.clear_selection()
         self._wcs = None  # a new frame invalidates the previous solution
         self._viewer.set_astrometry_overlay(None)
+        self._clear_catalog()
         self._histogram.set_astrometry_available(False)
         self._histogram.set_astrometry_checked(False)
         self._set_solve_text("not solved", theme.FG_MUTED)
@@ -262,6 +274,159 @@ class AnalysisWindow(QMainWindow):
             self._histogram.set_astrometry_available(True)
             self._histogram.set_astrometry_checked(True)
             self._remeasure_selection()  # refresh the clicked star's RA/Dec
+            self._fetch_catalog()  # VSX variables (+ VSP comparisons) for the field
+
+    # ------------------------------------------------------------------
+    # Catalog overlay (§6): VSX variable stars + VSP comparison stars
+    # ------------------------------------------------------------------
+
+    def _field_geometry(self) -> tuple[float, float, float, float] | None:
+        """(centre RA°, centre Dec°, cone radius°, FOV arcmin) from the WCS."""
+        if self._wcs is None or self._green_shape is None:
+            return None
+        gh, gw = self._green_shape
+        cx, cy = (gw - 1) / 2.0, (gh - 1) / 2.0
+        ra_h, dec_d = self._wcs.pixel_to_radec(cx, cy)
+        # Radius = centre→corner separation; FOV diameter = twice that, in arcmin.
+        cra_h, cdec_d = self._wcs.pixel_to_radec(0.0, 0.0)
+        radius_deg = angular_separation_deg(ra_h, dec_d, cra_h, cdec_d)
+        return ra_h * 15.0, dec_d, radius_deg, radius_deg * 2.0 * 60.0
+
+    def _fetch_catalog(self) -> None:
+        if self._catalog_worker is not None and self._catalog_worker.isRunning():
+            return
+        geom = self._field_geometry()
+        if geom is None:
+            return
+        ra_deg, dec_deg, radius_deg, fov_arcmin = geom
+        req = CatalogRequest(
+            ra_deg=ra_deg,
+            dec_deg=dec_deg,
+            radius_deg=radius_deg,
+            fov_arcmin=fov_arcmin,
+            mag_limit=float(self._cfg("catalog.mag_limit", 15.0)),
+            max_results=int(self._cfg("catalog.max_results", 250)),
+            include_suspected=bool(self._cfg("catalog.include_suspected", True)),
+        )
+        self._catalog_worker = CatalogWorker(req, parent=self)
+        self._catalog_worker.fetched.connect(self._on_catalog)
+        self._catalog_worker.start()
+
+    def _on_catalog(self, result) -> None:
+        if not result.ok:
+            logger.info("Catalog fetch failed: %s", result.error)
+            return
+        self._variables = list(result.variables)
+        self._comparisons = list(result.comparisons)
+        self._project_variables()
+
+    def _project_variables(self) -> None:
+        """Project variables to green px, keep those inside the frame, draw them."""
+        self._var_green = []
+        points: list[tuple[float, float, bool]] = []
+        if self._wcs is not None and self._green_shape is not None:
+            gh, gw = self._green_shape
+            margin = 2.0
+            for v in self._variables:
+                x, y = self._wcs.world_to_pixel_deg(v.ra_deg, v.dec_deg)
+                x, y = float(x), float(y)
+                if -margin <= x <= gw + margin and -margin <= y <= gh + margin:
+                    self._var_green.append((x, y))
+                    points.append((x, y, v.is_suspected))
+                else:
+                    self._var_green.append(None)  # outside frame → not clickable
+        self._viewer.set_catalog_markers(points, self._green_shape)
+        self._viewer.set_catalog_enabled(True)
+        self._histogram.set_astrometry_checked(True)
+
+    def _clear_catalog(self) -> None:
+        self._variables = []
+        self._var_green = []
+        self._comparisons = []
+        self._comp_rows = []
+        self._viewer.set_catalog_markers((), self._green_shape)
+        if getattr(self, "_comp_dock", None) is not None:
+            self._comp_table.setRowCount(0)
+            self._comp_dock.hide()
+
+    # ------------------------------------------------------------------
+    # Comparison stars (§6, R5): ranked list for the selected variable
+    # ------------------------------------------------------------------
+
+    def _ensure_comp_dock(self) -> None:
+        """Create the 'Comparison stars' dock on first use (imports kept local
+        so the shared import block stays untouched)."""
+        if getattr(self, "_comp_dock", None) is not None:
+            return
+        from PyQt6.QtWidgets import (
+            QAbstractItemView,
+            QDockWidget,
+            QTableWidget,
+        )
+
+        table = QTableWidget(0, 4)
+        table.setHorizontalHeaderLabels(["AUID", "V", "sep′", "Δmag"])
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.verticalHeader().setVisible(False)
+        table.cellClicked.connect(self._on_comp_selected)
+        dock = QDockWidget("Comparison stars", self)
+        dock.setObjectName("comparison_stars_dock")
+        dock.setWidget(table)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+        self._comp_dock = dock
+        self._comp_table = table
+
+    def _populate_comparisons(self, v) -> None:
+        from PyQt6.QtWidgets import QTableWidgetItem
+
+        from seercontrol.core.catalog import comparisons_for_variable
+
+        if not self._comparisons:
+            return
+        ranked = comparisons_for_variable(v, self._comparisons, max_results=15)
+        self._comp_rows = ranked
+        self._ensure_comp_dock()
+        t = self._comp_table
+        t.setRowCount(len(ranked))
+        for row, s in enumerate(ranked):
+            c = s.star
+            vmag = c.mag("V")
+            cells = [
+                c.auid,
+                f"{vmag:.2f}" if vmag is not None else "—",
+                f"{s.separation_arcmin:.1f}",
+                f"{s.delta_mag:.1f}" if s.delta_mag is not None else "—",
+            ]
+            for col, txt in enumerate(cells):
+                t.setItem(row, col, QTableWidgetItem(txt))
+        t.resizeColumnsToContents()
+        self._comp_dock.setWindowTitle(f"Comparison stars — {v.name}  ({len(ranked)})")
+        self._comp_dock.show()
+
+    def _on_comp_selected(self, row: int, _col: int) -> None:
+        if row < 0 or row >= len(self._comp_rows) or self._wcs is None:
+            return
+        s = self._comp_rows[row]
+        c = s.star
+        x, y = self._wcs.world_to_pixel_deg(c.ra_deg, c.dec_deg)
+        dp = self._green_to_disp(float(x), float(y))
+        if dp is None:
+            return
+        self._selected_green = None
+        self._viewer.mark_selection(dp[0], dp[1], self._format_comparison_text(c, s))
+
+    def _format_comparison_text(self, c, scored) -> str:
+        lines = [f"Comparison  {c.auid}"]
+        mags = [f"{b.band} {b.mag:.3f}" for b in c.bands]
+        if mags:
+            lines.append("   ".join(mags))
+        if c.label:
+            lines.append(f"chart label {c.label}   sep {scored.separation_arcmin:.1f}'")
+        if c.comments:
+            lines.append(str(c.comments))
+        lines.append(f"RA {format_ra_hms(c.ra_deg / 15.0)}  Dec {format_dec_dms(c.dec_deg)}")
+        return "\n".join(lines)
 
     def _update_astrometry_overlay(self) -> None:
         if self._wcs is None or self._green_shape is None:
@@ -279,6 +444,8 @@ class AnalysisWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if self._solver is not None and self._solver.isRunning():
             self._solver.wait(2000)
+        if self._catalog_worker is not None and self._catalog_worker.isRunning():
+            self._catalog_worker.wait(2000)
         super().closeEvent(event)
 
     # ------------------------------------------------------------------
@@ -288,6 +455,10 @@ class AnalysisWindow(QMainWindow):
     def _on_star_clicked(self, x_disp: float, y_disp: float) -> None:
         gp = self._disp_to_green(x_disp, y_disp)
         if gp is None or self._raw is None:
+            return
+        vi = self._nearest_variable(gp[0], gp[1])
+        if vi is not None:  # a catalog variable takes precedence over star metrics
+            self._show_variable(vi)
             return
         meas = measure_star_at(self._raw, gp[0], gp[1], self._radius)
         if meas is None:
@@ -300,8 +471,13 @@ class AnalysisWindow(QMainWindow):
     def _remeasure_selection(self) -> None:
         if self._selected_green is None or self._raw is None:
             return
+        # Tight snap → the centre is stable when the aperture radius changes.
         meas = measure_star_at(
-            self._raw, self._selected_green[0], self._selected_green[1], self._radius
+            self._raw,
+            self._selected_green[0],
+            self._selected_green[1],
+            self._radius,
+            search=TRACK_SNAP_SEARCH,
         )
         if meas is not None:
             self._selected_green = (meas.x, meas.y)
@@ -311,7 +487,8 @@ class AnalysisWindow(QMainWindow):
         dp = self._green_to_disp(meas.x, meas.y)
         if dp is None:
             return
-        self._viewer.mark_selection(dp[0], dp[1], self._format_star_text(meas))
+        radius_disp = self._green_len_to_disp(meas.radius)
+        self._viewer.mark_selection(dp[0], dp[1], self._format_star_text(meas), radius_disp)
 
     def _format_star_text(self, meas) -> str:
         parts = ["Selected star"]
@@ -328,6 +505,54 @@ class AnalysisWindow(QMainWindow):
             ra_h, dec_d = self._wcs.pixel_to_radec(meas.x, meas.y)
             text += f"\nRA {format_ra_hms(ra_h)}  Dec {format_dec_dms(dec_d)}"
         return text
+
+    def _nearest_variable(self, gx: float, gy: float) -> int | None:
+        """Index of the variable nearest (gx, gy) green px within tolerance."""
+        if not self._var_green:
+            return None
+        tol = 10.0  # green px; widen for a coarse display→green scale
+        if self._green_shape and self._disp_shape:
+            _gh, gw = self._green_shape
+            _dh, dw = self._disp_shape
+            if dw > 0:
+                tol = max(6.0, 14.0 * gw / dw)
+        best_i, best_d = None, tol
+        for i, pos in enumerate(self._var_green):
+            if pos is None:
+                continue
+            d = ((pos[0] - gx) ** 2 + (pos[1] - gy) ** 2) ** 0.5
+            if d <= best_d:
+                best_i, best_d = i, d
+        return best_i
+
+    def _show_variable(self, i: int) -> None:
+        v = self._variables[i]
+        pos = self._var_green[i]
+        dp = self._green_to_disp(pos[0], pos[1]) if pos else None
+        if dp is None:
+            return
+        self._selected_green = None  # a catalog pick, not a measured star
+        self._viewer.mark_selection(dp[0], dp[1], self._format_variable_text(v))
+        self._populate_comparisons(v)  # R5: comparison stars for this variable
+
+    def _format_variable_text(self, v) -> str:
+        head = f"Variable  {v.name}" + (f"   [{v.var_type}]" if v.var_type else "")
+        if v.is_suspected:
+            head += "   (suspected)"
+        lines = [head]
+        rng = []
+        if v.max_mag:
+            rng.append(f"max {v.max_mag}")
+        if v.min_mag and v.min_mag != "?":
+            rng.append(f"min {v.min_mag}")
+        if rng:
+            lines.append("   ".join(rng))
+        if v.period:
+            lines.append(f"period {v.period:g} d")
+        if v.auid:
+            lines.append(f"AUID {v.auid}")
+        lines.append(f"RA {format_ra_hms(v.ra_deg / 15.0)}  Dec {format_dec_dms(v.dec_deg)}")
+        return "\n".join(lines)
 
     def _disp_to_green(self, x: float, y: float) -> tuple[float, float] | None:
         if self._green_shape is None or self._disp_shape is None:
@@ -346,3 +571,11 @@ class AnalysisWindow(QMainWindow):
         if gw <= 0 or gh <= 0:
             return None
         return x * dw / gw, y * dh / gh
+
+    def _green_len_to_disp(self, length: float) -> float | None:
+        """Scale a green-plane length (e.g. the aperture radius) to display px."""
+        if self._green_shape is None or self._disp_shape is None:
+            return None
+        gw = self._green_shape[1]
+        dw = self._disp_shape[1]
+        return length * dw / gw if gw > 0 else None

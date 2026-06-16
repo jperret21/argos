@@ -8,8 +8,10 @@ import numpy as np
 
 from seercontrol.core.imaging import platesolve
 from seercontrol.core.imaging.platesolve import (
+    SolveResult,
     SolveSettings,
     _build_command,
+    _clamp_downsample,
     angular_separation_deg,
     find_astap,
     format_dec_dms,
@@ -82,12 +84,49 @@ def test_build_command_hinted() -> None:
     assert "-z" in cmd and "2" in cmd
     assert "-fov" in cmd
     assert "-ra" in cmd and "-spd" in cmd  # dec+90 hint
-    assert "-d" in cmd and "V17" in cmd
+    # An abbreviation goes through ``-D`` (not ``-d``, which is a path).
+    assert "-D" in cmd and cmd[cmd.index("-D") + 1] == "V17"
+    assert "-d" not in cmd
+
+
+def test_build_command_database_path_uses_lowercase_d() -> None:
+    s = SolveSettings(database="/usr/local/opt/astap")
+    cmd = _build_command("astap", Path("/tmp/x.fits"), s)
+    # A path-looking value goes through ``-d`` (directory), not ``-D``.
+    assert "-d" in cmd and cmd[cmd.index("-d") + 1] == "/usr/local/opt/astap"
+    assert "-D" not in cmd
+
+
+def test_clamp_downsample_protects_small_frames() -> None:
+    # A large (Seestar) frame keeps its configured factor.
+    assert _clamp_downsample(960, 2) == 2
+    # A small frame (e.g. the 300px-tall sim green plane) drops to 1 so it keeps
+    # enough stars — ``-z 2`` there would leave ASTAP with too few to match.
+    assert _clamp_downsample(300, 2) == 1
+    # Steps down one factor at a time, never below 1.
+    assert _clamp_downsample(800, 4) == 3
+    assert _clamp_downsample(100, 4) == 1
+    # ASTAP-auto (0) is left untouched.
+    assert _clamp_downsample(300, 0) == 0
 
 
 def test_build_command_blind_uses_full_sky() -> None:
     cmd = _build_command("astap", Path("/tmp/x.fits"), SolveSettings(search_radius_deg=0))
     assert "180" in cmd  # blind → whole-sky radius
+
+
+def test_build_command_local_radius_needs_a_position() -> None:
+    # A search radius is a radius *around a position*. With no ra/dec hint the
+    # local radius is meaningless, so we must search the whole sky instead.
+    cmd = _build_command("astap", Path("/tmp/x.fits"), SolveSettings(search_radius_deg=30))
+    assert cmd[cmd.index("-r") + 1] == "180"
+    # With a position hint, the configured local radius is honoured.
+    cmd = _build_command(
+        "astap",
+        Path("/tmp/x.fits"),
+        SolveSettings(search_radius_deg=30, ra_hint_hours=5.5, dec_hint_deg=22.0),
+    )
+    assert cmd[cmd.index("-r") + 1] == "30"
 
 
 def test_find_astap_explicit_path(tmp_path) -> None:
@@ -101,6 +140,28 @@ def test_solve_array_reports_missing_astap(monkeypatch) -> None:
     r = solve_array(np.zeros((16, 16), np.uint16), SolveSettings())
     assert not r.solved
     assert "not found" in r.message.lower()
+
+
+def test_solve_array_retries_blind_when_hint_is_wrong(monkeypatch, tmp_path) -> None:
+    fake = tmp_path / "astap"
+    fake.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(platesolve, "find_astap", lambda _p: str(fake))
+
+    calls: list[SolveSettings] = []
+
+    def fake_run(_astap, _path, s):
+        calls.append(s)
+        # First (hinted) attempt fails; the blind retry (no position) succeeds.
+        hinted = s.ra_hint_hours is not None and s.dec_hint_deg is not None
+        return SolveResult(not hinted, message="solved" if not hinted else "Not enough stars.")
+
+    monkeypatch.setattr(platesolve, "_run_astap", fake_run)
+    settings = SolveSettings(search_radius_deg=30, ra_hint_hours=2.5, dec_hint_deg=89.0)
+    r = solve_array(np.zeros((600, 800), np.uint16), settings)
+    assert r.solved  # recovered via the whole-sky retry
+    assert len(calls) == 2
+    assert calls[0].ra_hint_hours is not None  # first: hinted
+    assert calls[1].ra_hint_hours is None  # retry: blind
 
 
 def test_solve_array_rejects_non_2d(monkeypatch, tmp_path) -> None:

@@ -15,35 +15,36 @@ from __future__ import annotations
 # Color palette — equilux warm greys, Siril blue accent
 # ---------------------------------------------------------------------------
 
-BG           = "#2d2d2d"   # main application background
-BG2          = "#1f1f1f"   # input / sub-surface / log background
-SURFACE      = "#3c3c3c"   # button / raised surface
-BORDER       = "#484848"   # card borders, separators
-BORDER_SOFT  = "#3a3a3a"   # subtle inner separators
+BG = "#2d2d2d"  # main application background
+BG2 = "#1f1f1f"  # input / sub-surface / log background
+SURFACE = "#3c3c3c"  # button / raised surface
+BORDER = "#484848"  # card borders, separators
+BORDER_SOFT = "#3a3a3a"  # subtle inner separators
 
-FG           = "#dedede"   # primary text
-FG_MUTED     = "#9a9a9a"   # secondary / hint text
-FG_DISABLED  = "#5a5a5a"
+FG = "#dedede"  # primary text
+FG_MUTED = "#9a9a9a"  # secondary / hint text
+FG_DISABLED = "#5a5a5a"
 
-ACCENT       = "#5294e2"   # Siril blue — section titles, primary actions, focus
+ACCENT = "#5294e2"  # Siril blue — section titles, primary actions, focus
 ACCENT_HOVER = "#6aa3ea"
-ACCENT_DEEP  = "#3a7bd5"
-CYAN         = "#4eb3c9"   # info / secondary accent (coords, mount status)
-SUCCESS      = "#7ab648"   # green — connected / OK
-WARNING      = "#c89030"   # amber — field info, warnings
-DANGER       = "#d45c6e"   # red — errors, disconnected, target name
+ACCENT_DEEP = "#3a7bd5"
+CYAN = "#4eb3c9"  # info / secondary accent (coords, mount status)
+SUCCESS = "#7ab648"  # green — connected / OK
+WARNING = "#c89030"  # amber — field info, warnings
+DANGER = "#d45c6e"  # red — errors, disconnected, target name
+VARIABLE = "#c678dd"  # purple — variable-star (VSX) catalog markers
 
 # Back-compat aliases (some panels reference the old SpaceX names)
-SURFACE_1    = BG
-SURFACE_2    = BG
-SURFACE_3    = BG2
-SURFACE_4    = BORDER
-TEXT_PRIMARY  = FG
-TEXT_MUTED    = FG_MUTED
+SURFACE_1 = BG
+SURFACE_2 = BG
+SURFACE_3 = BG2
+SURFACE_4 = BORDER
+TEXT_PRIMARY = FG
+TEXT_MUTED = FG_MUTED
 TEXT_DISABLED = FG_DISABLED
-INFO         = CYAN
+INFO = CYAN
 
-FONT_UI   = '"SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif'
+FONT_UI = '"SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif'
 FONT_MONO = '"SF Mono", "Menlo", "JetBrains Mono", "Consolas", monospace'
 
 
@@ -52,20 +53,21 @@ FONT_MONO = '"SF Mono", "Menlo", "JetBrains Mono", "Consolas", monospace'
 # ---------------------------------------------------------------------------
 
 LOG_COLORS: dict[str, str] = {
-    "DEBUG":    FG_MUTED,
-    "INFO":     ACCENT,
-    "OK":       SUCCESS,
-    "WARNING":  WARNING,
-    "ERROR":    DANGER,
+    "DEBUG": FG_MUTED,
+    "INFO": ACCENT,
+    "OK": SUCCESS,
+    "WARNING": WARNING,
+    "ERROR": DANGER,
     "CRITICAL": DANGER,
-    "CMD":      CYAN,
-    "DISC":     WARNING,
+    "CMD": CYAN,
+    "DISC": WARNING,
 }
 
 
 # ---------------------------------------------------------------------------
 # Global Qt stylesheet
 # ---------------------------------------------------------------------------
+
 
 def get_stylesheet() -> str:
     """Return the global Qt stylesheet for the application."""

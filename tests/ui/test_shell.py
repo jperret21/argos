@@ -139,6 +139,51 @@ def test_shell_three_mode_walkthrough() -> None:
                 awin._histogram.set_astrometry_checked(True)
                 awin._remeasure_selection()  # clicked star now reports RA/Dec
                 assert "RA" in awin._viewer._sel_label.text()
+
+                # §6 catalog: VSX variables projected onto the frame + clickable.
+                from seercontrol.core.catalog import VariableStar
+
+                on_axis = VariableStar(
+                    name="TST Tau",
+                    ra_deg=83.6,
+                    dec_deg=22.0,
+                    auid="000-XYZ-001",
+                    var_type="EA",
+                    category="Variable",
+                    max_mag="12.0 V",
+                    min_mag="14.0 V",
+                    period=1.5,
+                )
+                off_frame = VariableStar(name="FAR", ra_deg=120.0, dec_deg=-40.0)
+                awin._variables = [on_axis, off_frame]
+                awin._project_variables()
+                # On-axis → reference pixel (CRPIX-1 ≈ 23.5); off-frame → None.
+                assert awin._var_green[0] is not None and awin._var_green[1] is None
+                vx, vy = awin._var_green[0]
+                assert abs(vx - 23.5) < 1.0 and abs(vy - 23.5) < 1.0
+                assert awin._viewer._catalog_item.isVisible()
+                assert awin._nearest_variable(vx + 1.0, vy + 1.0) == 0
+                assert awin._nearest_variable(2.0, 2.0) is None
+                vtext = awin._format_variable_text(on_axis)
+                assert "TST Tau" in vtext and "EA" in vtext and "000-XYZ-001" in vtext
+                assert "12.0 V" in vtext and "1.5" in vtext
+
+                # §6 R5: selecting a variable ranks the field's comparison stars
+                # (closest first) into a dock; clicking a row rings it on the image.
+                from seercontrol.core.catalog import Band, ComparisonStar
+
+                awin._comparisons = [
+                    ComparisonStar("000-CMP-001", 83.61, 22.01, "120", (Band("V", 12.0),)),  # near
+                    ComparisonStar("000-CMP-002", 83.9, 22.3, "135", (Band("V", 13.5),)),  # far
+                ]
+                awin._show_variable(0)  # selects on_axis → populates comparisons
+                # (isVisible() is transitively False offscreen; isHidden() reflects show())
+                assert awin._comp_dock is not None and not awin._comp_dock.isHidden()
+                assert awin._comp_table.rowCount() == 2
+                assert awin._comp_table.item(0, 0).text() == "000-CMP-001"  # nearest first
+                assert [s.star.auid for s in awin._comp_rows] == ["000-CMP-001", "000-CMP-002"]
+                awin._on_comp_selected(0, 0)  # ring the comparison on the image
+                assert "000-CMP-001" in awin._viewer._sel_label.text()
             finally:
                 awin.close()
                 awin.deleteLater()
