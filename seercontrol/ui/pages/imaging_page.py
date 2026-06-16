@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -53,9 +53,10 @@ from seercontrol.core.alpaca.filterwheel import POSITION_NAMES, FilterWheel
 from seercontrol.core.alpaca.focuser import Focuser
 from seercontrol.core.alpaca.telescope import MountPosition, Telescope
 from seercontrol.core.config import Config
-from seercontrol.core.catalog.targets import TargetSet, TargetStar
+from seercontrol.core.catalog.targets import ROLE_TARGET, TargetSet, TargetStar
 from seercontrol.core.imaging.astrometry_session import field_geometry, project_points
 from seercontrol.core.imaging.debayer import VIEW_SUPERPIXEL
+from seercontrol.core.imaging.green import green_plane
 from seercontrol.core.imaging.fits_writer import FITSWriter, FrameContext
 from seercontrol.core.imaging.metrics import (
     ARCSEC_PER_FULL_PX,
@@ -69,6 +70,9 @@ from seercontrol.core.imaging.platesolve import (
     format_dec_dms,
     format_ra_hms,
 )
+from seercontrol.core.photometry.airmass import airmass_from_altitude, julian_date
+from seercontrol.core.photometry.lightcurve import LcPoint, LightCurve
+from seercontrol.core.photometry.session import measure_targets
 from seercontrol.ui import design, theme
 from seercontrol.ui.panels.log_panel import LogPanel
 from seercontrol.ui.panels.manual_control_dialog import ManualControlDialog
@@ -79,6 +83,7 @@ from seercontrol.ui.widgets.focuser_dock import FocuserDock
 from seercontrol.ui.widgets.histogram_dock import HistogramDock
 from seercontrol.ui.widgets.image_toolbar import ImageToolbar
 from seercontrol.ui.widgets.mount_dock import MountDock
+from seercontrol.ui.panels.photometry_window import PhotometryWindow
 from seercontrol.ui.widgets.overlay_bar import OverlayBar
 from seercontrol.ui.widgets.sequence_panel import SequencePanel
 from seercontrol.ui.widgets.star_info_card import StarInfoCard
@@ -208,6 +213,11 @@ class ImagingPage(QWidget):
         self._target_set: TargetSet | None = None
         self._pending_star: dict | None = None  # the clicked star awaiting a role
         self._armed: set = set()  # overlays auto-shown once when first available
+        # §6 P4: live photometry preview (light curve + metrics window).
+        self._photometry_window: PhotometryWindow | None = None
+        self._lightcurves: dict[str, LightCurve] = {}  # key → per-target curve
+        self._metrics_t0: float | None = None
+        self._last_fwhm: float | None = None  # mean detected-star FWHM (green px)
 
         # Single-shot capture: number of upcoming preview frames to save.
         self._capture_pending = 0
@@ -341,6 +351,7 @@ class ImagingPage(QWidget):
         self._toolbar.open_requested.connect(self._on_open_fits)
         self._toolbar.solve_requested.connect(self._on_solve_live)
         self._toolbar.auto_solve_toggled.connect(self._astrometry.set_auto)
+        self._toolbar.photometry_requested.connect(self._open_photometry)
         # Live plate-solve controller (shared pipeline).
         self._astrometry.solved.connect(self._on_astrometry_solved)
         self._astrometry.failed.connect(lambda m: self.log_message.emit("ERROR", f"Solve: {m}"))
@@ -594,6 +605,8 @@ class ImagingPage(QWidget):
         # Keep a clicked star's FWHM readout live as new frames arrive.
         self._remeasure_selection()
         self._overlay_bar.set_available("stars", True)  # detected-star overlay always usable
+        self._last_fwhm = pf.stars.mean_fwhm
+        self._feed_metrics(pf)  # session metrics (when the photometry window is open)
         # Auto-solve policy (no-op unless armed + due): re-solve the live frame so
         # the WCS grid tracks the sequence instead of going stale.
         if self._last_raw is not None and self._green_shape is not None:
@@ -910,6 +923,7 @@ class ImagingPage(QWidget):
         self._remeasure_selection()  # refresh the clicked star's RA/Dec
         self._maybe_fetch_catalog()  # VSX/VSP once per field
         self._project_catalog()  # re-project cached catalog + targets onto the new WCS
+        self._measure_photometry()  # differential light-curve point for the target set
 
     # ------------------------------------------------------------------
     # Overlays, catalog + target set (§6 P1)
@@ -1026,6 +1040,98 @@ class ImagingPage(QWidget):
         self._viewer.clear_selection()
         self._selected_green = None
         self._pending_star = None
+
+    # ------------------------------------------------------------------
+    # Live photometry preview (§6 P4)
+    # ------------------------------------------------------------------
+
+    def _open_photometry(self) -> None:
+        if self._photometry_window is None:
+            self._photometry_window = PhotometryWindow(self)
+        self._photometry_window.show()
+        self._photometry_window.raise_()
+
+    def _elapsed(self) -> float:
+        if self._metrics_t0 is None:
+            self._metrics_t0 = time.monotonic()
+        return time.monotonic() - self._metrics_t0
+
+    def _feed_metrics(self, pf) -> None:
+        win = self._photometry_window
+        if win is None or not win.isVisible():
+            return
+        m = pf.metrics
+        air = airmass_from_altitude(self._last_position.altitude) if self._last_position else None
+        win.metrics.add_sample(
+            self._elapsed(), sky=m.sky_adu, fwhm=pf.stars.mean_fwhm, hfd=m.hfd,
+            stars=m.star_count, airmass=air,
+        )
+
+    def _photometry_csv_path(self, star) -> Path:
+        obj = (self._ensure_target_set().object_name or "untitled")
+        tag = (star.auid or star.display_name)
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in f"{obj}_{tag}")
+        return self._sessions_base() / "targets" / f"{safe or 'photometry'}.csv"
+
+    def _measure_photometry(self) -> None:
+        """Aperture-measure the target set on the solved frame → light-curve point."""
+        wcs = self._astrometry.wcs
+        if wcs is None or self._last_raw is None:
+            return
+        tset = self._ensure_target_set()
+        if not tset.by_role(ROLE_TARGET):
+            return
+        fwhm = self._last_fwhm or 3.0
+        r_ap = max(float(self._cfg("photometry.aperture_min_px", 4)),
+                   float(self._cfg("photometry.aperture_fwhm_mult", 2.5)) * fwhm)
+        r_in = float(self._cfg("photometry.annulus_in_px", 8))
+        r_out = float(self._cfg("photometry.annulus_out_px", 12))
+        results = measure_targets(
+            green_plane(self._last_raw), wcs, tset,
+            r_ap=r_ap, r_in=max(r_in, r_ap + 1), r_out=max(r_out, r_in + 2),
+            read_noise_e=float(self._cfg("photometry.read_noise_e", 1.5)),
+            sat_adu=float(self._cfg("camera.linearity_max_adu", 50000)),
+            band=str(self._cfg("photometry.default_band", "V")),
+            min_comps=int(self._cfg("photometry.min_comparisons", 2)),
+        )
+        jd = julian_date(datetime.now(timezone.utc))
+        air = airmass_from_altitude(self._last_position.altitude) if self._last_position else None
+        win = self._photometry_window
+        if win is not None and win.isVisible():
+            win.metrics.add_sample(self._elapsed(), temp=self._ccd_temp())
+        for res in results:
+            if res.diff is None or res.diff.mag is None:
+                continue
+            point = LcPoint(
+                jd_utc=jd, mag=res.diff.mag, mag_err=res.diff.mag_err or 0.0, airmass=air,
+                fwhm=fwhm, sky_adu=res.phot.sky_adu if res.phot else None,
+                comps_used=res.diff.comps_used, saturated=bool(res.phot and res.phot.saturated),
+            )
+            key = res.star.auid or res.star.display_name
+            lc = self._lightcurves.setdefault(
+                key, LightCurve(auid=res.star.auid or "", name=res.star.display_name)
+            )
+            lc.append(point)
+            if win is not None and win.isVisible():
+                win.lightcurve.add_point(
+                    res.star.display_name, jd, res.diff.mag, res.diff.mag_err or 0.0,
+                    saturated=point.saturated,
+                )
+            try:
+                lc.to_csv(self._photometry_csv_path(res.star))
+            except OSError as exc:
+                self.log_message.emit("WARN", f"photometry.csv: {exc}")
+
+    def _ccd_temp(self) -> float | None:
+        """Sensor temperature (read only when the photometry window is open — a
+        solved frame is infrequent, so this off-cadence network read is cheap)."""
+        cam = self._camera
+        if cam is None:
+            return None
+        try:
+            return cam.get_ccd_temperature()
+        except Exception:
+            return None
 
     def _clear_astrometry(self) -> None:
         """Drop the WCS + catalog overlays — a slew/goto changes the field."""
@@ -1545,6 +1651,9 @@ class ImagingPage(QWidget):
         for win in self._analysis_windows:
             win.close()
         self._analysis_windows.clear()
+        if self._photometry_window is not None:
+            self._photometry_window.close()
+            self._photometry_window = None
         self._stop_sequence_worker()
         self._stop_preview()
         self._stop_polling()

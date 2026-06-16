@@ -32,12 +32,14 @@ class ImageToolbar(QWidget):
         open_requested():     the user wants to open a FITS file from disk.
         solve_requested():    plate-solve the current live frame (§6).
         auto_solve_toggled(bool): arm/disarm per-frame auto plate-solving (§6).
+        photometry_requested(): open the live photometry window (§6 P4).
     """
 
     channel_changed = pyqtSignal(str)
     open_requested = pyqtSignal()
     solve_requested = pyqtSignal()
     auto_solve_toggled = pyqtSignal(bool)
+    photometry_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None, *, show_solve: bool = True) -> None:
         super().__init__(parent)
@@ -98,6 +100,15 @@ class ImageToolbar(QWidget):
             )
             self._auto_solve_btn.toggled.connect(self.auto_solve_toggled)
             layout.addWidget(self._auto_solve_btn)
+
+            self._phot_btn = QPushButton("Photometry")
+            self._phot_btn.setStyleSheet("font-size: 11px;")
+            self._phot_btn.setToolTip(
+                "Open the live differential light-curve preview + session metrics\n"
+                "(temperature / airmass / FWHM vs time) for the saved target set."
+            )
+            self._phot_btn.clicked.connect(self.photometry_requested)
+            layout.addWidget(self._phot_btn)
 
         layout.addStretch()
 
