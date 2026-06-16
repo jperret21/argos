@@ -35,6 +35,13 @@ from seercontrol.core.imaging.metrics import (
     TRACK_SNAP_SEARCH,
     measure_star_at,
 )
+from seercontrol.core.catalog.targets import (
+    ROLE_CHECK,
+    ROLE_COMPARISON,
+    ROLE_TARGET,
+    TargetSet,
+    TargetStar,
+)
 from seercontrol.core.imaging.astrometry_session import (
     build_solve_settings,
     field_geometry,
@@ -69,6 +76,21 @@ def read_fits_2d(path: str) -> np.ndarray | None:
     return arr if arr.ndim == 2 else None
 
 
+def read_fits_object(path: str) -> str:
+    """Return the FITS ``OBJECT`` keyword (the target's name), or ``""``."""
+    from astropy.io import fits  # heavy import — only on demand
+
+    try:
+        with fits.open(path) as hdul:
+            for h in hdul:
+                obj = getattr(h, "header", {}).get("OBJECT")
+                if obj:
+                    return str(obj).strip()
+    except Exception:
+        pass
+    return ""
+
+
 class AnalysisWindow(QMainWindow):
     """Floating window to analyse one loaded FITS frame (display only)."""
 
@@ -97,6 +119,10 @@ class AnalysisWindow(QMainWindow):
         self._comp_green: list = []  # comparison green-px positions (parallel to _comp_rows)
         self._selected_variable = None  # the variable whose comparisons are listed
         self._comp_dialog = None  # popup table, created lazily on first open
+        # §6 P2: target picker — assign clicked stars to the shared targets.json.
+        self._object_name = ""  # from the FITS OBJECT header
+        self._target_set: TargetSet | None = None
+        self._pending_star: dict | None = None  # the selected star awaiting a role
 
         self._build_ui()
         self._wire()
@@ -175,6 +201,15 @@ class AnalysisWindow(QMainWindow):
         self._settings_btn.setToolTip("Astrometry & catalog parameters")
         self._settings_btn.clicked.connect(self._on_settings)
         brow.addWidget(self._settings_btn)
+        # P2: role buttons — add the selected star to this night's target set.
+        self._role_btns: dict[str, QPushButton] = {}
+        for role, text in ((ROLE_TARGET, "Target"), (ROLE_COMPARISON, "Comp"), (ROLE_CHECK, "Check")):
+            b = QPushButton(text)
+            b.setEnabled(False)
+            b.setToolTip("Add the selected star to this night's target set (targets.json)")
+            b.clicked.connect(lambda _c, r=role: self._assign_role(r))
+            self._role_btns[role] = b
+            brow.addWidget(b)
         self._solve_lbl = QLabel("not solved")
         self._solve_lbl.setStyleSheet(
             f"color:{theme.FG_MUTED}; font-family:{theme.FONT_MONO};"
@@ -217,6 +252,9 @@ class AnalysisWindow(QMainWindow):
         if arr is None:
             return False
         self._raw = arr
+        self._object_name = read_fits_object(path)
+        self._pending_star = None
+        self._set_roles_enabled(False)
         self._selected_green = None
         self._viewer.clear_selection()
         self._wcs = None  # a new frame invalidates the previous solution
@@ -451,6 +489,10 @@ class AnalysisWindow(QMainWindow):
             return
         self._selected_green = None
         self._viewer.mark_selection(dp[0], dp[1], self._format_comparison_text(c, scored))
+        self._set_pending(
+            dict(ra_deg=c.ra_deg, dec_deg=c.dec_deg, auid=c.auid, name=c.label, source="vsp",
+                 mags={b.band: b.mag for b in c.bands})
+        )
 
     def _format_comparison_text(self, c, scored) -> str:
         lines = [f"Comparison  {c.auid}"]
@@ -504,6 +546,7 @@ class AnalysisWindow(QMainWindow):
         if meas is None:
             self._viewer.clear_selection()
             self._selected_green = None
+            self._set_pending(None)
             return
         self._selected_green = (meas.x, meas.y)
         self._show_selection(meas)
@@ -529,6 +572,49 @@ class AnalysisWindow(QMainWindow):
             return
         radius_disp = self._green_len_to_disp(meas.radius)
         self._viewer.mark_selection(dp[0], dp[1], self._format_star_text(meas), radius_disp)
+        pending = None
+        if self._wcs is not None:  # a role needs a real RA/Dec → only once solved
+            ra_h, dec_d = self._wcs.pixel_to_radec(meas.x, meas.y)
+            pending = dict(ra_deg=ra_h * 15.0, dec_deg=dec_d, auid=None, name=None,
+                           source="manual", mags={})
+        self._set_pending(pending)
+
+    # ------------------------------------------------------------------
+    # Target picker (§6 P2): assign the selected star to the shared targets.json
+    # ------------------------------------------------------------------
+
+    def _set_pending(self, pending: dict | None) -> None:
+        self._pending_star = pending
+        self._set_roles_enabled(pending is not None)
+
+    def _set_roles_enabled(self, on: bool) -> None:
+        for b in self._role_btns.values():
+            b.setEnabled(bool(on))
+
+    def _sessions_base(self):
+        try:
+            return self._config.sessions_path.parent
+        except Exception:
+            return Path.home() / "SeerControl"
+
+    def _target_path(self, obj: str):
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in (obj or "untitled"))
+        return self._sessions_base() / "targets" / f"{safe or 'untitled'}.json"
+
+    def _assign_role(self, role: str) -> None:
+        if self._pending_star is None:
+            return
+        obj = self._object_name or "untitled"
+        if self._target_set is None or self._target_set.object_name != obj:
+            self._target_set = TargetSet.load(self._target_path(obj))
+            self._target_set.object_name = obj
+        star = TargetStar(role=role, **self._pending_star)
+        self._target_set.set_role(star)
+        try:
+            self._target_set.save(self._target_path(obj))
+            self._set_solve_text(f"{role}: {star.display_name} → targets.json", theme.SUCCESS)
+        except OSError as exc:
+            self._set_solve_text(f"save failed: {exc}", theme.DANGER)
 
     def _format_star_text(self, meas) -> str:
         parts = ["Selected star"]
@@ -592,6 +678,9 @@ class AnalysisWindow(QMainWindow):
             return
         self._selected_green = None  # a catalog pick, not a measured star
         self._viewer.mark_selection(dp[0], dp[1], self._format_variable_text(v))
+        self._set_pending(
+            dict(ra_deg=v.ra_deg, dec_deg=v.dec_deg, auid=v.auid, name=v.name, source="vsx", mags={})
+        )
         self._populate_comparisons(v)  # R5: comparison stars for this variable
 
     def _format_variable_text(self, v) -> str:
