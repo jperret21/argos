@@ -133,7 +133,13 @@ def test_shell_three_mode_walkthrough() -> None:
                 awin._wcs = frame_wcs(fields, awin._green_shape)
                 assert awin._wcs is not None
                 assert wcs_grid(awin._wcs, awin._green_shape).lines  # grid crosses frame
-                awin._update_astrometry_overlay()
+                # Apply the overlay the way a real ASTAP solve (_on_solved) does.
+                from seercontrol.core.imaging.astrometry_session import overlay_for
+
+                awin._viewer.set_astrometry_overlay(
+                    overlay_for(awin._wcs, awin._green_shape, awin._cfg),
+                    awin._green_shape,
+                )
                 # R1: the bar "Grid" button toggles the RA/Dec grid overlay.
                 awin._grid_btn.setEnabled(True)
                 awin._grid_btn.setChecked(True)
@@ -144,74 +150,8 @@ def test_shell_three_mode_walkthrough() -> None:
                 awin._remeasure_selection()  # clicked star now reports RA/Dec
                 assert "RA" in awin._viewer._sel_label.text()
 
-                # §6 catalog: VSX variables projected onto the frame + clickable.
-                from seercontrol.core.catalog import VariableStar
-
-                on_axis = VariableStar(
-                    name="TST Tau",
-                    ra_deg=83.6,
-                    dec_deg=22.0,
-                    auid="000-XYZ-001",
-                    var_type="EA",
-                    category="Variable",
-                    max_mag="12.0 V",
-                    min_mag="14.0 V",
-                    period=1.5,
-                )
-                off_frame = VariableStar(name="FAR", ra_deg=120.0, dec_deg=-40.0)
-                awin._variables = [on_axis, off_frame]
-                awin._project_variables()
-                # On-axis → reference pixel (CRPIX-1 ≈ 23.5); off-frame → None.
-                assert awin._var_green[0] is not None and awin._var_green[1] is None
-                vx, vy = awin._var_green[0]
-                assert abs(vx - 23.5) < 1.0 and abs(vy - 23.5) < 1.0
-                # R1: the "Variables" button is armed + checked → markers shown.
-                assert awin._var_btn.isEnabled() and awin._var_btn.isChecked()
-                assert awin._viewer._catalog_item.isVisible()
-                awin._var_btn.setChecked(False)  # toggle the markers off
-                assert not awin._viewer._catalog_item.isVisible()
-                awin._var_btn.setChecked(True)
-                assert awin._nearest_variable(vx + 1.0, vy + 1.0) == 0
-                assert awin._nearest_variable(2.0, 2.0) is None
-                vtext = awin._format_variable_text(on_axis)
-                assert "TST Tau" in vtext and "EA" in vtext and "000-XYZ-001" in vtext
-                assert "12.0 V" in vtext and "1.5" in vtext
-
-                # §6 R5: selecting a variable ranks the field's comparison stars
-                # (closest first) into a dock; clicking a row rings it on the image.
-                from seercontrol.core.catalog import Band, ComparisonStar
-
-                awin._comparisons = [
-                    ComparisonStar("000-CMP-001", 83.61, 22.01, "120", (Band("V", 12.0),)),  # near
-                    ComparisonStar("000-CMP-002", 83.9, 22.3, "135", (Band("V", 13.5),)),  # far
-                ]
-                awin._show_variable(0)  # selects on_axis → ranks comps, arms the button
-                assert awin._comp_btn.isEnabled() and "(2)" in awin._comp_btn.text()
-                assert [s.star.auid for s in awin._comp_rows] == ["000-CMP-001", "000-CMP-002"]
-                awin._on_comp_btn()  # opens the full comparison-star table popup
-                # (isVisible() is transitively False offscreen; isHidden() reflects show())
-                assert awin._comp_dialog is not None and not awin._comp_dialog.isHidden()
-                t = awin._comp_dialog._table
-                assert t.rowCount() == 2
-                assert t.item(0, 0).text() == "000-CMP-001"  # nearest first
-                assert "05h" in t.item(0, 1).text() and t.item(0, 3).text() == "12.000"  # RA + V
-                awin._on_comp_selected(awin._comp_rows[0])  # ring the comparison on the image
-                assert "000-CMP-001" in awin._viewer._sel_label.text()
-
-                # R5: comparison markers drawn on the image, toggled + clickable.
-                assert awin._comp_markers_btn.isEnabled() and awin._comp_markers_btn.isChecked()
-                assert awin._viewer._comparison_item.isVisible()
-                # CMP-001 lands in-frame; CMP-002 (0.3° away) projects off-frame.
-                assert awin._comp_green[0] is not None and awin._comp_green[1] is None
-                cgx, cgy = awin._comp_green[0]
-                assert awin._nearest_comparison(cgx + 1.0, cgy + 1.0) == 0
-                awin._comp_markers_btn.setChecked(False)  # hide markers
-                assert not awin._viewer._comparison_item.isVisible()
-                assert awin._nearest_comparison(cgx, cgy) is None  # not clickable when hidden
-                awin._comp_markers_btn.setChecked(True)
-                assert awin._settings_btn is not None  # R6 settings button in the bar
-
-                # §6 R6: settings popup loads from + writes to the (shared) config.
+                # Astrometry settings popup loads from + writes to the (shared) config.
+                # (Standalone widget — exercised here with the viewer as a parent.)
                 from seercontrol.ui.widgets.astrometry_settings import (
                     AstrometrySettingsDialog,
                 )
@@ -243,6 +183,45 @@ def test_shell_three_mode_walkthrough() -> None:
             finally:
                 awin.close()
                 awin.deleteLater()
+
+            # §6 catalog moved to the Photometry Setup window: VSX variables are
+            # projected onto the solved frame + hit-tested for clicks there.
+            from seercontrol.core.catalog import VariableStar
+            from seercontrol.ui.panels.photometry_setup_window import (
+                PhotometrySetupWindow,
+            )
+
+            psw = PhotometrySetupWindow()
+            try:
+                psw.load_frame(fpath)
+                assert psw._green_shape == (48, 48)
+                psw._wcs = frame_wcs(fields, psw._green_shape)
+                on_axis = VariableStar(
+                    name="TST Tau",
+                    ra_deg=83.6,
+                    dec_deg=22.0,
+                    auid="000-XYZ-001",
+                    var_type="EA",
+                    category="Variable",
+                    max_mag="12.0 V",
+                    min_mag="14.0 V",
+                    period=1.5,
+                )
+                off_frame = VariableStar(name="FAR", ra_deg=120.0, dec_deg=-40.0)
+                psw._variables = [on_axis, off_frame]
+                psw._project_variables()
+                # On-axis → reference pixel (CRPIX-1 ≈ 23.5); off-frame → None.
+                assert psw._var_green[0] is not None and psw._var_green[1] is None
+                vx, vy = psw._var_green[0]
+                assert abs(vx - 23.5) < 1.0 and abs(vy - 23.5) < 1.0
+                # Markers shown on the viewer once at least one is on-frame.
+                assert psw._viewer._catalog_item.isVisible()
+                # Hit-test: near the on-axis marker → its index; far → None.
+                assert psw._nearest_variable(vx + 1.0, vy + 1.0) == 0
+                assert psw._nearest_variable(2.0, 2.0) is None
+            finally:
+                psw.close()
+                psw.deleteLater()
 
         # §6 live-frame astrometry overlay path (controller solved → grid on viewer).
         from seercontrol.core.imaging.astrometry_session import overlay_for

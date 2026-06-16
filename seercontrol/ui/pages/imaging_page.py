@@ -83,6 +83,7 @@ from seercontrol.ui.widgets.focuser_dock import FocuserDock
 from seercontrol.ui.widgets.histogram_dock import HistogramDock
 from seercontrol.ui.widgets.image_toolbar import ImageToolbar
 from seercontrol.ui.widgets.mount_dock import MountDock
+from seercontrol.ui.panels.photometry_setup_window import PhotometrySetupWindow
 from seercontrol.ui.panels.photometry_window import PhotometryWindow
 from seercontrol.ui.widgets.overlay_bar import OverlayBar
 from seercontrol.ui.widgets.sequence_panel import SequencePanel
@@ -220,6 +221,9 @@ class ImagingPage(QWidget):
         self._last_fwhm: float | None = None  # mean detected-star FWHM (green px)
         self._last_exposure_mid: datetime | None = None  # exposure midpoint (UTC)
 
+        # Last sequence directory (for the photometry setup window).
+        self._last_sequence_dir: Path | None = None
+
         # Single-shot capture: number of upcoming preview frames to save.
         self._capture_pending = 0
 
@@ -353,6 +357,7 @@ class ImagingPage(QWidget):
         self._toolbar.solve_requested.connect(self._on_solve_live)
         self._toolbar.auto_solve_toggled.connect(self._astrometry.set_auto)
         self._toolbar.photometry_requested.connect(self._open_photometry)
+        self._toolbar.photometry_setup_requested.connect(self._on_photometry_setup)
         # Live plate-solve controller (shared pipeline).
         self._astrometry.solved.connect(self._on_astrometry_solved)
         self._astrometry.failed.connect(lambda m: self.log_message.emit("ERROR", f"Solve: {m}"))
@@ -1180,6 +1185,20 @@ class ImagingPage(QWidget):
         except Exception:
             return None
 
+    # ------------------------------------------------------------------
+    # Photometry setup (opens the standalone window)
+    # ------------------------------------------------------------------
+
+    def _on_photometry_setup(self) -> None:
+        """Open the Photometry Setup window with the last sequence frame."""
+        win = PhotometrySetupWindow(
+            config=self._config,
+            sequence_dir=self._last_sequence_dir,
+            parent=self,
+        )
+        win.show()
+        win.raise_()
+
     def _clear_astrometry(self) -> None:
         """Drop the WCS + catalog overlays — a slew/goto changes the field."""
         self._astrometry.invalidate()
@@ -1267,6 +1286,8 @@ class ImagingPage(QWidget):
 
     def _on_seq_frame_saved(self, path: str, record) -> None:
         name = Path(path).name
+        # Track the last sequence directory for the photometry setup window.
+        self._last_sequence_dir = Path(path).parent
         if record is not None and record.hfd is not None:
             fwhm = f" FWHM={record.fwhm:.1f}" if record.fwhm is not None else ""
             self.log_message.emit(

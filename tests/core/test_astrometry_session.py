@@ -46,7 +46,9 @@ def test_build_solve_settings_live_small_radius_no_blind() -> None:
     )
     assert s.search_radius_deg == 4
     assert s.timeout_s == 20
-    assert s.allow_blind_retry is False  # live never runs the slow whole-sky retry
+    assert s.allow_blind_retry is True  # blind retry enabled so a stale mount
+    # hint (common with the Seestar) doesn't permanently
+    # break auto-solving.
     assert s.ra_hint_hours == 5.5 and s.dec_hint_deg == 22.0
     assert s.fov_hint_deg is not None  # scale hint on by default
 

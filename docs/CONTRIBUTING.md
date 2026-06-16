@@ -57,8 +57,21 @@ docs(readme): simplify project status section
 ### Run tests
 
 ```bash
-uv run python -m pytest tests/ -v
+uv run --extra dev pytest -q          # whole suite
+uv run --extra dev pytest tests/ -v   # verbose
 ```
+
+> **Always run tests through `uv`.** This project is `uv`-managed and the
+> `.venv` it creates has the correct, mutually-compatible pinned deps. Do **not**
+> run `pytest` from a system or Anaconda Python: those often ship **numpy 2.x**
+> against an **`erfa`/`astropy` built for numpy 1.x**, which raises a wall of
+> `numpy.dtype size changed` / binary-incompatibility errors at import time. Those
+> failures are an environment artefact, **not** a bug in the code — if you see ~16
+> astropy/erfa import errors, you are using the wrong interpreter. Re-run with
+> `uv run --extra dev pytest` before concluding anything about a change.
+>
+> A correct run on this repo is **all green except simulator-gated tests**, which
+> auto-skip when the ASCOM Alpaca simulator is not running (see below).
 
 ### Format and lint
 

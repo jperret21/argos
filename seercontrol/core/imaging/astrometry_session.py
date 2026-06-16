@@ -41,9 +41,11 @@ def build_solve_settings(
 ) -> SolveSettings:
     """Assemble :class:`SolveSettings` from config — the only place that does it.
 
-    Live solves (``live=True``) with a mount hint use a small search radius and a
-    bounded timeout, and **skip the slow whole-sky blind retry** so an auto-solve
-    cadence never stalls. Static/manual solves keep the generous radius + retry.
+    Live solves (``live=True``) with a mount hint use a bounded timeout and a
+    configurable search radius, and **allow a blind retry** so a stale mount hint
+    (common with the Seestar) doesn't permanently break auto-solving. The blind
+    retry removes the hint and searches the whole sky, so the cadence is only
+    affected when the hinted solve misses.
     """
     gh = int(green_shape[0])
     use_hint = bool(cfg_get("astrometry.use_scale_hint", True))
@@ -51,7 +53,7 @@ def build_solve_settings(
     dec_hint = mount_radec[1] if mount_radec is not None else None
 
     if live and mount_radec is not None:
-        radius = float(cfg_get("astrometry.live_search_radius_deg", 5.0))
+        radius = float(cfg_get("astrometry.live_search_radius_deg", 30.0))
     else:
         radius = float(cfg_get("astrometry.search_radius_deg", 30.0))
     timeout = float(cfg_get("astrometry.live_timeout_s", 25.0)) if live else 120.0
@@ -65,7 +67,7 @@ def build_solve_settings(
         ra_hint_hours=ra_hint,
         dec_hint_deg=dec_hint,
         timeout_s=timeout,
-        allow_blind_retry=not live,
+        allow_blind_retry=True,
     )
 
 
