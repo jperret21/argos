@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -70,7 +70,7 @@ from seercontrol.core.imaging.platesolve import (
     format_dec_dms,
     format_ra_hms,
 )
-from seercontrol.core.photometry.airmass import airmass_from_altitude, julian_date
+from seercontrol.core.photometry.airmass import airmass_from_altitude, bjd_tdb, julian_date
 from seercontrol.core.photometry.lightcurve import LcPoint, LightCurve
 from seercontrol.core.photometry.session import measure_targets
 from seercontrol.ui import design, theme
@@ -218,6 +218,7 @@ class ImagingPage(QWidget):
         self._lightcurves: dict[str, LightCurve] = {}  # key → per-target curve
         self._metrics_t0: float | None = None
         self._last_fwhm: float | None = None  # mean detected-star FWHM (green px)
+        self._last_exposure_mid: datetime | None = None  # exposure midpoint (UTC)
 
         # Single-shot capture: number of upcoming preview frames to save.
         self._capture_pending = 0
@@ -923,7 +924,8 @@ class ImagingPage(QWidget):
         self._remeasure_selection()  # refresh the clicked star's RA/Dec
         self._maybe_fetch_catalog()  # VSX/VSP once per field
         self._project_catalog()  # re-project cached catalog + targets onto the new WCS
-        self._measure_photometry()  # differential light-curve point for the target set
+        if self._sequence is None or not self._sequence.isRunning():
+            self._measure_photometry()  # per-solve point; sequences measure per saved sub
 
     # ------------------------------------------------------------------
     # Overlays, catalog + target set (§6 P1)
@@ -1034,6 +1036,7 @@ class ImagingPage(QWidget):
         except OSError as exc:
             self.log_message.emit("ERROR", f"Save targets: {exc}")
         self._project_targets()
+        self._refresh_target_table()
         self.log_message.emit("OK", f"{role.capitalize()}: {star.display_name}")
 
     def _on_card_cleared(self) -> None:
@@ -1048,8 +1051,44 @@ class ImagingPage(QWidget):
     def _open_photometry(self) -> None:
         if self._photometry_window is None:
             self._photometry_window = PhotometryWindow(self)
+            self._photometry_window.lightcurves = self._lightcurves
+            self._photometry_window.obscode = str(self._cfg("observer.obscode", "XXX") or "XXX")
+            self._photometry_window.targets.remove_requested.connect(self._on_target_remove)
+        self._refresh_target_table()
         self._photometry_window.show()
         self._photometry_window.raise_()
+
+    def _refresh_target_table(self) -> None:
+        if self._photometry_window is not None:
+            self._photometry_window.targets.set_targets(self._ensure_target_set().stars)
+
+    def _on_target_remove(self, key: str) -> None:
+        tset = self._ensure_target_set()
+        tset.remove(key)
+        try:
+            tset.save(self._target_path(tset.object_name))
+        except OSError as exc:
+            self.log_message.emit("ERROR", f"Save targets: {exc}")
+        self._project_targets()
+        self._refresh_target_table()
+
+    def _egain(self) -> float:
+        """e-/ADU for the photometric error: config egain_table[gain] → driver → 1."""
+        table = self._cfg("camera.egain_table", {}) or {}
+        gain = str(self._camera_dock.params().gain)
+        if isinstance(table, dict) and gain in table:
+            try:
+                return float(table[gain])
+            except (TypeError, ValueError):
+                pass
+        if self._camera is not None:
+            try:
+                value = self._camera.get_electrons_per_adu()
+                if value:
+                    return float(value)
+            except Exception:
+                pass
+        return 1.0
 
     def _elapsed(self) -> float:
         if self._metrics_t0 is None:
@@ -1089,22 +1128,30 @@ class ImagingPage(QWidget):
         results = measure_targets(
             green_plane(self._last_raw), wcs, tset,
             r_ap=r_ap, r_in=max(r_in, r_ap + 1), r_out=max(r_out, r_in + 2),
+            egain=self._egain(),
             read_noise_e=float(self._cfg("photometry.read_noise_e", 1.5)),
             sat_adu=float(self._cfg("camera.linearity_max_adu", 50000)),
             band=str(self._cfg("photometry.default_band", "V")),
             min_comps=int(self._cfg("photometry.min_comparisons", 2)),
         )
-        jd = julian_date(datetime.now(timezone.utc))
+        jd = julian_date(self._last_exposure_mid or datetime.now(timezone.utc))
         air = airmass_from_altitude(self._last_position.altitude) if self._last_position else None
+        lat, lon = self._cfg("site.latitude", None), self._cfg("site.longitude", None)
+        elev = self._cfg("site.elevation", 0.0) or 0.0
         win = self._photometry_window
         if win is not None and win.isVisible():
             win.metrics.add_sample(self._elapsed(), temp=self._ccd_temp())
         for res in results:
             if res.diff is None or res.diff.mag is None:
                 continue
+            bjd = (
+                bjd_tdb(jd, res.star.ra_deg, res.star.dec_deg, float(lat), float(lon), float(elev))
+                if lat is not None and lon is not None
+                else None
+            )
             point = LcPoint(
-                jd_utc=jd, mag=res.diff.mag, mag_err=res.diff.mag_err or 0.0, airmass=air,
-                fwhm=fwhm, sky_adu=res.phot.sky_adu if res.phot else None,
+                jd_utc=jd, mag=res.diff.mag, mag_err=res.diff.mag_err or 0.0, bjd_tdb=bjd,
+                airmass=air, fwhm=fwhm, sky_adu=res.phot.sky_adu if res.phot else None,
                 comps_used=res.diff.comps_used, saturated=bool(res.phot and res.phot.saturated),
             )
             key = res.star.auid or res.star.display_name
@@ -1227,6 +1274,15 @@ class ImagingPage(QWidget):
             )
         else:
             self.log_message.emit("OK", f"Saved {name}")
+        # P5: one differential point per saved sub (uses the latest solve's WCS).
+        if record is not None and getattr(record, "timestamp", None):
+            try:
+                start = datetime.fromisoformat(str(record.timestamp).replace("Z", "+00:00"))
+                self._last_exposure_mid = start + timedelta(seconds=(record.exposure_s or 0) / 2.0)
+            except (TypeError, ValueError):
+                pass
+        if self._astrometry.wcs is not None and self._ensure_target_set().by_role(ROLE_TARGET):
+            self._measure_photometry()
 
     def _on_seq_autofocus_due(self) -> None:
         """Run an autofocus pass mid-sequence, then resume the worker."""
@@ -1319,6 +1375,10 @@ class ImagingPage(QWidget):
         if self._preview:
             self._preview.update_settings(params.exposure_s, params.gain, scale=1)
 
+        try:  # exposure-midpoint time → the light curve's true epoch
+            self._last_exposure_mid = start_dt + (end_dt - start_dt) / 2
+        except (TypeError, ValueError):
+            self._last_exposure_mid = None
         self._show_raw(full_arr)
 
         # Single-shot save: persist the requested number of preview frames.

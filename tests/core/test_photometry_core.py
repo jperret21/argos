@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from seercontrol.core.photometry.airmass import airmass_from_altitude, julian_date
+from seercontrol.core.photometry.airmass import airmass_from_altitude, bjd_tdb, julian_date
 from seercontrol.core.photometry.aperture import measure_aperture
 from seercontrol.core.photometry.differential import differential_mag, ensemble_zero_point
 from seercontrol.core.photometry.lightcurve import LcPoint, LightCurve
@@ -112,5 +112,25 @@ def test_lightcurve_csv_round_trip(tmp_path) -> None:
     lc.to_csv(path)
     rows = list(csv.reader(path.open()))
     assert rows[0][0] == "jd_utc" and rows[0][-1] == "saturated"
+    assert "bjd_tdb" in rows[0]
     assert len(rows) == 3  # header + 2 points
     assert rows[2][-1] == "1"  # saturated flag serialised as 1
+
+
+def test_lightcurve_aavso_export(tmp_path) -> None:
+    lc = LightCurve(name="NU Ori")
+    lc.append(LcPoint(jd_utc=2451545.0, mag=9.0, mag_err=0.02, airmass=1.2))
+    path = tmp_path / "aavso.txt"
+    lc.to_aavso(path, obscode="ABC", filt="TG")
+    text = path.read_text().splitlines()
+    assert "#TYPE=EXTENDED" in text and "#OBSCODE=ABC" in text
+    data = [ln for ln in text if not ln.startswith("#")]
+    assert data and data[0].startswith("NU ORI,2451545.0")
+    assert ",TG,NO,STD,ENSEMBLE," in data[0]
+
+
+def test_bjd_tdb_close_to_jd() -> None:
+    # BJD−JD is at most ~8.3 min (0.0058 d); just check the correction is sane.
+    bjd = bjd_tdb(2451545.0, ra_deg=83.6, dec_deg=22.0, lat_deg=43.6, lon_deg=1.4, elev_m=150.0)
+    assert bjd is not None
+    assert abs(bjd - 2451545.0) < 0.01

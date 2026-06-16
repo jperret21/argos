@@ -45,3 +45,33 @@ def julian_date(dt: datetime) -> float:
     )
     frac = (dt.hour - 12) / 24.0 + dt.minute / 1440.0 + dt.second / 86400.0 + dt.microsecond / 86_400_000_000.0
     return jdn + frac
+
+
+def bjd_tdb(
+    jd_utc: float,
+    ra_deg: float,
+    dec_deg: float,
+    lat_deg: float,
+    lon_deg: float,
+    elev_m: float = 0.0,
+) -> float | None:
+    """Barycentric Julian Date (TDB) for an exposure-midpoint ``jd_utc``.
+
+    The publishable time standard: UTC→TDB plus the barycentric light-travel-time
+    correction for the target's direction from the observing site. Uses astropy
+    (imported lazily). Returns ``None`` if astropy can't do the conversion.
+    """
+    try:
+        import astropy.units as u
+        from astropy.coordinates import EarthLocation, SkyCoord
+        from astropy.time import Time
+
+        t = Time(jd_utc, format="jd", scale="utc")
+        loc = EarthLocation.from_geodetic(
+            lon=lon_deg * u.deg, lat=lat_deg * u.deg, height=elev_m * u.m
+        )
+        target = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg)
+        ltt = t.light_travel_time(target, kind="barycentric", location=loc)
+        return float((t.tdb + ltt).jd)
+    except Exception:  # astropy missing / bad inputs → caller falls back to JD
+        return None

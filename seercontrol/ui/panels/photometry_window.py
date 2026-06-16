@@ -21,9 +21,11 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from seercontrol.core.photometry.lightcurve import write_aavso
 from seercontrol.ui import theme
 from seercontrol.ui.widgets.lightcurve_panel import LightCurvePanel
 from seercontrol.ui.widgets.metrics_panel import MetricsPanel
+from seercontrol.ui.widgets.target_table import TargetTable
 
 
 class PhotometryWindow(QWidget):
@@ -48,22 +50,42 @@ class PhotometryWindow(QWidget):
 
         self.lightcurve = LightCurvePanel()
         self.metrics = MetricsPanel()
+        self.targets = TargetTable()
         tabs = QTabWidget()
         tabs.addTab(self.lightcurve, "Light curve")
         tabs.addTab(self.metrics, "Metrics")
+        tabs.addTab(self.targets, "Targets")
         root.addWidget(tabs, 1)
 
         footer = QHBoxLayout()
         footer.addStretch()
-        self._export_btn = QPushButton("Export light curve CSV…")
-        self._export_btn.clicked.connect(self._export)
-        footer.addWidget(self._export_btn)
+        self._csv_btn = QPushButton("Export CSV…")
+        self._csv_btn.clicked.connect(self._export_csv)
+        footer.addWidget(self._csv_btn)
+        self._aavso_btn = QPushButton("Export AAVSO…")
+        self._aavso_btn.clicked.connect(self._export_aavso)
+        footer.addWidget(self._aavso_btn)
         root.addLayout(footer)
 
-    def _export(self) -> None:
+        # Set by the page: the per-target LightCurve objects + the observer code.
+        self.lightcurves: dict = {}
+        self.obscode = "XXX"
+
+    def _export_csv(self) -> None:
         if not self.lightcurve.has_data():
             return
-        start = str(Path.home() / "photometry.csv")
-        path, _ = QFileDialog.getSaveFileName(self, "Export light curve", start, "CSV (*.csv)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export light curve", str(Path.home() / "photometry.csv"), "CSV (*.csv)"
+        )
         if path:
             self.lightcurve.export_csv(path)
+
+    def _export_aavso(self) -> None:
+        curves = [lc for lc in self.lightcurves.values() if lc.points]
+        if not curves:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export AAVSO", str(Path.home() / "aavso.txt"), "Text (*.txt)"
+        )
+        if path:
+            write_aavso(path, curves, obscode=self.obscode or "XXX")

@@ -12,6 +12,7 @@ from pathlib import Path
 
 _COLUMNS = (
     "jd_utc",
+    "bjd_tdb",
     "mag",
     "mag_err",
     "airmass",
@@ -24,11 +25,12 @@ _COLUMNS = (
 
 @dataclass
 class LcPoint:
-    """One light-curve point (exposure-midpoint JD_UTC)."""
+    """One light-curve point (exposure-midpoint JD_UTC; BJD_TDB when site known)."""
 
     jd_utc: float
     mag: float
     mag_err: float
+    bjd_tdb: float | None = None
     airmass: float | None = None
     fwhm: float | None = None
     sky_adu: float | None = None
@@ -58,6 +60,7 @@ class LightCurve:
                 writer.writerow(
                     [
                         p.jd_utc,
+                        "" if p.bjd_tdb is None else p.bjd_tdb,
                         p.mag,
                         p.mag_err,
                         "" if p.airmass is None else p.airmass,
@@ -66,4 +69,36 @@ class LightCurve:
                         p.comps_used,
                         int(p.saturated),
                     ]
+                )
+
+    def to_aavso(self, path, **kwargs) -> None:
+        """Write this curve in AAVSO Extended File Format (ensemble photometry)."""
+        write_aavso(path, [self], **kwargs)
+
+
+def write_aavso(path, curves, *, obscode: str = "XXX", filt: str = "TG",
+                software: str = "SeerControl") -> None:
+    """Write one or more :class:`LightCurve` to an AAVSO Extended File.
+
+    A *preview* export — DATE is the JD_UTC midpoint, MTYPE=STD, comparison is the
+    ensemble (CNAME=ENSEMBLE). Calibrated mags + BJD_TDB come from post-processing.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as f:
+        f.write("#TYPE=EXTENDED\n")
+        f.write(f"#OBSCODE={obscode}\n")
+        f.write(f"#SOFTWARE={software}\n")
+        f.write("#DELIM=,\n#DATE=JD\n#OBSTYPE=CCD\n")
+        f.write(
+            "#NAME,DATE,MAG,MERR,FILT,TRANS,MTYPE,CNAME,CMAG,KNAME,KMAG,"
+            "AMASS,GROUP,CHART,NOTES\n"
+        )
+        for lc in curves:
+            name = (lc.name or lc.auid or "TARGET").upper()
+            for p in lc.points:
+                amass = "na" if p.airmass is None else f"{p.airmass:.3f}"
+                f.write(
+                    f"{name},{p.jd_utc:.6f},{p.mag:.4f},{p.mag_err:.4f},{filt},NO,STD,"
+                    f"ENSEMBLE,na,na,na,{amass},na,na,na\n"
                 )
