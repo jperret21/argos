@@ -17,6 +17,7 @@ import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from seercontrol.core.imaging.debayer import render_view
+from seercontrol.core.imaging.green import green_shape as _green_shape
 from seercontrol.core.imaging.metrics import (
     DEFAULT_STAR_RADIUS,
     FrameMetrics,
@@ -63,7 +64,7 @@ def build_processed_frame(
     display = render_view(raw, view)
     metrics = frame_metrics(raw)
     stars = detect_stars(raw, radius=radius)
-    green_shape = (raw.shape[0] // 2, raw.shape[1] // 2)
+    green_shape = _green_shape(raw)
     lo = float(raw.min())
     hi = float(np.percentile(raw, 99.8))
     if hi <= lo:

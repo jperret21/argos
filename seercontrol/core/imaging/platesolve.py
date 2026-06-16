@@ -55,6 +55,7 @@ class SolveSettings:
     ra_hint_hours: float | None = None  # approx pointing → fast hinted solve
     dec_hint_deg: float | None = None
     timeout_s: float = 120.0
+    allow_blind_retry: bool = True  # whole-sky retry if a hinted solve fails (off in live)
 
 
 @dataclass
@@ -183,7 +184,7 @@ def solve_array(green: np.ndarray, settings: SolveSettings) -> SolveResult:
         # local radius scanned the wrong patch of sky — retry once whole-sky.
         local = eff.search_radius_deg and eff.search_radius_deg > 0
         hinted = eff.ra_hint_hours is not None and eff.dec_hint_deg is not None
-        if not result.solved and hinted and local:
+        if not result.solved and hinted and local and eff.allow_blind_retry:
             logger.info("ASTAP: hinted solve failed — retrying blind (whole-sky)")
             result = _run_astap(
                 astap, fits_path, replace(eff, ra_hint_hours=None, dec_hint_deg=None)

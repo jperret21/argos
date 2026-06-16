@@ -205,10 +205,13 @@ def _box3_sum(x: np.ndarray) -> np.ndarray:
 def compute_hfd(arr: np.ndarray, search_radius: int = 32) -> float | None:
     """Compute the Half-Flux Diameter of the brightest star in the frame.
 
-    Uses the green channel (densest sampling, best SNR for stars). Returns HFD in
-    pixels (at the subsampled scale), or None if the frame is empty / no star.
+    Uses the canonical green plane (densest sampling, best SNR for stars; see
+    ``core/imaging/green.py``). Returns HFD in pixels (at the subsampled scale),
+    or None if the frame is empty / no star.
     """
-    g = arr[0::2, 0::2].astype(np.float32)
+    from seercontrol.core.imaging.green import green_plane
+
+    g = green_plane(arr)
 
     bg = float(np.median(g))
     g -= bg

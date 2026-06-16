@@ -40,6 +40,37 @@ _DEFAULTS: dict[str, Any] = {
         "adc_bits": 12,
         "full_well_adu": 60000,
         "linearity_max_adu": 50000,
+        "egain_table": {},  # {gain_value: e-/ADU}; empty → driver/IMX585 lookup
+    },
+    # Plate-solving (ASTAP) + the live auto-solve policy. See
+    # docs/photometry_plan.md §4/§8. Empty astap_path/database → auto-detect.
+    "astrometry": {
+        "astap_path": "",
+        "database": "",
+        "downsample": 2,
+        "search_radius_deg": 30,  # thorough/manual solve (around a hint)
+        "use_scale_hint": True,
+        "grid_spacing_arcmin": 0,  # 0 = adaptive 1/2/5 grid
+        "live_search_radius_deg": 5,  # small radius w/ mount hint (auto-solve)
+        "live_resolve_s": 20,  # re-solve cadence ceiling (auto)
+        "live_resolve_arcmin": 2,  # re-solve once the mount moves this far
+        "live_timeout_s": 25,  # bound the live solve so the cadence never stalls
+    },
+    # VSX/VSP variable-star catalog cone search (docs/photometry_plan.md §5).
+    "catalog": {
+        "mag_limit": 15.0,
+        "max_results": 250,
+        "include_suspected": True,
+    },
+    # Differential-photometry preview (docs/photometry_plan.md §6).
+    "photometry": {
+        "aperture_fwhm_mult": 2.5,
+        "aperture_min_px": 4,
+        "annulus_in_px": 8,
+        "annulus_out_px": 12,
+        "read_noise_e": 1.5,
+        "default_band": "TG",
+        "min_comparisons": 2,
     },
 }
 

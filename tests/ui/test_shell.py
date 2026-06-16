@@ -244,12 +244,13 @@ def test_shell_three_mode_walkthrough() -> None:
                 awin.close()
                 awin.deleteLater()
 
-        # §6 live-frame astrometry overlay path (toolbar Solve → grid on viewer).
+        # §6 live-frame astrometry overlay path (controller solved → grid on viewer).
+        from seercontrol.core.imaging.astrometry_session import overlay_for
         from seercontrol.core.imaging.platesolve import frame_wcs as _frame_wcs
 
         page._green_shape = (48, 48)
         page._viewer.display(np.zeros((48, 48), np.uint16))
-        page._wcs = _frame_wcs(
+        wcs = _frame_wcs(
             {
                 "CRVAL1": "83.6",
                 "CRVAL2": "22.0",
@@ -262,11 +263,14 @@ def test_shell_three_mode_walkthrough() -> None:
             },
             (48, 48),
         )
-        assert page._wcs is not None
-        page._update_astrometry_overlay()
-        page._viewer.set_astrometry_enabled(True)
+        assert wcs is not None
+        # Simulate a controller solve: seed its last-good WCS and apply the overlay
+        # the way the AstrometryController.solved signal does on the page.
+        page._astrometry._wcs = wcs
+        page._on_astrometry_solved(wcs, overlay_for(wcs, (48, 48), page._cfg), "Solved — test")
+        assert page._astrometry.wcs is not None
         page._clear_astrometry()  # a goto/slew invalidates the solve
-        assert page._wcs is None
+        assert page._astrometry.wcs is None
 
         # Imaging upward signals reach the global status bar.
         page.device_state_changed.emit("camera", "busy", "exposing")

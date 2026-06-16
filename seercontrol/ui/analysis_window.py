@@ -35,14 +35,15 @@ from seercontrol.core.imaging.metrics import (
     TRACK_SNAP_SEARCH,
     measure_star_at,
 )
-from seercontrol.core.imaging.platesolve import (
-    SolveSettings,
-    angular_separation_deg,
-    format_dec_dms,
-    format_ra_hms,
-    frame_wcs,
-    wcs_grid,
+from seercontrol.core.imaging.astrometry_session import (
+    build_solve_settings,
+    field_geometry,
+    full_res_scale,
+    overlay_for,
+    project_points,
+    wcs_from_result,
 )
+from seercontrol.core.imaging.platesolve import format_dec_dms, format_ra_hms
 from seercontrol.ui import theme
 from seercontrol.ui.widgets.fits_viewer import FitsViewer
 from seercontrol.ui.widgets.histogram_dock import HistogramDock
@@ -110,7 +111,9 @@ class AnalysisWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        self._toolbar = ImageToolbar()
+        # Open-FITS has its own Solve bar (below), so the toolbar drops the
+        # live-page Solve / Auto-solve buttons to avoid two confusing solve paths.
+        self._toolbar = ImageToolbar(show_solve=False)
         root.addWidget(self._toolbar)
 
         self._viewer = FitsViewer()
@@ -187,9 +190,7 @@ class AnalysisWindow(QMainWindow):
         self._toolbar.open_requested.connect(self._on_open)
         self._histogram.stretch_changed.connect(self._viewer.set_stretch)
         self._histogram.auto_requested.connect(self._viewer.auto_stretch)
-        self._histogram.saturation_toggled.connect(
-            lambda on: self._viewer.set_saturation(on, 60000)
-        )
+        self._histogram.saturation_toggled.connect(self._on_saturation_toggled)
         self._histogram.roi_toggled.connect(self._viewer.set_roi_enabled)
         self._histogram.crosshair_toggled.connect(self._viewer.set_crosshair_enabled)
         self._histogram.stars_overlay_toggled.connect(self._viewer.set_star_overlay_enabled)
@@ -269,19 +270,16 @@ class AnalysisWindow(QMainWindow):
         value = self._config.get(key, default)
         return default if value is None else value
 
+    def _on_saturation_toggled(self, enabled: bool) -> None:
+        threshold = int(self._cfg("camera.full_well_adu", 60000))
+        self._viewer.set_saturation(enabled, threshold)
+
     def _on_solve(self) -> None:
         if self._raw is None or (self._solver is not None and self._solver.isRunning()):
             return
         green = extract_plane(self._raw, VIEW_G)
-        gh = green.shape[0]
-        use_hint = bool(self._cfg("astrometry.use_scale_hint", True))
-        settings = SolveSettings(
-            astap_path=str(self._cfg("astrometry.astap_path", "")),
-            database=str(self._cfg("astrometry.database", "")),
-            search_radius_deg=float(self._cfg("astrometry.search_radius_deg", 30)),
-            downsample=int(self._cfg("astrometry.downsample", 2)),
-            fov_hint_deg=(gh * ARCSEC_PER_GREEN_PX / 3600.0) if use_hint else None,
-        )
+        # Static frame, no mount hint → thorough settings via the shared builder.
+        settings = build_solve_settings(self._cfg, self._green_shape, live=False)
         self._solve_btn.setEnabled(False)
         self._set_solve_text("solving… (ASTAP)", theme.WARNING)
         self._solver = SolveWorker(green, settings, parent=self)
@@ -291,19 +289,20 @@ class AnalysisWindow(QMainWindow):
     def _on_solved(self, result) -> None:
         self._solve_btn.setEnabled(True)
         if not result.solved:
-            self._set_solve_text(f"✗ {result.message}", theme.DANGER)
+            self._set_solve_text(f"not solved — {result.message}", theme.DANGER)
             return
-        bits = [f"✓ RA {result.ra_hours:.4f}h", f"Dec {result.dec_deg:+.4f}°"]
-        if result.scale_arcsec:  # ASTAP solved the green plane → ÷2 for full-res
-            bits.append(f"{result.scale_arcsec / 2:.2f}″/px")
+        bits = [f"RA {result.ra_hours:.4f}h", f"Dec {result.dec_deg:+.4f}°"]
+        scale = full_res_scale(result)  # green plane → full-res (÷2), once, shared
+        if scale is not None:
+            bits.append(f"{scale:.2f}″/px")
         if result.rotation_deg is not None:
             bits.append(f"rot {result.rotation_deg:.1f}°")
         if result.mirrored:
             bits.append("mirrored")
-        self._set_solve_text("   ".join(bits), theme.SUCCESS)
+        self._set_solve_text("Solved — " + "   ".join(bits), theme.SUCCESS)
 
         # Build the WCS → enable the grid overlay + per-star RA/Dec readout.
-        self._wcs = frame_wcs(result.fields, self._green_shape)
+        self._wcs = wcs_from_result(result, self._green_shape)
         if self._wcs is not None:
             self._update_astrometry_overlay()
             self._grid_btn.setEnabled(True)
@@ -315,22 +314,10 @@ class AnalysisWindow(QMainWindow):
     # Catalog overlay (§6): VSX variable stars + VSP comparison stars
     # ------------------------------------------------------------------
 
-    def _field_geometry(self) -> tuple[float, float, float, float] | None:
-        """(centre RA°, centre Dec°, cone radius°, FOV arcmin) from the WCS."""
-        if self._wcs is None or self._green_shape is None:
-            return None
-        gh, gw = self._green_shape
-        cx, cy = (gw - 1) / 2.0, (gh - 1) / 2.0
-        ra_h, dec_d = self._wcs.pixel_to_radec(cx, cy)
-        # Radius = centre→corner separation; FOV diameter = twice that, in arcmin.
-        cra_h, cdec_d = self._wcs.pixel_to_radec(0.0, 0.0)
-        radius_deg = angular_separation_deg(ra_h, dec_d, cra_h, cdec_d)
-        return ra_h * 15.0, dec_d, radius_deg, radius_deg * 2.0 * 60.0
-
     def _fetch_catalog(self) -> None:
         if self._catalog_worker is not None and self._catalog_worker.isRunning():
             return
-        geom = self._field_geometry()
+        geom = field_geometry(self._wcs, self._green_shape)
         if geom is None:
             return
         ra_deg, dec_deg, radius_deg, fov_arcmin = geom
@@ -357,19 +344,16 @@ class AnalysisWindow(QMainWindow):
 
     def _project_variables(self) -> None:
         """Project variables to green px, keep those inside the frame, draw them."""
-        self._var_green = []
-        points: list[tuple[float, float, bool]] = []
-        if self._wcs is not None and self._green_shape is not None:
-            gh, gw = self._green_shape
-            margin = 2.0
-            for v in self._variables:
-                x, y = self._wcs.world_to_pixel_deg(v.ra_deg, v.dec_deg)
-                x, y = float(x), float(y)
-                if -margin <= x <= gw + margin and -margin <= y <= gh + margin:
-                    self._var_green.append((x, y))
-                    points.append((x, y, v.is_suspected))
-                else:
-                    self._var_green.append(None)  # outside frame → not clickable
+        # ``_var_green`` stays parallel to ``_variables`` (None = off-frame) so the
+        # click hit-test can map a marker index back to its variable.
+        self._var_green = project_points(
+            self._wcs, self._green_shape, ((v.ra_deg, v.dec_deg) for v in self._variables)
+        )
+        points = [
+            (pos[0], pos[1], v.is_suspected)
+            for pos, v in zip(self._var_green, self._variables)
+            if pos is not None
+        ]
         self._viewer.set_catalog_markers(points, self._green_shape)
         has = bool(points)
         self._var_btn.setEnabled(has)
@@ -417,20 +401,15 @@ class AnalysisWindow(QMainWindow):
 
     def _plot_comparison_markers(self) -> None:
         """Project the ranked comparisons onto the frame and draw the markers."""
-        self._comp_green = []
-        points: list[tuple[float, float, str]] = []
-        if self._wcs is not None and self._green_shape is not None:
-            gh, gw = self._green_shape
-            margin = 2.0
-            for s in self._comp_rows:
-                c = s.star
-                x, y = self._wcs.world_to_pixel_deg(c.ra_deg, c.dec_deg)
-                x, y = float(x), float(y)
-                if -margin <= x <= gw + margin and -margin <= y <= gh + margin:
-                    self._comp_green.append((x, y))
-                    points.append((x, y, c.label))
-                else:
-                    self._comp_green.append(None)  # outside frame → not clickable
+        # ``_comp_green`` stays parallel to ``_comp_rows`` (None = off-frame).
+        self._comp_green = project_points(
+            self._wcs, self._green_shape, ((s.star.ra_deg, s.star.dec_deg) for s in self._comp_rows)
+        )
+        points = [
+            (pos[0], pos[1], s.star.label)
+            for pos, s in zip(self._comp_green, self._comp_rows)
+            if pos is not None
+        ]
         self._viewer.set_comparison_markers(points, self._green_shape)
         has = bool(points)
         self._comp_markers_btn.setEnabled(has)
@@ -486,12 +465,8 @@ class AnalysisWindow(QMainWindow):
         return "\n".join(lines)
 
     def _update_astrometry_overlay(self) -> None:
-        if self._wcs is None or self._green_shape is None:
-            self._viewer.set_astrometry_overlay(None, self._green_shape)
-            return
-        arcmin = float(self._cfg("astrometry.grid_spacing_arcmin", 0) or 0)
-        spacing = arcmin / 60.0 if arcmin > 0 else None  # R1: 0 = auto/adaptive
-        overlay = wcs_grid(self._wcs, self._green_shape, spacing_deg=spacing)
+        # Shared builder applies astrometry.grid_spacing_arcmin (0 = adaptive).
+        overlay = overlay_for(self._wcs, self._green_shape, self._cfg)
         self._viewer.set_astrometry_overlay(overlay, self._green_shape)
 
     def _set_solve_text(self, text: str, color: str) -> None:

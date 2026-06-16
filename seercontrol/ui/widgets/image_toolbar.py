@@ -31,14 +31,17 @@ class ImageToolbar(QWidget):
         channel_changed(str): the selected view (see ``debayer.VIEWS``).
         open_requested():     the user wants to open a FITS file from disk.
         solve_requested():    plate-solve the current live frame (§6).
+        auto_solve_toggled(bool): arm/disarm per-frame auto plate-solving (§6).
     """
 
     channel_changed = pyqtSignal(str)
     open_requested = pyqtSignal()
     solve_requested = pyqtSignal()
+    auto_solve_toggled = pyqtSignal(bool)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, show_solve: bool = True) -> None:
         super().__init__(parent)
+        self._show_solve = show_solve  # the live page owns solving; Open-FITS has its own bar
         self.setMinimumHeight(38)
         self.setMaximumHeight(48)
         self.setStyleSheet(
@@ -74,14 +77,27 @@ class ImageToolbar(QWidget):
         self._open_btn.clicked.connect(self.open_requested)
         layout.addWidget(self._open_btn)
 
-        self._solve_btn = QPushButton("Solve")
-        self._solve_btn.setStyleSheet("font-size: 11px;")
-        self._solve_btn.setToolTip(
-            "Plate-solve the current live frame via ASTAP (uses the mount as a\n"
-            "position hint). Shows centre RA/Dec + an RA/Dec grid overlay."
-        )
-        self._solve_btn.clicked.connect(self.solve_requested)
-        layout.addWidget(self._solve_btn)
+        if self._show_solve:
+            self._solve_btn = QPushButton("Solve")
+            self._solve_btn.setStyleSheet("font-size: 11px;")
+            self._solve_btn.setToolTip(
+                "Plate-solve the current live frame via ASTAP (uses the mount as a\n"
+                "position hint). Shows centre RA/Dec + an RA/Dec grid overlay."
+            )
+            self._solve_btn.clicked.connect(self.solve_requested)
+            layout.addWidget(self._solve_btn)
+
+            self._auto_solve_btn = QPushButton("Auto-solve")
+            self._auto_solve_btn.setCheckable(True)
+            self._auto_solve_btn.setStyleSheet("font-size: 11px;")
+            self._auto_solve_btn.setToolTip(
+                "Re-solve the live frame automatically as the sequence runs, so the\n"
+                "RA/Dec grid tracks the field instead of going stale. Re-solves only\n"
+                "when due (mount moved or a few seconds elapsed); keeps the last grid\n"
+                "if a solve misses."
+            )
+            self._auto_solve_btn.toggled.connect(self.auto_solve_toggled)
+            layout.addWidget(self._auto_solve_btn)
 
         layout.addStretch()
 

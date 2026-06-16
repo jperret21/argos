@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from seercontrol.core.imaging.debayer import compute_hfd
+from seercontrol.core.imaging.green import green_plane
 
 logger = logging.getLogger(__name__)
 
@@ -108,8 +109,11 @@ class StarMeasurement:
 
 
 def _green_plane(raw: np.ndarray) -> np.ndarray:
-    """Return the float32 green half-res plane (densest CFA sampling)."""
-    return raw[0::2, 0::2].astype(np.float32)
+    """Return the float32 green half-res plane — the canonical (G1+G2)/2 plane.
+
+    Single definition shared with the solver (see ``core/imaging/green.py``).
+    """
+    return green_plane(raw)
 
 
 def _robust_sky_sigma(g: np.ndarray) -> tuple[float, float]:

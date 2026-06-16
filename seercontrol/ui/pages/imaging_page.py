@@ -53,7 +53,7 @@ from seercontrol.core.alpaca.filterwheel import POSITION_NAMES, FilterWheel
 from seercontrol.core.alpaca.focuser import Focuser
 from seercontrol.core.alpaca.telescope import MountPosition, Telescope
 from seercontrol.core.config import Config
-from seercontrol.core.imaging.debayer import VIEW_G, VIEW_SUPERPIXEL, extract_plane
+from seercontrol.core.imaging.debayer import VIEW_SUPERPIXEL
 from seercontrol.core.imaging.fits_writer import FITSWriter, FrameContext
 from seercontrol.core.imaging.metrics import (
     ARCSEC_PER_FULL_PX,
@@ -62,14 +62,7 @@ from seercontrol.core.imaging.metrics import (
     TRACK_SNAP_SEARCH,
     measure_star_at,
 )
-from seercontrol.core.imaging.platesolve import (
-    SolveSettings,
-    angular_separation_deg,
-    format_dec_dms,
-    format_ra_hms,
-    frame_wcs,
-    wcs_grid,
-)
+from seercontrol.core.imaging.platesolve import format_dec_dms, format_ra_hms
 from seercontrol.ui import design, theme
 from seercontrol.ui.panels.log_panel import LogPanel
 from seercontrol.ui.panels.manual_control_dialog import ManualControlDialog
@@ -85,9 +78,9 @@ from seercontrol.workers.autofocus_worker import AutofocusWorker
 from seercontrol.workers.discovery_worker import DiscoveryWorker
 from seercontrol.workers.exposure_worker import LivePreviewWorker
 from seercontrol.workers.polling_worker import MountPollingWorker
+from seercontrol.workers.astrometry_controller import AstrometryController
 from seercontrol.workers.preview_processor import PreviewProcessor
 from seercontrol.workers.sequence_worker import SequenceWorker
-from seercontrol.workers.solve_worker import SolveWorker
 
 logger = logging.getLogger(__name__)
 
@@ -193,8 +186,8 @@ class ImagingPage(QWidget):
         self._disp_shape: tuple[int, int] | None = None
         self._selected_green: tuple[float, float] | None = None  # clicked star (green px)
         self._analysis_windows: list = []  # open Open-FITS analysis windows
-        self._solver: SolveWorker | None = None  # live plate-solve (§6)
-        self._wcs = None  # platesolve.FrameWCS from the last live solve
+        # Live plate-solve lifecycle + auto-solve policy (§6, shared pipeline).
+        self._astrometry = AstrometryController(self._cfg, self)
 
         # Single-shot capture: number of upcoming preview frames to save.
         self._capture_pending = 0
@@ -322,6 +315,11 @@ class ImagingPage(QWidget):
         self._toolbar.channel_changed.connect(self._on_channel_changed)
         self._toolbar.open_requested.connect(self._on_open_fits)
         self._toolbar.solve_requested.connect(self._on_solve_live)
+        self._toolbar.auto_solve_toggled.connect(self._astrometry.set_auto)
+        # Live plate-solve controller (shared pipeline).
+        self._astrometry.solved.connect(self._on_astrometry_solved)
+        self._astrometry.failed.connect(lambda m: self.log_message.emit("ERROR", f"Solve: {m}"))
+        self._astrometry.state.connect(self.action_changed)
         # Display pipeline: the Display tab (histogram/stretch) ↔ the viewer.
         self._histogram_dock.stretch_changed.connect(self._viewer.set_stretch)
         self._histogram_dock.auto_requested.connect(self._viewer.auto_stretch)
@@ -566,6 +564,12 @@ class ImagingPage(QWidget):
         self._viewer.display(pf.display)
         # Keep a clicked star's FWHM readout live as new frames arrive.
         self._remeasure_selection()
+        # Auto-solve policy (no-op unless armed + due): re-solve the live frame so
+        # the WCS grid tracks the sequence instead of going stale.
+        if self._last_raw is not None and self._green_shape is not None:
+            self._astrometry.on_new_frame(
+                self._last_raw, self._green_shape, self._mount_radec(), self._target_radec()
+            )
 
     def _update_stats(self, pf) -> None:
         """Refresh the live stats strip under the image."""
@@ -646,8 +650,9 @@ class ImagingPage(QWidget):
         else:
             line2 = f"scale  {ARCSEC_PER_FULL_PX:.2f}″/px   (mount not connected)"
         text = f"{line1}\n{line2}"
-        if self._wcs is not None:  # plate-solved → the star's true celestial position
-            ra_h, dec_d = self._wcs.pixel_to_radec(meas.x, meas.y)
+        wcs = self._astrometry.wcs
+        if wcs is not None:  # plate-solved → the star's true celestial position
+            ra_h, dec_d = wcs.pixel_to_radec(meas.x, meas.y)
             text += f"\nstar   RA {format_ra_hms(ra_h)}  Dec {format_dec_dms(dec_d)}"
         return text
 
@@ -718,71 +723,43 @@ class ImagingPage(QWidget):
         value = self._config.get(key, default)
         return default if value is None else value
 
+    def _mount_radec(self) -> tuple[float, float] | None:
+        pos = self._last_position
+        return (pos.ra, pos.dec) if pos is not None else None
+
+    def _target_radec(self) -> tuple[float, float] | None:
+        if self._target_ra is not None and self._target_dec is not None:
+            return (self._target_ra, self._target_dec)
+        return None
+
     def _on_solve_live(self) -> None:
         """Plate-solve the current live frame; show RA/Dec + a WCS grid overlay."""
-        if self._last_raw is None:
+        if self._last_raw is None or self._green_shape is None:
             self.log_message.emit("WARN", "No frame to solve yet — start a preview first.")
             return
-        if self._solver is not None and self._solver.isRunning():
-            return
-        green = extract_plane(self._last_raw, VIEW_G)
-        gh = green.shape[0]
-        use_hint = bool(self._cfg("astrometry.use_scale_hint", True))
-        pos = self._last_position
-        settings = SolveSettings(
-            astap_path=str(self._cfg("astrometry.astap_path", "")),
-            database=str(self._cfg("astrometry.database", "")),
-            search_radius_deg=float(self._cfg("astrometry.search_radius_deg", 30)),
-            downsample=int(self._cfg("astrometry.downsample", 2)),
-            fov_hint_deg=(gh * ARCSEC_PER_GREEN_PX / 3600.0) if use_hint else None,
-            ra_hint_hours=pos.ra if pos else None,
-            dec_hint_deg=pos.dec if pos else None,
+        mount = self._mount_radec()
+        if not self._astrometry.solve_now(
+            self._last_raw, self._green_shape, mount, self._target_radec()
+        ):
+            return  # a solve is already running
+        hint = (
+            f" (hint RA {mount[0]:.3f}h Dec {mount[1]:+.2f}°)" if mount else " (blind — no mount)"
         )
-        hint = f" (hint RA {pos.ra:.3f}h Dec {pos.dec:+.2f}°)" if pos else " (blind — no mount)"
         self.log_message.emit("CMD", f"Plate-solving current frame…{hint}")
-        self.action_changed.emit("Plate-solving…")
-        self._solver = SolveWorker(green, settings, parent=self)
-        self._solver.solved.connect(self._on_live_solved)
-        self._solver.start()
 
-    @pyqtSlot(object)
-    def _on_live_solved(self, result) -> None:
-        self.action_changed.emit("Idle")
-        if not result.solved:
-            self.log_message.emit("ERROR", f"Solve: {result.message}")
-            return
-        self._wcs = frame_wcs(result.fields, self._green_shape)
-        bits = [f"Solved — RA {result.ra_hours:.4f}h", f"Dec {result.dec_deg:+.4f}°"]
-        if result.scale_arcsec:  # ASTAP solved the green plane → ÷2 for full-res
-            bits.append(f"{result.scale_arcsec / 2:.2f}″/px")
-        if result.rotation_deg is not None:
-            bits.append(f"rot {result.rotation_deg:.1f}°")
-        if self._target_ra is not None and self._target_dec is not None:
-            sep = angular_separation_deg(
-                result.ra_hours, result.dec_deg, self._target_ra, self._target_dec
-            )
-            bits.append(f"Δtarget {sep * 60.0:.1f}′")
-        self.log_message.emit("OK", "  ".join(bits))
-        if self._wcs is not None:
-            self._update_astrometry_overlay()
-            self._viewer.set_astrometry_enabled(True)
-            self._histogram_dock.set_astrometry_available(True)
-            self._histogram_dock.set_astrometry_checked(True)
-            self._remeasure_selection()  # refresh the clicked star's RA/Dec
-
-    def _update_astrometry_overlay(self) -> None:
-        if self._wcs is None or self._green_shape is None:
-            self._viewer.set_astrometry_overlay(None, self._green_shape)
-            return
-        target = None
-        if self._target_ra is not None and self._target_dec is not None:
-            target = (self._target_ra, self._target_dec)
-        overlay = wcs_grid(self._wcs, self._green_shape, target_radec=target)
+    @pyqtSlot(object, object, str)
+    def _on_astrometry_solved(self, _wcs, overlay, summary: str) -> None:
+        """A fresh solution arrived from the controller — apply grid + readouts."""
+        self.log_message.emit("OK", summary)
         self._viewer.set_astrometry_overlay(overlay, self._green_shape)
+        self._viewer.set_astrometry_enabled(True)
+        self._histogram_dock.set_astrometry_available(True)
+        self._histogram_dock.set_astrometry_checked(True)
+        self._remeasure_selection()  # refresh the clicked star's RA/Dec
 
     def _clear_astrometry(self) -> None:
         """Drop the WCS overlay — a slew/goto invalidates the previous solve."""
-        self._wcs = None
+        self._astrometry.invalidate()
         self._viewer.set_astrometry_overlay(None)
         self._histogram_dock.set_astrometry_available(False)
         self._histogram_dock.set_astrometry_checked(False)
@@ -1288,8 +1265,7 @@ class ImagingPage(QWidget):
         self._stop_preview()
         self._stop_polling()
         self._stop_autofocus()
-        if self._solver is not None and self._solver.isRunning():
-            self._solver.wait(2000)
+        self._astrometry.wait(2000)
         self._processor.stop()
         self._processor.wait(2000)
 
