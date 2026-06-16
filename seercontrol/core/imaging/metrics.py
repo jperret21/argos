@@ -33,6 +33,14 @@ _SIGMA_FLOOR = 1.0
 #: Public default aperture radius (green-plane px) for star measurement (§5).
 DEFAULT_STAR_RADIUS = _STAR_RADIUS
 
+#: Snap window (green-plane px) for the *initial* click — generous so a click
+#: near a star locks onto its peak. Kept independent of the aperture radius so
+#: changing the radius can't re-snap the centre onto a different star.
+_SNAP_SEARCH = 6
+#: Snap window when *re-measuring* an already-selected star (new frame / radius
+#: change): tight, so the centre stays put and only tracks small drift.
+TRACK_SNAP_SEARCH = 2
+
 #: Plate scale (IMX585 @ 160 mm): 206.265·2.9/160 ≈ 3.74″ per full-res px. The
 #: green plane is subsampled ×2, so one green-plane px spans twice that on sky.
 ARCSEC_PER_FULL_PX = 206.265 * 2.9 / 160.0
@@ -211,7 +219,9 @@ def measure_star_at(
         raw:    Raw 2-D GRBG frame.
         x, y:   Click position in **green-plane** px.
         radius: Aperture radius (green-plane px).
-        search: Snap radius for the local peak (defaults to ``radius``).
+        search: Snap radius for the local peak. Defaults to ``_SNAP_SEARCH`` and
+                is **independent of** ``radius`` so changing the aperture radius
+                doesn't re-snap the centre onto a different star.
     """
     radius = max(2, int(radius))
     g = _green_plane(raw)
@@ -221,7 +231,7 @@ def measure_star_at(
         return None
     sky, sigma = _robust_sky_sigma(g)
 
-    s = int(search) if search is not None else radius
+    s = int(search) if search is not None else _SNAP_SEARCH
     y0, y1 = max(0, yi - s), min(h, yi + s + 1)
     x0, x1 = max(0, xi - s), min(w, xi + s + 1)
     sub = g[y0:y1, x0:x1]

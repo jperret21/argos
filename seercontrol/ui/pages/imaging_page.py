@@ -59,6 +59,7 @@ from seercontrol.core.imaging.metrics import (
     ARCSEC_PER_FULL_PX,
     ARCSEC_PER_GREEN_PX,
     DEFAULT_STAR_RADIUS,
+    TRACK_SNAP_SEARCH,
     measure_star_at,
 )
 from seercontrol.core.imaging.platesolve import (
@@ -601,11 +602,17 @@ class ImagingPage(QWidget):
         self._show_selection(meas)
 
     def _remeasure_selection(self) -> None:
-        """Re-measure the pinned star on the new frame so its FWHM stays live."""
+        """Re-measure the pinned star (new frame / radius change), centre stable."""
         if self._selected_green is None or self._last_raw is None:
             return
+        # Tight snap → the centre stays put when the aperture radius changes; it
+        # only tracks small frame-to-frame drift.
         meas = measure_star_at(
-            self._last_raw, self._selected_green[0], self._selected_green[1], self._star_radius
+            self._last_raw,
+            self._selected_green[0],
+            self._selected_green[1],
+            self._star_radius,
+            search=TRACK_SNAP_SEARCH,
         )
         if meas is None:
             return
@@ -616,7 +623,8 @@ class ImagingPage(QWidget):
         dp = self._green_to_disp(meas.x, meas.y)
         if dp is None:
             return
-        self._viewer.mark_selection(dp[0], dp[1], self._format_star_text(meas))
+        radius_disp = self._green_len_to_disp(meas.radius)
+        self._viewer.mark_selection(dp[0], dp[1], self._format_star_text(meas), radius_disp)
 
     def _format_star_text(self, meas) -> str:
         parts = ["Selected star"]
@@ -660,6 +668,14 @@ class ImagingPage(QWidget):
         if gw <= 0 or gh <= 0:
             return None
         return x_green * dw / gw, y_green * dh / gh
+
+    def _green_len_to_disp(self, length: float) -> float | None:
+        """Scale a green-plane length (e.g. the aperture radius) to display px."""
+        if self._green_shape is None or self._disp_shape is None:
+            return None
+        gw = self._green_shape[1]
+        dw = self._disp_shape[1]
+        return length * dw / gw if gw > 0 else None
 
     def _on_open_fits(self) -> None:
         start = str(Path.home() / "Downloads")

@@ -112,7 +112,7 @@ class HistogramDock(design.Card):
 
         # Measurement toggles.
         self._cross_chk = QCheckBox("Crosshair on image")
-        self._cross_chk.setChecked(True)  # visible by default
+        self._cross_chk.setChecked(False)  # off by default; shows on hover when on
         self._cross_chk.toggled.connect(self.crosshair_toggled)
         outer.addWidget(self._cross_chk)
         self._sat_chk = QCheckBox("Highlight saturation")
