@@ -93,7 +93,9 @@ class AnalysisWindow(QMainWindow):
         self._var_green: list[tuple[float, float]] = []
         self._comparisons: list = []
         self._comp_rows: list = []  # R5: ranked comparisons for the selected variable
-        self._comp_dock = None  # created lazily on first variable selection
+        self._comp_green: list = []  # comparison green-px positions (parallel to _comp_rows)
+        self._selected_variable = None  # the variable whose comparisons are listed
+        self._comp_dialog = None  # popup table, created lazily on first open
 
         self._build_ui()
         self._wire()
@@ -137,6 +139,39 @@ class AnalysisWindow(QMainWindow):
         )
         self._solve_btn.clicked.connect(self._on_solve)
         brow.addWidget(self._solve_btn)
+        # R1: independent show/hide toggles for the RA/Dec grid and the
+        # variable-star markers (enabled once a solve provides a WCS).
+        self._grid_btn = QPushButton("Grid")
+        self._grid_btn.setCheckable(True)
+        self._grid_btn.setEnabled(False)
+        self._grid_btn.setToolTip("Show/hide the RA/Dec grid")
+        self._grid_btn.toggled.connect(self._viewer.set_astrometry_enabled)
+        brow.addWidget(self._grid_btn)
+        self._var_btn = QPushButton("Variables")
+        self._var_btn.setCheckable(True)
+        self._var_btn.setEnabled(False)
+        self._var_btn.setToolTip("Show/hide the variable-star markers")
+        self._var_btn.toggled.connect(self._viewer.set_catalog_enabled)
+        brow.addWidget(self._var_btn)
+        # R5: show/hide the comparison-star markers (cyan squares + labels) of
+        # the selected variable on the image.
+        self._comp_markers_btn = QPushButton("Comp. markers")
+        self._comp_markers_btn.setCheckable(True)
+        self._comp_markers_btn.setEnabled(False)
+        self._comp_markers_btn.setToolTip("Show/hide comparison-star markers on the image")
+        self._comp_markers_btn.toggled.connect(self._viewer.set_comparison_enabled)
+        brow.addWidget(self._comp_markers_btn)
+        # R5: opens the comparison-star table for the selected variable.
+        self._comp_btn = QPushButton("Comparison stars")
+        self._comp_btn.setToolTip("Select a variable star first, then list its comparison stars")
+        self._comp_btn.setEnabled(False)
+        self._comp_btn.clicked.connect(self._on_comp_btn)
+        brow.addWidget(self._comp_btn)
+        # R6: astrometry + catalog settings popup (same config as the main page).
+        self._settings_btn = QPushButton("Settings…")
+        self._settings_btn.setToolTip("Astrometry & catalog parameters")
+        self._settings_btn.clicked.connect(self._on_settings)
+        brow.addWidget(self._settings_btn)
         self._solve_lbl = QLabel("not solved")
         self._solve_lbl.setStyleSheet(
             f"color:{theme.FG_MUTED}; font-family:{theme.FONT_MONO};"
@@ -159,8 +194,9 @@ class AnalysisWindow(QMainWindow):
         self._histogram.crosshair_toggled.connect(self._viewer.set_crosshair_enabled)
         self._histogram.stars_overlay_toggled.connect(self._viewer.set_star_overlay_enabled)
         self._histogram.loupe_toggled.connect(self._viewer.set_loupe_enabled)
-        self._histogram.astrometry_toggled.connect(self._viewer.set_astrometry_enabled)
-        self._histogram.astrometry_toggled.connect(self._viewer.set_catalog_enabled)
+        # Grid + variable markers are driven by their own bar buttons (R1); hide
+        # the histogram's now-redundant "WCS grid overlay" checkbox.
+        self._histogram._astro_chk.hide()
         self._histogram.star_radius_changed.connect(self._on_radius)
         self._viewer.levels_changed.connect(self._histogram.set_levels)
         self._viewer.region_info.connect(self._histogram.set_region_info)
@@ -184,9 +220,9 @@ class AnalysisWindow(QMainWindow):
         self._viewer.clear_selection()
         self._wcs = None  # a new frame invalidates the previous solution
         self._viewer.set_astrometry_overlay(None)
+        self._grid_btn.setChecked(False)
+        self._grid_btn.setEnabled(False)
         self._clear_catalog()
-        self._histogram.set_astrometry_available(False)
-        self._histogram.set_astrometry_checked(False)
         self._set_solve_text("not solved", theme.FG_MUTED)
         self._channel = VIEW_RAW
         self._toolbar.set_view(VIEW_RAW)
@@ -270,9 +306,8 @@ class AnalysisWindow(QMainWindow):
         self._wcs = frame_wcs(result.fields, self._green_shape)
         if self._wcs is not None:
             self._update_astrometry_overlay()
-            self._viewer.set_astrometry_enabled(True)
-            self._histogram.set_astrometry_available(True)
-            self._histogram.set_astrometry_checked(True)
+            self._grid_btn.setEnabled(True)
+            self._grid_btn.setChecked(True)  # → shows the grid via toggled
             self._remeasure_selection()  # refresh the clicked star's RA/Dec
             self._fetch_catalog()  # VSX variables (+ VSP comparisons) for the field
 
@@ -336,85 +371,107 @@ class AnalysisWindow(QMainWindow):
                 else:
                     self._var_green.append(None)  # outside frame → not clickable
         self._viewer.set_catalog_markers(points, self._green_shape)
-        self._viewer.set_catalog_enabled(True)
-        self._histogram.set_astrometry_checked(True)
+        has = bool(points)
+        self._var_btn.setEnabled(has)
+        self._var_btn.setChecked(has)  # → shows markers via toggled
+        if has and self._var_btn.isChecked():
+            self._viewer.set_catalog_enabled(True)  # refresh if already checked
 
     def _clear_catalog(self) -> None:
         self._variables = []
         self._var_green = []
         self._comparisons = []
         self._comp_rows = []
+        self._selected_variable = None
+        self._comp_green = []
         self._viewer.set_catalog_markers((), self._green_shape)
-        if getattr(self, "_comp_dock", None) is not None:
-            self._comp_table.setRowCount(0)
-            self._comp_dock.hide()
+        self._viewer.set_comparison_markers((), self._green_shape)
+        self._var_btn.setChecked(False)
+        self._var_btn.setEnabled(False)
+        self._comp_markers_btn.setChecked(False)
+        self._comp_markers_btn.setEnabled(False)
+        self._comp_btn.setEnabled(False)
+        self._comp_btn.setText("Comparison stars")
+        if self._comp_dialog is not None:
+            self._comp_dialog.hide()
 
     # ------------------------------------------------------------------
-    # Comparison stars (§6, R5): ranked list for the selected variable
+    # Comparison stars (§6, R5): ranked table for the selected variable
     # ------------------------------------------------------------------
-
-    def _ensure_comp_dock(self) -> None:
-        """Create the 'Comparison stars' dock on first use (imports kept local
-        so the shared import block stays untouched)."""
-        if getattr(self, "_comp_dock", None) is not None:
-            return
-        from PyQt6.QtWidgets import (
-            QAbstractItemView,
-            QDockWidget,
-            QTableWidget,
-        )
-
-        table = QTableWidget(0, 4)
-        table.setHorizontalHeaderLabels(["AUID", "V", "sep′", "Δmag"])
-        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        table.verticalHeader().setVisible(False)
-        table.cellClicked.connect(self._on_comp_selected)
-        dock = QDockWidget("Comparison stars", self)
-        dock.setObjectName("comparison_stars_dock")
-        dock.setWidget(table)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
-        self._comp_dock = dock
-        self._comp_table = table
 
     def _populate_comparisons(self, v) -> None:
-        from PyQt6.QtWidgets import QTableWidgetItem
-
+        """Rank the field's comparison stars for variable ``v`` and arm the
+        'Comparison stars' button (the full table opens on click)."""
         from seercontrol.core.catalog import comparisons_for_variable
 
-        if not self._comparisons:
-            return
-        ranked = comparisons_for_variable(v, self._comparisons, max_results=15)
-        self._comp_rows = ranked
-        self._ensure_comp_dock()
-        t = self._comp_table
-        t.setRowCount(len(ranked))
-        for row, s in enumerate(ranked):
-            c = s.star
-            vmag = c.mag("V")
-            cells = [
-                c.auid,
-                f"{vmag:.2f}" if vmag is not None else "—",
-                f"{s.separation_arcmin:.1f}",
-                f"{s.delta_mag:.1f}" if s.delta_mag is not None else "—",
-            ]
-            for col, txt in enumerate(cells):
-                t.setItem(row, col, QTableWidgetItem(txt))
-        t.resizeColumnsToContents()
-        self._comp_dock.setWindowTitle(f"Comparison stars — {v.name}  ({len(ranked)})")
-        self._comp_dock.show()
+        self._selected_variable = v
+        self._comp_rows = comparisons_for_variable(v, self._comparisons, max_results=50)
+        has = bool(self._comp_rows)
+        self._comp_btn.setEnabled(has)
+        self._comp_btn.setText(
+            f"Comparison stars ({len(self._comp_rows)})" if has else "Comparison stars"
+        )
+        if has and self._comp_dialog is not None and self._comp_dialog.isVisible():
+            self._comp_dialog.set_data(v.name, self._comp_rows)  # live-refresh if open
+        self._plot_comparison_markers()
 
-    def _on_comp_selected(self, row: int, _col: int) -> None:
-        if row < 0 or row >= len(self._comp_rows) or self._wcs is None:
+    def _plot_comparison_markers(self) -> None:
+        """Project the ranked comparisons onto the frame and draw the markers."""
+        self._comp_green = []
+        points: list[tuple[float, float, str]] = []
+        if self._wcs is not None and self._green_shape is not None:
+            gh, gw = self._green_shape
+            margin = 2.0
+            for s in self._comp_rows:
+                c = s.star
+                x, y = self._wcs.world_to_pixel_deg(c.ra_deg, c.dec_deg)
+                x, y = float(x), float(y)
+                if -margin <= x <= gw + margin and -margin <= y <= gh + margin:
+                    self._comp_green.append((x, y))
+                    points.append((x, y, c.label))
+                else:
+                    self._comp_green.append(None)  # outside frame → not clickable
+        self._viewer.set_comparison_markers(points, self._green_shape)
+        has = bool(points)
+        self._comp_markers_btn.setEnabled(has)
+        self._comp_markers_btn.setChecked(has)  # → shows markers via toggled
+        if has and self._comp_markers_btn.isChecked():
+            self._viewer.set_comparison_enabled(True)  # refresh if already checked
+
+    def _on_comp_btn(self) -> None:
+        """Open the comparison-star table for the currently selected variable."""
+        if not self._comp_rows or self._selected_variable is None:
             return
-        s = self._comp_rows[row]
-        c = s.star
+        if self._comp_dialog is None:
+            from seercontrol.ui.widgets.comparison_table import ComparisonTableDialog
+
+            self._comp_dialog = ComparisonTableDialog(self)
+            self._comp_dialog.row_activated.connect(self._on_comp_selected)
+        self._comp_dialog.set_data(self._selected_variable.name, self._comp_rows)
+        self._comp_dialog.show()
+        self._comp_dialog.raise_()
+
+    def _on_settings(self) -> None:
+        """R6: open the astrometry + catalog settings popup. If the new limits
+        change anything and a solution exists, re-query the catalog."""
+        from seercontrol.ui.widgets.astrometry_settings import AstrometrySettingsDialog
+
+        dlg = AstrometrySettingsDialog(self._config, self)
+        if dlg.exec() and self._wcs is not None:
+            self._update_astrometry_overlay()  # grid spacing may have changed
+            self._fetch_catalog()  # mag limit / max may have changed
+
+    def _on_comp_selected(self, scored) -> None:
+        """A row in the comparison table was clicked → ring that star on the image."""
+        if self._wcs is None:
+            return
+        c = scored.star
         x, y = self._wcs.world_to_pixel_deg(c.ra_deg, c.dec_deg)
         dp = self._green_to_disp(float(x), float(y))
         if dp is None:
             return
         self._selected_green = None
-        self._viewer.mark_selection(dp[0], dp[1], self._format_comparison_text(c, s))
+        self._viewer.mark_selection(dp[0], dp[1], self._format_comparison_text(c, scored))
 
     def _format_comparison_text(self, c, scored) -> str:
         lines = [f"Comparison  {c.auid}"]
@@ -432,7 +489,9 @@ class AnalysisWindow(QMainWindow):
         if self._wcs is None or self._green_shape is None:
             self._viewer.set_astrometry_overlay(None, self._green_shape)
             return
-        overlay = wcs_grid(self._wcs, self._green_shape)
+        arcmin = float(self._cfg("astrometry.grid_spacing_arcmin", 0) or 0)
+        spacing = arcmin / 60.0 if arcmin > 0 else None  # R1: 0 = auto/adaptive
+        overlay = wcs_grid(self._wcs, self._green_shape, spacing_deg=spacing)
         self._viewer.set_astrometry_overlay(overlay, self._green_shape)
 
     def _set_solve_text(self, text: str, color: str) -> None:
@@ -446,6 +505,8 @@ class AnalysisWindow(QMainWindow):
             self._solver.wait(2000)
         if self._catalog_worker is not None and self._catalog_worker.isRunning():
             self._catalog_worker.wait(2000)
+        if self._comp_dialog is not None:
+            self._comp_dialog.close()
         super().closeEvent(event)
 
     # ------------------------------------------------------------------
@@ -459,6 +520,10 @@ class AnalysisWindow(QMainWindow):
         vi = self._nearest_variable(gp[0], gp[1])
         if vi is not None:  # a catalog variable takes precedence over star metrics
             self._show_variable(vi)
+            return
+        ci = self._nearest_comparison(gp[0], gp[1])
+        if ci is not None:  # then a comparison marker
+            self._on_comp_selected(self._comp_rows[ci])
             return
         meas = measure_star_at(self._raw, gp[0], gp[1], self._radius)
         if meas is None:
@@ -518,6 +583,25 @@ class AnalysisWindow(QMainWindow):
                 tol = max(6.0, 14.0 * gw / dw)
         best_i, best_d = None, tol
         for i, pos in enumerate(self._var_green):
+            if pos is None:
+                continue
+            d = ((pos[0] - gx) ** 2 + (pos[1] - gy) ** 2) ** 0.5
+            if d <= best_d:
+                best_i, best_d = i, d
+        return best_i
+
+    def _nearest_comparison(self, gx: float, gy: float) -> int | None:
+        """Index of the comparison nearest (gx, gy), only while its markers show."""
+        if not self._comp_green or not self._comp_markers_btn.isChecked():
+            return None
+        tol = 10.0
+        if self._green_shape and self._disp_shape:
+            _gh, gw = self._green_shape
+            _dh, dw = self._disp_shape
+            if dw > 0:
+                tol = max(6.0, 14.0 * gw / dw)
+        best_i, best_d = None, tol
+        for i, pos in enumerate(self._comp_green):
             if pos is None:
                 continue
             d = ((pos[0] - gx) ** 2 + (pos[1] - gy) ** 2) ** 0.5

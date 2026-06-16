@@ -134,9 +134,13 @@ def test_shell_three_mode_walkthrough() -> None:
                 assert awin._wcs is not None
                 assert wcs_grid(awin._wcs, awin._green_shape).lines  # grid crosses frame
                 awin._update_astrometry_overlay()
-                awin._viewer.set_astrometry_enabled(True)
-                awin._histogram.set_astrometry_available(True)
-                awin._histogram.set_astrometry_checked(True)
+                # R1: the bar "Grid" button toggles the RA/Dec grid overlay.
+                awin._grid_btn.setEnabled(True)
+                awin._grid_btn.setChecked(True)
+                assert awin._viewer._wcs_on  # grid shown via the button
+                awin._grid_btn.setChecked(False)
+                assert not awin._viewer._wcs_on  # and hidden again
+                awin._grid_btn.setChecked(True)
                 awin._remeasure_selection()  # clicked star now reports RA/Dec
                 assert "RA" in awin._viewer._sel_label.text()
 
@@ -161,7 +165,12 @@ def test_shell_three_mode_walkthrough() -> None:
                 assert awin._var_green[0] is not None and awin._var_green[1] is None
                 vx, vy = awin._var_green[0]
                 assert abs(vx - 23.5) < 1.0 and abs(vy - 23.5) < 1.0
+                # R1: the "Variables" button is armed + checked → markers shown.
+                assert awin._var_btn.isEnabled() and awin._var_btn.isChecked()
                 assert awin._viewer._catalog_item.isVisible()
+                awin._var_btn.setChecked(False)  # toggle the markers off
+                assert not awin._viewer._catalog_item.isVisible()
+                awin._var_btn.setChecked(True)
                 assert awin._nearest_variable(vx + 1.0, vy + 1.0) == 0
                 assert awin._nearest_variable(2.0, 2.0) is None
                 vtext = awin._format_variable_text(on_axis)
@@ -176,14 +185,61 @@ def test_shell_three_mode_walkthrough() -> None:
                     ComparisonStar("000-CMP-001", 83.61, 22.01, "120", (Band("V", 12.0),)),  # near
                     ComparisonStar("000-CMP-002", 83.9, 22.3, "135", (Band("V", 13.5),)),  # far
                 ]
-                awin._show_variable(0)  # selects on_axis → populates comparisons
-                # (isVisible() is transitively False offscreen; isHidden() reflects show())
-                assert awin._comp_dock is not None and not awin._comp_dock.isHidden()
-                assert awin._comp_table.rowCount() == 2
-                assert awin._comp_table.item(0, 0).text() == "000-CMP-001"  # nearest first
+                awin._show_variable(0)  # selects on_axis → ranks comps, arms the button
+                assert awin._comp_btn.isEnabled() and "(2)" in awin._comp_btn.text()
                 assert [s.star.auid for s in awin._comp_rows] == ["000-CMP-001", "000-CMP-002"]
-                awin._on_comp_selected(0, 0)  # ring the comparison on the image
+                awin._on_comp_btn()  # opens the full comparison-star table popup
+                # (isVisible() is transitively False offscreen; isHidden() reflects show())
+                assert awin._comp_dialog is not None and not awin._comp_dialog.isHidden()
+                t = awin._comp_dialog._table
+                assert t.rowCount() == 2
+                assert t.item(0, 0).text() == "000-CMP-001"  # nearest first
+                assert "05h" in t.item(0, 1).text() and t.item(0, 3).text() == "12.000"  # RA + V
+                awin._on_comp_selected(awin._comp_rows[0])  # ring the comparison on the image
                 assert "000-CMP-001" in awin._viewer._sel_label.text()
+
+                # R5: comparison markers drawn on the image, toggled + clickable.
+                assert awin._comp_markers_btn.isEnabled() and awin._comp_markers_btn.isChecked()
+                assert awin._viewer._comparison_item.isVisible()
+                # CMP-001 lands in-frame; CMP-002 (0.3° away) projects off-frame.
+                assert awin._comp_green[0] is not None and awin._comp_green[1] is None
+                cgx, cgy = awin._comp_green[0]
+                assert awin._nearest_comparison(cgx + 1.0, cgy + 1.0) == 0
+                awin._comp_markers_btn.setChecked(False)  # hide markers
+                assert not awin._viewer._comparison_item.isVisible()
+                assert awin._nearest_comparison(cgx, cgy) is None  # not clickable when hidden
+                awin._comp_markers_btn.setChecked(True)
+                assert awin._settings_btn is not None  # R6 settings button in the bar
+
+                # §6 R6: settings popup loads from + writes to the (shared) config.
+                from seercontrol.ui.widgets.astrometry_settings import (
+                    AstrometrySettingsDialog,
+                )
+
+                class _FakeCfg:
+                    def __init__(self, d):
+                        self.d = dict(d)
+                        self.saved = False
+
+                    def get(self, k, default=None):
+                        return self.d.get(k, default)
+
+                    def set(self, k, v):
+                        self.d[k] = v
+
+                    def save(self):
+                        self.saved = True
+
+                fake = _FakeCfg({"astrometry.database": "D05", "catalog.mag_limit": 14.0})
+                dlg = AstrometrySettingsDialog(fake, awin)
+                assert dlg._db_combo.currentText() == "D05"  # loaded from config
+                assert dlg._mag_spin.value() == 14.0
+                dlg._mag_spin.setValue(16.0)
+                dlg._db_combo.setCurrentText("D80")
+                dlg._on_save()  # persists + emits saved
+                assert fake.saved
+                assert fake.d["catalog.mag_limit"] == 16.0
+                assert fake.d["astrometry.database"] == "D80"
             finally:
                 awin.close()
                 awin.deleteLater()

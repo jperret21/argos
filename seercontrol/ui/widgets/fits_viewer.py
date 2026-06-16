@@ -78,6 +78,10 @@ class FitsViewer(QWidget):
         # §6 catalog overlay: VSX variable-star markers (green-plane coords).
         self._catalog: tuple = ()  # (x_green, y_green, suspected) per object
         self._catalog_on: bool = False
+        # §6 R5: VSP comparison-star markers (green px) + their chart labels.
+        self._comparisons: tuple = ()  # (x_green, y_green, label) per object
+        self._comparisons_on: bool = False
+        self._comp_labels: list = []  # pg.TextItem pool, rebuilt on each refresh
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -161,6 +165,13 @@ class FitsViewer(QWidget):
         self._catalog_item = pg.ScatterPlotItem(brush=None, pxMode=True, size=18, symbol="d")
         self._catalog_item.setVisible(False)
         self._view.getView().addItem(self._catalog_item, ignoreBounds=True)
+        # §6 R5 — VSP comparison stars as hollow cyan squares (chart labels added
+        # as TextItems in _refresh_comparisons).
+        self._comparison_item = pg.ScatterPlotItem(
+            pen=pg.mkPen(theme.CYAN, width=2), brush=None, pxMode=True, size=16, symbol="s"
+        )
+        self._comparison_item.setVisible(False)
+        self._view.getView().addItem(self._comparison_item, ignoreBounds=True)
         self._astro_label = QLabel(self)
         self._astro_label.setStyleSheet(
             f"background: rgba(13,17,23,205); color: {theme.FG};"
@@ -188,6 +199,7 @@ class FitsViewer(QWidget):
         self._refresh_overlay()
         self._refresh_astrometry()
         self._refresh_catalog()
+        self._refresh_comparisons()
         if self._roi is not None:
             self._on_roi_changed()
 
@@ -445,6 +457,56 @@ class FitsViewer(QWidget):
         self._catalog_item.setData(spots)
         self._catalog_item.setVisible(True)
 
+    # ------------------------------------------------------------------
+    # Comparison-star overlay (§6, R5): VSP squares + chart-magnitude labels
+    # ------------------------------------------------------------------
+
+    def set_comparison_markers(self, points, green_shape: tuple[int, int] | None = None) -> None:
+        """Receive comparison-star markers (green-plane coords).
+
+        ``points`` is an iterable of ``(x_green, y_green, label)`` tuples, where
+        ``label`` is the VSP chart label (magnitude×10) drawn beside the square.
+        """
+        self._comparisons = tuple(points or ())
+        if green_shape is not None:
+            self._green_shape = green_shape
+        self._refresh_comparisons()
+
+    def set_comparison_enabled(self, enabled: bool) -> None:
+        self._comparisons_on = bool(enabled)
+        self._refresh_comparisons()
+
+    def _clear_comp_labels(self) -> None:
+        view = self._view.getView()
+        for t in self._comp_labels:
+            view.removeItem(t)
+        self._comp_labels = []
+
+    def _refresh_comparisons(self) -> None:
+        """Redraw comparison squares + magnitude labels, green-plane → view."""
+        self._clear_comp_labels()
+        if not (self._comparisons_on and self._comparisons and self._last_arr is not None):
+            self._comparison_item.setVisible(False)
+            return
+        gh, gw = self._green_shape or (0, 0)
+        if gh <= 0 or gw <= 0:
+            self._comparison_item.setVisible(False)
+            return
+        dh, dw = self._last_arr.shape[:2]
+        sx, sy = dw / gw, dh / gh  # green-plane px → display px
+        view = self._view.getView()
+        spots = []
+        for x, y, label in self._comparisons:
+            px, py = x * sx, y * sy
+            spots.append({"pos": (px, py)})
+            if label:
+                t = pg.TextItem(text=str(label), color=theme.CYAN, anchor=(0.0, 1.2))
+                t.setPos(px, py)
+                view.addItem(t, ignoreBounds=True)
+                self._comp_labels.append(t)
+        self._comparison_item.setData(spots)
+        self._comparison_item.setVisible(True)
+
     def set_loupe_enabled(self, enabled: bool) -> None:
         self._loupe = bool(enabled)
         if not self._loupe:
@@ -549,6 +611,8 @@ class FitsViewer(QWidget):
         self._refresh_astrometry()
         self._catalog = ()
         self._refresh_catalog()
+        self._comparisons = ()
+        self._refresh_comparisons()
         self.clear_selection()
         self._auto_on = True
         self._black, self._white = 0.0, 65535.0

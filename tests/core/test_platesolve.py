@@ -262,6 +262,16 @@ def test_wcs_grid_target_reticle() -> None:
     assert (tx, ty) != overlay.center
 
 
+def test_wcs_grid_spacing_makes_a_finer_grid() -> None:
+    wcs = frame_wcs(_WCS_FIELDS, _GREEN_SHAPE)
+    auto = wcs_grid(wcs, _GREEN_SHAPE)
+    fine = wcs_grid(wcs, _GREEN_SHAPE, spacing_deg=0.1)  # 6′ → many lines
+    assert len(fine.lines) > len(auto.lines)
+    # An absurdly tiny spacing is capped, not allowed to flood the overlay.
+    capped = wcs_grid(wcs, _GREEN_SHAPE, spacing_deg=0.0005)
+    assert len(capped.lines) < 400
+
+
 # --------------------------------------------------------------------------- #
 # Formatting + spherical helpers (§6)                                          #
 # --------------------------------------------------------------------------- #

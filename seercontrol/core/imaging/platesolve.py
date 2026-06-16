@@ -377,6 +377,7 @@ def wcs_grid(
     target_radec: tuple[float, float] | None = None,
     target_lines: int = 4,
     samples: int = 40,
+    spacing_deg: float | None = None,
 ) -> WCSOverlay:
     """Build RA/Dec grid lines + centre marker (+ optional target) for the frame.
 
@@ -384,6 +385,11 @@ def wcs_grid(
     coordinates and projected back to pixels; points outside the frame become
     NaN so the viewer breaks the polyline there. ``target_radec`` is
     ``(ra_hours, dec_deg)`` of the intended target (a framing reticle).
+
+    ``spacing_deg`` forces a fixed on-sky grid step (a *finer* grid than the
+    ``target_lines`` auto-pick); ``None`` keeps the adaptive 1/2/5 step. The RA
+    step is widened by ``1/cos(dec)`` so meridians and parallels stay visually
+    even, and the line count is capped so a tiny spacing can't flood the view.
     """
     gh, gw = int(shape[0]), int(shape[1])
     if gh <= 1 or gw <= 1:
@@ -400,8 +406,19 @@ def wcs_grid(
     ras = [r - 360.0 if r - ref > 180 else r + 360.0 if r - ref < -180 else r for r in ras]
     ra_min, ra_max = min(ras), max(ras)
     dec_min, dec_max = min(decs), max(decs)
-    ra_step = _nice_step(ra_max - ra_min, target_lines)
-    dec_step = _nice_step(dec_max - dec_min, target_lines)
+    if spacing_deg and spacing_deg > 0:
+        # Fixed on-sky spacing; keep RA/Dec lines visually even, cap the count.
+        cosd = max(0.05, math.cos(math.radians((dec_min + dec_max) / 2.0)))
+        dec_step = spacing_deg
+        ra_step = spacing_deg / cosd
+        _max_lines = 160
+        while (dec_max - dec_min) / dec_step > _max_lines:
+            dec_step *= 2.0
+        while (ra_max - ra_min) / ra_step > _max_lines:
+            ra_step *= 2.0
+    else:
+        ra_step = _nice_step(ra_max - ra_min, target_lines)
+        dec_step = _nice_step(dec_max - dec_min, target_lines)
     margin = 2.0
     lines: list = []
 
