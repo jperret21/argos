@@ -47,7 +47,7 @@ _CFG_MODE = "ui.shell.mode"
 class Shell(QMainWindow):
     """Three-mode workspace shell."""
 
-    APP_VERSION = "0.2.0-redesign"
+    APP_VERSION = "0.2.1"
 
     def __init__(self, config: Config) -> None:
         super().__init__()
