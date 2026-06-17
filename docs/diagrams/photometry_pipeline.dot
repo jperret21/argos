@@ -1,0 +1,19 @@
+digraph photometry_pipeline {
+  rankdir=LR;
+  graph [fontname="Helvetica", fontsize=11, nodesep=0.4, ranksep=0.7];
+  node  [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", fillcolor="#eef3f8", color="#2b3e50"];
+  edge  [fontname="Helvetica", fontsize=9, color="#5a6b7b"];
+
+  star [label="TargetStar\n(RA / Dec)"];
+  px   [label="green-plane\npixel coords"];
+  phot [label="AperturePhot\n(instrumental mag)"];
+  diff [label="DiffResult\n(differential mag)"];
+  lc   [label="LightCurve\n(LcPoint[])"];
+  out  [label="CSV / AAVSO", shape=note, fillcolor="#fff6e6", color="#b8893b"];
+
+  star -> px   [label="world_to_pixel_deg"];
+  px   -> phot [label="measure_aperture"];
+  phot -> diff [label="differential_mag\n(+ comparison ensemble)"];
+  diff -> lc   [label="append LcPoint"];
+  lc   -> out  [label="export"];
+}

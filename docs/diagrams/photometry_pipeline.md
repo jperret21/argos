@@ -4,9 +4,9 @@ The differential photometry pipeline runs per solved frame. It projects saved ca
 stars onto the green plane, measures their flux, and calibrates targets against the
 comparison ensemble.
 
-:::{note}
-The Graphviz source (`photometry_pipeline.dot`) for this diagram was lost and needs to be regenerated. The steps below describe the pipeline.
-:::
+```{graphviz} photometry_pipeline.dot
+:align: center
+```
 
 ## Steps
 

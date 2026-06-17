@@ -2,9 +2,9 @@
 
 The relationships between the key dataclasses and persisted files in SeerControl.
 
-:::{note}
-The Graphviz source (`data_model.dot`) for this diagram was lost and needs to be regenerated. The tables below describe the model.
-:::
+```{graphviz} data_model.dot
+:align: center
+```
 
 ## File persistence
 

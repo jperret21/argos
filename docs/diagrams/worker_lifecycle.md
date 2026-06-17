@@ -3,9 +3,9 @@
 The live preview processes frames through three stages: camera download → off-thread
 processing → UI display. Each stage runs on its own thread so the UI never freezes.
 
-:::{note}
-The Graphviz source (`preview_chain.dot`) for this diagram was lost and needs to be regenerated. The data flow below describes the chain.
-:::
+```{graphviz} preview_chain.dot
+:align: center
+```
 
 ## Data flow
 

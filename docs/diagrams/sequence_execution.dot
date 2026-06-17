@@ -1,0 +1,31 @@
+digraph sequence_execution {
+  rankdir=TB;
+  graph [fontname="Helvetica", fontsize=11, nodesep=0.4, ranksep=0.5];
+  node  [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", fillcolor="#eef3f8", color="#2b3e50"];
+  edge  [fontname="Helvetica", fontsize=9, color="#5a6b7b"];
+
+  plan   [label="SequencePlan\n(steps: count, start_index)"];
+  expand [label="expand_plan()", fillcolor="#dce7f1"];
+  specs  [label="FrameSpec iterator"];
+
+  plan -> expand -> specs;
+
+  subgraph cluster_worker {
+    label="SequenceWorker (QThread) -- per FrameSpec";
+    style="rounded"; color="#9fb3c8"; fontname="Helvetica"; fontsize=10;
+    filt  [label="1. Filter change\n(if differs)"];
+    af    [label="2. Autofocus\n(filter change / every N)"];
+    expo  [label="3. Expose\n(start, poll ImageReady, download)"];
+    qa    [label="4. QA metrics\n(HFD, stars, sky, FWHM)"];
+    write [label="5. Write FITS\n(Siril layout + headers)"];
+    emit  [label="6. Emit signals"];
+    filt -> af -> expo -> qa -> write -> emit;
+  }
+  specs -> filt;
+  emit  -> filt [label="next frame", style=dashed, constraint=false];
+
+  fs [label="frame_saved(path, record)", shape=note, fillcolor="#fff6e6", color="#b8893b"];
+  pr [label="progress(done, total, eta)", shape=note, fillcolor="#fff6e6", color="#b8893b"];
+  emit -> fs [style=dashed];
+  emit -> pr [style=dashed];
+}

@@ -1,0 +1,52 @@
+digraph data_model {
+  rankdir=LR;
+  graph [fontname="Helvetica", fontsize=11, splines=spline, nodesep=0.4, ranksep=0.8];
+  node  [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", fillcolor="#eef3f8", color="#2b3e50"];
+  edge  [fontname="Helvetica", fontsize=9, color="#5a6b7b"];
+
+  subgraph cluster_acq {
+    label="Acquisition"; style="rounded"; color="#9fb3c8";
+    Config; SequencePlan; FrameSpec;
+  }
+  subgraph cluster_astro {
+    label="Astrometry"; style="rounded"; color="#9fb3c8";
+    SolveResult; FrameWCS;
+  }
+  subgraph cluster_cat {
+    label="Catalog"; style="rounded"; color="#9fb3c8";
+    TargetSet; TargetStar;
+  }
+  subgraph cluster_phot {
+    label="Photometry"; style="rounded"; color="#9fb3c8";
+    AperturePhot; DiffResult; LightCurve; LcPoint;
+  }
+  subgraph cluster_log {
+    label="Logging"; style="rounded"; color="#9fb3c8";
+    SessionLog; FrameRecord;
+  }
+
+  SequencePlan -> FrameSpec  [label="expand_plan (many)"];
+  TargetSet    -> TargetStar [label="has many"];
+  LightCurve   -> LcPoint    [label="has many"];
+  SessionLog   -> FrameRecord[label="has many"];
+  SolveResult  -> FrameWCS   [label="yields"];
+  FrameWCS     -> AperturePhot [label="project"];
+  TargetStar   -> AperturePhot [label="position"];
+  AperturePhot -> DiffResult [label="calibrate"];
+  DiffResult   -> LcPoint    [label="append"];
+
+  node [shape=note, fillcolor="#fff6e6", color="#b8893b"];
+  config_json    [label="config.json"];
+  session_json   [label="session.json"];
+  targets_json   [label="targets.json"];
+  fits           [label="*.fits"];
+  photometry_csv [label="photometry.csv"];
+  aavso_txt      [label="aavso.txt"];
+
+  Config      -> config_json    [style=dashed, label="persists"];
+  SessionLog  -> session_json   [style=dashed];
+  TargetSet   -> targets_json   [style=dashed];
+  FrameRecord -> fits           [style=dashed];
+  LcPoint     -> photometry_csv [style=dashed];
+  LightCurve  -> aavso_txt      [style=dashed, label="AAVSO export"];
+}

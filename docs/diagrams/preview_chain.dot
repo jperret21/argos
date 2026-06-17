@@ -1,0 +1,26 @@
+digraph preview_chain {
+  rankdir=LR;
+  graph [fontname="Helvetica", fontsize=11, nodesep=0.5, ranksep=0.9];
+  node  [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", fillcolor="#eef3f8", color="#2b3e50"];
+  edge  [fontname="Helvetica", fontsize=9, color="#5a6b7b"];
+
+  cam [label="Camera\n(Alpaca HTTP)", shape=cylinder, fillcolor="#e9eef3"];
+
+  subgraph cluster_exp {
+    label="ExposureWorker (QThread)"; style="rounded"; color="#9fb3c8";
+    exp [label="start exposure\npoll ImageReady\ndownload raw uint16"];
+  }
+  subgraph cluster_proc {
+    label="PreviewProcessor (QThread)"; style="rounded"; color="#9fb3c8";
+    proc [label="render + star field\n+ metrics + histograms\n(off UI thread)"];
+  }
+  subgraph cluster_ui {
+    label="UI thread"; style="rounded"; color="#9fb3c8";
+    ui [label="display stretch\n+ overlays + histogram\n(uint8 -> QImage)"];
+  }
+
+  cam  -> exp;
+  exp  -> proc [label="frame_ready(raw)"];
+  proc -> ui   [label="ProcessedFrame"];
+  proc -> proc [label="latest-frame-wins\n(drop stale)", style=dashed, color="#b8893b"];
+}

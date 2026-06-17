@@ -4,9 +4,9 @@ The {class}`~seercontrol.core.imaging.sequencer.SequencePlan` defines a multi-st
 acquisition plan. The {class}`~seercontrol.workers.sequence_worker.SequenceWorker`
 executes it on a QThread.
 
-:::{note}
-The Graphviz source (`sequence_execution.dot`) for this diagram was lost and needs to be regenerated. The description below covers the execution flow.
-:::
+```{graphviz} sequence_execution.dot
+:align: center
+```
 
 ## Plan expansion
 
