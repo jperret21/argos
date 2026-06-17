@@ -46,6 +46,9 @@ handoff.md
 docs/plan_*.md
 docs/redesign_*.md
 
+# Sphinx build output (regenerated from docs/ sources)
+docs/_build/
+
 # Tests
 .pytest_cache/
 htmlcov/
