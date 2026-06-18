@@ -1,61 +1,57 @@
 # Argos
 
-**Desktop control software for the ZWO Seestar S30 Pro.**
+**Differential photometry for the Seestar S30 Pro.**  
+From raw Bayer frames to AAVSO-ready light curves — on your laptop, in real time.
 
-This project is in **early development** — not yet ready for testing.
-Goals, features, and architecture are evolving rapidly.
-
----
-
-## Status
-
-| Area | Status |
-|---|---|
-| Telescope control (Alpaca) | Working — GoTo, tracking, park |
-| Manual jogging (native API) | Working — N/S/E/W at 3 speeds |
-| Live preview | Working — continuous exposure loop |
-| FITS export | Working — 16-bit with science headers |
-| Auto-discovery (UDP) | Working |
-| Sequencer | In progress |
-| Plate solving | Planned |
-| Focuser / Filter wheel | Planned |
-
-See [STATUS.md](docs/STATUS.md) for the full project dashboard.
+> ⌘ Early development. Brewing since 2024.  
+> Not ready for general use — but getting there.
 
 ---
 
-## Getting Started
+The Seestar S30 Pro is a clever little telescope. Its native app is fine for
+eyepiece replacement, but it saves FITS files with almost no metadata and
+offers zero scientific workflow beyond "save a JPEG". Argos fills the gap:
+ASCOM Alpaca control, science-grade FITS headers, live star detection,
+aperture photometry, and — eventually — full ensemble differential light
+curves ready for AAVSO submission.
+
+Why the name? **Argos** was the hundred-eyed giant of Greek myth, the
+all-seeing watcher. A fitting guardian for a piece of software that watches
+the sky.
+
+---
+
+### Status · what works today
+
+| Telescope control (Alpaca) | ✅ |
+| Manual jogging (native API) | ✅ |
+| Live preview loop | ✅ |
+| FITS export (16-bit, science headers) | ✅ |
+| Auto-discovery (UDP) | ✅ |
+| Star detection & focus metrics (HFD, FWHM) | ✅ |
+| Aperture photometry | ✅ |
+| ASTAP plate solving | ✅ |
+| Sequencer (multi-step plans) | ✅ |
+| Ensemble differential photometry | ✅ |
+| AAVSO light-curve export | ✅ |
+| Autofocus routines | 🚧 |
+| Filter wheel support | 🚧 |
+
+---
+
+### Try it
 
 ```bash
-# Requirements: macOS (Apple Silicon or Intel), Python 3.11+, uv
-
 brew install uv
-git clone https://github.com/jperret21/seerstar.git
-cd seerstar
+git clone https://github.com/jperret21/argos.git
+cd argos
 uv sync --extra dev
-./run.sh
+uv run python main.py
 ```
 
-See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for development setup and workflow.
-
-No telescope on hand? Run the whole app against the ASCOM Alpaca simulator —
-see [simulator_testing.md](docs/simulator_testing.md).
+No telescope? The app works against the ASCOM Alpaca simulator —
+see [`docs/simulator_testing.md`](docs/simulator_testing.md).
 
 ---
 
-## Project Goals
-
-Argos aims to provide a **desktop-grade control interface** for the Seestar S30 Pro,
-with an emphasis on:
-
-- **Precision** — fine-grained control over telescope and camera
-- **Quality** — science-grade FITS output, compatible with PixInsight, Siril, AstroImageJ
-- **Openness** — built on open standards (ASCOM Alpaca, FITS) and open source
-
-See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for design decisions and module layout.
-
----
-
-## License
-
-MIT
+MIT License.
