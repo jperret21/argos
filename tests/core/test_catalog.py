@@ -9,14 +9,14 @@ from __future__ import annotations
 import pytest
 import requests
 
-from seercontrol.core.catalog import (
+from argos.core.catalog import (
     CatalogError,
     ComparisonStar,
     VariableStar,
     vsp_chart,
     vsx_cone_search,
 )
-from seercontrol.core.catalog.aavso import _dms_to_deg, _hms_to_deg
+from argos.core.catalog.aavso import _dms_to_deg, _hms_to_deg
 
 # --- recorded responses (trimmed) ----------------------------------------- #
 

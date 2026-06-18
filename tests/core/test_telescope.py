@@ -11,8 +11,8 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-from seercontrol.core.alpaca.client import AlpacaError
-from seercontrol.core.alpaca.telescope import MountPosition, Telescope
+from argos.core.alpaca.client import AlpacaError
+from argos.core.alpaca.telescope import MountPosition, Telescope
 from tests.conftest import SIMULATOR_HOST, SIMULATOR_PORT, simulator_required
 
 
@@ -20,7 +20,7 @@ from tests.conftest import SIMULATOR_HOST, SIMULATOR_PORT, simulator_required
 # Fixtures
 # ===========================================================================
 
-ALPYCA_PATH = "seercontrol.core.alpaca.telescope._AlpacaTelescope"
+ALPYCA_PATH = "argos.core.alpaca.telescope._AlpacaTelescope"
 
 
 @pytest.fixture

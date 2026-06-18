@@ -1,4 +1,4 @@
-"""Sphinx configuration for SeerControl documentation.
+"""Sphinx configuration for Argos documentation.
 
 Build with::
 
@@ -18,7 +18,7 @@ from datetime import datetime
 
 # -- Project info -----------------------------------------------------------
 
-project = "SeerControl"
+project = "Argos"
 author = "J. Perret"
 copyright = f"{datetime.now().year}, {author}"
 release = "0.2.1"
@@ -43,13 +43,32 @@ myst_enable_extensions = [
     "html_image",                  # inline HTML images
 ]
 
-# autodoc — scan seercontrol packages
+# autodoc — scan argos packages
 sys.path.insert(0, os.path.abspath(".."))
+
+# Custom mock for PyQt6 so pyqtSignal() doesn't produce *args signatures.
+import unittest.mock as _mock
+
+class _PyqtSignalInstance:
+    """A pyqtSignal instance — Sphinx sees it as a plain object."""
+    pass
+
+class _PyqtSignal:
+    """Mock for pyqtSignal — returns a plain instance."""
+    def __new__(cls, *types, **kwargs):
+        return _PyqtSignalInstance()
+
+_PYQT = _mock.MagicMock()
+for _sub in ("QtCore", "QtWidgets", "QtGui", "QtSvg", "QtNetwork"):
+    setattr(_PYQT, _sub, _mock.MagicMock())
+    sys.modules[f"PyQt6.{_sub}"] = getattr(_PYQT, _sub)
+_PYQT.QtCore.pyqtSignal = _PyqtSignal
+sys.modules["PyQt6"] = _PYQT
+
+del _mock, _PYQT  # Keep _PyqtSignal* classes in namespace for autodoc
+
+# Other packages — mock only in autodoc's scope so Sphinx itself can use them.
 autodoc_mock_imports = [
-    "PyQt6",
-    "PyQt6.QtCore",
-    "PyQt6.QtWidgets",
-    "PyQt6.QtGui",
     "pyqtgraph",
     "requests",
     "astropy",
@@ -74,15 +93,15 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "../tests/**"]
 
 # Don't include test files or conftest.py in autodoc downloads
 nitpicky = False
-suppress_warnings = ["misc.highlighting_failure"]
 
-html_theme = "sphinx_rtd_theme"
+html_theme = "furo"
 html_static_path = ["_static"]
 html_css_files = ["custom.css"]
 html_theme_options = {
-    "style_nav_header_background": "#2b3e50",
-    "collapse_navigation": False,
-    "sticky_navigation": True,
+    "dark_css_variables": {
+        "color-brand-primary": "#6ab0f5",
+        "color-brand-content": "#6ab0f5",
+    },
 }
 
 # -- Graphviz settings ------------------------------------------------------
@@ -94,5 +113,9 @@ graphviz_output_format = "svg"
 # Napoleon settings
 napoleon_google_docstring = True
 napoleon_numpy_docstring = True
-napoleon_include_init_with_doc = True
+napoleon_include_init_with_doc = False
 napoleon_include_private_with_doc = False
+
+# autodoc — don't duplicate dataclass fields (attributes + __init__ params)
+autoclass_content = 'class'
+suppress_warnings = ["misc.highlighting_failure", "ref.duplicate", "toc.circular", "duplicate"]

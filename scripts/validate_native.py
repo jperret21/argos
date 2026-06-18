@@ -32,11 +32,11 @@ def main() -> None:
     host = sys.argv[1] if len(sys.argv) > 1 else "localhost"
     port = int(sys.argv[2]) if len(sys.argv) > 2 else 4700
 
-    print(f"\nSeerControl — Native TCP validation  ({host}:{port})")
+    print(f"\nArgos — Native TCP validation  ({host}:{port})")
     print("  WARNING: If using real Seestar, the mount will physically move!")
     print("  Make sure the arm is deployed and the sky is clear.\n")
 
-    from seercontrol.core.seestar.native_client import (
+    from argos.core.seestar.native_client import (
         SeestarNativeClient, SeestarNativeError,
         ANGLE_NORTH, ANGLE_SOUTH, ANGLE_EAST, ANGLE_WEST,
         SPEED_SLOW, SPEED_NORMAL,

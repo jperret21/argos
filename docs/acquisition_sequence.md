@@ -1,7 +1,12 @@
+```{warning}
+This is a **design reference** based on an external flight sequence spec.
+Some steps (A7–A8, post-session P1–P8) are not yet implemented.
+```
+
 # Acquisition Sequence Reference
 
 > Based on seevar A1-A12 sovereign flight sequence (v5.0.0, April 2026).
-> Adapted for SeerControl architecture.
+> Adapted for Argos architecture.
 
 ---
 
@@ -9,6 +14,10 @@
 
 Each target observation follows a deterministic 12-step chain.
 Steps A1-A8 are pre-acquisition setup; A9-A12 are the science acquisition.
+
+```{graphviz} diagrams/sequence_execution.dot
+:align: center
+```
 
 ```
 A1 → A2 → A3 → A4 → A5 → A6 → A7 → A8 → A9 → A10 → A11 → A12

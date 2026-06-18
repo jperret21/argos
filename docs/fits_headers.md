@@ -88,7 +88,7 @@ seevar convention (for raw science frames):
 ## Session Folder Structure (Siril-Compatible)
 
 ```
-~/SeerControl/sessions/
+~/Argos/sessions/
 └── 20250814_M42/
     ├── Lights/
     │   └── M42_Light_*.fits

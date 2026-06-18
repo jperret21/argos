@@ -1,3 +1,10 @@
+```{warning}
+This is a **design specification** — it describes what *should* be built,
+not necessarily what *is* implemented. Some features described here are
+planned or partially complete. Check the source code and API reference
+for the current state.
+```
+
 # Capture / Acquisition panel — science specification
 
 > Source: photometry-expert review (2026-06). This is the authoritative spec for

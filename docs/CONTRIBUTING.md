@@ -1,4 +1,4 @@
-# Contributing to SeerControl
+# Contributing to Argos
 
 Thanks for your interest. This project is in **early development** —
 expect rough edges and frequent changes.
@@ -76,8 +76,8 @@ uv run --extra dev pytest tests/ -v   # verbose
 ### Format and lint
 
 ```bash
-uv run black seercontrol/ tests/
-uv run ruff check seercontrol/ tests/
+uv run black argos/ tests/
+uv run ruff check argos/ tests/
 ```
 
 ---

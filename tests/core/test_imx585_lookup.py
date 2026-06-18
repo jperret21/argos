@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from seercontrol.core.imaging import imx585
+from argos.core.imaging import imx585
 
 
 def test_egain_monotonically_decreases_with_gain() -> None:

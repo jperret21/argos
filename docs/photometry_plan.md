@@ -1,3 +1,9 @@
+```{warning}
+This is a **design document** — it describes the target architecture and
+planned features. Not everything here is implemented yet. See the API
+reference for what currently exists.
+```
+
 # Photometry & astrometry workflow — technical plan
 
 > Status: **design / hand-off doc** (2026-06-16). Author intent captured from the
@@ -291,6 +297,11 @@ comparisons, clicks any star to get full info, assigns roles, and the set persis
 
 ---
 
+```{graphviz} diagrams/photometry_pipeline.dot
+:align: center
+
+```
+
 ## 6. Workstream C — live differential photometry (light-curve preview)
 
 A **preview** — explicitly *not* the calibrated science product. The README/panel
@@ -404,7 +415,7 @@ Re-purpose it as the **field-setup / target-picker** that seeds the live workflo
 ## 8. Data model & persistence (session folder)
 
 ```
-~/SeerControl/sessions/<date>_<target>/.../
+~/Argos/sessions/<date>_<target>/.../
   *.fits             raw linear CFA subs (unchanged)
   session.json       per-frame QA roll-up (unchanged, session_log.py)
   targets.json       NEW  TargetSet (roles, RA/Dec, mags, source)   ── core/catalog/targets.py

@@ -6,8 +6,8 @@ from pathlib import Path
 
 import numpy as np
 
-from seercontrol.core.imaging import platesolve
-from seercontrol.core.imaging.platesolve import (
+from argos.core.imaging import platesolve
+from argos.core.imaging.platesolve import (
     SolveResult,
     SolveSettings,
     _build_command,

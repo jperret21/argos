@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from seercontrol.core.imaging.metrics import (
+from argos.core.imaging.metrics import (
     DetectedStar,
     FrameMetrics,
     StarField,

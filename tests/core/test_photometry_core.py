@@ -7,10 +7,10 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from seercontrol.core.photometry.airmass import airmass_from_altitude, bjd_tdb, julian_date
-from seercontrol.core.photometry.aperture import measure_aperture
-from seercontrol.core.photometry.differential import differential_mag, ensemble_zero_point
-from seercontrol.core.photometry.lightcurve import LcPoint, LightCurve
+from argos.core.photometry.airmass import airmass_from_altitude, bjd_tdb, julian_date
+from argos.core.photometry.aperture import measure_aperture
+from argos.core.photometry.differential import differential_mag, ensemble_zero_point
+from argos.core.photometry.lightcurve import LcPoint, LightCurve
 
 
 def _star(cx, cy, peak=10000.0, sky=200.0, sigma=1.5, shape=(40, 40)) -> np.ndarray:

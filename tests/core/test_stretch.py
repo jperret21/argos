@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from seercontrol.core.imaging import stretch as s
+from argos.core.imaging import stretch as s
 
 
 def test_apply_stretch_linear_endpoints_and_monotonic() -> None:

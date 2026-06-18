@@ -12,7 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
-from seercontrol.core.config import Config  # noqa: E402
+from argos.core.config import Config  # noqa: E402
 
 
 def test_shell_three_mode_walkthrough() -> None:
@@ -20,15 +20,15 @@ def test_shell_three_mode_walkthrough() -> None:
     # Strong reference to the QApplication so it isn't GC'd before the Shell.
     app = QApplication.instance() or QApplication(["test"])
 
-    from seercontrol.ui.pages.configuration_page import ConfigurationPage
-    from seercontrol.ui.pages.connection_page import ConnectionPage
-    from seercontrol.ui.pages.imaging_page import ImagingPage
-    from seercontrol.ui.panels.stellarium_card import StellariumCard
-    from seercontrol.ui.shell import Shell
-    from seercontrol.ui.widgets.camera_dock import CameraDock, CaptureParams
-    from seercontrol.ui.widgets.filterwheel_dock import FilterWheelDock
-    from seercontrol.ui.widgets.histogram_dock import HistogramDock
-    from seercontrol.ui.widgets.mount_dock import MountDock
+    from argos.ui.pages.configuration_page import ConfigurationPage
+    from argos.ui.pages.connection_page import ConnectionPage
+    from argos.ui.pages.imaging_page import ImagingPage
+    from argos.ui.panels.stellarium_card import StellariumCard
+    from argos.ui.shell import Shell
+    from argos.ui.widgets.camera_dock import CameraDock, CaptureParams
+    from argos.ui.widgets.filterwheel_dock import FilterWheelDock
+    from argos.ui.widgets.histogram_dock import HistogramDock
+    from argos.ui.widgets.mount_dock import MountDock
 
     shell = Shell(Config({}))
     try:
@@ -101,7 +101,7 @@ def test_shell_three_mode_walkthrough() -> None:
         import numpy as np
         from astropy.io import fits
 
-        from seercontrol.ui.analysis_window import AnalysisWindow
+        from argos.ui.analysis_window import AnalysisWindow
 
         with tempfile.TemporaryDirectory() as d:
             yy, xx = np.mgrid[0:96, 0:96]
@@ -118,7 +118,7 @@ def test_shell_three_mode_walkthrough() -> None:
                 assert awin._selected_green is not None
 
                 # §6 astrometry: a synthetic WCS drives the grid + per-star RA/Dec.
-                from seercontrol.core.imaging.platesolve import frame_wcs, wcs_grid
+                from argos.core.imaging.platesolve import frame_wcs, wcs_grid
 
                 fields = {
                     "CRVAL1": "83.6",
@@ -134,7 +134,7 @@ def test_shell_three_mode_walkthrough() -> None:
                 assert awin._wcs is not None
                 assert wcs_grid(awin._wcs, awin._green_shape).lines  # grid crosses frame
                 # Apply the overlay the way a real ASTAP solve (_on_solved) does.
-                from seercontrol.core.imaging.astrometry_session import overlay_for
+                from argos.core.imaging.astrometry_session import overlay_for
 
                 awin._viewer.set_astrometry_overlay(
                     overlay_for(awin._wcs, awin._green_shape, awin._cfg),
@@ -152,7 +152,7 @@ def test_shell_three_mode_walkthrough() -> None:
 
                 # Astrometry settings popup loads from + writes to the (shared) config.
                 # (Standalone widget — exercised here with the viewer as a parent.)
-                from seercontrol.ui.widgets.astrometry_settings import (
+                from argos.ui.widgets.astrometry_settings import (
                     AstrometrySettingsDialog,
                 )
 
@@ -186,8 +186,8 @@ def test_shell_three_mode_walkthrough() -> None:
 
             # §6 catalog moved to the Photometry Setup window: VSX variables are
             # projected onto the solved frame + hit-tested for clicks there.
-            from seercontrol.core.catalog import VariableStar
-            from seercontrol.ui.panels.photometry_setup_window import (
+            from argos.core.catalog import VariableStar
+            from argos.ui.panels.photometry_setup_window import (
                 PhotometrySetupWindow,
             )
 
@@ -224,8 +224,8 @@ def test_shell_three_mode_walkthrough() -> None:
                 psw.deleteLater()
 
         # §6 live-frame astrometry overlay path (controller solved → grid on viewer).
-        from seercontrol.core.imaging.astrometry_session import overlay_for
-        from seercontrol.core.imaging.platesolve import frame_wcs as _frame_wcs
+        from argos.core.imaging.astrometry_session import overlay_for
+        from argos.core.imaging.platesolve import frame_wcs as _frame_wcs
 
         page._green_shape = (48, 48)
         page._viewer.display(np.zeros((48, 48), np.uint16))

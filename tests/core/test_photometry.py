@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from seercontrol.core.catalog import (
+from argos.core.catalog import (
     Band,
     ComparisonStar,
     VariableStar,

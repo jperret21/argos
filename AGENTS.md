@@ -1,4 +1,4 @@
-# Notes for AI agents working on SeerControl
+# Notes for AI agents working on Argos
 
 Read this before you change code or run tests. It captures the few things that
 trip agents up here.
@@ -39,7 +39,7 @@ fine.
 ## Conventions
 
 - No emoji in UI or code; use Feather SVG icons.
-- `black` (line length 100) + `ruff`: `uv run black seercontrol/ tests/` /
-  `uv run ruff check seercontrol/ tests/`.
+- `black` (line length 100) + `ruff`: `uv run black argos/ tests/` /
+  `uv run ruff check argos/ tests/`.
 - See `docs/CONTRIBUTING.md` for the full workflow and `docs/ARCHITECTURE.md`
   for layout.

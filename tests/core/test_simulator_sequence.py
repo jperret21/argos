@@ -22,12 +22,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from astropy.io import fits  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
-from seercontrol.core.alpaca.camera import Camera  # noqa: E402
-from seercontrol.core.alpaca.filterwheel import FilterWheel  # noqa: E402
-from seercontrol.core.imaging.fits_writer import FrameContext  # noqa: E402
-from seercontrol.core.imaging.sequencer import SequencePlan, SequenceStep  # noqa: E402
-from seercontrol.core.imaging.session_log import SESSION_FILENAME  # noqa: E402
-from seercontrol.workers.sequence_worker import SequenceWorker  # noqa: E402
+from argos.core.alpaca.camera import Camera  # noqa: E402
+from argos.core.alpaca.filterwheel import FilterWheel  # noqa: E402
+from argos.core.imaging.fits_writer import FrameContext  # noqa: E402
+from argos.core.imaging.sequencer import SequencePlan, SequenceStep  # noqa: E402
+from argos.core.imaging.session_log import SESSION_FILENAME  # noqa: E402
+from argos.workers.sequence_worker import SequenceWorker  # noqa: E402
 from tests.conftest import SIMULATOR_HOST, SIMULATOR_PORT, simulator_required  # noqa: E402
 
 
@@ -35,7 +35,7 @@ def _context_provider(object_name: str, filter_name: str) -> FrameContext:
     return FrameContext(
         object_name=object_name,
         filter_name=filter_name,
-        software="SeerControl test",
+        software="Argos test",
     )
 
 

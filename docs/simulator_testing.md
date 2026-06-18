@@ -1,6 +1,6 @@
-# Testing SeerControl against the ASCOM Alpaca Simulator
+# Testing Argos against the ASCOM Alpaca Simulator
 
-SeerControl talks to the Seestar over **ASCOM Alpaca**. The same protocol is
+Argos talks to the Seestar over **ASCOM Alpaca**. The same protocol is
 spoken by the official **ASCOM Alpaca Simulators** (OmniSim), so you can develop
 and test the whole app — connect, expose, preview, focus, jog, sequence —
 **without the telescope plugged in**.
@@ -21,7 +21,7 @@ This doc covers:
 
 OmniSim exposes a full set of Alpaca devices on one HTTP port (default
 **`32323`**): **Camera**, **Telescope**, **Focuser**, **FilterWheel**, and more.
-SeerControl connects to all of them exactly as it would to a real Seestar.
+Argos connects to all of them exactly as it would to a real Seestar.
 
 | You can test… | How the sim behaves |
 |---|---|
@@ -94,14 +94,14 @@ curl -s http://localhost:32323/api/v1/telescope/0/connected
 
 The browser UI at <http://localhost:32323> lets you inspect device state and
 change the port (**Server settings → Server Port**) if `32323` is taken. Keep it
-at `32323` — that's the value SeerControl and the tests default to
+at `32323` — that's the value Argos and the tests default to
 (`SIMULATOR_PORT` in `tests/conftest.py`).
 
 ---
 
 ## 4. Manual app test against the sim
 
-With the simulator running, launch SeerControl:
+With the simulator running, launch Argos:
 
 ```bash
 cd ~/Documents/perso/dev/seerstar
@@ -158,12 +158,12 @@ and [`test_session_log.py`](../tests/core/test_session_log.py) (`session.json`).
 ## 6. Known sim quirks (expected, not bugs)
 
 The OmniSim camera is generic, so a couple of things differ from a real Seestar.
-SeerControl tolerates both on purpose:
+Argos tolerates both on purpose:
 
 - **Gain not implemented** → log line `Camera does not implement Gain —
   skipping`. The sim has no Gain property; the real Seestar does and is
   unaffected. (`set_gain`/`get_gain` in
-  [`core/alpaca/camera.py`](../seercontrol/core/alpaca/camera.py) swallow the
+  [`core/alpaca/camera.py`](../argos/core/alpaca/camera.py) swallow the
   `NotImplementedException`.)
 - **JSON instead of ImageBytes** → log line `ImageBytes unavailable/mismatched —
   using JSON imagearray`. The sim's binary buffer doesn't match its reported

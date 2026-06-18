@@ -1,4 +1,4 @@
-# SeerControl — Project Status
+# Argos — Project Status
 
 > Early development. Not ready for testing.
 > Last updated: April 2025

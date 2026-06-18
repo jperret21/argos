@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from seercontrol.core.imaging.astrometry_session import (
+from argos.core.imaging.astrometry_session import (
     build_solve_settings,
     field_geometry,
     full_res_scale,
@@ -10,7 +10,7 @@ from seercontrol.core.imaging.astrometry_session import (
     project_points,
     wcs_from_result,
 )
-from seercontrol.core.imaging.platesolve import SolveResult, frame_wcs
+from argos.core.imaging.platesolve import SolveResult, frame_wcs
 
 # A clean aligned green-plane solution (mirror of tests/core/test_platesolve.py).
 _SCALE_DEG = 7.48 / 3600.0

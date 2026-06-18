@@ -12,7 +12,7 @@ import socket
 
 import pytest
 
-from seercontrol.core.stellarium.protocol import (
+from argos.core.stellarium.protocol import (
     _GOTO_SIZE,
     _GOTO_STRUCT,
     _HEADER_STRUCT,
@@ -20,7 +20,7 @@ from seercontrol.core.stellarium.protocol import (
     _POS_STRUCT,
     MSG_TYPE_POSITION,
 )
-from seercontrol.core.stellarium.server import StellariumServer
+from argos.core.stellarium.server import StellariumServer
 
 
 def _free_port() -> int:

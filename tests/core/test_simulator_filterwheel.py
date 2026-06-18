@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 
-from seercontrol.core.alpaca.filterwheel import FilterWheel
+from argos.core.alpaca.filterwheel import FilterWheel
 from tests.conftest import SIMULATOR_HOST, SIMULATOR_PORT, simulator_required
 
 

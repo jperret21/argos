@@ -1,4 +1,4 @@
-# SeerControl — Documentation Guide
+# Argos — Documentation Guide
 
 This file is the working plan and convention for documenting the codebase.
 It exists so that any contributor (human or AI) writing documentation produces

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from seercontrol.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
-from seercontrol.core.photometry.session import measure_targets
+from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+from argos.core.photometry.session import measure_targets
 
 
 class _FakeWCS:

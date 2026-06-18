@@ -12,7 +12,7 @@ import time
 import pytest
 from PyQt6.QtWidgets import QApplication
 
-from seercontrol.workers.astrometry_controller import AstrometryController
+from argos.workers.astrometry_controller import AstrometryController
 
 
 @pytest.fixture(scope="module")

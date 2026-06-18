@@ -1,4 +1,4 @@
-# SeerControl
+# Argos
 
 **Desktop control software for the ZWO Seestar S30 Pro.**
 
@@ -45,7 +45,7 @@ see [simulator_testing.md](docs/simulator_testing.md).
 
 ## Project Goals
 
-SeerControl aims to provide a **desktop-grade control interface** for the Seestar S30 Pro,
+Argos aims to provide a **desktop-grade control interface** for the Seestar S30 Pro,
 with an emphasis on:
 
 - **Precision** — fine-grained control over telescope and camera

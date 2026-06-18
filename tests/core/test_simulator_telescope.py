@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import time
 
-from seercontrol.core.alpaca.telescope import Telescope
+from argos.core.alpaca.telescope import Telescope
 from tests.conftest import SIMULATOR_HOST, SIMULATOR_PORT, simulator_required
 
 

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from seercontrol.core.imaging.debayer import VIEW_G, extract_plane
-from seercontrol.core.imaging.green import green_plane, green_shape
+from argos.core.imaging.debayer import VIEW_G, extract_plane
+from argos.core.imaging.green import green_plane, green_shape
 
 
 def test_green_shape_is_half() -> None:

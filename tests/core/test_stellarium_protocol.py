@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import pytest
 
-from seercontrol.core.stellarium.protocol import (
+from argos.core.stellarium.protocol import (
     _GOTO_SIZE,
     _GOTO_STRUCT,
     _HEADER_STRUCT,

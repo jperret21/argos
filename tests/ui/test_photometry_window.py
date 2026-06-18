@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from PyQt6.QtWidgets import QApplication
 
-from seercontrol.ui.panels.photometry_window import PhotometryWindow
+from argos.ui.panels.photometry_window import PhotometryWindow
 
 
 @pytest.fixture(scope="module")

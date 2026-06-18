@@ -109,8 +109,8 @@ GET /api/v1/camera/0/imagearray
 ### Python shortcut (uses our wrapper)
 
 ```python
-from seercontrol.core.alpaca.telescope import Telescope
-from seercontrol.core.alpaca.camera import Camera
+from argos.core.alpaca.telescope import Telescope
+from argos.core.alpaca.camera import Camera
 
 scope = Telescope("192.168.0.18", 32323)
 scope.connect()                         # returns "Seestar S30 Pro_... Telescope"

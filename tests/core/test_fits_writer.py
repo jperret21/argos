@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from astropy.io import fits
 
-from seercontrol.core.imaging.fits_writer import FITSWriter, FrameContext
+from argos.core.imaging.fits_writer import FITSWriter, FrameContext
 
 # --------------------------------------------------------------------------- #
 # Helpers                                                                      #
@@ -70,11 +70,11 @@ def test_postprod_pipeline_can_extract_egain(tmp_path: Path) -> None:
 
 
 def test_software_identity_headers_present(tmp_path: Path) -> None:
-    ctx = FrameContext(software="SeerControl v1.2.3")
+    ctx = FrameContext(software="Argos v1.2.3")
     hdr = _write_frame(tmp_path, context=ctx)
-    assert hdr["SOFTWARE"] == "SeerControl v1.2.3"
-    assert hdr["SWCREATE"] == "SeerControl v1.2.3"
-    assert hdr["CREATOR"] == "SeerControl v1.2.3"
+    assert hdr["SOFTWARE"] == "Argos v1.2.3"
+    assert hdr["SWCREATE"] == "Argos v1.2.3"
+    assert hdr["CREATOR"] == "Argos v1.2.3"
 
 
 def test_astrometry_frame_headers(tmp_path: Path) -> None:

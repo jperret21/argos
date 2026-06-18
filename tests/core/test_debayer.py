@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from seercontrol.core.imaging import debayer as d
+from argos.core.imaging import debayer as d
 
 
 def _grbg(g1: int = 10, r: int = 20, b: int = 30, g2: int = 40) -> np.ndarray:

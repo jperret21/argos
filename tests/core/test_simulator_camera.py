@@ -12,16 +12,16 @@ import time
 
 import numpy as np
 
-from seercontrol.core.alpaca.camera import Camera
-from seercontrol.core.imaging.debayer import (
+from argos.core.alpaca.camera import Camera
+from argos.core.imaging.debayer import (
     VIEW_G,
     VIEW_INTERP,
     VIEW_RAW,
     VIEW_SUPERPIXEL,
     render_view,
 )
-from seercontrol.core.imaging.metrics import detect_stars, frame_metrics
-from seercontrol.core.imaging.stretch import apply_stretch, auto_stf
+from argos.core.imaging.metrics import detect_stars, frame_metrics
+from argos.core.imaging.stretch import apply_stretch, auto_stf
 from tests.conftest import SIMULATOR_HOST, SIMULATOR_PORT, simulator_required
 
 

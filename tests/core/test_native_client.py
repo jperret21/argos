@@ -16,7 +16,7 @@ import socket
 
 import pytest
 
-from seercontrol.core.seestar.native_client import (
+from argos.core.seestar.native_client import (
     ANGLE_EAST,
     ANGLE_NORTH,
     ANGLE_SOUTH,

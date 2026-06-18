@@ -1,5 +1,5 @@
 [project]
-name = "seercontrol"
+name = "argos"
 version = "0.2.1"
 description = "Astrophotography control for ZWO Seestar S30 Pro via ASCOM Alpaca"
 requires-python = ">=3.11,<3.12"

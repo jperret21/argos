@@ -51,7 +51,7 @@ def main() -> None:
     host = sys.argv[1] if len(sys.argv) > 1 else "localhost"
     port = int(sys.argv[2]) if len(sys.argv) > 2 else 32323
 
-    print(f"\nSeerControl — Alpaca validation  ({host}:{port})")
+    print(f"\nArgos — Alpaca validation  ({host}:{port})")
 
     # ── 0. Reachability ──────────────────────────────────────────────────
     section("0. Reachability")
@@ -70,7 +70,7 @@ def main() -> None:
 
     # ── 1. Telescope ──────────────────────────────────────────────────────
     section("1. Telescope (Alpaca)")
-    from seercontrol.core.alpaca.telescope import Telescope
+    from argos.core.alpaca.telescope import Telescope
     scope = Telescope(host, port)
 
     name = check("connect", scope.connect)
@@ -94,7 +94,7 @@ def main() -> None:
 
     # ── 2. Camera ─────────────────────────────────────────────────────────
     section("2. Camera (Alpaca)")
-    from seercontrol.core.alpaca.camera import Camera, BAYER_PATTERN, FOCAL_LENGTH
+    from argos.core.alpaca.camera import Camera, BAYER_PATTERN, FOCAL_LENGTH
 
     print(f"  INFO Constants: BAYER_PATTERN={BAYER_PATTERN}  FOCAL_LENGTH={FOCAL_LENGTH}mm")
     assert BAYER_PATTERN == "GRBG", f"BAYER_PATTERN wrong: {BAYER_PATTERN} (expected GRBG)"
@@ -143,7 +143,7 @@ def main() -> None:
     section("3. FITS writer constants")
     import numpy as np
     from datetime import datetime, timezone
-    from seercontrol.core.imaging.fits_writer import FITSWriter
+    from argos.core.imaging.fits_writer import FITSWriter
     import tempfile, pathlib
 
     dummy = np.zeros((100, 100), dtype=np.uint16)

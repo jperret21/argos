@@ -15,11 +15,11 @@ import time
 
 import numpy as np
 
-from seercontrol.core.alpaca.camera import Camera
-from seercontrol.core.alpaca.telescope import Telescope
-from seercontrol.core.imaging.debayer import VIEW_SUPERPIXEL, render_view
-from seercontrol.core.imaging.metrics import frame_metrics
-from seercontrol.core.imaging.stretch import apply_stretch, auto_stf
+from argos.core.alpaca.camera import Camera
+from argos.core.alpaca.telescope import Telescope
+from argos.core.imaging.debayer import VIEW_SUPERPIXEL, render_view
+from argos.core.imaging.metrics import frame_metrics
+from argos.core.imaging.stretch import apply_stretch, auto_stf
 from tests.conftest import SIMULATOR_HOST, SIMULATOR_PORT, simulator_required
 
 

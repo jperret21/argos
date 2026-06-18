@@ -10,14 +10,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 MODULES = [
-    "seercontrol",
-    "seercontrol.core.alpaca.client",
-    "seercontrol.core.alpaca.telescope",
-    "seercontrol.core.alpaca.camera",
-    "seercontrol.core.alpaca.discovery",
-    "seercontrol.core.seestar.native_client",
-    "seercontrol.core.imaging.fits_writer",
-    "seercontrol.core.config",
+    "argos",
+    "argos.core.alpaca.client",
+    "argos.core.alpaca.telescope",
+    "argos.core.alpaca.camera",
+    "argos.core.alpaca.discovery",
+    "argos.core.seestar.native_client",
+    "argos.core.imaging.fits_writer",
+    "argos.core.config",
 ]
 
 ok = True

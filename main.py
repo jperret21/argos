@@ -1,4 +1,4 @@
-"""SeerControl — entry point.
+"""Argos — entry point.
 
 Usage:
     python main.py
@@ -52,8 +52,8 @@ _fix_qt_plugin_path()
 # must be set before Qt is imported, and the config/theme stay grouped.
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
-from seercontrol.core.config import Config  # noqa: E402
-from seercontrol.ui.theme import get_stylesheet  # noqa: E402
+from argos.core.config import Config  # noqa: E402
+from argos.ui.theme import get_stylesheet  # noqa: E402
 
 
 def _setup_logging(level: str) -> None:
@@ -66,7 +66,7 @@ def _setup_logging(level: str) -> None:
 
 def _build_window(config: Config):
     """Return the top-level window (the 3-mode Shell)."""
-    from seercontrol.ui.shell import Shell
+    from argos.ui.shell import Shell
 
     return Shell(config)
 
@@ -76,11 +76,11 @@ def main() -> None:
     _setup_logging(config.get("ui.log_level", "INFO"))
 
     logger = logging.getLogger(__name__)
-    logger.info("SeerControl starting")
+    logger.info("Argos starting")
 
     app = QApplication(sys.argv)
-    app.setApplicationName("SeerControl")
-    app.setOrganizationName("SeerControl")
+    app.setApplicationName("Argos")
+    app.setOrganizationName("Argos")
     app.setStyleSheet(get_stylesheet())
 
     window = _build_window(config)

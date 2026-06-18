@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from seercontrol.core.imaging.sequencer import (
+from argos.core.imaging.sequencer import (
     SequencePlan,
     SequenceStep,
     expand_plan,

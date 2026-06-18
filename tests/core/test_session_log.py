@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from seercontrol.core.imaging.session_log import (
+from argos.core.imaging.session_log import (
     SESSION_SCHEMA,
     FrameRecord,
     SessionLog,
@@ -31,7 +31,7 @@ def _record(idx: int, image_type: str = "Light Frame", **kw) -> FrameRecord:
 
 
 def test_to_dict_structure() -> None:
-    log = SessionLog(object_name="M42", software="SeerControl", started_utc="2026-06-14T22:00:00")
+    log = SessionLog(object_name="M42", software="Argos", started_utc="2026-06-14T22:00:00")
     log.add(_record(1))
     log.add(_record(2))
     doc = log.to_dict()

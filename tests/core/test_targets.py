@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from seercontrol.core.catalog.targets import (
+from argos.core.catalog.targets import (
     ROLE_COMPARISON,
     ROLE_TARGET,
     TargetSet,

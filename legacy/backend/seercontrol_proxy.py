@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# seercontrol_proxy.py — Proxy UDP Alpaca pour SeerControl
-# Usage : pip install flask flask-cors && python3 seercontrol_proxy.py
+# argos_proxy.py — Proxy UDP Alpaca pour SeerControl
+# Usage : pip install flask flask-cors && python3 argos_proxy.py
 
 import socket
 import json
