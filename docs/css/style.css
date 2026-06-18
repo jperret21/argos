@@ -124,6 +124,40 @@ h2 {
     100% { opacity: 0.25; transform: scale(1.5); }
 }
 
+/* ─── Isosurface field lines ─── */
+.hero-field {
+    position: absolute;
+    top: 50%; left: 50%;
+    width: min(800px, 95vw);
+    height: min(800px, 95vw);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    opacity: 0.07;
+}
+
+.hero-field svg {
+    width: 100%; height: 100%;
+    animation: field-spin 60s linear infinite;
+}
+
+@keyframes field-spin {
+    0%   { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.hero-field .iso {
+    fill: none;
+    stroke: var(--gold);
+    stroke-width: 0.5;
+}
+
+.hero-field .iso-thin {
+    fill: none;
+    stroke: var(--gold);
+    stroke-width: 0.25;
+    opacity: 0.5;
+}
+
 /* ─── Hero content ─── */
 .hero-content {
     position: relative; z-index: 1;
