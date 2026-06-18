@@ -110,20 +110,6 @@ h2 {
     pointer-events: none;
 }
 
-/* ─── Stars subtiles ─── */
-.hero-stars { position: absolute; inset: 0; pointer-events: none; }
-.hero-stars span {
-    position: absolute;
-    width: 1.5px; height: 1.5px;
-    background: var(--gold);
-    border-radius: 50%;
-    animation: twinkle var(--d, 5s) ease-in-out infinite alternate;
-}
-@keyframes twinkle {
-    0%   { opacity: 0.05; transform: scale(1); }
-    100% { opacity: 0.25; transform: scale(1.5); }
-}
-
 /* ─── Isosurface field lines ─── */
 .hero-field {
     position: absolute;
