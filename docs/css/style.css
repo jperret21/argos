@@ -809,3 +809,205 @@ h2 {
 ::-webkit-scrollbar-thumb:hover {
     background: var(--color-text-muted);
 }
+
+/* ═══════════════════════════════════════════════════
+   Additions — Argos redesign
+   ═══════════════════════════════════════════════════ */
+
+/* ─── Hero eyes ─── */
+.hero-eyes {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--color-primary-light);
+    opacity: 0.8;
+}
+
+.hero-eyes svg {
+    max-width: 120px;
+    height: auto;
+}
+
+.hero-word {
+    display: block;
+}
+
+/* ─── About grid ─── */
+.about-grid {
+    display: grid;
+    grid-template-columns: 1.5fr 1fr;
+    gap: 60px;
+    align-items: center;
+}
+
+.about-text h2 {
+    font-size: clamp(1.5rem, 3vw, 2rem);
+    margin-bottom: 20px;
+    line-height: 1.3;
+}
+
+.about-text p {
+    font-size: 0.95rem;
+    color: var(--color-text-muted);
+    line-height: 1.7;
+}
+
+.about-text p + p {
+    margin-top: 12px;
+}
+
+.about-metrics {
+    display: flex;
+    gap: 32px;
+    justify-content: center;
+}
+
+.metric {
+    text-align: center;
+}
+
+.metric-value {
+    display: block;
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: var(--color-primary-light);
+    line-height: 1;
+    margin-bottom: 4px;
+}
+
+.metric-label {
+    font-size: 0.78rem;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* ─── Status grid (cards) ─── */
+.status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 12px;
+    max-width: 860px;
+    margin: 0 auto;
+}
+
+.status-card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 16px 20px;
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    transition: border-color 0.2s;
+}
+
+.status-card:hover {
+    border-color: var(--color-primary);
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.status-working .status-dot {
+    background: var(--color-success);
+    box-shadow: 0 0 6px rgba(124, 179, 66, 0.4);
+}
+
+.status-soon .status-dot {
+    background: var(--color-warning);
+    box-shadow: 0 0 6px rgba(232, 168, 56, 0.4);
+}
+
+.status-planned .status-dot {
+    background: var(--color-text-muted);
+}
+
+.status-body strong {
+    display: block;
+    font-size: 0.88rem;
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+
+.status-body span {
+    font-size: 0.78rem;
+    color: var(--color-text-muted);
+}
+
+/* ─── Code block ─── */
+.code-block {
+    max-width: 600px;
+    margin: 0 auto 24px;
+    background: var(--color-bg-code);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.code-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 16px;
+    background: rgba(255,255,255,0.03);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.code-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+}
+
+.code-dot-red { background: #ff5f56; }
+.code-dot-yellow { background: #ffbd2e; }
+.code-dot-green { background: #27c93f; }
+
+.code-filename {
+    margin-left: auto;
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    color: var(--color-text-muted);
+    opacity: 0.6;
+}
+
+.code-block pre {
+    padding: 20px 24px;
+    overflow-x: auto;
+    font-size: 0.82rem;
+    line-height: 1.7;
+}
+
+.code-block code {
+    background: none;
+    padding: 0;
+    color: var(--color-accent-light);
+}
+
+.start-links {
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+/* ─── Responsive ─── */
+@media (max-width: 768px) {
+    .about-grid {
+        grid-template-columns: 1fr;
+        gap: 40px;
+        text-align: center;
+    }
+
+    .status-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .hero-eyes svg {
+        max-width: 80px;
+    }
+}
