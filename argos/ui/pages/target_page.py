@@ -147,11 +147,14 @@ class TargetScreen(QWidget):
         self._values["name"].setText(self._label)
         self._values["radec"].setText(f"{_fmt_ra(self._ra)}  {_fmt_dec(self._dec)}")
 
+        # Site coordinates live under `site.*` (written by Settings, read by the
+        # FITS writer + photometry setup) — not `observer.*`, which holds only the
+        # observer name + AAVSO code.
         geo = compute_target_geometry(
             datetime.now(timezone.utc),
-            self._config.get("observer.latitude"),
-            self._config.get("observer.longitude"),
-            self._config.get("observer.elevation"),
+            self._config.get("site.latitude"),
+            self._config.get("site.longitude"),
+            self._config.get("site.elevation"),
             self._ra,
             self._dec,
         )

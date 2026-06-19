@@ -196,6 +196,16 @@ def test_shell_three_mode_walkthrough() -> None:
         target._slew_btn.click()
         assert slews == [(5.5, 12.0)]
 
+        # Site coordinates (stored under site.*, as Settings writes them) must
+        # drive the observing summary. A circumpolar target (dec near +90 at a
+        # northern site) is always above the horizon, so this is time-independent.
+        shell._config.set("site.latitude", 45.0)
+        shell._config.set("site.longitude", 0.0)
+        shell._config.set("site.elevation", 0.0)
+        target.set_target(2.0, 85.0, "CIRCUMPOLAR")
+        assert target._values["altitude"].text().endswith("deg")  # numeric, not "—"
+        assert target._values["airmass"].text() not in ("—", "— (below horizon)")
+
         # Open FITS → a floating analysis window (the live viewer is untouched).
         import tempfile
 
