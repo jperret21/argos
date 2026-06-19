@@ -1,4 +1,4 @@
-"""Left navigation sidebar — switches between the 3 modes.
+"""Left navigation sidebar — switches between the workflow phases.
 
 Vertical toolbar pinned to the left of the Shell. Each entry is a crisp,
 vector line icon above a wrapped label; clicking it emits
@@ -20,7 +20,7 @@ import logging
 from PyQt6.QtCore import Qt, QByteArray, QRectF, pyqtSignal
 from PyQt6.QtGui import QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
-from PyQt6.QtWidgets import QLabel, QToolBar, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QLabel, QSizePolicy, QToolBar, QVBoxLayout, QWidget
 
 from argos.ui import theme
 
@@ -28,28 +28,51 @@ logger = logging.getLogger(__name__)
 
 
 # (mode_id, label, tooltip). The icon is drawn from ``mode_id`` (see _draw_icon).
+# Order = the chronology of a photometry night (docs/ui_design.md). Settings is
+# pushed to the bottom (it is a destination, not a phase).
 MODES: tuple[tuple[str, str, str], ...] = (
-    ("connection", "Connection", "Connect the Seestar devices and Stellarium"),
-    ("acquisition", "Acquisition", "Live preview, focus, capture and sequencing"),
-    ("configuration", "Configuration", "Theme, language, paths, observer, credits"),
+    ("connect", "Connect", "Connect the Seestar devices and Stellarium"),
+    ("target", "Target", "Point, plate-solve and centre the field"),
+    ("focus", "Focus", "Reach and lock best focus"),
+    ("photometry", "Photometry", "Pick target, comparison and check stars"),
+    ("capture", "Capture", "Run the sequence and monitor frame health"),
+    ("analyze", "Analyze", "Inspect the light curve and export AAVSO"),
+    ("settings", "Settings", "Observer, site, paths, appearance"),
 )
+
+#: Mode that sits at the bottom of the rail, after an expanding spacer.
+_FOOTER_MODE = "settings"
 
 _ICON_PX = 24  # logical icon size
 
-# Feather (MIT) icon bodies on a 24×24 viewBox: wifi=connect, camera=capture,
-# sliders=settings. Recoloured per state by injecting the stroke colour.
+# Feather (MIT) icon bodies on a 24×24 viewBox, recoloured per state by injecting
+# the stroke colour: wifi=connect, crosshair=target, disc=focus, star=photometry,
+# camera=capture, trending-up=analyze, sliders=settings.
 _ICON_PATHS: dict[str, str] = {
-    "connection": (
+    "connect": (
         '<path d="M5 12.55a11 11 0 0 1 14.08 0"/>'
         '<path d="M1.42 9a16 16 0 0 1 21.16 0"/>'
         '<path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>'
         '<line x1="12" y1="20" x2="12.01" y2="20"/>'
     ),
-    "acquisition": (
+    "target": (
+        '<circle cx="12" cy="12" r="10"/>'
+        '<line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/>'
+        '<line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/>'
+    ),
+    "focus": ('<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>'),
+    "photometry": (
+        '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 '
+        '12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>'
+    ),
+    "capture": (
         '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>'
         '<circle cx="12" cy="13" r="4"/>'
     ),
-    "configuration": (
+    "analyze": (
+        '<polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>' '<polyline points="17 6 23 6 23 12"/>'
+    ),
+    "settings": (
         '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>'
         '<line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>'
         '<line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>'
@@ -158,9 +181,9 @@ class _NavButton(QWidget):
 
 
 class Sidebar(QToolBar):
-    """Left navigation toolbar with 3 mutually-exclusive mode buttons."""
+    """Left navigation toolbar with the mutually-exclusive workflow phases."""
 
-    mode_changed = pyqtSignal(str)  # mode id ('connection', 'acquisition', ...)
+    mode_changed = pyqtSignal(str)  # mode id ('connect', 'target', 'capture', ...)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Modes", parent)
@@ -176,6 +199,12 @@ class Sidebar(QToolBar):
         self._current: str | None = None
 
         for mode_id, label, tooltip in MODES:
+            if mode_id == _FOOTER_MODE:
+                # Push Settings to the bottom of the rail, set off by a divider.
+                spacer = QWidget()
+                spacer.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+                self.addWidget(spacer)
+                self.addSeparator()
             btn = _NavButton(mode_id, label, tooltip, self)
             btn.clicked.connect(lambda m=mode_id: self.select(m))
             self.addWidget(btn)

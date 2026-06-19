@@ -346,6 +346,18 @@ class ImagingPage(QWidget):
         row.addStretch()
         return bar
 
+    def select_rail_tab(self, label: str) -> None:
+        """Select the right-rail control tab whose text matches ``label``.
+
+        Used by the workflow-rail phase screens (Target/Focus/Photometry) to
+        deep-link into the controls that still live on the shared Capture page
+        until the per-phase split lands.
+        """
+        for i in range(self._rail.count()):
+            if self._rail.tabText(i) == label:
+                self._rail.setCurrentIndex(i)
+                return
+
     # ------------------------------------------------------------------
     # Signal wiring
     # ------------------------------------------------------------------

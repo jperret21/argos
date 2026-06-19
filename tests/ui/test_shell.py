@@ -32,17 +32,25 @@ def test_shell_three_mode_walkthrough() -> None:
 
     shell = Shell(Config({}))
     try:
-        # ── Shell skeleton: 3 modes, default = connection ────────────────
-        assert set(shell._pages.keys()) == {"connection", "acquisition", "configuration"}
-        assert shell._stack.currentIndex() == shell._page_indices["connection"]
+        # ── Shell skeleton: 7 workflow phases, default = connect ──────────
+        assert set(shell._pages.keys()) == {
+            "connect",
+            "target",
+            "focus",
+            "photometry",
+            "capture",
+            "analyze",
+            "settings",
+        }
+        assert shell._stack.currentIndex() == shell._page_indices["connect"]
 
-        for mode in ("acquisition", "configuration", "connection"):
+        for mode in ("target", "focus", "photometry", "capture", "analyze", "settings", "connect"):
             shell.sidebar.select(mode)
             assert shell._stack.currentIndex() == shell._page_indices[mode], mode
 
-        assert isinstance(shell._pages["connection"], ConnectionPage)
-        assert isinstance(shell._pages["acquisition"], ImagingPage)
-        assert isinstance(shell._pages["configuration"], ConfigurationPage)
+        assert isinstance(shell._pages["connect"], ConnectionPage)
+        assert isinstance(shell._pages["capture"], ImagingPage)
+        assert isinstance(shell._pages["settings"], ConfigurationPage)
 
         # ── Status bar device states ─────────────────────────────────────
         shell.status.set_device_state("mount", "connected")
@@ -50,13 +58,13 @@ def test_shell_three_mode_walkthrough() -> None:
         assert shell.status.device_state("mount") == "connected"
         assert shell.status.device_state("camera") == "busy"
 
-        # Clicking a disconnected badge jumps to Connection.
-        shell.sidebar.select("acquisition")
+        # Clicking a disconnected badge jumps to Connect.
+        shell.sidebar.select("capture")
         shell._on_badge_clicked("focuser")  # still disconnected
-        assert shell._stack.currentIndex() == shell._page_indices["connection"]
+        assert shell._stack.currentIndex() == shell._page_indices["connect"]
 
-        # ── Acquisition page docks ───────────────────────────────────────
-        page = shell._pages["acquisition"]
+        # ── Capture page docks ───────────────────────────────────────────
+        page = shell._pages["capture"]
         assert isinstance(page._camera_dock, CameraDock)
         assert isinstance(page._mount_dock, MountDock)
         assert isinstance(page._histogram_dock, HistogramDock)
@@ -94,6 +102,15 @@ def test_shell_three_mode_walkthrough() -> None:
         page._filterwheel_dock._combo.setCurrentIndex(2)  # LP
         page._filterwheel_dock._move_btn.click()
         assert moves == [2]
+
+        # Workflow scaffolds: the right types, and the deep-link into Capture.
+        from argos.ui.pages.phase_scaffold import AnalyzeLauncher, PhaseScaffold
+
+        assert isinstance(shell._pages["target"], PhaseScaffold)
+        assert isinstance(shell._pages["analyze"], AnalyzeLauncher)
+        shell._pages["focus"].open_controls.emit()
+        assert shell._stack.currentIndex() == shell._page_indices["capture"]
+        assert page._rail.tabText(page._rail.currentIndex()) == "Focus"
 
         # Open FITS → a floating analysis window (the live viewer is untouched).
         import tempfile
@@ -256,7 +273,7 @@ def test_shell_three_mode_walkthrough() -> None:
         assert shell.status.device_state("camera") == "busy"
 
         # ── Connection page: Stellarium card + connect intents ───────────
-        conn = shell._pages["connection"]
+        conn = shell._pages["connect"]
         assert isinstance(conn.stellarium_card, StellariumCard)
 
         intents: list[tuple[str, str, int]] = []
