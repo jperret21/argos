@@ -260,18 +260,22 @@ class ImagingPage(QWidget):
         self._histogram_dock = HistogramDock()
         self._log_panel = LogPanel()
 
-        # Right rail = workflow-staged tabs (Capture → Mount → Focus). Tabbing
-        # gives every control group the full rail height instead of cramming
-        # them into one long scroll. Capture is the home base of the session.
+        # Right rail grouped by the one-axis rule (docs/ui_design.md):
+        #   Session   — what you drive a run with: capture params + the sequence
+        #   Equipment — the devices (transitional: these migrate to the Target /
+        #               Focus phases once the session layer is extracted)
+        #   Display   — image appearance (histogram / stretch)
+        # This replaces the previous six flat tabs (Capture/Sequence/Mount/Focus/
+        # Filter/Display) that mixed activity, equipment and appearance in one row.
         self._rail = QTabWidget()
         self._rail.setMinimumWidth(360)
         self._rail.setMaximumWidth(460)
-        self._rail.addTab(self._tab_page(self._camera_dock), "Capture")
-        self._rail.addTab(self._tab_page(self._sequence_panel), "Sequence")
-        self._rail.addTab(self._tab_page(self._mount_dock), "Mount")
-        self._rail.addTab(self._tab_page(self._focuser_dock), "Focus")
-        self._rail.addTab(self._tab_page(self._filterwheel_dock), "Filter")
-        self._rail.addTab(self._tab_page(self._histogram_dock), "Display")
+        self._rail.addTab(self._tab_group(self._camera_dock, self._sequence_panel), "Session")
+        self._rail.addTab(
+            self._tab_group(self._mount_dock, self._focuser_dock, self._filterwheel_dock),
+            "Equipment",
+        )
+        self._rail.addTab(self._tab_group(self._histogram_dock), "Display")
 
         # Image column: the viewer (hero) + a thin always-visible stats strip
         # (HFD / Stars / Sky / Min / Max / Mean) — what an astrophotographer
@@ -308,11 +312,11 @@ class ImagingPage(QWidget):
         root.addWidget(main, 1)
 
     @staticmethod
-    def _tab_page(widget: QWidget) -> QScrollArea:
-        """Wrap a control dock in a scrollable, top-aligned tab page.
+    def _tab_group(*widgets: QWidget) -> QScrollArea:
+        """Wrap one or more control docks in a scrollable, top-aligned tab page.
 
-        The dock keeps its natural (Fixed) height and scrolls if the rail is
-        shorter than the content, instead of being vertically stretched.
+        Each dock keeps its natural (Fixed) height and the page scrolls if the
+        rail is shorter than the stacked content, instead of stretching them.
         """
         inner = QWidget()
         layout = QVBoxLayout(inner)
@@ -320,7 +324,8 @@ class ImagingPage(QWidget):
             design.SPACING_MD, design.SPACING_MD, design.SPACING_MD, design.SPACING_MD
         )
         layout.setSpacing(design.SPACING_MD)
-        layout.addWidget(widget)
+        for widget in widgets:
+            layout.addWidget(widget)
         layout.addStretch()
 
         scroll = QScrollArea()

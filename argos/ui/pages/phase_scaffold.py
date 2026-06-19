@@ -180,7 +180,7 @@ def target_scaffold() -> PhaseScaffold:
             "Altitude / airmass / transit / Moon-separation summary",
             "Live field with RA/Dec grid + star overlay",
         ],
-        action_label="Open mount controls in Capture",
+        action_label="Open equipment controls in Capture",
     )
 
 
@@ -208,7 +208,7 @@ def focus_scaffold() -> PhaseScaffold:
             "Live HFD on detected stars",
             "Focus-locked confirmation",
         ],
-        action_label="Open focus controls in Capture",
+        action_label="Open equipment controls in Capture",
     )
 
 
@@ -237,5 +237,5 @@ def photometry_scaffold() -> PhaseScaffold:
             "Aperture / annulus settings (k x FWHM)",
             "Opens the Photometry Setup companion window",
         ],
-        action_label="Open capture controls",
+        action_label="Open session controls in Capture",
     )

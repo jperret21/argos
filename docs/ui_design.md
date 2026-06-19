@@ -726,10 +726,14 @@ marked [SCI] are science-correctness, not just convenience.
 - **Horizon / altitude / airmass limits** — warn or skip when a target is too low.
 
 **Science correctness [SCI]**
-- **Field-rotation tracking on alt-az** — the Seestar is alt-az, so the field
-  rotates during a session; stars move across the frame and apertures must follow
-  (we have re-centroiding) but long runs may need a rotation warning or a session
-  length cap. Must be surfaced, not silent.
+- **Mount mode: alt-az vs equatorial [SCI]** — the Seestar runs **either** alt-az
+  **or** an equatorial mode, and the UI must take both into account. In alt-az the
+  field rotates during a session (stars move across the frame; apertures must
+  follow via re-centroiding, and long runs may need a rotation warning or a
+  session-length cap). In EQ mode field rotation is eliminated. The app must
+  therefore *know the active mount mode*, surface it (Target screen + status bar),
+  and gate field-rotation handling / de-rotation accordingly. Planned; not yet
+  scheduled.
 - **AAVSO observer code + transform coefficients (Tg, etc.)** in Settings — needed
   for valid AAVSO Extended Format submission (see capture_panel.md TG band).
 - **Comp-star saturation / linearity guard** — flag comps near saturation (Max

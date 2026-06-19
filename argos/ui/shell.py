@@ -131,9 +131,9 @@ class Shell(QMainWindow):
         }
 
         # Scaffolds deep-link to the live controls hosted on the Capture page.
-        self._target.open_controls.connect(lambda: self._open_capture_tab("Mount"))
-        self._focus.open_controls.connect(lambda: self._open_capture_tab("Focus"))
-        self._photometry.open_controls.connect(lambda: self._open_capture_tab("Capture"))
+        self._target.open_controls.connect(lambda: self._open_capture_tab("Equipment"))
+        self._focus.open_controls.connect(lambda: self._open_capture_tab("Equipment"))
+        self._photometry.open_controls.connect(lambda: self._open_capture_tab("Session"))
 
         # Track connection state to know when to pulse the next-step hint.
         self._conn_state: dict[str, str] = dict.fromkeys(

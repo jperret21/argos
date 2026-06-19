@@ -110,7 +110,7 @@ def test_shell_three_mode_walkthrough() -> None:
         assert isinstance(shell._pages["analyze"], AnalyzeLauncher)
         shell._pages["focus"].open_controls.emit()
         assert shell._stack.currentIndex() == shell._page_indices["capture"]
-        assert page._rail.tabText(page._rail.currentIndex()) == "Focus"
+        assert page._rail.tabText(page._rail.currentIndex()) == "Equipment"
 
         # Open FITS → a floating analysis window (the live viewer is untouched).
         import tempfile
