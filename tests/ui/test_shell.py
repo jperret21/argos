@@ -103,14 +103,15 @@ def test_shell_three_mode_walkthrough() -> None:
         page._filterwheel_dock._move_btn.click()
         assert moves == [2]
 
-        # Workflow phases: the right types, and the scaffold deep-link into Capture.
+        # Workflow phases: the right types, and the deep-links into Capture.
+        from argos.ui.pages.analyze_page import AnalyzeLauncher
         from argos.ui.pages.focus_page import FocusScreen
-        from argos.ui.pages.phase_scaffold import AnalyzeLauncher, PhaseScaffold
+        from argos.ui.pages.photometry_page import PhotometryScreen
         from argos.ui.pages.target_page import TargetScreen
 
         assert isinstance(shell._pages["target"], TargetScreen)
         assert isinstance(shell._pages["focus"], FocusScreen)
-        assert isinstance(shell._pages["photometry"], PhaseScaffold)
+        assert isinstance(shell._pages["photometry"], PhotometryScreen)
         assert isinstance(shell._pages["analyze"], AnalyzeLauncher)
         shell._pages["focus"].open_controls.emit()
         assert shell._stack.currentIndex() == shell._page_indices["capture"]
@@ -139,6 +140,27 @@ def test_shell_three_mode_walkthrough() -> None:
         focus.nudge_requested.connect(nudges.append)
         focus._on_nudge(-1)
         assert nudges == [-50]
+
+        # Photometry screen: a target set renders the selection summary + a
+        # readiness verdict, and the Setup button reaches the Capture companion.
+        from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+
+        photom = shell._pages["photometry"]
+        setups: list[bool] = []
+        photom.setup_requested.disconnect(page.open_photometry_setup)  # isolate
+        photom.setup_requested.connect(lambda: setups.append(True))
+        photom._setup_btn.click()
+        assert setups == [True]
+        photom.set_target_set(None)
+        assert photom._values["status"].text() == "No selection yet"
+        tset = TargetSet(object_name="NU Ori")
+        tset.set_role(TargetStar(role=ROLE_TARGET, ra_deg=83.6, dec_deg=22.0, name="NU Ori"))
+        tset.set_role(TargetStar(role=ROLE_COMPARISON, ra_deg=83.7, dec_deg=22.1, auid="C1"))
+        photom.set_target_set(tset)
+        assert photom._values["object"].text() == "NU Ori"
+        assert photom._values["target"].text() == "NU Ori"
+        assert photom._values["comparison"].text() == "1"
+        assert "check star" in photom._values["status"].text()  # ready, but warns no K
 
         # Target screen: set_target updates the summary and arms the slew button.
         target = shell._pages["target"]

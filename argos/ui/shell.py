@@ -13,9 +13,11 @@ top, and a single workspace area that swaps content per phase.
     Settings    — observer, site, paths, appearance
 
 The Capture page (``ImagingPage``) is the live engine: it owns the device
-handles and workers. Target / Focus / Photometry are design scaffolds that
-deep-link into the Capture controls until the per-phase split lands; Analyze
-launches its own companion window. The Connect page emits connect/disconnect
+handles and workers. Target / Focus / Photometry are real phase screens, each
+backed by a pure tested core helper; for the live device work they still drive
+the Capture engine (slew, autofocus sweep) or open a companion window
+(Photometry Setup) until the per-phase device split lands. Analyze launches its
+own companion window. The Connect page emits connect/disconnect
 intents that the Shell routes to the Capture page; device-state updates flow
 back to the status bar and the Connect page. Targeting is driven entirely by
 Stellarium (select an object, Ctrl+1) over the TCP telescope-control protocol —
@@ -41,11 +43,9 @@ from argos.ui import theme
 from argos.ui.pages.configuration_page import ConfigurationPage
 from argos.ui.pages.connection_page import ConnectionPage
 from argos.ui.pages.imaging_page import ImagingPage
+from argos.ui.pages.analyze_page import AnalyzeLauncher
 from argos.ui.pages.focus_page import FocusScreen
-from argos.ui.pages.phase_scaffold import (
-    AnalyzeLauncher,
-    photometry_scaffold,
-)
+from argos.ui.pages.photometry_page import PhotometryScreen
 from argos.ui.pages.target_page import TargetScreen
 from argos.ui.sidebar import Sidebar
 from argos.ui.statusbar import TopStatusBar
@@ -111,7 +111,7 @@ class Shell(QMainWindow):
         self._configuration = ConfigurationPage(self._config)
         self._target = TargetScreen(self._config)
         self._focus = FocusScreen()
-        self._photometry = photometry_scaffold()
+        self._photometry = PhotometryScreen(self._config)
         self._analyze = AnalyzeLauncher()
 
         # Workflow-ordered pages (docs/ui_design.md). Connect / Capture / Settings
@@ -142,6 +142,7 @@ class Shell(QMainWindow):
         self._acquisition.autofocus_best.connect(self._focus.set_best)
         self._acquisition.autofocus_state.connect(self._focus.set_running)
         self._photometry.open_controls.connect(lambda: self._open_capture_tab("Session"))
+        self._photometry.setup_requested.connect(self._acquisition.open_photometry_setup)
 
         # Track connection state to know when to pulse the next-step hint.
         self._conn_state: dict[str, str] = dict.fromkeys(

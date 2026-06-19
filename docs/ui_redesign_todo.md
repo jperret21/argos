@@ -7,7 +7,7 @@
 > Missing UX features (science + robustness, full list): `ui_design.md` section 12.
 > Build-order + status: `ui_design.md` section 10.
 
-Last updated: 2026-06-19.
+Last updated: 2026-06-19 (Photometry phase).
 
 ---
 
@@ -27,14 +27,17 @@ Last updated: 2026-06-19.
       `AutofocusWorker._find_best`). Drives the Capture sweep via the new public
       `ImagingPage.request_autofocus` / `nudge_focuser` + `autofocus_*` signals;
       verifiable headless through `add_sample` / `set_best`.
+- [x] **Real Photometry screen** — first-class phase that launches the existing
+      Photometry Setup companion (`ImagingPage.open_photometry_setup`) and shows a
+      live selection summary (object / T1 / comparisons / check + readiness) from
+      the pure, tested `TargetSet.summary()`. Removed the now-dead `PhaseScaffold`;
+      `AnalyzeLauncher` moved to `analyze_page.py`. (The AstroImageJ click-to-place
+      `T1`/`C2`/`C3`/`K` interaction already lives in the Setup companion.)
 
 ---
 
 ## Remaining — phase screens
 
-- [ ] **Photometry** — promote target/comparison/check selection to a first-class
-      phase; wire the Photometry Setup companion. Interaction = AstroImageJ
-      standard (click-to-place `T1`/`C2`/`C3`/`K`) + VPhot reusable field sequence.
 - [ ] **Capture cockpit (monitoring)** — stability block (FWHM/HFD, SNR, Max ADU,
       background, tracking) + live light curve as the right-rail content; reduce
       controls to Start / Pause / Stop.

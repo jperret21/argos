@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from argos.core.catalog.targets import (
+    ROLE_CHECK,
     ROLE_COMPARISON,
     ROLE_TARGET,
     TargetSet,
@@ -67,3 +68,23 @@ def test_from_dict_ignores_unknown_keys() -> None:
 def test_display_name_prefers_name_then_auid() -> None:
     assert _star(name="NU Ori").display_name == "NU Ori"
     assert TargetStar(role="check", ra_deg=1, dec_deg=2, auid="Z").display_name == "Z"
+
+
+def test_summary_counts_roles_and_readiness() -> None:
+    empty = TargetSet(object_name="M42").summary()
+    assert empty["target"] is None and empty["complete"] is False
+
+    ts = TargetSet(object_name="M42")
+    ts.set_role(_star(auid="A", role=ROLE_TARGET, name="NU Ori"))
+    # Target alone is not yet enough for differential photometry.
+    assert ts.summary()["complete"] is False
+    ts.set_role(_star(auid="B", role=ROLE_COMPARISON, name="comp1"))
+    ts.set_role(_star(auid="C", role=ROLE_COMPARISON, name="comp2"))
+    ts.set_role(_star(auid="K", role=ROLE_CHECK, name="check1"))
+
+    s = ts.summary()
+    assert s["object"] == "M42"
+    assert s["target"] == "NU Ori"
+    assert s["n_comparison"] == 2
+    assert s["n_check"] == 1
+    assert s["complete"] is True

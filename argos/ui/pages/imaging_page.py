@@ -1209,6 +1209,10 @@ class ImagingPage(QWidget):
     # Photometry setup (opens the standalone window)
     # ------------------------------------------------------------------
 
+    def open_photometry_setup(self) -> None:
+        """Public entry point (e.g. the Photometry phase screen) for the companion."""
+        self._on_photometry_setup()
+
     def _on_photometry_setup(self) -> None:
         """Open the Photometry Setup window with the last sequence frame."""
         win = PhotometrySetupWindow(

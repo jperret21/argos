@@ -70,6 +70,25 @@ class TargetSet:
     def by_role(self, role: str) -> list[TargetStar]:
         return [s for s in self.stars if s.role == role]
 
+    def summary(self) -> dict:
+        """A display/readiness summary of the selection (Qt-free).
+
+        Differential photometry needs at least one target (T1) and one
+        comparison; a check star is recommended but optional. ``complete``
+        captures that minimum so the UI can tell the user what is missing.
+        """
+        targets = self.by_role(ROLE_TARGET)
+        comparisons = self.by_role(ROLE_COMPARISON)
+        checks = self.by_role(ROLE_CHECK)
+        return {
+            "object": self.object_name,
+            "target": targets[0].display_name if targets else None,
+            "n_target": len(targets),
+            "n_comparison": len(comparisons),
+            "n_check": len(checks),
+            "complete": bool(targets) and bool(comparisons),
+        }
+
     def to_dict(self) -> dict:
         return {"schema": SCHEMA, "object": self.object_name, "stars": [asdict(s) for s in self.stars]}
 

@@ -661,8 +661,12 @@ One screen at a time, each leaving the app working. Status as of 2026-06-19
    single source for `AutofocusWorker`). Drives the Capture engine's sweep via
    public `request_autofocus` / `nudge_focuser` + `autofocus_*` signals; verifiable
    headless through its `add_sample` / `set_best` API.
-5. [next] **Photometry** phase + Setup companion.
-6. [todo] **Analyze** companion wired to AAVSO export.
+5. [done] **Photometry** phase — first-class screen that launches the existing
+   **Photometry Setup** companion (`ImagingPage.open_photometry_setup`) and shows
+   a live selection summary (object / T1 / comparisons / check + a readiness
+   verdict) from the pure, tested `TargetSet.summary()`. The dead `PhaseScaffold`
+   (all phases now real) was removed; `AnalyzeLauncher` moved to `analyze_page.py`.
+6. [next] **Analyze** companion wired to AAVSO export.
 7. [todo] **Settings** grouping; **Connect** standardised device-row anatomy.
 
 **Deferred — sequenced, not yet done.**
