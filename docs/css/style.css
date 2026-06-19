@@ -1,5 +1,6 @@
 /* ═══════════════════════════════════════════════════
-   Argos — clean dark, precise, aligned
+   Argos — the hundred-eyed watcher
+   Dark, precise, restrained. Star-atlas gold on near-black.
    ═══════════════════════════════════════════════════ */
 
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
@@ -54,14 +55,9 @@ h2 {
     cursor: pointer; border: none; text-decoration: none;
     transition: all 0.2s;
 }
-.btn-primary {
-    background: var(--gold);
-    color: #08080a;
-}
+.btn-primary { background: var(--gold); color: #08080a; }
 .btn-primary:hover { opacity: 0.9; transform: translateY(-1px); }
-.btn-ghost {
-    background: transparent; color: var(--muted); padding: 8px 14px;
-}
+.btn-ghost { background: transparent; color: var(--muted); padding: 8px 14px; }
 .btn-ghost:hover { color: var(--text); background: var(--gold-dim); }
 
 /* ─── Nav ─── */
@@ -86,7 +82,7 @@ h2 {
 }
 .nav-logo:hover { opacity: 1; }
 .nav-logo svg { color: var(--gold); }
-.nav-links { display: flex; gap: 2px; }
+.nav-links { display: flex; gap: 2px; list-style: none; }
 .nav-links a {
     color: var(--muted); padding: 6px 12px; border-radius: 6px;
     font-size: 0.82rem; font-weight: 500; transition: all 0.2s;
@@ -103,53 +99,62 @@ h2 {
 .hero-bg {
     position: absolute; inset: 0;
     background:
-        radial-gradient(ellipse 80% 50% at 50% 80%, rgba(196, 154, 60, 0.03) 0%, transparent 100%),
-        radial-gradient(ellipse 60% 60% at 30% 20%, rgba(60, 90, 140, 0.04) 0%, transparent 100%),
-        radial-gradient(ellipse 60% 60% at 70% 30%, rgba(196, 154, 60, 0.02) 0%, transparent 100%),
+        radial-gradient(ellipse 80% 50% at 50% 85%, rgba(196, 154, 60, 0.035) 0%, transparent 100%),
+        radial-gradient(ellipse 60% 60% at 25% 18%, rgba(60, 90, 140, 0.045) 0%, transparent 100%),
+        radial-gradient(ellipse 55% 55% at 78% 28%, rgba(196, 154, 60, 0.02) 0%, transparent 100%),
         var(--bg);
     pointer-events: none;
 }
 
-/* ─── Isosurface field lines ─── */
-.hero-field {
+/* ─── Starfield: the hundred eyes ─── */
+.hero-sky { position: absolute; inset: 0; pointer-events: none; }
+.hero-sky .star {
     position: absolute;
-    top: 50%; left: 50%;
-    width: min(800px, 95vw);
-    height: min(800px, 95vw);
-    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    background: var(--text);
+    box-shadow: 0 0 4px rgba(232, 228, 222, 0.5);
+}
+.hero-sky .star.twinkle { animation: twinkle ease-in-out infinite; }
+@keyframes twinkle {
+    0%, 100% { opacity: 0.2; }
+    50%      { opacity: 0.95; }
+}
+
+/* ─── Light curve: a star watched over time ─── */
+.hero-curve {
+    position: absolute; left: 0; right: 0;
+    top: 50%; transform: translateY(-50%);
+    height: 340px;
+    overflow: hidden;
     pointer-events: none;
-    opacity: 0.07;
-}
-
-.hero-field svg {
-    width: 100%; height: 100%;
-    animation: field-spin 60s linear infinite;
-}
-
-@keyframes field-spin {
-    0%   { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-}
-
-.hero-field .iso {
-    fill: none;
-    stroke: var(--gold);
-    stroke-width: 0.5;
-}
-
-.hero-field .iso-thin {
-    fill: none;
-    stroke: var(--gold);
-    stroke-width: 0.25;
     opacity: 0.5;
+    -webkit-mask: linear-gradient(90deg, transparent, #000 14%, #000 86%, transparent);
+            mask: linear-gradient(90deg, transparent, #000 14%, #000 86%, transparent);
 }
+.hero-curve svg {
+    position: absolute; left: 0; top: 0;
+    animation: lc-drift 38s linear infinite;
+}
+/* translate distance MUST equal periodPx in index.html */
+@keyframes lc-drift {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-360px); }
+}
+.hero-curve .lc-line {
+    fill: none;
+    stroke: var(--gold);
+    stroke-width: 1.5;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+    filter: drop-shadow(0 0 6px rgba(196, 154, 60, 0.55));
+}
+.hero-curve .lc-dot { fill: var(--gold); opacity: 0.85; }
 
 /* ─── Hero content ─── */
 .hero-content {
     position: relative; z-index: 1;
     text-align: center;
 }
-
 .hero-badge {
     display: inline-block;
     padding: 5px 14px;
@@ -160,39 +165,50 @@ h2 {
     color: var(--gold);
     letter-spacing: 1px;
     text-transform: uppercase;
-    margin-bottom: 28px;
+    margin-bottom: 26px;
 }
-
 .hero h1 {
     font-size: clamp(4rem, 12vw, 8rem);
     font-weight: 800;
     letter-spacing: -0.04em;
     line-height: 1;
-    margin-bottom: 12px;
+    margin-bottom: 8px;
     background: linear-gradient(180deg, var(--text) 35%, rgba(232, 228, 222, 0.3));
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
 }
-
+.hero-myth {
+    font-style: italic;
+    font-size: clamp(0.82rem, 1.5vw, 0.95rem);
+    color: var(--gold);
+    opacity: 0.75;
+    letter-spacing: 0.04em;
+    margin-bottom: 22px;
+}
 .hero-sub {
     font-size: clamp(0.9rem, 1.6vw, 1.05rem);
     color: var(--muted);
-    max-width: 380px;
+    max-width: 440px;
     margin: 0 auto 32px;
     line-height: 1.6;
 }
-
 .hero-actions {
     display: flex; justify-content: center; gap: 10px;
     flex-wrap: wrap;
 }
 
-/* ─── Separator line ─── */
-.sep {
-    width: 40px; height: 1px;
-    background: rgba(196, 154, 60, 0.2);
-    margin: 60px auto;
+.hero-scroll {
+    position: absolute; left: 50%; bottom: 26px;
+    transform: translateX(-50%);
+    color: var(--muted); opacity: 0.5;
+    z-index: 1;
+    animation: bob 2.4s ease-in-out infinite;
+}
+.hero-scroll:hover { opacity: 0.9; }
+@keyframes bob {
+    0%, 100% { transform: translate(-50%, 0); }
+    50%      { transform: translate(-50%, 6px); }
 }
 
 /* ─── Sections ─── */
@@ -201,51 +217,80 @@ h2 {
 .section-header { text-align: center; margin-bottom: 40px; }
 .section-header p { color: var(--muted); font-size: 0.9rem; }
 
-/* ─── Tagline ─── */
-.tagline {
-    text-align: center;
-    max-width: 560px;
-    margin: 0 auto;
-    font-size: clamp(1rem, 2vw, 1.2rem);
+/* ─── Intro / About ─── */
+.intro { max-width: 600px; margin: 0 auto; text-align: center; }
+.intro-lead {
+    font-size: clamp(1.4rem, 3vw, 2rem);
+    font-weight: 700; letter-spacing: -0.02em;
+    line-height: 1.25;
     color: var(--muted);
-    line-height: 1.7;
-    font-weight: 400;
 }
-.tagline strong { color: var(--text); font-weight: 600; }
+.intro-lead strong { color: var(--text); font-weight: 700; }
+.intro-body {
+    max-width: 520px; margin: 22px auto 0;
+    color: var(--muted);
+    font-size: 0.98rem; line-height: 1.75;
+}
+.intro-aside {
+    max-width: 480px; margin: 32px auto 0;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    font-style: italic;
+    font-size: 0.85rem; line-height: 1.7;
+    color: var(--gold); opacity: 0.7;
+}
 
-/* ─── Capabilities ─── */
-.cap-grid {
+/* ─── Specs — the pipeline ─── */
+.spec-group { margin-bottom: 30px; }
+.spec-group:last-of-type { margin-bottom: 0; }
+.spec-label {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 12px;
+    font-family: var(--mono);
+    font-size: 0.7rem; font-weight: 500;
+    letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--gold);
+}
+.spec-label span { color: var(--muted); opacity: 0.7; }
+.spec-label::after {
+    content: ""; flex: 1; height: 1px; background: var(--border);
+}
+.spec-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 6px;
-    max-width: 520px;
-    margin: 0 auto;
+    gap: 8px;
 }
-
-.cap-card {
-    display: flex; align-items: center; gap: 10px;
-    padding: 10px 14px;
+.spec-card {
+    position: relative;
+    padding: 15px 17px;
     background: var(--bg-card);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: 8px;
+    transition: border-color 0.2s;
 }
-
-.cap-dot {
-    width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0;
-}
-.cap-dot.on { background: var(--gold); }
-.cap-dot.pending { background: #3a3a3a; }
-
-.cap-body strong {
+.spec-card:hover { border-color: rgba(196, 154, 60, 0.25); }
+.spec-card strong {
     display: block;
-    font-size: 0.82rem; font-weight: 600;
-    margin-bottom: 1px;
+    font-size: 0.88rem; font-weight: 600;
+    margin-bottom: 5px; padding-right: 16px;
 }
-.cap-body span { font-size: 0.72rem; color: var(--muted); }
+.spec-card p { font-size: 0.78rem; color: var(--muted); line-height: 1.55; }
 
-@media (max-width: 560px) {
-    .cap-grid { grid-template-columns: 1fr; }
+/* status dot (shared with the legend) */
+.cap-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.cap-dot.on { background: var(--gold); box-shadow: 0 0 6px rgba(196, 154, 60, 0.6); }
+.cap-dot.pending { background: transparent; box-shadow: inset 0 0 0 1px var(--muted); }
+.spec-card > .cap-dot { position: absolute; top: 18px; right: 16px; }
+
+.cap-legend {
+    display: flex; justify-content: center; gap: 22px;
+    margin-top: 28px;
+    font-size: 0.72rem; color: var(--muted);
 }
+.cap-legend span { display: inline-flex; align-items: center; gap: 7px; }
+.cap-legend i { display: inline-block; }
+
+@media (max-width: 640px) { .spec-grid { grid-template-columns: 1fr; } }
 
 /* ─── Code block ─── */
 .code-wrap {
@@ -253,6 +298,7 @@ h2 {
     background: #09090b;
     border: 1px solid var(--border);
     border-radius: var(--radius); overflow: hidden;
+    text-align: left;
 }
 .code-bar {
     display: flex; align-items: center; gap: 6px;
@@ -269,11 +315,8 @@ h2 {
     font-size: 0.65rem; font-family: var(--mono);
     color: var(--muted); opacity: 0.3;
 }
-.code-wrap pre {
-    padding: 14px 18px; overflow-x: auto;
-    font-size: 0.78rem; line-height: 1.8;
-}
-.code-wrap code { background: none; padding: 0; color: #a8a094; }
+.code-wrap pre { padding: 14px 18px; overflow-x: auto; font-size: 0.78rem; line-height: 1.8; }
+.code-wrap code { background: none; padding: 0; color: #a8a094; font-family: var(--mono); }
 .code-wrap code .hl { color: var(--gold); }
 .code-wrap code .cm { color: #4a4a4a; }
 
@@ -282,20 +325,22 @@ h2 {
     flex-wrap: wrap;
 }
 
-/* ─── Footer ─── */
-.footer {
-    border-top: 1px solid var(--border);
-    padding: 32px 0;
+/* ─── Contribute ─── */
+.contribute-text {
+    max-width: 520px; margin: 0 auto 24px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.98rem; line-height: 1.75;
 }
+
+/* ─── Footer ─── */
+.footer { border-top: 1px solid var(--border); padding: 32px 0; }
 .footer-content {
     display: flex; justify-content: space-between;
     align-items: center; flex-wrap: wrap; gap: 16px;
     font-size: 0.82rem;
 }
-.footer-brand {
-    display: flex; align-items: center; gap: 8px;
-    font-weight: 700;
-}
+.footer-brand { display: flex; align-items: center; gap: 8px; font-weight: 700; }
 .footer-brand svg { color: var(--gold); }
 .footer-links { display: flex; gap: 16px; }
 .footer-links a { color: var(--muted); }
@@ -306,4 +351,11 @@ h2 {
     .nav-links { display: none; }
     .footer-content { flex-direction: column; text-align: center; }
     .section { padding: 50px 0; }
+}
+
+/* ─── Respect reduced-motion ─── */
+@media (prefers-reduced-motion: reduce) {
+    .hero-curve svg,
+    .hero-sky .star.twinkle,
+    .hero-scroll { animation: none; }
 }
