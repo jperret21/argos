@@ -28,6 +28,7 @@ import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from argos.core.imaging.debayer import compute_hfd
+from argos.core.imaging.focus import fit_v_curve
 
 if TYPE_CHECKING:
     from argos.core.alpaca.camera import Camera
@@ -182,34 +183,8 @@ class AutofocusWorker(QThread):
     ) -> tuple[int, float | None]:
         """Return (best_position, best_hfd) from a list of (pos, hfd) pairs.
 
-        Tries a parabola fit first; falls back to the raw minimum if the fit
-        is degenerate.
+        Delegates to the pure :func:`~argos.core.imaging.focus.fit_v_curve`
+        (parabola vertex, with a raw-minimum fallback for degenerate sweeps).
         """
-        # Filter NaN
-        valid = [(p, h) for p, h in measurements if not np.isnan(h)]
-        if len(valid) < 3:
-            if valid:
-                best_raw = min(valid, key=lambda x: x[1])
-                return int(best_raw[0]), float(best_raw[1])
-            return int(measurements[len(measurements) // 2][0]), None
-
-        pos_arr = np.array([p for p, _ in valid], dtype=float)
-        hfd_arr = np.array([h for _, h in valid], dtype=float)
-
-        best_raw = valid[int(np.argmin(hfd_arr))]
-
-        # Parabola fit — only use if the parabola opens upward (a > 0) and the
-        # vertex falls within the scanned range.
-        try:
-            coeffs = np.polyfit(pos_arr, hfd_arr, 2)
-            a, b, _ = coeffs
-            if a > 0:
-                vertex = -b / (2.0 * a)
-                if low <= vertex <= high:
-                    poly = np.poly1d(coeffs)
-                    fitted_hfd = float(poly(vertex))
-                    return int(round(vertex)), round(fitted_hfd, 1)
-        except Exception as exc:
-            logger.debug("Parabola fit failed: %s", exc)
-
-        return int(best_raw[0]), float(best_raw[1])
+        result = fit_v_curve(measurements, low, high)
+        return result.best_position, result.best_hfd

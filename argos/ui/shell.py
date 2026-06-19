@@ -41,9 +41,9 @@ from argos.ui import theme
 from argos.ui.pages.configuration_page import ConfigurationPage
 from argos.ui.pages.connection_page import ConnectionPage
 from argos.ui.pages.imaging_page import ImagingPage
+from argos.ui.pages.focus_page import FocusScreen
 from argos.ui.pages.phase_scaffold import (
     AnalyzeLauncher,
-    focus_scaffold,
     photometry_scaffold,
 )
 from argos.ui.pages.target_page import TargetScreen
@@ -110,7 +110,7 @@ class Shell(QMainWindow):
         self._acquisition = ImagingPage(self._config)  # the Capture engine
         self._configuration = ConfigurationPage(self._config)
         self._target = TargetScreen(self._config)
-        self._focus = focus_scaffold()
+        self._focus = FocusScreen()
         self._photometry = photometry_scaffold()
         self._analyze = AnalyzeLauncher()
 
@@ -136,6 +136,11 @@ class Shell(QMainWindow):
             lambda ra, dec: self._acquisition.goto_target(ra, dec, "target")
         )
         self._focus.open_controls.connect(lambda: self._open_capture_tab("Equipment"))
+        self._focus.autofocus_requested.connect(self._acquisition.request_autofocus)
+        self._focus.nudge_requested.connect(self._acquisition.nudge_focuser)
+        self._acquisition.autofocus_step.connect(self._focus.add_sample)
+        self._acquisition.autofocus_best.connect(self._focus.set_best)
+        self._acquisition.autofocus_state.connect(self._focus.set_running)
         self._photometry.open_controls.connect(lambda: self._open_capture_tab("Session"))
 
         # Track connection state to know when to pulse the next-step hint.

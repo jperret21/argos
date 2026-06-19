@@ -7,7 +7,7 @@
 > Missing UX features (science + robustness, full list): `ui_design.md` section 12.
 > Build-order + status: `ui_design.md` section 10.
 
-Last updated: 2026-06-18.
+Last updated: 2026-06-19.
 
 ---
 
@@ -21,14 +21,17 @@ Last updated: 2026-06-18.
 - [x] **Real Target screen** — observing-summary card (altitude / airmass /
       transit / Moon separation / mount-mode field) + Slew, backed by the pure,
       tested `sky_geometry.compute_target_geometry()`. (commit `4c0492f`)
+- [x] **Real Focus screen** — HFD V-curve (samples + fitted parabola + vertex
+      marker) + best-focus summary, backed by the pure, tested
+      `core/imaging/focus.fit_v_curve()` (now also the single source for
+      `AutofocusWorker._find_best`). Drives the Capture sweep via the new public
+      `ImagingPage.request_autofocus` / `nudge_focuser` + `autofocus_*` signals;
+      verifiable headless through `add_sample` / `set_best`.
 
 ---
 
 ## Remaining — phase screens
 
-- [ ] **Focus** — autofocus V-curve plot + live HFD trend + focus-locked
-      confirmation (replace the scaffold). Pattern: pure tested parabola-fit
-      helper + a headless-verifiable view, like Target.
 - [ ] **Photometry** — promote target/comparison/check selection to a first-class
       phase; wire the Photometry Setup companion. Interaction = AstroImageJ
       standard (click-to-place `T1`/`C2`/`C3`/`K`) + VPhot reusable field sequence.

@@ -172,6 +172,9 @@ class ImagingPage(QWidget):
     log_message = pyqtSignal(str, str)  # level, message
     discovered_address = pyqtSignal(str, int)  # host, port
     position_updated = pyqtSignal(float, float, bool)  # ra_h, dec_d, slewing
+    autofocus_step = pyqtSignal(int, int, int, object)  # step, total, pos, hfd|None
+    autofocus_best = pyqtSignal(int, object)  # best position, best hfd|None
+    autofocus_state = pyqtSignal(bool)  # sweep running / stopped
     _filter_moved = pyqtSignal(int, str)  # internal: wheel settled at (pos, name)
 
     def __init__(self, config: Config, parent: QWidget | None = None) -> None:
@@ -1608,6 +1611,17 @@ class ImagingPage(QWidget):
         except AlpacaError as exc:
             self.log_message.emit("WARN", f"Focuser halt: {exc}")
 
+    def request_autofocus(self) -> None:
+        """Public entry point (e.g. the Focus screen) to start/stop a sweep."""
+        if self._autofocus and self._autofocus.isRunning():
+            self._stop_autofocus()
+        else:
+            self._on_autofocus_requested()
+
+    def nudge_focuser(self, delta: int) -> None:
+        """Public manual focuser nudge (signed steps; + = inward)."""
+        self._on_focuser_step(delta)
+
     def _on_autofocus_requested(self) -> None:
         if not (self._focuser and self._camera):
             self.log_message.emit("WARN", "Autofocus needs focuser + camera connected")
@@ -1627,6 +1641,7 @@ class ImagingPage(QWidget):
         self._autofocus.error_occurred.connect(lambda m: self.log_message.emit("ERROR", f"AF: {m}"))
         self._autofocus.finished.connect(self._on_af_finished)
         self._focuser_dock.set_autofocus_running(True)
+        self.autofocus_state.emit(True)
         self._autofocus.start()
         self.log_message.emit("CMD", "Autofocus started…")
         self.action_changed.emit("Autofocus running")
@@ -1637,23 +1652,27 @@ class ImagingPage(QWidget):
             self._autofocus.wait(10_000)
         self._autofocus = None
         self._focuser_dock.set_autofocus_running(False)
+        self.autofocus_state.emit(False)
 
     @pyqtSlot(int, int, int, object)
     def _on_af_step(self, step: int, total: int, pos: int, hfd) -> None:
         self._focuser_dock.set_position(pos)
         hfd_str = f"{hfd:.1f}" if hfd is not None else "—"
         self._focuser_dock.set_autofocus_status(f"Step {step}/{total}  HFD={hfd_str}")
+        self.autofocus_step.emit(step, total, pos, hfd)
         self.log_message.emit("INFO", f"AF {step}/{total}  pos={pos}  HFD={hfd_str}")
 
     @pyqtSlot(int, object)
     def _on_af_done(self, best_pos: int, best_hfd) -> None:
         self._focuser_dock.set_position(best_pos)
         hfd_str = f"{best_hfd:.1f}" if best_hfd is not None else "—"
+        self.autofocus_best.emit(best_pos, best_hfd)
         self.log_message.emit("OK", f"Autofocus complete — best pos={best_pos}  HFD={hfd_str}")
         self.action_changed.emit(f"Focused  pos={best_pos}")
 
     def _on_af_finished(self) -> None:
         self._focuser_dock.set_autofocus_running(False)
+        self.autofocus_state.emit(False)
 
     # ------------------------------------------------------------------
     # FITS save

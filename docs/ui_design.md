@@ -645,7 +645,7 @@ the windows; update it in the same commit as each screen extraction (see
 
 ## 10. Build order + status
 
-One screen at a time, each leaving the app working. Status as of 2026-06-18
+One screen at a time, each leaving the app working. Status as of 2026-06-19
 (branch `feat/workflow-ui`):
 
 1. [done] Reshape the rail to the seven phases; route Connect/Capture/Settings to
@@ -653,12 +653,17 @@ One screen at a time, each leaving the app working. Status as of 2026-06-18
 2. [done] **Capture** rail regrouped by the one-axis rule (Session / Equipment /
    Display) — first step of the cockpit. The monitoring layout (stability block,
    live light curve as the right-rail content) is still to come.
-3. [next] **Target** screen — real target-summary card (alt / airmass / transit /
+3. [done] **Target** screen — real target-summary card (alt / airmass / transit /
    Moon + mount mode), replacing the scaffold. A verifiable vertical slice that
    does not touch the connection path.
-4. [todo] **Focus** (+ V-curve), then **Photometry** phase + Setup companion.
-5. [todo] **Analyze** companion wired to AAVSO export.
-6. [todo] **Settings** grouping; **Connect** standardised device-row anatomy.
+4. [done] **Focus** screen — real HFD V-curve (samples + fitted parabola + vertex)
+   backed by the pure, tested `core/imaging/focus.fit_v_curve` (also now the
+   single source for `AutofocusWorker`). Drives the Capture engine's sweep via
+   public `request_autofocus` / `nudge_focuser` + `autofocus_*` signals; verifiable
+   headless through its `add_sample` / `set_best` API.
+5. [next] **Photometry** phase + Setup companion.
+6. [todo] **Analyze** companion wired to AAVSO export.
+7. [todo] **Settings** grouping; **Connect** standardised device-row anatomy.
 
 **Deferred — sequenced, not yet done.**
 - **DeviceSession extraction** (the NINA-style equipment mediator that owns the

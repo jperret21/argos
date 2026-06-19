@@ -104,15 +104,41 @@ def test_shell_three_mode_walkthrough() -> None:
         assert moves == [2]
 
         # Workflow phases: the right types, and the scaffold deep-link into Capture.
+        from argos.ui.pages.focus_page import FocusScreen
         from argos.ui.pages.phase_scaffold import AnalyzeLauncher, PhaseScaffold
         from argos.ui.pages.target_page import TargetScreen
 
         assert isinstance(shell._pages["target"], TargetScreen)
-        assert isinstance(shell._pages["focus"], PhaseScaffold)
+        assert isinstance(shell._pages["focus"], FocusScreen)
+        assert isinstance(shell._pages["photometry"], PhaseScaffold)
         assert isinstance(shell._pages["analyze"], AnalyzeLauncher)
         shell._pages["focus"].open_controls.emit()
         assert shell._stack.currentIndex() == shell._page_indices["capture"]
         assert page._rail.tabText(page._rail.currentIndex()) == "Equipment"
+
+        # Focus screen: live sweep samples drive the V-curve fit + summary, and
+        # the autofocus button round-trips to the Capture engine's public entry.
+        focus = shell._pages["focus"]
+        af_starts: list[bool] = []
+        page.autofocus_step.disconnect(focus.add_sample)  # isolate from the live wiring
+        focus.autofocus_requested.disconnect(page.request_autofocus)
+        focus.autofocus_requested.connect(lambda: af_starts.append(True))
+        focus._af_btn.click()
+        assert af_starts == [True]
+        focus.set_running(True)
+        for i, (pos, hfd) in enumerate(
+            [(3800, 4.0), (3900, 2.6), (4000, 1.8), (4100, 2.0), (4200, 3.1)]
+        ):
+            focus.add_sample(i + 1, 5, pos, hfd)
+        res = focus.result()
+        assert res.method == "parabola"
+        assert 3900 <= res.best_position <= 4100
+        assert focus._values["fit"].text() == "parabola"
+        # A manual nudge emits a signed step (the combo default is 50).
+        nudges: list[int] = []
+        focus.nudge_requested.connect(nudges.append)
+        focus._on_nudge(-1)
+        assert nudges == [-50]
 
         # Target screen: set_target updates the summary and arms the slew button.
         target = shell._pages["target"]
