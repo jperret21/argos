@@ -70,6 +70,22 @@ class PhotometryWindow(QWidget):
         # Set by the page: the per-target LightCurve objects + the observer code.
         self.lightcurves: dict = {}
         self.obscode = "XXX"
+        self.filt = "TG"
+
+    def load_curves(self, curves: dict, obscode: str = "XXX", filt: str = "TG") -> None:
+        """Display finished curves (e.g. reloaded from a session CSV by Analyze).
+
+        ``curves`` maps a key to a :class:`LightCurve`; its points are plotted
+        and kept for export. Replaces any currently shown curves.
+        """
+        self.lightcurves = dict(curves)
+        self.obscode = obscode or "XXX"
+        self.filt = filt or "TG"
+        self.lightcurve.clear()
+        for lc in self.lightcurves.values():
+            label = lc.name or lc.auid or "TARGET"
+            for p in lc.points:
+                self.lightcurve.add_point(label, p.jd_utc, p.mag, p.mag_err, p.saturated)
 
     def _export_csv(self) -> None:
         if not self.lightcurve.has_data():
@@ -88,4 +104,4 @@ class PhotometryWindow(QWidget):
             self, "Export AAVSO", str(Path.home() / "aavso.txt"), "Text (*.txt)"
         )
         if path:
-            write_aavso(path, curves, obscode=self.obscode or "XXX")
+            write_aavso(path, curves, obscode=self.obscode or "XXX", filt=self.filt or "TG")

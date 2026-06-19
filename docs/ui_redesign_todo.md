@@ -7,7 +7,7 @@
 > Missing UX features (science + robustness, full list): `ui_design.md` section 12.
 > Build-order + status: `ui_design.md` section 10.
 
-Last updated: 2026-06-19 (Photometry phase).
+Last updated: 2026-06-19 (Analyze phase).
 
 ---
 
@@ -33,6 +33,12 @@ Last updated: 2026-06-19 (Photometry phase).
       the pure, tested `TargetSet.summary()`. Removed the now-dead `PhaseScaffold`;
       `AnalyzeLauncher` moved to `analyze_page.py`. (The AstroImageJ click-to-place
       `T1`/`C2`/`C3`/`K` interaction already lives in the Setup companion.)
+- [x] **Real Analyze screen** — first-class phase with two companion paths: reload
+      a session `photometry.csv` (pure, tested `LightCurve.from_csv`) into the
+      light-curve window + export AAVSO Extended Format stamped with the observer
+      code / band, or inspect a frame. Added `observer.obscode` to config + the
+      Settings Observer card; `PhotometryWindow.load_curves` displays a reloaded
+      curve and carries obscode + `photometry.default_band` (FILT) into the export.
 
 ---
 
@@ -41,9 +47,8 @@ Last updated: 2026-06-19 (Photometry phase).
 - [ ] **Capture cockpit (monitoring)** — stability block (FWHM/HFD, SNR, Max ADU,
       background, tracking) + live light curve as the right-rail content; reduce
       controls to Start / Pause / Stop.
-- [ ] **Analyze** companion — check-star + diagnostic co-plots, live ensemble
-      toggle, in-plot reversible outlier removal, one-click AAVSO Extended Format
-      export.
+- [ ] **Analyze — deeper vetting** — check-star + diagnostic co-plots, live ensemble
+      toggle, in-plot reversible outlier removal. (Reload + AAVSO export done above.)
 - [ ] **Connect** — standardise the device-row anatomy (driver dropdown + connect
       + state), one identical shape per device.
 - [ ] **Settings** — group into one-axis sections (Observer & Site / Files &
@@ -64,7 +69,9 @@ Last updated: 2026-06-19 (Photometry phase).
 
 - [ ] **Mount mode alt-az vs equatorial** [SCI] — detect the active mode, surface
       it (Target + status bar), and gate field-rotation handling accordingly.
-- [ ] **AAVSO observer code + transform coefficients (Tg, ...)** in Settings.
+- [~] **AAVSO observer code + transform coefficients (Tg, ...)** in Settings.
+      Observer code DONE (`observer.obscode`, fed into the AAVSO export); transform
+      coefficients still to add.
 - [ ] **Target queue / "tonight's plan"** — cycle several variable stars in a night.
 - [ ] Plate-solve failure handling; session resume / crash recovery; storage
       gauge; battery + thermal (55 C veto) indicators; end-of-target notifications.

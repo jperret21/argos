@@ -92,7 +92,13 @@ class ConfigurationPage(QWidget):
         self._observer_edit = QLineEdit()
         self._observer_edit.editingFinished.connect(self._save_observer)
         grid.addWidget(design.MutedLabel("Observer"), 0, 0)
-        grid.addWidget(self._observer_edit, 0, 1, 1, 3)
+        grid.addWidget(self._observer_edit, 0, 1)
+        self._obscode_edit = QLineEdit()
+        self._obscode_edit.setPlaceholderText("e.g. ABC")
+        self._obscode_edit.setToolTip("Your AAVSO observer code — stamped on every AAVSO export")
+        self._obscode_edit.editingFinished.connect(self._save_observer)
+        grid.addWidget(design.MutedLabel("AAVSO code"), 0, 2)
+        grid.addWidget(self._obscode_edit, 0, 3)
 
         self._lat_spin = self._make_deg_spin(-90.0, 90.0)
         self._lat_spin.valueChanged.connect(self._save_site)
@@ -281,6 +287,7 @@ class ConfigurationPage(QWidget):
     def _load_config(self) -> None:
         self._loading = True
         self._observer_edit.setText(str(self._config.get("observer.name", "") or ""))
+        self._obscode_edit.setText(str(self._config.get("observer.obscode", "") or ""))
         self._lat_spin.setValue(float(self._config.get("site.latitude", 0.0) or 0.0))
         self._lon_spin.setValue(float(self._config.get("site.longitude", 0.0) or 0.0))
         self._elev_spin.setValue(float(self._config.get("site.elevation", 0.0) or 0.0))
@@ -312,6 +319,7 @@ class ConfigurationPage(QWidget):
 
     def _save_observer(self) -> None:
         self._config.set("observer.name", self._observer_edit.text().strip())
+        self._config.set("observer.obscode", self._obscode_edit.text().strip().upper())
         self._config.save()
 
     def _save_site(self) -> None:

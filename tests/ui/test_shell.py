@@ -104,7 +104,7 @@ def test_shell_three_mode_walkthrough() -> None:
         assert moves == [2]
 
         # Workflow phases: the right types, and the deep-links into Capture.
-        from argos.ui.pages.analyze_page import AnalyzeLauncher
+        from argos.ui.pages.analyze_page import AnalyzeScreen
         from argos.ui.pages.focus_page import FocusScreen
         from argos.ui.pages.photometry_page import PhotometryScreen
         from argos.ui.pages.target_page import TargetScreen
@@ -112,7 +112,7 @@ def test_shell_three_mode_walkthrough() -> None:
         assert isinstance(shell._pages["target"], TargetScreen)
         assert isinstance(shell._pages["focus"], FocusScreen)
         assert isinstance(shell._pages["photometry"], PhotometryScreen)
-        assert isinstance(shell._pages["analyze"], AnalyzeLauncher)
+        assert isinstance(shell._pages["analyze"], AnalyzeScreen)
         shell._pages["focus"].open_controls.emit()
         assert shell._stack.currentIndex() == shell._page_indices["capture"]
         assert page._rail.tabText(page._rail.currentIndex()) == "Equipment"
@@ -161,6 +161,30 @@ def test_shell_three_mode_walkthrough() -> None:
         assert photom._values["target"].text() == "NU Ori"
         assert photom._values["comparison"].text() == "1"
         assert "check star" in photom._values["status"].text()  # ready, but warns no K
+
+        # Analyze screen: the export card surfaces the observer code (warns unset)
+        # and reflects Settings once a code is configured.
+        analyze = shell._pages["analyze"]
+        assert "unset" in analyze._obscode_value.text()  # no code in Config({})
+        shell._config.set("observer.obscode", "ABC")  # as Settings stores it (upper)
+        analyze._refresh_export_info()
+        assert analyze._obscode_value.text() == "ABC"
+        assert analyze._band_value.text() == "TG"
+
+        # Analyze → PhotometryWindow: a reloaded curve plots and carries the stamp.
+        from argos.core.photometry.lightcurve import LcPoint, LightCurve
+        from argos.ui.panels.photometry_window import PhotometryWindow
+
+        lc = LightCurve(name="NU Ori")
+        lc.append(LcPoint(jd_utc=2451545.0, mag=9.0, mag_err=0.02))
+        pw = PhotometryWindow()
+        try:
+            pw.load_curves({"t": lc}, obscode="ABC", filt="TG")
+            assert pw.lightcurve.has_data()
+            assert pw.obscode == "ABC" and pw.filt == "TG"
+        finally:
+            pw.close()
+            pw.deleteLater()
 
         # Target screen: set_target updates the summary and arms the slew button.
         target = shell._pages["target"]

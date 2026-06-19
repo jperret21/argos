@@ -75,6 +75,45 @@ class LightCurve:
         """Write this curve in AAVSO Extended File Format (ensemble photometry)."""
         write_aavso(path, [self], **kwargs)
 
+    @classmethod
+    def from_csv(cls, path, auid: str = "", name: str = "") -> "LightCurve":
+        """Reload a curve written by :meth:`to_csv` (round-trips it).
+
+        Lets a finished session be reopened for review/export without re-running
+        the night. Unknown/blank optional columns become ``None``; unparseable
+        rows are skipped rather than raising, so a partial file still loads.
+        """
+        path = Path(path)
+        lc = cls(auid=auid, name=name or Path(path).stem)
+        with path.open(newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                try:
+                    lc.append(
+                        LcPoint(
+                            jd_utc=float(row["jd_utc"]),
+                            mag=float(row["mag"]),
+                            mag_err=float(row["mag_err"]),
+                            bjd_tdb=_opt_float(row.get("bjd_tdb")),
+                            airmass=_opt_float(row.get("airmass")),
+                            fwhm=_opt_float(row.get("fwhm")),
+                            sky_adu=_opt_float(row.get("sky_adu")),
+                            comps_used=int(row.get("comps_used") or 0),
+                            saturated=bool(int(row.get("saturated") or 0)),
+                        )
+                    )
+                except (TypeError, ValueError):
+                    continue
+        return lc
+
+
+def _opt_float(value) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
 
 def write_aavso(path, curves, *, obscode: str = "XXX", filt: str = "TG",
                 software: str = "Argos") -> None:

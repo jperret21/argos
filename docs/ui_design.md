@@ -666,7 +666,11 @@ One screen at a time, each leaving the app working. Status as of 2026-06-19
    a live selection summary (object / T1 / comparisons / check + a readiness
    verdict) from the pure, tested `TargetSet.summary()`. The dead `PhaseScaffold`
    (all phases now real) was removed; `AnalyzeLauncher` moved to `analyze_page.py`.
-6. [next] **Analyze** companion wired to AAVSO export.
+6. [done] **Analyze** phase — first-class screen with two companion paths: reload
+   a session `photometry.csv` (pure, tested `LightCurve.from_csv`) into the
+   light-curve window and export AAVSO Extended Format stamped with the observer
+   code + band, or inspect a frame. Added `observer.obscode` to config + the
+   Settings Observer card; the export carries `photometry.default_band` as FILT.
 7. [todo] **Settings** grouping; **Connect** standardised device-row anatomy.
 
 **Deferred — sequenced, not yet done.**

@@ -24,6 +24,7 @@ _DEFAULTS: dict[str, Any] = {
     "sessions_path": str(Path.home() / "Argos" / "sessions"),
     "observer": {
         "name": "",
+        "obscode": "",  # AAVSO observer code — stamped on every AAVSO export
         "latitude": 0.0,
         "longitude": 0.0,
         "elevation": 0.0,

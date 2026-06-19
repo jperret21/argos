@@ -43,7 +43,7 @@ from argos.ui import theme
 from argos.ui.pages.configuration_page import ConfigurationPage
 from argos.ui.pages.connection_page import ConnectionPage
 from argos.ui.pages.imaging_page import ImagingPage
-from argos.ui.pages.analyze_page import AnalyzeLauncher
+from argos.ui.pages.analyze_page import AnalyzeScreen
 from argos.ui.pages.focus_page import FocusScreen
 from argos.ui.pages.photometry_page import PhotometryScreen
 from argos.ui.pages.target_page import TargetScreen
@@ -112,7 +112,7 @@ class Shell(QMainWindow):
         self._target = TargetScreen(self._config)
         self._focus = FocusScreen()
         self._photometry = PhotometryScreen(self._config)
-        self._analyze = AnalyzeLauncher()
+        self._analyze = AnalyzeScreen(self._config)
 
         # Workflow-ordered pages (docs/ui_design.md). Connect / Capture / Settings
         # are live; Target / Focus / Photometry are design scaffolds that deep-link
