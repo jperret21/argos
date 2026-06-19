@@ -154,36 +154,6 @@ class AnalyzeLauncher(QWidget):
 # --------------------------------------------------------------------------- #
 
 
-def target_scaffold() -> PhaseScaffold:
-    """The Target phase: point, plate-solve and centre the field."""
-    return PhaseScaffold(
-        title="Target",
-        job="Put the right star in the centre of the frame, confirmed by a plate "
-        "solve, and check the field is worth observing tonight.",
-        wireframe=(
-            "+-----------------------------+-------------+\n"
-            "| [stretch  channel]          | TARGET      |\n"
-            "|                             |  Name       |\n"
-            "|       IMAGE (live)          |  RA / Dec   |\n"
-            "|       + solved overlay      |  Alt 58 deg |\n"
-            "|       + centre reticle      |  Airmass    |\n"
-            "|                             |  Transit    |\n"
-            '|  solved   offset 12"        |  Moon sep   |\n'
-            "+-----------------------------+ [ Slew ]    |\n"
-            "|  RA/Dec readout             | [ Solve ]   |\n"
-            "|                             | [ Center ]  |\n"
-            "+-----------------------------+-------------+"
-        ),
-        controls=[
-            "Slew to the Stellarium target",
-            "Plate-solve (ASTAP) and centre the field",
-            "Altitude / airmass / transit / Moon-separation summary",
-            "Live field with RA/Dec grid + star overlay",
-        ],
-        action_label="Open equipment controls in Capture",
-    )
-
-
 def focus_scaffold() -> PhaseScaffold:
     """The Focus phase: reach and lock best focus."""
     return PhaseScaffold(

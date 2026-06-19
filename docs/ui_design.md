@@ -643,17 +643,37 @@ the windows; update it in the same commit as each screen extraction (see
 
 ---
 
-## 10. Build order (when we start)
+## 10. Build order + status
 
-Paper first, then one screen at a time, each leaving the app working:
+One screen at a time, each leaving the app working. Status as of 2026-06-18
+(branch `feat/workflow-ui`):
 
-1. Reshape the rail to the seven phases (entries only; route to current content).
-2. **Capture** screen (highest time-spent; sets the cockpit style).
-3. **Connect** (standardised anatomy; low risk).
-4. **Target** (+ summary card) and **Focus** (+ V-curve).
-5. **Photometry** phase + Photometry Setup companion.
-6. **Analyze** companion + AAVSO export.
-7. **Settings** grouping.
+1. [done] Reshape the rail to the seven phases; route Connect/Capture/Settings to
+   live pages, Target/Focus/Photometry to scaffolds, Analyze to a launcher.
+2. [done] **Capture** rail regrouped by the one-axis rule (Session / Equipment /
+   Display) — first step of the cockpit. The monitoring layout (stability block,
+   live light curve as the right-rail content) is still to come.
+3. [next] **Target** screen — real target-summary card (alt / airmass / transit /
+   Moon + mount mode), replacing the scaffold. A verifiable vertical slice that
+   does not touch the connection path.
+4. [todo] **Focus** (+ V-curve), then **Photometry** phase + Setup companion.
+5. [todo] **Analyze** companion wired to AAVSO export.
+6. [todo] **Settings** grouping; **Connect** standardised device-row anatomy.
+
+**Deferred — sequenced, not yet done.**
+- **DeviceSession extraction** (the NINA-style equipment mediator that owns the
+  device handles + connect/disconnect, so the phase screens can each access the
+  devices and the per-phase split can complete). Assessed 2026-06-18: the
+  connect/disconnect code is tightly woven into the docks and lifecycle
+  (`_start_polling`, `_stop_preview`, dock `set_enabled`/`set_filters`) and the
+  connect path cannot be verified in CI (no hardware; the smoke test never
+  actually connects). **Do this with hardware-in-the-loop verification**, not
+  blind. It is the keystone for splitting Mount->Target, Focus->Focus,
+  Filter->Capture and slimming the Capture cockpit to monitoring-only.
+- Moving the Equipment controls out of Capture into Target/Focus — blocked on the
+  DeviceSession extraction above.
+- Live-capture "stability" block + live light curve as the Capture right-rail
+  content (depends on the session/photometry wiring).
 
 Each step is a self-contained change with its `test_shell.py` update.
 

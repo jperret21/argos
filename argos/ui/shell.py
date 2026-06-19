@@ -45,8 +45,8 @@ from argos.ui.pages.phase_scaffold import (
     AnalyzeLauncher,
     focus_scaffold,
     photometry_scaffold,
-    target_scaffold,
 )
+from argos.ui.pages.target_page import TargetScreen
 from argos.ui.sidebar import Sidebar
 from argos.ui.statusbar import TopStatusBar
 from argos.workers.stellarium_worker import StellariumWorker
@@ -109,7 +109,7 @@ class Shell(QMainWindow):
         self._connection = ConnectionPage(self._config)
         self._acquisition = ImagingPage(self._config)  # the Capture engine
         self._configuration = ConfigurationPage(self._config)
-        self._target = target_scaffold()
+        self._target = TargetScreen(self._config)
         self._focus = focus_scaffold()
         self._photometry = photometry_scaffold()
         self._analyze = AnalyzeLauncher()
@@ -131,7 +131,10 @@ class Shell(QMainWindow):
         }
 
         # Scaffolds deep-link to the live controls hosted on the Capture page.
-        self._target.open_controls.connect(lambda: self._open_capture_tab("Equipment"))
+        self._target.open_controls.connect(lambda: self._open_capture_tab("Session"))
+        self._target.slew_requested.connect(
+            lambda ra, dec: self._acquisition.goto_target(ra, dec, "target")
+        )
         self._focus.open_controls.connect(lambda: self._open_capture_tab("Equipment"))
         self._photometry.open_controls.connect(lambda: self._open_capture_tab("Session"))
 
@@ -278,6 +281,7 @@ class Shell(QMainWindow):
     def _on_stellarium_target(self, ra_hours: float, dec_degrees: float) -> None:
         self._connection.stellarium_card.flash_goto(ra_hours, dec_degrees)
         self._acquisition.goto_target(ra_hours, dec_degrees, label="goto")
+        self._target.set_target(ra_hours, dec_degrees, "Stellarium target")
 
     def _on_stellarium_error(self, message: str) -> None:
         self._acquisition.log_message.emit("ERROR", f"Stellarium: {message}")

@@ -103,14 +103,26 @@ def test_shell_three_mode_walkthrough() -> None:
         page._filterwheel_dock._move_btn.click()
         assert moves == [2]
 
-        # Workflow scaffolds: the right types, and the deep-link into Capture.
+        # Workflow phases: the right types, and the scaffold deep-link into Capture.
         from argos.ui.pages.phase_scaffold import AnalyzeLauncher, PhaseScaffold
+        from argos.ui.pages.target_page import TargetScreen
 
-        assert isinstance(shell._pages["target"], PhaseScaffold)
+        assert isinstance(shell._pages["target"], TargetScreen)
+        assert isinstance(shell._pages["focus"], PhaseScaffold)
         assert isinstance(shell._pages["analyze"], AnalyzeLauncher)
         shell._pages["focus"].open_controls.emit()
         assert shell._stack.currentIndex() == shell._page_indices["capture"]
         assert page._rail.tabText(page._rail.currentIndex()) == "Equipment"
+
+        # Target screen: set_target updates the summary and arms the slew button.
+        target = shell._pages["target"]
+        slews: list[tuple[float, float]] = []
+        target.slew_requested.connect(lambda r, d: slews.append((r, d)))
+        target.set_target(5.5, 12.0, "TST")
+        assert target._values["name"].text() == "TST"
+        assert target._slew_btn.isEnabled()
+        target._slew_btn.click()
+        assert slews == [(5.5, 12.0)]
 
         # Open FITS → a floating analysis window (the live viewer is untouched).
         import tempfile
