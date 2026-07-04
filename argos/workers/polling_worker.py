@@ -22,7 +22,7 @@ import logging
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from argos.core.alpaca.client import AlpacaConnectionError, AlpacaTimeoutError
-from argos.core.alpaca.telescope import MountPosition, Telescope
+from argos.core.alpaca.telescope import Telescope
 
 logger = logging.getLogger(__name__)
 

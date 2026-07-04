@@ -21,7 +21,6 @@ import logging
 import time
 from datetime import datetime, timezone
 
-import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from argos.core.alpaca.camera import Camera

@@ -1,28 +1,20 @@
-"""Shell — the Argos main window built around the workflow phases.
+"""Shell — the Argos main window. NINA-style: the night happens in ONE screen.
 
-A NINA-inspired structure: a left sidebar of phases (the chronology of a
-photometry night, see docs/ui_design.md), a permanent status bar across the
-top, and a single workspace area that swaps content per phase.
-
-    Connect     — connect the Seestar devices + the Stellarium server
-    Target      — point, plate-solve and centre the field
-    Focus       — reach and lock best focus
-    Photometry  — pick target, comparison and check stars
-    Capture     — run the sequence and monitor frame health (where time is spent)
-    Analyze     — inspect the light curve and export AAVSO
-    Settings    — observer, site, paths, appearance
+    Equipment — connect the Seestar devices + the Stellarium server
+                (a 2-minute setup stop; mode id "connect" for back-compat)
+    Capture   — THE screen: hero image, camera + sequencer, mount goto,
+                focuser + V-curve, photometry overlays and the live curve
+    Analyze   — post-prod: reload curves, vetting, AAVSO export
+    Settings  — observer, site, paths, appearance
 
 The session layer owns the hardware (WS5): ``DeviceSession`` holds the device
 handles, pollers and the Stellarium server; ``AcquisitionEngine`` holds the
 camera-ownership state machine and the capture/solve/photometry workers. The
-Capture page (``ImagingPage``) is a view over the two. Target / Focus /
-Photometry are phase screens that drive the engine (slew, autofocus sweep) or
-open a companion window (Photometry Setup). Analyze launches its own companion
-window. The Connect page emits connect/disconnect intents that the Shell
-routes to the DeviceSession; device-state updates flow back to the status bar
-and the Connect page. Targeting is driven entirely by Stellarium (select an
-object, Ctrl+1) over the TCP telescope-control protocol — there is no in-app
-search.
+Capture page (``ImagingPage``) is a view over the two. The Equipment page
+emits connect/disconnect intents that the Shell routes to the DeviceSession;
+device-state updates flow back to the status bar and the Equipment page.
+Targeting is driven by Stellarium (select an object, Ctrl+1) over the TCP
+telescope-control protocol, or by the mount dock's goto fields.
 """
 
 from __future__ import annotations
@@ -47,9 +39,6 @@ from argos.ui.pages.configuration_page import ConfigurationPage
 from argos.ui.pages.connection_page import ConnectionPage
 from argos.ui.pages.imaging_page import ImagingPage
 from argos.ui.pages.analyze_page import AnalyzeScreen
-from argos.ui.pages.focus_page import FocusScreen
-from argos.ui.pages.photometry_page import PhotometryScreen
-from argos.ui.pages.target_page import TargetScreen
 from argos.ui.sidebar import MODES, Sidebar
 from argos.ui.statusbar import TopStatusBar
 from argos.workers.camera_service import CameraState
@@ -60,10 +49,10 @@ _CFG_GEOMETRY = "ui.shell.geometry"
 _CFG_STATE = "ui.shell.state"
 _CFG_MODE = "ui.shell.mode"
 
-#: Phases that need hardware to be useful. Devices are never connected at
+#: Modes that need hardware to be useful. Devices are never connected at
 #: startup, so restoring one of these would land the user on a dead screen —
-#: we land on Connect instead (the persisted mode is kept for the session).
-_HARDWARE_MODES = frozenset({"target", "focus", "photometry", "capture"})
+#: we land on Equipment instead (the persisted mode is kept for the session).
+_HARDWARE_MODES = frozenset({"capture"})
 
 
 class Shell(QMainWindow):
@@ -124,19 +113,12 @@ class Shell(QMainWindow):
         self._connection = ConnectionPage(self._config)
         self._acquisition = ImagingPage(self._config, self._session, self._engine)
         self._configuration = ConfigurationPage(self._config)
-        self._target = TargetScreen(self._config)
-        self._focus = FocusScreen()
-        self._photometry = PhotometryScreen(self._config)
         self._analyze = AnalyzeScreen(self._config)
 
-        # Workflow-ordered pages (docs/ui_design.md). Connect / Capture / Settings
-        # are live; Target / Focus / Photometry are design scaffolds that deep-link
-        # into the still-shared Capture controls; Analyze launches its window.
+        # NINA-style: the night happens in Capture; Equipment is setup,
+        # Analyze is post-prod. (Mode id "connect" kept for config back-compat.)
         self._pages: dict[str, QWidget] = {
             "connect": self._connection,
-            "target": self._target,
-            "focus": self._focus,
-            "photometry": self._photometry,
             "capture": self._acquisition,
             "analyze": self._analyze,
             "settings": self._configuration,
@@ -144,20 +126,6 @@ class Shell(QMainWindow):
         self._page_indices: dict[str, int] = {
             mode_id: self._stack.addWidget(page) for mode_id, page in self._pages.items()
         }
-
-        # Scaffolds deep-link to the live controls hosted on the Capture page.
-        self._target.open_controls.connect(lambda: self._open_capture_tab("Session"))
-        self._target.slew_requested.connect(
-            lambda ra, dec: self._acquisition.goto_target(ra, dec, "target")
-        )
-        self._focus.open_controls.connect(lambda: self._open_capture_tab("Equipment"))
-        self._focus.autofocus_requested.connect(self._acquisition.request_autofocus)
-        self._focus.nudge_requested.connect(self._acquisition.nudge_focuser)
-        self._acquisition.autofocus_step.connect(self._focus.add_sample)
-        self._acquisition.autofocus_best.connect(self._focus.set_best)
-        self._acquisition.autofocus_state.connect(self._focus.set_running)
-        self._photometry.open_controls.connect(lambda: self._open_capture_tab("Session"))
-        self._photometry.setup_requested.connect(self._acquisition.open_photometry_setup)
 
         # Connection/activity state feeding the sidebar phase dots.
         self._conn_state: dict[str, str] = dict.fromkeys(
@@ -241,7 +209,6 @@ class Shell(QMainWindow):
     def _on_stellarium_target(self, ra_hours: float, dec_degrees: float) -> None:
         self._connection.stellarium_card.flash_goto(ra_hours, dec_degrees)
         self._acquisition.goto_target(ra_hours, dec_degrees, label="goto")
-        self._target.set_target(ra_hours, dec_degrees, "Stellarium target")
 
     def _on_stellarium_error(self, message: str) -> None:
         self._connection.stellarium_card.set_server_state(False, "✗  error")
@@ -270,27 +237,17 @@ class Shell(QMainWindow):
         self._status.set_live(state is CameraState.LIVE)
 
     def _refresh_sidebar_states(self) -> None:
-        """Recompute the sidebar phase dots from device + activity state.
+        """Recompute the sidebar mode dots from device + activity state.
 
         ready = prerequisites met, active = running now, blocked = a required
-        device is missing. Connect/Analyze/Settings stay neutral — they are
+        device is missing. Equipment/Analyze/Settings stay neutral — they are
         always usable.
         """
-        def up(*devices: str) -> bool:
-            return all(self._conn_state[d] in ("connected", "busy") for d in devices)
-
-        self._sidebar.set_mode_state("target", "ready" if up("mount") else "blocked")
-        if self._autofocus_active:
-            self._sidebar.set_mode_state("focus", "active")
-        else:
-            self._sidebar.set_mode_state(
-                "focus", "ready" if up("camera", "focuser") else "blocked"
-            )
-        self._sidebar.set_mode_state("photometry", "ready" if up("camera") else "blocked")
-        if self._sequence_active:
+        camera_up = self._conn_state["camera"] in ("connected", "busy")
+        if self._sequence_active or self._autofocus_active:
             self._sidebar.set_mode_state("capture", "active")
         else:
-            self._sidebar.set_mode_state("capture", "ready" if up("camera") else "blocked")
+            self._sidebar.set_mode_state("capture", "ready" if camera_up else "blocked")
 
     def _on_mode_changed(self, mode_id: str) -> None:
         index = self._page_indices.get(mode_id)
@@ -303,16 +260,6 @@ class Shell(QMainWindow):
     def _on_badge_clicked(self, device_id: str) -> None:
         if self._status.device_state(device_id) == "disconnected":
             self._sidebar.select("connect")
-
-    def _open_capture_tab(self, tab_label: str) -> None:
-        """Switch to Capture and select one of its right-rail control tabs.
-
-        Used by the Target / Focus / Photometry scaffolds to deep-link into the
-        controls that still live on the shared Capture page (transitional, until
-        the per-phase split lands).
-        """
-        self._sidebar.select("capture")
-        self._acquisition.select_rail_tab(tab_label)
 
     # ------------------------------------------------------------------
     # Public accessors

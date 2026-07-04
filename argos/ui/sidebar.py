@@ -29,14 +29,14 @@ logger = logging.getLogger(__name__)
 
 
 # (mode_id, label, tooltip). The icon is drawn from ``mode_id`` (see _draw_icon).
-# Order = the chronology of a photometry night (docs/ui_design.md). Settings is
-# pushed to the bottom (it is a destination, not a phase).
+# NINA-style: the night happens in ONE screen (Capture — image, camera,
+# sequencer, mount goto, focuser + V-curve, photometry overlays and the live
+# curve all live there). Equipment is a 2-minute setup stop, Analyze is
+# post-prod. Settings is pushed to the bottom (a destination, not a phase).
+# The mode id "connect" is kept for config/back-compat; the label is Equipment.
 MODES: tuple[tuple[str, str, str], ...] = (
-    ("connect", "Connect", "Connect the Seestar devices and Stellarium"),
-    ("target", "Target", "Point, plate-solve and centre the field"),
-    ("focus", "Focus", "Reach and lock best focus"),
-    ("photometry", "Photometry", "Pick target, comparison and check stars"),
-    ("capture", "Capture", "Run the sequence and monitor frame health"),
+    ("connect", "Equipment", "Connect the Seestar devices and Stellarium"),
+    ("capture", "Capture", "The night screen — image, sequence, focus, photometry"),
     ("analyze", "Analyze", "Inspect the light curve and export AAVSO"),
     ("settings", "Settings", "Observer, site, paths, appearance"),
 )
@@ -55,16 +55,6 @@ _ICON_PATHS: dict[str, str] = {
         '<path d="M1.42 9a16 16 0 0 1 21.16 0"/>'
         '<path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>'
         '<line x1="12" y1="20" x2="12.01" y2="20"/>'
-    ),
-    "target": (
-        '<circle cx="12" cy="12" r="10"/>'
-        '<line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/>'
-        '<line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/>'
-    ),
-    "focus": ('<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>'),
-    "photometry": (
-        '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 '
-        '12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>'
     ),
     "capture": (
         '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>'

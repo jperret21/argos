@@ -17,7 +17,7 @@ import logging
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from argos.core.alpaca.discovery import AlpacaDevice, discover
+from argos.core.alpaca.discovery import discover
 
 logger = logging.getLogger(__name__)
 

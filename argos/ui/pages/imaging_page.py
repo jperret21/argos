@@ -1186,6 +1186,7 @@ class ImagingPage(QWidget):
         self._focuser_dock.set_position(pos)
         hfd_str = f"{hfd:.1f}" if hfd is not None else "—"
         self._focuser_dock.set_autofocus_status(f"Step {step}/{total}  HFD={hfd_str}")
+        self._focuser_dock.vcurve.add_sample(pos, hfd)
         self.autofocus_step.emit(step, total, pos, hfd)
         self.log_message.emit("INFO", f"AF {step}/{total}  pos={pos}  HFD={hfd_str}")
 
@@ -1193,6 +1194,7 @@ class ImagingPage(QWidget):
     def _on_af_done(self, best_pos: int, best_hfd) -> None:
         self._focuser_dock.set_position(best_pos)
         hfd_str = f"{best_hfd:.1f}" if best_hfd is not None else "—"
+        self._focuser_dock.vcurve.set_best(best_pos, best_hfd)
         self.autofocus_best.emit(best_pos, best_hfd)
         self.log_message.emit("OK", f"Autofocus complete — best pos={best_pos}  HFD={hfd_str}")
         self.action_changed.emit(f"Focused  pos={best_pos}")

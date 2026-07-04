@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (
 )
 
 from argos.ui import design, theme
+from argos.ui.widgets.vcurve import VCurveWidget
 
 logger = logging.getLogger(__name__)
 
@@ -128,10 +129,17 @@ class FocuserDock(design.Card):
         # Autofocus status label (hidden when idle)
         self._af_status = QLabel("")
         self._af_status.setStyleSheet(
-            f"color:{theme.FG_MUTED}; font-size:11px; background:transparent;"
+            f"color:{theme.FG_MUTED}; font-size:{design.FONT_SIZE_SMALL}px;"
+            f" background:transparent;"
         )
         self._af_status.hide()
         outer.addWidget(self._af_status)
+
+        # The V-curve — watch the sweep converge right where you capture.
+        # Hidden until the first sweep so the rail stays compact.
+        self.vcurve = VCurveWidget()
+        self.vcurve.hide()
+        outer.addWidget(self.vcurve)
 
         # Focus quality — HFD trend + per-frame readouts (§5 / §7).
         outer.addWidget(design.horizontal_divider())
@@ -212,6 +220,8 @@ class FocuserDock(design.Card):
         if running:
             self._af_status.setText("Autofocus in progress…")
             self._af_status.show()
+            self.vcurve.start_sweep()
+            self.vcurve.show()  # stays visible after the sweep for read-back
         else:
             self._af_status.hide()
 

@@ -32,19 +32,16 @@ def test_shell_three_mode_walkthrough() -> None:
 
     shell = Shell(Config({}))
     try:
-        # ── Shell skeleton: 7 workflow phases, default = connect ──────────
+        # ── Shell skeleton: 4 modes (NINA-style), default = connect ───────
         assert set(shell._pages.keys()) == {
             "connect",
-            "target",
-            "focus",
-            "photometry",
             "capture",
             "analyze",
             "settings",
         }
         assert shell._stack.currentIndex() == shell._page_indices["connect"]
 
-        for mode in ("target", "focus", "photometry", "capture", "analyze", "settings", "connect"):
+        for mode in ("capture", "analyze", "settings", "connect"):
             shell.sidebar.select(mode)
             assert shell._stack.currentIndex() == shell._page_indices[mode], mode
 
@@ -103,64 +100,25 @@ def test_shell_three_mode_walkthrough() -> None:
         page._filterwheel_dock._move_btn.click()
         assert moves == [2]
 
-        # Workflow phases: the right types, and the deep-links into Capture.
+        # Analyze is a first-class mode.
         from argos.ui.pages.analyze_page import AnalyzeScreen
-        from argos.ui.pages.focus_page import FocusScreen
-        from argos.ui.pages.photometry_page import PhotometryScreen
-        from argos.ui.pages.target_page import TargetScreen
 
-        assert isinstance(shell._pages["target"], TargetScreen)
-        assert isinstance(shell._pages["focus"], FocusScreen)
-        assert isinstance(shell._pages["photometry"], PhotometryScreen)
         assert isinstance(shell._pages["analyze"], AnalyzeScreen)
-        shell._pages["focus"].open_controls.emit()
-        assert shell._stack.currentIndex() == shell._page_indices["capture"]
-        assert page._rail.tabText(page._rail.currentIndex()) == "Equipment"
 
-        # Focus screen: live sweep samples drive the V-curve fit + summary, and
-        # the autofocus button round-trips to the Capture engine's public entry.
-        focus = shell._pages["focus"]
-        af_starts: list[bool] = []
-        page.autofocus_step.disconnect(focus.add_sample)  # isolate from the live wiring
-        focus.autofocus_requested.disconnect(page.request_autofocus)
-        focus.autofocus_requested.connect(lambda: af_starts.append(True))
-        focus._af_btn.click()
-        assert af_starts == [True]
-        focus.set_running(True)
+        # Focuser dock V-curve: a sweep's live samples drive the fit + summary
+        # right on the Capture page (the AF signals route through the page).
+        dock = page._focuser_dock
+        dock.set_autofocus_running(True)  # resets + shows the curve
         for i, (pos, hfd) in enumerate(
             [(3800, 4.0), (3900, 2.6), (4000, 1.8), (4100, 2.0), (4200, 3.1)]
         ):
-            focus.add_sample(i + 1, 5, pos, hfd)
-        res = focus.result()
+            page._on_af_step(i + 1, 5, pos, hfd)
+        res = dock.vcurve.result()
         assert res.method == "parabola"
         assert 3900 <= res.best_position <= 4100
-        assert focus._values["fit"].text() == "parabola"
-        # A manual nudge emits a signed step (the combo default is 50).
-        nudges: list[int] = []
-        focus.nudge_requested.connect(nudges.append)
-        focus._on_nudge(-1)
-        assert nudges == [-50]
-
-        # Photometry screen: a target set renders the selection summary + a
-        # readiness verdict, and the Setup button reaches the Capture companion.
-        from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
-
-        photom = shell._pages["photometry"]
-        setups: list[bool] = []
-        photom.setup_requested.disconnect(page.open_photometry_setup)  # isolate
-        photom.setup_requested.connect(lambda: setups.append(True))
-        photom._setup_btn.click()
-        assert setups == [True]
-        photom.set_target_set(None)
-        assert photom._values["status"].text() == "No selection yet"
-        tset = TargetSet(object_name="NU Ori")
-        tset.set_role(TargetStar(role=ROLE_TARGET, ra_deg=83.6, dec_deg=22.0, name="NU Ori"))
-        tset.set_role(TargetStar(role=ROLE_COMPARISON, ra_deg=83.7, dec_deg=22.1, auid="C1"))
-        photom.set_target_set(tset)
-        assert photom._values["object"].text() == "NU Ori"
-        assert photom._values["target"].text() == "NU Ori"
-        assert photom._values["comparison"].text() == "1"
-        assert "check star" in photom._values["status"].text()  # ready, but warns no K
+        page._on_af_done(res.best_position, res.best_hfd)
+        assert "Best focus" in dock.vcurve._summary.text()
+        dock.set_autofocus_running(False)
 
         # Analyze screen: the export card surfaces the observer code (warns unset)
         # and reflects Settings once a code is configured.
@@ -185,26 +143,6 @@ def test_shell_three_mode_walkthrough() -> None:
         finally:
             pw.close()
             pw.deleteLater()
-
-        # Target screen: set_target updates the summary and arms the slew button.
-        target = shell._pages["target"]
-        slews: list[tuple[float, float]] = []
-        target.slew_requested.connect(lambda r, d: slews.append((r, d)))
-        target.set_target(5.5, 12.0, "TST")
-        assert target._values["name"].text() == "TST"
-        assert target._slew_btn.isEnabled()
-        target._slew_btn.click()
-        assert slews == [(5.5, 12.0)]
-
-        # Site coordinates (stored under site.*, as Settings writes them) must
-        # drive the observing summary. A circumpolar target (dec near +90 at a
-        # northern site) is always above the horizon, so this is time-independent.
-        shell._config.set("site.latitude", 45.0)
-        shell._config.set("site.longitude", 0.0)
-        shell._config.set("site.elevation", 0.0)
-        target.set_target(2.0, 85.0, "CIRCUMPOLAR")
-        assert target._values["altitude"].text().endswith("deg")  # numeric, not "—"
-        assert target._values["airmass"].text() not in ("—", "— (below horizon)")
 
         # Open FITS → a floating analysis window (the live viewer is untouched).
         import tempfile
