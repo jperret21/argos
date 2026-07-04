@@ -49,6 +49,13 @@ Last updated: 2026-07-04 (WS5 landed).
       View menu + F1-F7 derived from the single `MODES` tuple ·
       readiness-aware mode restore.
 
+- [x] **Navigation collapse — 4 modes, NINA-style** (`9093cf4`)
+      Target/Focus/Photometry screens deleted (thin scaffolds that deep-linked
+      back to Capture). Equipment (ex-Connect) · Capture (THE screen) ·
+      Analyze · Settings. The autofocus V-curve now lives in the FocuserDock
+      (`widgets/vcurve.py`) next to the AF button; targeting = mount-dock goto
+      + Stellarium; photometry roles = click the solved image.
+
 - [x] **WS5 — Session layer extraction** (`36337b3`) — *the keystone*
       New `argos/core/session/`: `DeviceSession` (device handles, connect/
       disconnect, discovery, typed `CameraCapabilities`, temp/position pollers,
@@ -115,17 +122,17 @@ The headline science flow, currently split across two divergent paths:
 - [ ] Update `docs/STATUS.md` + `docs/ui_design.md` to the session-layer
       architecture
 
-### Phase screens (post-WS5 unlocks, can ride along WS6–8)
+### Screens polish (can ride along WS6–8)
 
-- [ ] Move the Equipment controls out of Capture into Target / Focus (the
-      session layer now makes this possible)
-- [ ] Live field image on Target / Focus / Photometry, not only Capture
-- [ ] Connect — standardise the device-row anatomy (driver dropdown +
+- [ ] Equipment — standardise the device-row anatomy (driver dropdown +
       connect + state), one identical shape per device
 - [ ] Settings — group into one-axis sections (Observer & Site / Files &
       Folders / Astrometry / Photometry defaults / Appearance)
 - [ ] Analyze — deeper vetting: check-star + diagnostic co-plots, live
       ensemble toggle, reversible outlier removal
+- [ ] Optional target-info readout (altitude/airmass/transit/Moon from the
+      pure `sky_geometry` helper, kept in core) as a compact line in the
+      mount dock — NOT a screen
 
 ### Science & robustness (selected from `ui_design.md` §12)
 
@@ -150,8 +157,8 @@ The headline science flow, currently split across two divergent paths:
 
 ### Open design questions
 
-- [ ] Q1 — Target and Focus: keep as two screens, or merge into one?
-      (currently two; see `ui_design.md` §9)
+- [x] Q1 — Target and Focus screens: RESOLVED — both deleted; the night
+      happens in Capture (user decision, 2026-07-04)
 
 ---
 
