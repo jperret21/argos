@@ -56,6 +56,13 @@ Last updated: 2026-07-04 (WS5 landed).
       (`widgets/vcurve.py`) next to the AF button; targeting = mount-dock goto
       + Stellarium; photometry roles = click the solved image.
 
+- [x] **WS6 — Sequencer UI parity** (`69c2640`)
+      Sequence panel in the wide bottom dock (tabs Sequence/Log) · per-step
+      Interval + Dither columns · AF-on-filter-change + end-of-sequence
+      action (full completion only, logged) · JSON presets · Pause/Resume at
+      frame boundaries · active-row highlight · live pre-run duration
+      estimate · dither implemented (alternating MoveAxis nudge + settle).
+
 - [x] **WS5 — Session layer extraction** (`36337b3`) — *the keystone*
       New `argos/core/session/`: `DeviceSession` (device handles, connect/
       disconnect, discovery, typed `CameraCapabilities`, temp/position pollers,
@@ -70,24 +77,11 @@ Last updated: 2026-07-04 (WS5 landed).
 
 ## Remaining
 
-### WS6 — Sequencer UI parity + unified capture path
+### WS6 leftovers
 
-The sequencer core (`core/imaging/sequencer.py`) already supports more than
-the UI exposes. Bring `sequence_panel.py` up to parity:
-
-- [ ] Expose interval between frames, dither cadence, AF-on-filter-change
-      (all already in `SequencePlan` / `sequence_worker.py`)
-- [ ] Sequence presets — save/load via the existing `plan_to_dict` /
-      `plan_from_dict` JSON round-trip
-- [ ] Pause / resume (the worker's AF handshake shows the pattern)
-- [ ] Active-row highlight while running + pre-run duration estimate (ETA
-      from `total_frames`)
-- [ ] Widen the panel: move it out of the 360 px rail tab into a bottom dock
-      on the Capture page (the docs' cockpit layout)
-- [ ] Dither as a `move_axis` nudge + settle between frames
-- [ ] End-of-sequence actions (stop tracking / park — confirmed, never silent)
 - [ ] Single shots go through the same `_shoot_one` semantics as sequence
-      frames so filter/frame-type are correct by construction
+      frames so filter/frame-type are correct by construction (the WS1 fix
+      already made them honest; this is the structural unification)
 
 ### WS7 — Photometry consolidation
 
