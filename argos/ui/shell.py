@@ -12,16 +12,17 @@ top, and a single workspace area that swaps content per phase.
     Analyze     — inspect the light curve and export AAVSO
     Settings    — observer, site, paths, appearance
 
-The Capture page (``ImagingPage``) is the live engine: it owns the device
-handles and workers. Target / Focus / Photometry are real phase screens, each
-backed by a pure tested core helper; for the live device work they still drive
-the Capture engine (slew, autofocus sweep) or open a companion window
-(Photometry Setup) until the per-phase device split lands. Analyze launches its
-own companion window. The Connect page emits connect/disconnect
-intents that the Shell routes to the Capture page; device-state updates flow
-back to the status bar and the Connect page. Targeting is driven entirely by
-Stellarium (select an object, Ctrl+1) over the TCP telescope-control protocol —
-there is no in-app search.
+The session layer owns the hardware (WS5): ``DeviceSession`` holds the device
+handles, pollers and the Stellarium server; ``AcquisitionEngine`` holds the
+camera-ownership state machine and the capture/solve/photometry workers. The
+Capture page (``ImagingPage``) is a view over the two. Target / Focus /
+Photometry are phase screens that drive the engine (slew, autofocus sweep) or
+open a companion window (Photometry Setup). Analyze launches its own companion
+window. The Connect page emits connect/disconnect intents that the Shell
+routes to the DeviceSession; device-state updates flow back to the status bar
+and the Connect page. Targeting is driven entirely by Stellarium (select an
+object, Ctrl+1) over the TCP telescope-control protocol — there is no in-app
+search.
 """
 
 from __future__ import annotations
@@ -39,6 +40,8 @@ from PyQt6.QtWidgets import (
 )
 
 from argos.core.config import Config
+from argos.core.session.acquisition_engine import AcquisitionEngine
+from argos.core.session.device_session import DeviceSession
 from argos.ui import theme
 from argos.ui.pages.configuration_page import ConfigurationPage
 from argos.ui.pages.connection_page import ConnectionPage
@@ -50,7 +53,6 @@ from argos.ui.pages.target_page import TargetScreen
 from argos.ui.sidebar import MODES, Sidebar
 from argos.ui.statusbar import TopStatusBar
 from argos.workers.camera_service import CameraState
-from argos.workers.stellarium_worker import StellariumWorker
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +74,6 @@ class Shell(QMainWindow):
     def __init__(self, config: Config) -> None:
         super().__init__()
         self._config = config
-        self._stellarium_worker: StellariumWorker | None = None
 
         self.setWindowTitle(f"Argos  v{self.APP_VERSION}")
         self.setMinimumSize(1100, 700)
@@ -113,8 +114,15 @@ class Shell(QMainWindow):
         self._sidebar = Sidebar(self)
         self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self._sidebar)
 
+        # The session layer: DeviceSession owns the device handles/pollers
+        # and the Stellarium server; AcquisitionEngine owns the camera
+        # ownership state machine + capture/solve/photometry workers. The
+        # pages are views over the two.
+        self._session = DeviceSession(self._config, parent=self)
+        self._engine = AcquisitionEngine(self._config, self._session, parent=self)
+
         self._connection = ConnectionPage(self._config)
-        self._acquisition = ImagingPage(self._config)  # the Capture engine
+        self._acquisition = ImagingPage(self._config, self._session, self._engine)
         self._configuration = ConfigurationPage(self._config)
         self._target = TargetScreen(self._config)
         self._focus = FocusScreen()
@@ -209,90 +217,26 @@ class Shell(QMainWindow):
         self._acquisition.autofocus_state.connect(self._on_autofocus_state)
         self._status.capture_clicked.connect(lambda: self._sidebar.select("capture"))
 
-        # Connection intents → acquisition session.
-        self._connection.discover_requested.connect(self._acquisition.start_discovery)
-        self._connection.connect_requested.connect(self._on_connect_device)
-        self._connection.disconnect_requested.connect(self._on_disconnect_device)
-        self._connection.connect_all_requested.connect(self._on_connect_all)
-        self._connection.disconnect_all_requested.connect(self._acquisition.disconnect_all)
-        self._acquisition.discovered_address.connect(self._connection.set_discovered_address)
+        # Connection intents → device session (dict-dispatched per device).
+        self._connection.discover_requested.connect(self._session.discover)
+        self._connection.connect_requested.connect(self._session.connect_device)
+        self._connection.disconnect_requested.connect(self._session.disconnect_device)
+        self._connection.connect_all_requested.connect(self._session.connect_all)
+        self._connection.disconnect_all_requested.connect(self._session.disconnect_all)
+        self._session.discovered_address.connect(self._connection.set_discovered_address)
 
-        # Stellarium card (on the Connection page).
+        # Stellarium card (on the Connection page) ↔ the session-owned server.
         card = self._connection.stellarium_card
-        card.start_server_requested.connect(self._on_stellarium_start)
-        card.stop_server_requested.connect(self._on_stellarium_stop)
+        card.start_server_requested.connect(self._session.start_stellarium)
+        card.stop_server_requested.connect(self._session.stop_stellarium)
+        self._session.stellarium_state.connect(card.set_server_state)
+        self._session.stellarium_clients.connect(card.set_client_count)
+        self._session.stellarium_target.connect(self._on_stellarium_target)
+        self._session.stellarium_error.connect(self._on_stellarium_error)
 
     # ------------------------------------------------------------------
-    # Device connection routing
+    # Stellarium fan-out (the session owns the server worker)
     # ------------------------------------------------------------------
-
-    def _on_connect_device(self, device_id: str, host: str, port: int) -> None:
-        if device_id == "mount":
-            self._acquisition.connect_mount(host, port)
-        elif device_id == "camera":
-            self._acquisition.connect_camera(host, port)
-        elif device_id == "filterwheel":
-            self._acquisition.connect_filterwheel(host, port)
-        elif device_id == "focuser":
-            self._acquisition.connect_focuser(host, port)
-        else:
-            self._status.set_action(f"{device_id.title()} connect — not implemented yet")
-
-    def _on_disconnect_device(self, device_id: str) -> None:
-        if device_id == "mount":
-            self._acquisition.disconnect_mount()
-        elif device_id == "camera":
-            self._acquisition.disconnect_camera()
-        elif device_id == "filterwheel":
-            self._acquisition.disconnect_filterwheel()
-        elif device_id == "focuser":
-            self._acquisition.disconnect_focuser()
-
-    def _on_connect_all(self, host: str, port: int) -> None:
-        self._acquisition.connect_mount(host, port)
-        self._acquisition.connect_camera(host, port)
-        self._acquisition.connect_filterwheel(host, port)
-        self._acquisition.connect_focuser(host, port)
-
-    # ------------------------------------------------------------------
-    # Stellarium integration (TCP telescope-control server only)
-    # ------------------------------------------------------------------
-
-    def _on_stellarium_start(self, host: str, port: int) -> None:
-        if self._stellarium_worker is not None:
-            self._stop_stellarium_worker()
-        card = self._connection.stellarium_card
-
-        worker = StellariumWorker(host=host, port=port)
-        worker.target_received.connect(self._on_stellarium_target)
-        worker.client_count_changed.connect(card.set_client_count)
-        worker.server_started.connect(lambda: card.set_server_state(True))
-        worker.server_stopped.connect(lambda: card.set_server_state(False))
-        worker.error_occurred.connect(self._on_stellarium_error)
-        # Feed every mount position update so the Stellarium reticle follows.
-        self._acquisition.position_updated.connect(worker.update_mount_position)
-
-        self._config.set("stellarium.host", host)
-        self._config.set("stellarium.port", port)
-
-        self._stellarium_worker = worker
-        worker.start()
-        self._acquisition.log_message.emit("INFO", f"Stellarium server starting on {host}:{port}")
-
-    def _on_stellarium_stop(self) -> None:
-        self._stop_stellarium_worker()
-
-    def _stop_stellarium_worker(self) -> None:
-        worker = self._stellarium_worker
-        if worker is None:
-            return
-        try:
-            self._acquisition.position_updated.disconnect(worker.update_mount_position)
-        except (TypeError, RuntimeError):
-            pass
-        worker.stop()
-        worker.wait(3000)
-        self._stellarium_worker = None
 
     def _on_stellarium_target(self, ra_hours: float, dec_degrees: float) -> None:
         self._connection.stellarium_card.flash_goto(ra_hours, dec_degrees)
@@ -300,7 +244,6 @@ class Shell(QMainWindow):
         self._target.set_target(ra_hours, dec_degrees, "Stellarium target")
 
     def _on_stellarium_error(self, message: str) -> None:
-        self._acquisition.log_message.emit("ERROR", f"Stellarium: {message}")
         self._connection.stellarium_card.set_server_state(False, "✗  error")
 
     # ------------------------------------------------------------------
@@ -425,8 +368,10 @@ class Shell(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        self._stop_stellarium_worker()
+        # Order matters: stop the capture workers first (they hold device
+        # references), then the session's pollers + Stellarium server.
         self._acquisition.shutdown()
+        self._session.shutdown()
         self._save_state()
         self._config.save()
         logger.info("Shell closed")
