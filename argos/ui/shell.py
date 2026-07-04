@@ -47,8 +47,9 @@ from argos.ui.pages.analyze_page import AnalyzeScreen
 from argos.ui.pages.focus_page import FocusScreen
 from argos.ui.pages.photometry_page import PhotometryScreen
 from argos.ui.pages.target_page import TargetScreen
-from argos.ui.sidebar import Sidebar
+from argos.ui.sidebar import MODES, Sidebar
 from argos.ui.statusbar import TopStatusBar
+from argos.workers.camera_service import CameraState
 from argos.workers.stellarium_worker import StellariumWorker
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,11 @@ logger = logging.getLogger(__name__)
 _CFG_GEOMETRY = "ui.shell.geometry"
 _CFG_STATE = "ui.shell.state"
 _CFG_MODE = "ui.shell.mode"
+
+#: Phases that need hardware to be useful. Devices are never connected at
+#: startup, so restoring one of these would land the user on a dead screen —
+#: we land on Connect instead (the persisted mode is kept for the session).
+_HARDWARE_MODES = frozenset({"target", "focus", "photometry", "capture"})
 
 
 class Shell(QMainWindow):
@@ -78,9 +84,10 @@ class Shell(QMainWindow):
         self._restore_state()
 
         last_mode = self._config.get(_CFG_MODE) or "connect"
-        if last_mode not in self._pages:
+        if last_mode not in self._pages or last_mode in _HARDWARE_MODES:
             last_mode = "connect"
         self._sidebar.select(last_mode)
+        self._refresh_sidebar_states()
 
         logger.info("Shell initialised (mode=%s)", last_mode)
 
@@ -144,10 +151,12 @@ class Shell(QMainWindow):
         self._photometry.open_controls.connect(lambda: self._open_capture_tab("Session"))
         self._photometry.setup_requested.connect(self._acquisition.open_photometry_setup)
 
-        # Track connection state to know when to pulse the next-step hint.
+        # Connection/activity state feeding the sidebar phase dots.
         self._conn_state: dict[str, str] = dict.fromkeys(
             ("mount", "camera", "filterwheel", "focuser"), "disconnected"
         )
+        self._sequence_active = False
+        self._autofocus_active = False
 
         self._wire_pages()
 
@@ -159,17 +168,9 @@ class Shell(QMainWindow):
         bar = self.menuBar()
 
         view = bar.addMenu("View")
-        for i, (mode_id, label) in enumerate(
-            (
-                ("connect", "Connect"),
-                ("target", "Target"),
-                ("focus", "Focus"),
-                ("photometry", "Photometry"),
-                ("capture", "Capture"),
-                ("analyze", "Analyze"),
-                ("settings", "Settings"),
-            )
-        ):
+        # Derived from the sidebar's MODES tuple — one source of truth, so a
+        # phase insertion can't silently desynchronise the F-key bindings.
+        for i, (mode_id, label, _tooltip) in enumerate(MODES):
             action = QAction(label, self)
             action.setShortcut(QKeySequence(f"F{i + 1}"))
             action.triggered.connect(lambda _c, m=mode_id: self._sidebar.select(m))
@@ -198,6 +199,15 @@ class Shell(QMainWindow):
         self._acquisition.device_state_changed.connect(self._on_device_state_changed)
         self._acquisition.tracking_changed.connect(self._status.set_tracking)
         self._acquisition.action_changed.connect(self._status.set_action)
+
+        # Capture visibility on every screen: sequence progress + LIVE chip in
+        # the top strip, activity dots on the sidebar (WS4).
+        self._acquisition.sequence_running.connect(self._on_sequence_running)
+        self._acquisition.sequence_progress.connect(self._status.set_sequence_progress)
+        self._acquisition.hfd_updated.connect(self._status.set_hfd)
+        self._acquisition.camera_state_changed.connect(self._on_camera_state)
+        self._acquisition.autofocus_state.connect(self._on_autofocus_state)
+        self._status.capture_clicked.connect(lambda: self._sidebar.select("capture"))
 
         # Connection intents → acquisition session.
         self._connection.discover_requested.connect(self._acquisition.start_discovery)
@@ -302,8 +312,42 @@ class Shell(QMainWindow):
         self._connection.set_device_state(device_id, state, info)
 
         self._conn_state[device_id] = state
-        if self._conn_state["mount"] == "connected" and self._conn_state["camera"] == "connected":
-            self._sidebar.pulse("capture")
+        self._refresh_sidebar_states()
+
+    def _on_sequence_running(self, running: bool) -> None:
+        self._sequence_active = running
+        self._status.set_sequence_running(running)
+        self._refresh_sidebar_states()
+
+    def _on_autofocus_state(self, running: bool) -> None:
+        self._autofocus_active = running
+        self._refresh_sidebar_states()
+
+    def _on_camera_state(self, state: CameraState) -> None:
+        self._status.set_live(state is CameraState.LIVE)
+
+    def _refresh_sidebar_states(self) -> None:
+        """Recompute the sidebar phase dots from device + activity state.
+
+        ready = prerequisites met, active = running now, blocked = a required
+        device is missing. Connect/Analyze/Settings stay neutral — they are
+        always usable.
+        """
+        def up(*devices: str) -> bool:
+            return all(self._conn_state[d] in ("connected", "busy") for d in devices)
+
+        self._sidebar.set_mode_state("target", "ready" if up("mount") else "blocked")
+        if self._autofocus_active:
+            self._sidebar.set_mode_state("focus", "active")
+        else:
+            self._sidebar.set_mode_state(
+                "focus", "ready" if up("camera", "focuser") else "blocked"
+            )
+        self._sidebar.set_mode_state("photometry", "ready" if up("camera") else "blocked")
+        if self._sequence_active:
+            self._sidebar.set_mode_state("capture", "active")
+        else:
+            self._sidebar.set_mode_state("capture", "ready" if up("camera") else "blocked")
 
     def _on_mode_changed(self, mode_id: str) -> None:
         index = self._page_indices.get(mode_id)

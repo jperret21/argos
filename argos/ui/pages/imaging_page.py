@@ -193,6 +193,11 @@ class ImagingPage(QWidget):
     autofocus_step = pyqtSignal(int, int, int, object)  # step, total, pos, hfd|None
     autofocus_best = pyqtSignal(int, object)  # best position, best hfd|None
     autofocus_state = pyqtSignal(bool)  # sweep running / stopped
+    # Capture visibility for the Shell's persistent strip (WS4).
+    sequence_running = pyqtSignal(bool)
+    sequence_progress = pyqtSignal(str, int, int, float)  # object, done, total, eta_s
+    camera_state_changed = pyqtSignal(object)  # CameraState ownership transitions
+    hfd_updated = pyqtSignal(object)  # per-frame HFD, float | None
     _filter_moved = pyqtSignal(int, str)  # internal: wheel settled at (pos, name)
 
     def __init__(self, config: Config, parent: QWidget | None = None) -> None:
@@ -405,6 +410,7 @@ class ImagingPage(QWidget):
     def _wire_signals(self) -> None:
         # Camera-ownership state machine → status bar + session log.
         self._camera_service.state_changed.connect(self._on_camera_state)
+        self._camera_service.state_changed.connect(self.camera_state_changed)
         self._camera_service.acquire_refused.connect(
             lambda reason: self.log_message.emit("WARN", reason)
         )
@@ -765,6 +771,7 @@ class ImagingPage(QWidget):
         self._disp_shape = pf.display.shape[:2]
         self._camera_dock.set_hfd(pf.metrics.hfd)
         self._focuser_dock.push_metrics(pf.metrics)
+        self.hfd_updated.emit(pf.metrics.hfd)  # Shell capture strip
         self._update_stats(pf)
         # Histogram first: sets the slider/data range, then the viewer's
         # auto-stretch emits levels that the dock sliders sync to.
@@ -1548,6 +1555,13 @@ class ImagingPage(QWidget):
         self._sequence.frame_image.connect(self._on_seq_frame_image)
         self._sequence.frame_saved.connect(self._on_seq_frame_saved)
         self._sequence.progress.connect(self._sequence_panel.set_progress)
+        # Fan progress out to the Shell's persistent capture strip too.
+        seq_object = (plan.object_name or "").strip()
+        self._sequence.progress.connect(
+            lambda done, total, eta, o=seq_object: self.sequence_progress.emit(
+                o, done, total, eta
+            )
+        )
         self._sequence.autofocus_due.connect(self._on_seq_autofocus_due)
         self._sequence.error_occurred.connect(
             lambda m: self.log_message.emit("ERROR", f"Sequence: {m}")
@@ -1556,6 +1570,7 @@ class ImagingPage(QWidget):
 
         self._sequence_panel.set_running(True)
         self._sequence.start()
+        self.sequence_running.emit(True)
         total = sum(s.count for s in plan.steps if s.enabled and s.count > 0) * max(1, plan.repeat)
         self.log_message.emit("CMD", f"Sequence started — {total} frame(s).")
 
@@ -1633,6 +1648,7 @@ class ImagingPage(QWidget):
         # the sequence died while a mid-run autofocus held the camera, this
         # just cancels the pending resume — AF releases to IDLE on its own.
         self._camera_service.release(CameraState.SEQUENCE)
+        self.sequence_running.emit(False)
         self.log_message.emit(
             "OK" if completed else "INFO",
             "Sequence complete." if completed else "Sequence stopped.",

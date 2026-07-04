@@ -1,8 +1,9 @@
-"""Permanent top status strip — devices, tracking, last action.
+"""Permanent top status strip — devices, capture progress, tracking, last action.
 
 Sits between the toolbar and the mode workspace. Always visible across all
 modes so the user never wonders "am I still connected?" or "is the mount
-tracking?". Updated via slots called by the Shell from device signals.
+tracking?" — and, during a run, never loses sight of the sequence. Updated via
+slots called by the Shell from device/sequence signals.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import logging
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QWidget
 
-from argos.ui import theme
+from argos.ui import design, theme
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +31,15 @@ class TopStatusBar(QWidget):
     """One-line summary of the observatory state.
 
     Layout (left → right):
-        [● Mount]  [● Camera]  [● Filter Wheel]  [● Focuser]    Tracking ON   Last: …
+        [● Mount] [● Camera] [● Filter Wheel] [● Focuser]   ●REC M42 · 34/120 · ETA 12m · HFD 2.1   Tracking ON   Last: …
+
+    The capture strip (middle) is hidden while idle; during a sequence it stays
+    visible on every screen and clicking it jumps to the Capture mode. A LIVE
+    chip appears while the user preview loop owns the camera.
     """
 
     badge_clicked = pyqtSignal(str)   # device id ('mount', 'camera', …)
+    capture_clicked = pyqtSignal()    # click on the capture strip → Capture mode
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -41,6 +47,14 @@ class TopStatusBar(QWidget):
         self.setStyleSheet(
             f"background:{theme.BG}; border-bottom:1px solid {theme.BORDER};"
         )
+        # Capture-strip state (rendered together by _render_capture).
+        self._seq_object = ""
+        self._seq_done = 0
+        self._seq_total = 0
+        self._seq_eta_s = 0.0
+        self._seq_running = False
+        self._live = False
+        self._hfd: float | None = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -58,9 +72,19 @@ class TopStatusBar(QWidget):
 
         layout.addStretch()
 
+        # Capture strip — sequence progress + LIVE chip, hidden while idle.
+        self._capture_lbl = _ClickLabel()
+        self._capture_lbl.setToolTip("Capture in progress — click to open the Capture screen")
+        self._capture_lbl.clicked.connect(self.capture_clicked)
+        self._capture_lbl.hide()
+        layout.addWidget(self._capture_lbl)
+
+        layout.addStretch()
+
         self._tracking_lbl = QLabel("Tracking —")
         self._tracking_lbl.setStyleSheet(
-            f"color:{theme.FG_MUTED}; font-size:11px; background:transparent;"
+            f"color:{theme.FG_MUTED}; font-size:{design.FONT_SIZE_SMALL}px;"
+            f" background:transparent;"
         )
         layout.addWidget(self._tracking_lbl)
 
@@ -73,13 +97,13 @@ class TopStatusBar(QWidget):
 
         self._action_lbl = QLabel("Idle")
         self._action_lbl.setStyleSheet(
-            f"color:{theme.FG_MUTED}; font-size:11px; background:transparent;"
-            f" font-family:{theme.FONT_MONO};"
+            f"color:{theme.FG_MUTED}; font-size:{design.FONT_SIZE_SMALL}px;"
+            f" background:transparent; font-family:{theme.FONT_MONO};"
         )
         layout.addWidget(self._action_lbl)
 
     # ------------------------------------------------------------------
-    # Slot API
+    # Slot API — devices
     # ------------------------------------------------------------------
 
     def set_device_state(self, device_id: str, state: str, info: str = "") -> None:
@@ -108,7 +132,7 @@ class TopStatusBar(QWidget):
             self._tracking_lbl.setText("Tracking OFF")
             color = theme.WARNING
         self._tracking_lbl.setStyleSheet(
-            f"color:{color}; font-size:11px; background:transparent;"
+            f"color:{color}; font-size:{design.FONT_SIZE_SMALL}px; background:transparent;"
         )
 
     def set_action(self, text: str) -> None:
@@ -118,9 +142,84 @@ class TopStatusBar(QWidget):
         badge = self._badges.get(device_id)
         return badge.state() if badge else "disconnected"
 
+    # ------------------------------------------------------------------
+    # Slot API — capture strip
+    # ------------------------------------------------------------------
+
+    def set_sequence_running(self, running: bool) -> None:
+        """Show/clear the sequence part of the capture strip."""
+        self._seq_running = bool(running)
+        if not running:
+            self._seq_object = ""
+            self._seq_done = self._seq_total = 0
+            self._seq_eta_s = 0.0
+        self._render_capture()
+
+    def set_sequence_progress(self, object_name: str, done: int, total: int,
+                              eta_seconds: float) -> None:
+        self._seq_object = object_name
+        self._seq_done = done
+        self._seq_total = total
+        self._seq_eta_s = eta_seconds
+        self._render_capture()
+
+    def set_live(self, live: bool) -> None:
+        """LIVE chip — the user preview loop owns the camera."""
+        self._live = bool(live)
+        self._render_capture()
+
+    def set_hfd(self, hfd: float | None) -> None:
+        """Latest per-frame HFD — shown inside the strip during a run."""
+        self._hfd = hfd
+        if self._seq_running or self._live:
+            self._render_capture()
+
+    def _render_capture(self) -> None:
+        if not (self._seq_running or self._live):
+            self._capture_lbl.hide()
+            return
+        if self._seq_running:
+            parts = ["●REC"]
+            if self._seq_object:
+                parts.append(self._seq_object)
+            if self._seq_total:
+                parts.append(f"{self._seq_done}/{self._seq_total}")
+                m, s = divmod(max(0, int(self._seq_eta_s)), 60)
+                parts.append(f"ETA {m}m{s:02d}s")
+            if self._hfd is not None:
+                parts.append(f"HFD {self._hfd:.1f}")
+            color = theme.DANGER
+        else:  # LIVE only
+            parts = ["LIVE"]
+            if self._hfd is not None:
+                parts.append(f"HFD {self._hfd:.1f}")
+            color = theme.SUCCESS
+        self._capture_lbl.setText("  ·  ".join(parts))
+        self._capture_lbl.setStyleSheet(
+            f"color:{color}; font-size:{design.FONT_SIZE_SMALL}px; font-weight:600;"
+            f" background:transparent; font-family:{theme.FONT_MONO}; padding:0 8px;"
+        )
+        self._capture_lbl.show()
+
+
+class _ClickLabel(QLabel):
+    """QLabel that emits ``clicked`` on left-button press."""
+
+    clicked = pyqtSignal()
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
 
 class _Badge(QLabel):
-    """Click-aware device badge — color reflects state."""
+    """Click-aware device badge — shape + color reflect state (the shape
+    distinction keeps busy/connected readable under red-light or CVD)."""
 
     clicked = pyqtSignal(object)
 
@@ -141,7 +240,7 @@ class _Badge(QLabel):
         glyph = {
             "disconnected": "○",
             "connected":    "●",
-            "busy":         "●",
+            "busy":         "◐",
             "error":        "✗",
         }.get(state, "○")
         color = {
@@ -156,10 +255,10 @@ class _Badge(QLabel):
             text += f" · {info}"
         self.setText(text)
         self.setStyleSheet(
-            f"color:{color}; font-size:11px; padding:4px 8px;"
+            f"color:{color}; font-size:{design.FONT_SIZE_SMALL}px; padding:4px 8px;"
             f" background:transparent;"
         )
 
-    def mousePressEvent(self, event) -> None:
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
         self.clicked.emit(event)
         super().mousePressEvent(event)

@@ -73,6 +73,8 @@ FONT_SIZE_LABEL = 13
 FONT_SIZE_METRIC = 16
 FONT_SIZE_HEADING = 22
 FONT_SIZE_SECTION = 13
+FONT_SIZE_SMALL = 11  # status bar, chips
+FONT_SIZE_TINY = 10  # sidebar labels
 
 # Default max content width for sparse, form-style pages so they don't stretch
 # edge-to-edge on wide windows. Dense workspaces (Imaging) ignore this.

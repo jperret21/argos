@@ -9,8 +9,9 @@ Icons are inline SVG (Feather, MIT) rendered with QtSvg — no emoji, no shipped
 asset files — so they stay sharp at any DPI and recolour with the theme (muted →
 hover → accent) by injecting the stroke colour.
 
-``pulse(mode_id)`` is kept as a no-op for API compatibility (the Shell calls it
-as a guidance hint); the attention blink was removed as visually distracting.
+Each entry carries a small state dot (``set_mode_state``): green = the phase's
+prerequisites are met, accent = the phase is actively running (e.g. a sequence
+on Capture), amber = blocked (a required device is missing). No dot = neutral.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from PyQt6.QtGui import QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import QLabel, QSizePolicy, QToolBar, QVBoxLayout, QWidget
 
-from argos.ui import theme
+from argos.ui import design, theme
 
 logger = logging.getLogger(__name__)
 
@@ -113,8 +114,21 @@ def _draw_icon(mode: str, color: str, px: int = _ICON_PX) -> QPixmap:
     return pm
 
 
+#: Phase-state dot colours (``set_mode_state``). ``none`` shows no dot.
+_STATE_DOT_COLORS: dict[str, str | None] = {
+    "none": None,
+    "ready": theme.SUCCESS,
+    "active": theme.ACCENT,
+    "blocked": theme.WARNING,
+}
+
+
 class _NavButton(QWidget):
-    """One sidebar entry: a recoloured line icon above a wrapped label."""
+    """One sidebar entry: a recoloured line icon above a wrapped label.
+
+    Keyboard-accessible: Tab focuses it (drawn like hover), Space/Return
+    activates it — the F-key shortcuts stay available via the View menu.
+    """
 
     clicked = pyqtSignal()
 
@@ -125,10 +139,13 @@ class _NavButton(QWidget):
         self._mode_id = mode_id
         self._selected = False
         self._hover = False
+        self._focused = False
         self.setToolTip(tooltip)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedSize(88, 66)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.setAccessibleName(label)
 
         lay = QVBoxLayout(self)
         # Left margin clears the 3px accent border (a QSS border on a plain
@@ -145,11 +162,30 @@ class _NavButton(QWidget):
         self._text.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         lay.addWidget(self._icon, 0, Qt.AlignmentFlag.AlignHCenter)
         lay.addWidget(self._text, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        # Phase-state dot, floating in the top-right corner over the layout.
+        self._dot = QLabel("●", self)
+        self._dot.setStyleSheet("background:transparent; font-size:8px;")
+        self._dot.adjustSize()
+        self._dot.move(self.width() - self._dot.width() - 6, 5)
+        self._dot.hide()
+
         self._refresh()
 
     def set_selected(self, selected: bool) -> None:
         self._selected = bool(selected)
         self._refresh()
+
+    def set_state(self, state: str) -> None:
+        """Show the phase-state dot: 'none' | 'ready' | 'active' | 'blocked'."""
+        color = _STATE_DOT_COLORS.get(state)
+        if color is None:
+            self._dot.hide()
+            return
+        self._dot.setStyleSheet(
+            f"background:transparent; font-size:8px; color:{color};"
+        )
+        self._dot.show()
 
     def enterEvent(self, event) -> None:  # noqa: N802 (Qt override)
         self._hover = True
@@ -161,6 +197,22 @@ class _NavButton(QWidget):
         self._refresh()
         super().leaveEvent(event)
 
+    def focusInEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        self._focused = True
+        self._refresh()
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        self._focused = False
+        self._refresh()
+        super().focusOutEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.clicked.emit()
+            return
+        super().keyPressEvent(event)
+
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 (Qt override)
         if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.pos()):
             self.clicked.emit()
@@ -169,13 +221,14 @@ class _NavButton(QWidget):
     def _refresh(self) -> None:
         if self._selected:
             fg, bg, border = theme.ACCENT, theme.SURFACE, theme.ACCENT
-        elif self._hover:
+        elif self._hover or self._focused:
             fg, bg, border = theme.FG, theme.SURFACE, "transparent"
         else:
             fg, bg, border = theme.FG_MUTED, "transparent", "transparent"
         self.setStyleSheet(f"background:{bg}; border-left:3px solid {border};")
         self._text.setStyleSheet(
-            f"color:{fg}; font-size:10px; font-weight:500; background:transparent;"
+            f"color:{fg}; font-size:{design.FONT_SIZE_TINY}px; font-weight:500;"
+            f" background:transparent;"
         )
         self._icon.setPixmap(_draw_icon(self._mode_id, fg))
 
@@ -223,9 +276,16 @@ class Sidebar(QToolBar):
         self._current = mode_id
         self.mode_changed.emit(mode_id)
 
-    def pulse(self, mode_id: str | None) -> None:  # noqa: ARG002 (kept for API compat)
-        """No-op. The attention blink was removed (visually distracting)."""
-        return
+    def set_mode_state(self, mode_id: str, state: str) -> None:
+        """Set the phase-state dot on a mode entry.
+
+        Args:
+            mode_id: One of the :data:`MODES` ids.
+            state:   ``"none"`` | ``"ready"`` | ``"active"`` | ``"blocked"``.
+        """
+        btn = self._buttons.get(mode_id)
+        if btn is not None:
+            btn.set_state(state)
 
     # ------------------------------------------------------------------
     # Internals
