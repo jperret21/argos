@@ -43,6 +43,9 @@ _DOWNLOAD_MARGIN_S = 15.0
 _POLL_MS = 200
 #: Max time to wait for the filter wheel to settle after a move.
 _FILTER_SETTLE_S = 20.0
+#: Max time to wait for the controller to resume after an autofocus request —
+#: a lost AF must never hang the night's run.
+_AF_RESUME_TIMEOUT_S = 120.0
 
 #: Callback that builds a fresh FrameContext for the current frame. Called with
 #: keyword args ``object_name`` and ``filter_name``; returns a FrameContext.
@@ -323,10 +326,24 @@ class SequenceWorker(QThread):
             pass
 
     def _await_autofocus(self) -> None:
-        """Signal the controller and block until resumed (or stopped)."""
+        """Signal the controller and block until resumed (or stopped).
+
+        Bounded wait: if the controller never calls
+        :meth:`resume_after_autofocus` (lost AF worker, UI bug), abort the
+        sequence after ``_AF_RESUME_TIMEOUT_S`` instead of hanging all night.
+        """
         self._resume.clear()
         self.autofocus_due.emit()
-        self._resume.wait()  # set by resume_after_autofocus() or stop()
+        # Set by resume_after_autofocus() or stop(); False on timeout.
+        if not self._resume.wait(_AF_RESUME_TIMEOUT_S):
+            logger.error(
+                "Autofocus handshake timed out after %.0fs — aborting sequence",
+                _AF_RESUME_TIMEOUT_S,
+            )
+            self.error_occurred.emit(
+                f"Autofocus did not resume within {_AF_RESUME_TIMEOUT_S:.0f}s — sequence aborted"
+            )
+            self._stop_flag = True
 
     def _interruptible_sleep(self, seconds: float) -> bool:
         """Sleep in small slices; return False if a stop was requested."""

@@ -11,10 +11,12 @@ UI-only — the ImagingPage wires the signal to the camera/worker.
 Public surface:
     Signals
         take_shot_clicked()
+        filter_selected(name: str)   # user picked a filter → move the wheel
     Methods (called by ImagingPage)
         params()       -> CaptureParams
         set_enabled(connected: bool)
         set_filter_options(names: list[str])
+        set_current_filter(name: str)
         set_hfd(value: float | None)
 """
 
@@ -57,6 +59,7 @@ class CameraDock(design.Card):
     """Single-shot capture controls for the Capture tab."""
 
     take_shot_clicked = pyqtSignal()
+    filter_selected = pyqtSignal(str)  # user picked a filter in the combo
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Camera", parent)
@@ -91,6 +94,11 @@ class CameraDock(design.Card):
         row += 1
         grid.addWidget(design.MutedLabel("Filter"), row, 0)
         self._filter_combo = self._combo(_DEFAULT_FILTERS)
+        # ``activated`` fires only on user interaction — programmatic syncs
+        # (set_current_filter / set_filter_options) never trigger a wheel move.
+        self._filter_combo.activated.connect(
+            lambda _i: self.filter_selected.emit(self._filter_combo.currentText())
+        )
         grid.addWidget(self._filter_combo, row, 1)
 
         row += 1
@@ -159,6 +167,12 @@ class CameraDock(design.Card):
         if idx >= 0:
             self._filter_combo.setCurrentIndex(idx)
         self._filter_combo.blockSignals(False)
+
+    def set_current_filter(self, name: str) -> None:
+        """Sync the combo to the wheel's real position (no signal emitted)."""
+        idx = self._filter_combo.findText(name)
+        if idx >= 0:
+            self._filter_combo.setCurrentIndex(idx)
 
     def set_hfd(self, value: float | None) -> None:
         if value is None:

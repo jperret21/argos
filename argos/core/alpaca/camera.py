@@ -318,14 +318,17 @@ class Camera:
             dtype = _TYPECODE_DTYPE.get(raw.typecode, np.int32)
 
             # Binary layout: column-major [X][Y] — Dimension1=width, Dimension2=height
-            # np.frombuffer → zero-copy view; .T → metadata change only; .astype → one copy
+            # np.frombuffer → zero-copy view; .T → metadata change only
             arr = (
                 np.frombuffer(raw, dtype=dtype)
                 .reshape(meta.Dimension1, meta.Dimension2)
-                .T.astype(np.uint16)  # (height, width)  # makes a writeable copy
+                .T  # (height, width)
             )
             if dtype not in (np.uint16,):
-                np.clip(arr, 0, 65535, out=arr)
+                # Clamp in the source dtype BEFORE the uint16 cast — casting
+                # first would wrap out-of-range values instead of saturating.
+                arr = np.clip(arr, 0, 65535)
+            arr = arr.astype(np.uint16)  # makes a writeable copy
             logger.info(
                 "Image downloaded (ImageBytes): %.2fs  shape=%s  typecode=%s",
                 time.perf_counter() - t0,

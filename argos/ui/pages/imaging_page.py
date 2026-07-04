@@ -111,6 +111,12 @@ def _stat_key(text: str) -> QLabel:
     return lbl
 
 
+def _is_light_frame(frame_type: str) -> bool:
+    """Shutter semantics for a CameraDock frame type — darks/bias expose with
+    ``light=False`` so single shots are honest about what they captured."""
+    return frame_type not in ("Dark Frame", "Bias Frame")
+
+
 class _JogRunnable(QRunnable):
     """One-shot off-thread MoveAxis call.
 
@@ -402,6 +408,7 @@ class ImagingPage(QWidget):
 
         # Camera dock
         self._camera_dock.take_shot_clicked.connect(self._on_take_shot)
+        self._camera_dock.filter_selected.connect(self._on_camera_dock_filter)
         self._sequence_panel.start_requested.connect(self._on_sequence_start)
         self._sequence_panel.stop_requested.connect(self._on_sequence_stop)
 
@@ -550,9 +557,27 @@ class ImagingPage(QWidget):
             _FilterMoveRunnable(self._filterwheel, position, self._filter_moved, self.log_message)
         )
 
+    def _on_camera_dock_filter(self, name: str) -> None:
+        """The CameraDock filter combo physically moves the wheel — the FITS
+        metadata must describe the filter that was really in front of the sensor."""
+        if not self._filterwheel:
+            self.log_message.emit(
+                "WARN", f"Filter wheel not connected — '{name}' is metadata only."
+            )
+            return
+        position = next(
+            (i for i, n in POSITION_NAMES.items() if str(n).lower() == name.lower()), None
+        )
+        if position is None:
+            self.log_message.emit("WARN", f"No wheel position matches filter '{name}'.")
+            return
+        self._on_filter_move(position)
+
     @pyqtSlot(int, str)
     def _on_filter_moved(self, position: int, name: str) -> None:
         self._filterwheel_dock.set_position(position, name)
+        # Keep the CameraDock combo (single-shot metadata) on the real position.
+        self._camera_dock.set_current_filter(name)
         self.device_state_changed.emit("filterwheel", "connected", name)
         self.log_message.emit("CMD", f"Filter → {name}")
 
@@ -1245,6 +1270,11 @@ class ImagingPage(QWidget):
             self._overlay_bar.set_available(name, False)
 
     def _on_take_shot(self) -> None:
+        if self._sequence and self._sequence.isRunning():
+            self.log_message.emit(
+                "WARN", "Sequence running — the sequence owns the camera. Stop it first."
+            )
+            return
         self._capture_pending = 1
         if not (self._preview and self._preview.isRunning()):
             self._start_preview()
@@ -1337,8 +1367,12 @@ class ImagingPage(QWidget):
             return
         self.log_message.emit("CMD", "Sequence: autofocus…")
         self._on_autofocus_requested()
-        if self._autofocus is not None:
+        if self._autofocus is not None and self._autofocus.isRunning():
             self._autofocus.finished.connect(self._resume_sequence)
+        else:
+            # AF refused/failed to start — resume immediately, never leave the
+            # sequence blocked on the handshake.
+            self._resume_sequence()
 
     def _resume_sequence(self) -> None:
         if self._sequence is not None:
@@ -1392,6 +1426,7 @@ class ImagingPage(QWidget):
             camera=self._camera,
             exposure=params.exposure_s,
             gain=params.gain,
+            light=_is_light_frame(params.frame_type),
         )
         self._preview.frame_ready.connect(self._on_frame)
         self._preview.status_updated.connect(self.action_changed)
@@ -1418,7 +1453,12 @@ class ImagingPage(QWidget):
         # Update worker settings for the next frame from the dock form.
         params = self._camera_dock.params()
         if self._preview:
-            self._preview.update_settings(params.exposure_s, params.gain, scale=1)
+            self._preview.update_settings(
+                params.exposure_s,
+                params.gain,
+                scale=1,
+                light=_is_light_frame(params.frame_type),
+            )
 
         try:  # exposure-midpoint time → the light curve's true epoch
             self._last_exposure_mid = start_dt + (end_dt - start_dt) / 2
@@ -1629,6 +1669,11 @@ class ImagingPage(QWidget):
     def _on_autofocus_requested(self) -> None:
         if not (self._focuser and self._camera):
             self.log_message.emit("WARN", "Autofocus needs focuser + camera connected")
+            return
+        if self._preview and self._preview.isRunning():
+            self.log_message.emit(
+                "WARN", "Live preview running — stop it before autofocus (one camera owner)."
+            )
             return
         if self._autofocus and self._autofocus.isRunning():
             return

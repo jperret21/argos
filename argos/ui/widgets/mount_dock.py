@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QGridLayout,
+    QMessageBox,
     QPushButton,
     QWidget,
 )
@@ -192,7 +193,8 @@ class MountDock(design.Card):
         self._sync_btn.setToolTip("Sync mount pointing model to current RA/Dec")
         self._sync_btn.clicked.connect(self.sync_to_current_clicked)
         self._park_btn = design.SecondaryButton("⊙  Park")
-        self._park_btn.clicked.connect(self.park_clicked)
+        self._park_btn.setToolTip("Park the mount — physically closes the Seestar arm")
+        self._park_btn.clicked.connect(self._on_park_clicked)
         self._jog_btn = design.SecondaryButton("✥  Jog dialog…")
         self._jog_btn.setToolTip("Open the floating jog dialog (arrow-key navigation, stay-on-top)")
         self._jog_btn.clicked.connect(self.manual_control_requested)
@@ -253,6 +255,20 @@ class MountDock(design.Card):
 
     def _on_slew(self) -> None:
         self.goto_clicked.emit(self._goto_ra.value(), self._goto_dec.value())
+
+    def _on_park_clicked(self) -> None:
+        """Confirm before parking — it physically closes the Seestar arm and
+        would end any capture in progress."""
+        reply = QMessageBox.question(
+            self,
+            "Park mount",
+            "Parking physically closes the Seestar arm and stops tracking.\n\n"
+            "Park the mount now?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.park_clicked.emit()
 
     def _on_tracking_toggle(self, checked: bool) -> None:
         self.tracking_toggled.emit(checked)
