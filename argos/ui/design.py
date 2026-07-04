@@ -205,6 +205,7 @@ class SliderSpin(QWidget):
         self._min = float(minimum)
         self._max = float(maximum)
         self._decimals = decimals
+        self._logarithmic = logarithmic
         self._log = logarithmic and self._min > 0.0
         self._guard = False
 
@@ -285,6 +286,21 @@ class SliderSpin(QWidget):
         self._spin.setValue(value if self._decimals > 0 else int(round(value)))
         self._slider.setValue(self._to_slider(value))
         self._guard = False
+
+    def setRange(self, minimum: float, maximum: float) -> None:
+        """Retarget the slider/spin range (e.g. driver-derived camera limits),
+        clamping the current value into the new range."""
+        value = self.value()
+        self._min = float(minimum)
+        self._max = float(maximum)
+        self._log = self._logarithmic and self._min > 0.0
+        self._guard = True
+        if self._decimals > 0:
+            self._spin.setRange(self._min, self._max)
+        else:
+            self._spin.setRange(int(self._min), int(self._max))
+        self._guard = False
+        self.setValue(min(max(value, self._min), self._max))
 
 
 # --------------------------------------------------------------------------- #

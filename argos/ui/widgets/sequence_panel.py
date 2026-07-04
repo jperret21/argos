@@ -35,6 +35,10 @@ _FRAME_TYPES = ("Light", "Dark", "Flat", "Bias")
 _DEFAULT_FILTERS = ("LP", "IR-cut", "Dark")
 _COLUMNS = ("✓", "Type", "Filter", "Exp (s)", "Gain", "Count")
 
+#: Fallback limits when no camera is connected (the historical hardcodes).
+_DEFAULT_GAIN_RANGE = (0, 600)
+_DEFAULT_EXPOSURE_RANGE = (0.01, 600.0)
+
 
 class SequencePanel(design.Card):
     """Editable multi-step sequence table + run controls."""
@@ -45,6 +49,8 @@ class SequencePanel(design.Card):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Sequence", parent)
         self._filters = list(_DEFAULT_FILTERS)
+        self._gain_range = _DEFAULT_GAIN_RANGE
+        self._exposure_range = _DEFAULT_EXPOSURE_RANGE
         self._running = False
         self._build_ui()
         self._add_row()  # start with one editable row
@@ -151,13 +157,13 @@ class SequencePanel(design.Card):
         self._table.setCellWidget(r, 2, filter_combo)
 
         exp = QDoubleSpinBox()
-        exp.setRange(0.01, 600.0)
+        exp.setRange(*self._exposure_range)
         exp.setDecimals(2)
         exp.setValue(step.exposure_s)
         self._table.setCellWidget(r, 3, exp)
 
         gain = QSpinBox()
-        gain.setRange(0, 600)
+        gain.setRange(*self._gain_range)
         gain.setValue(step.gain)
         self._table.setCellWidget(r, 4, gain)
 
@@ -236,6 +242,31 @@ class SequencePanel(design.Card):
     # ------------------------------------------------------------------
     # Public API (called by ImagingPage)
     # ------------------------------------------------------------------
+
+    def set_camera_limits(
+        self,
+        gain_min: int | None = None,
+        gain_max: int | None = None,
+        exposure_min: float | None = None,
+        exposure_max: float | None = None,
+    ) -> None:
+        """Retarget the per-step exposure/gain spinboxes to the connected
+        camera's driver-reported limits; ``None``s restore the defaults."""
+        if gain_min is not None and gain_max is not None and gain_max > gain_min:
+            self._gain_range = (int(gain_min), int(gain_max))
+        else:
+            self._gain_range = _DEFAULT_GAIN_RANGE
+        if exposure_min is not None and exposure_max is not None:
+            lo = max(float(exposure_min), _DEFAULT_EXPOSURE_RANGE[0])
+            if exposure_max > lo:
+                self._exposure_range = (lo, float(exposure_max))
+            else:
+                self._exposure_range = _DEFAULT_EXPOSURE_RANGE
+        else:
+            self._exposure_range = _DEFAULT_EXPOSURE_RANGE
+        for r in range(self._table.rowCount()):
+            self._table.cellWidget(r, 3).setRange(*self._exposure_range)
+            self._table.cellWidget(r, 4).setRange(*self._gain_range)
 
     def set_filter_options(self, names: list[str]) -> None:
         self._filters = list(names or _DEFAULT_FILTERS)

@@ -70,6 +70,12 @@ class AstrometryController(QObject):
         """The last good :class:`FrameWCS`, or ``None``."""
         return self._wcs
 
+    @property
+    def green_shape(self) -> tuple[int, int] | None:
+        """Green shape of the frame the WCS was solved against — its pixel
+        coordinates are only valid for frames of this geometry."""
+        return self._green_shape
+
     def is_busy(self) -> bool:
         return self._worker is not None and self._worker.isRunning()
 

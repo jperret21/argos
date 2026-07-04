@@ -93,7 +93,7 @@ from argos.workers.autofocus_worker import AutofocusWorker
 from argos.workers.catalog_worker import CatalogRequest, CatalogWorker
 from argos.workers.discovery_worker import DiscoveryWorker
 from argos.workers.exposure_worker import LivePreviewWorker
-from argos.workers.polling_worker import MountPollingWorker
+from argos.workers.polling_worker import MountPollingWorker, TemperaturePollingWorker
 from argos.workers.preview_processor import PreviewProcessor
 from argos.workers.sequence_worker import SequenceWorker
 
@@ -193,6 +193,8 @@ class ImagingPage(QWidget):
         self._filterwheel: FilterWheel | None = None
         self._discovery: DiscoveryWorker | None = None
         self._polling: MountPollingWorker | None = None
+        self._cam_temp_poll: TemperaturePollingWorker | None = None
+        self._foc_temp_poll: TemperaturePollingWorker | None = None
         self._preview: LivePreviewWorker | None = None
         self._autofocus: AutofocusWorker | None = None
         self._sequence: SequenceWorker | None = None
@@ -235,6 +237,12 @@ class ImagingPage(QWidget):
 
         # Single-shot capture: number of upcoming preview frames to save.
         self._capture_pending = 0
+        # Live loop: True while the user has explicitly started Live (a single
+        # Take-shot also spins the preview worker, but only transiently).
+        self._live_requested = False
+        # True when the frame behind _last_raw is a decimated (half-quality)
+        # preview — solve/photometry must skip it (wrong plate scale).
+        self._last_raw_decimated = False
 
         self._build_ui()
         self._wire_signals()
@@ -408,6 +416,10 @@ class ImagingPage(QWidget):
 
         # Camera dock
         self._camera_dock.take_shot_clicked.connect(self._on_take_shot)
+        self._camera_dock.live_start_requested.connect(self._on_live_start)
+        self._camera_dock.live_stop_requested.connect(self._on_live_stop)
+        self._camera_dock.offset_changed.connect(self._on_camera_offset)
+        self._camera_dock.binning_changed.connect(self._on_camera_binning)
         self._camera_dock.filter_selected.connect(self._on_camera_dock_filter)
         self._sequence_panel.start_requested.connect(self._on_sequence_start)
         self._sequence_panel.stop_requested.connect(self._on_sequence_stop)
@@ -485,11 +497,46 @@ class ImagingPage(QWidget):
             name = cam.connect()
             self._camera = cam
             self._camera_dock.set_enabled(True)
+            self._apply_camera_capabilities(cam)
+            self._start_camera_temp_poll(cam)
             self.log_message.emit("OK", f"Camera connected: {name}")
             self.device_state_changed.emit("camera", "connected", name)
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Camera: {exc}")
             self.device_state_changed.emit("camera", "error", str(exc)[:48])
+
+    def _apply_camera_capabilities(self, cam: Camera) -> None:
+        """Push driver-derived limits into the capture forms and expose the
+        optional parameters (offset / binning) the driver proves it supports."""
+        self._camera_dock.set_gain_range(cam.gain_min, cam.gain_max)
+        self._camera_dock.set_exposure_range(cam.exposure_min, cam.exposure_max)
+        self._sequence_panel.set_camera_limits(
+            cam.gain_min, cam.gain_max, cam.exposure_min, cam.exposure_max
+        )
+        offset = cam.get_offset()
+        if offset is not None and cam.offset_min is not None and cam.offset_max is not None:
+            self._camera_dock.set_offset_support(cam.offset_min, cam.offset_max, offset)
+        if cam.max_bin > 1:
+            self._camera_dock.set_binning_support(cam.max_bin, cam.get_binning())
+        self.log_message.emit(
+            "INFO",
+            f"Camera limits: gain {cam.gain_min}–{cam.gain_max}, "
+            f"exposure {cam.exposure_min:g}–{cam.exposure_max:g}s"
+            + (", offset" if offset is not None else "")
+            + (f", bin ≤{cam.max_bin}" if cam.max_bin > 1 else ""),
+        )
+
+    def _start_camera_temp_poll(self, cam: Camera) -> None:
+        self._stop_camera_temp_poll()  # reconnect without disconnect must not leak a poller
+        self._cam_temp_poll = TemperaturePollingWorker(cam.get_ccd_temperature, parent=self)
+        self._cam_temp_poll.temperature_updated.connect(self._camera_dock.set_temperature)
+        self._cam_temp_poll.start()
+
+    def _stop_camera_temp_poll(self) -> None:
+        if self._cam_temp_poll and self._cam_temp_poll.isRunning():
+            self._cam_temp_poll.stop()
+            self._cam_temp_poll.wait(3000)
+        self._cam_temp_poll = None
 
     def disconnect_mount(self) -> None:
         self._stop_polling()
@@ -506,6 +553,7 @@ class ImagingPage(QWidget):
 
     def disconnect_camera(self) -> None:
         self._stop_preview()
+        self._stop_camera_temp_poll()
         if self._camera:
             try:
                 self._camera.disconnect()
@@ -513,6 +561,8 @@ class ImagingPage(QWidget):
                 pass
             self._camera = None
         self._camera_dock.set_enabled(False)
+        self._camera_dock.reset_camera_limits()
+        self._sequence_panel.set_camera_limits()  # back to defaults
         self.device_state_changed.emit("camera", "disconnected", "")
         self.log_message.emit("INFO", "Camera disconnected.")
 
@@ -592,16 +642,27 @@ class ImagingPage(QWidget):
             self._focuser_dock.set_enabled(True)
             pos = foc.get_position()
             self._focuser_dock.set_position(pos)
-            temp = foc.get_temperature()
-            self._focuser_dock.set_temperature(temp)
+            # Periodic refresh — a temperature read once at connect would go
+            # stale over the night (temp-based AF triggers need it live).
+            self._stop_focuser_temp_poll()  # reconnect must not leak a poller
+            self._foc_temp_poll = TemperaturePollingWorker(foc.get_temperature, parent=self)
+            self._foc_temp_poll.temperature_updated.connect(self._focuser_dock.set_temperature)
+            self._foc_temp_poll.start()
             self.log_message.emit("OK", f"Focuser connected: {name}  pos={pos}")
             self.device_state_changed.emit("focuser", "connected", name)
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Focuser: {exc}")
             self.device_state_changed.emit("focuser", "error", str(exc)[:48])
 
+    def _stop_focuser_temp_poll(self) -> None:
+        if self._foc_temp_poll and self._foc_temp_poll.isRunning():
+            self._foc_temp_poll.stop()
+            self._foc_temp_poll.wait(3000)
+        self._foc_temp_poll = None
+
     def disconnect_focuser(self) -> None:
         self._stop_autofocus()
+        self._stop_focuser_temp_poll()
         if self._focuser:
             try:
                 self._focuser.disconnect()
@@ -609,6 +670,7 @@ class ImagingPage(QWidget):
                 pass
             self._focuser = None
         self._focuser_dock.set_enabled(False)
+        self._focuser_dock.set_temperature(None)
         self.device_state_changed.emit("focuser", "disconnected", "")
         self.log_message.emit("INFO", "Focuser disconnected.")
 
@@ -643,6 +705,12 @@ class ImagingPage(QWidget):
     def _on_processed(self, pf) -> None:
         """Apply a worker-processed frame to the UI (cheap work, UI thread)."""
         self._last_metrics = pf.metrics
+        if self._green_shape is not None and pf.green_shape != self._green_shape:
+            # The green coordinate frame changed size (preview quality toggle,
+            # binning) — a click selection from the old frame is stale.
+            self._selected_green = None
+            self._viewer.clear_selection()
+            self._info_card.hide()
         self._green_shape = pf.green_shape
         self._disp_shape = pf.display.shape[:2]
         self._camera_dock.set_hfd(pf.metrics.hfd)
@@ -658,9 +726,28 @@ class ImagingPage(QWidget):
         self._overlay_bar.set_available("stars", True)  # detected-star overlay always usable
         self._last_fwhm = pf.stars.mean_fwhm
         self._feed_metrics(pf)  # session metrics (when the photometry window is open)
+        # WCS geometry guard: the grid + catalog markers are projected in the
+        # *solved* frame's green px. If the displayed frame no longer matches
+        # (preview quality toggle, binning change), they would draw at the
+        # wrong positions and clicks would mis-identify stars — drop them,
+        # same policy as a slew. Re-solving at full res restores everything.
+        if (
+            self._astrometry.wcs is not None
+            and self._astrometry.green_shape is not None
+            and self._astrometry.green_shape != pf.green_shape
+        ):
+            self._clear_astrometry()
+            self.log_message.emit(
+                "INFO", "Frame geometry changed — WCS overlays cleared (solve again at full res)."
+            )
         # Auto-solve policy (no-op unless armed + due): re-solve the live frame so
-        # the WCS grid tracks the sequence instead of going stale.
-        if self._last_raw is not None and self._green_shape is not None:
+        # the WCS grid tracks the sequence instead of going stale. Half-quality
+        # previews are skipped — their plate scale would poison the solve.
+        if (
+            self._last_raw is not None
+            and self._green_shape is not None
+            and not self._last_raw_decimated
+        ):
             self._astrometry.on_new_frame(
                 self._last_raw, self._green_shape, self._mount_radec(), self._target_radec()
             )
@@ -953,6 +1040,11 @@ class ImagingPage(QWidget):
         if self._last_raw is None or self._green_shape is None:
             self.log_message.emit("WARN", "No frame to solve yet — start a preview first.")
             return
+        if self._last_raw_decimated:
+            self.log_message.emit(
+                "WARN", "Preview is at half quality — set Preview to Full res to plate-solve."
+            )
+            return
         mount = self._mount_radec()
         if not self._astrometry.solve_now(
             self._last_raw, self._green_shape, mount, self._target_radec()
@@ -966,6 +1058,19 @@ class ImagingPage(QWidget):
     @pyqtSlot(object, object, str)
     def _on_astrometry_solved(self, _wcs, overlay, summary: str) -> None:
         """A fresh solution arrived from the controller — apply grid + catalog."""
+        if (
+            self._green_shape is not None
+            and self._astrometry.green_shape is not None
+            and self._green_shape != self._astrometry.green_shape
+        ):
+            # Solved against a frame geometry we no longer display (the preview
+            # scale / binning changed while the solve was in flight) — its pixel
+            # frame doesn't match, so applying it would misplace every overlay.
+            self._clear_astrometry()
+            self.log_message.emit(
+                "INFO", "Solve finished for a different frame geometry — discarded."
+            )
+            return
         self.log_message.emit("OK", summary)
         self._viewer.set_astrometry_overlay(overlay, self._green_shape)
         self._arm_overlay("grid", True, self._viewer.set_astrometry_enabled)
@@ -1165,8 +1270,8 @@ class ImagingPage(QWidget):
     def _measure_photometry(self) -> None:
         """Aperture-measure the target set on the solved frame → light-curve point."""
         wcs = self._astrometry.wcs
-        if wcs is None or self._last_raw is None:
-            return
+        if wcs is None or self._last_raw is None or self._last_raw_decimated:
+            return  # a decimated preview doesn't match the full-res WCS
         tset = self._ensure_target_set()
         if not tset.by_role(ROLE_TARGET):
             return
@@ -1275,10 +1380,95 @@ class ImagingPage(QWidget):
                 "WARN", "Sequence running — the sequence owns the camera. Stop it first."
             )
             return
+        if self._autofocus and self._autofocus.isRunning():
+            self.log_message.emit(
+                "WARN", "Autofocus running — it owns the camera. Wait for it to finish."
+            )
+            return
         self._capture_pending = 1
         if not (self._preview and self._preview.isRunning()):
             self._start_preview()
         self.log_message.emit("CMD", "Take shot — saving next frame…")
+
+    # ------------------------------------------------------------------
+    # Live loop (user-controlled Start/Stop on the LivePreviewWorker)
+    # ------------------------------------------------------------------
+
+    def _on_live_start(self) -> None:
+        if not self._camera:
+            self.log_message.emit("WARN", "Camera not connected.")
+            return
+        if self._sequence and self._sequence.isRunning():
+            self.log_message.emit(
+                "WARN", "Sequence running — the sequence owns the camera. Stop it first."
+            )
+            return
+        if self._autofocus and self._autofocus.isRunning():
+            self.log_message.emit(
+                "WARN", "Autofocus running — it owns the camera. Wait for it to finish."
+            )
+            return
+        self._live_requested = True
+        if not (self._preview and self._preview.isRunning()):
+            self._start_preview()
+        self._camera_dock.set_live_running(True)
+        self.log_message.emit("CMD", "Live preview started.")
+
+    def _on_live_stop(self) -> None:
+        self._stop_preview()
+        self.log_message.emit("INFO", "Live preview stopped.")
+
+    # ------------------------------------------------------------------
+    # Driver-backed camera parameters (offset / binning)
+    # ------------------------------------------------------------------
+
+    def _camera_owner(self) -> str | None:
+        """Name of the worker that owns the camera right now, or ``None``."""
+        if self._sequence and self._sequence.isRunning():
+            return "Sequence"
+        if self._autofocus and self._autofocus.isRunning():
+            return "Autofocus"
+        return None
+
+    def _on_camera_offset(self, value: int) -> None:
+        cam = self._camera
+        if not cam:
+            return
+        owner = self._camera_owner()
+        if owner is not None:
+            # Offset is device-global — changing it mid-run would shift the
+            # bias level of the frames the worker is acquiring.
+            self.log_message.emit(
+                "WARN", f"{owner} running — it owns the camera. Stop it first."
+            )
+            offset = cam.get_offset()  # re-sync the spinbox with the device
+            if offset is not None and cam.offset_min is not None and cam.offset_max is not None:
+                self._camera_dock.set_offset_support(cam.offset_min, cam.offset_max, offset)
+            return
+        try:
+            cam.set_offset(value)
+            self.log_message.emit("CMD", f"Offset → {value}")
+        except AlpacaError as exc:
+            self.log_message.emit("ERROR", f"Offset: {exc}")
+
+    def _on_camera_binning(self, value: int) -> None:
+        cam = self._camera
+        if not cam:
+            return
+        owner = self._camera_owner()
+        if owner is not None:
+            # Binning is device-global — changing it mid-run would change the
+            # frame geometry (and plate scale) under the worker.
+            self.log_message.emit(
+                "WARN", f"{owner} running — it owns the camera. Stop it first."
+            )
+            self._camera_dock.set_binning_support(cam.max_bin, cam.get_binning())
+            return
+        try:
+            cam.set_binning(value)
+            self.log_message.emit("CMD", f"Binning → {value}×{value}")
+        except AlpacaError as exc:
+            self.log_message.emit("ERROR", f"Binning: {exc}")
 
     # ------------------------------------------------------------------
     # Advanced sequencer (Sequence tab → SequenceWorker)
@@ -1336,6 +1526,7 @@ class ImagingPage(QWidget):
 
     @pyqtSlot(object)
     def _on_seq_frame_image(self, full_arr) -> None:
+        self._last_raw_decimated = False  # sequence frames are always full-res
         self._show_raw(full_arr)
 
     def _on_seq_frame_saved(self, path: str, record) -> None:
@@ -1426,6 +1617,7 @@ class ImagingPage(QWidget):
             camera=self._camera,
             exposure=params.exposure_s,
             gain=params.gain,
+            preview_scale=self._camera_dock.preview_scale(),
             light=_is_light_frame(params.frame_type),
         )
         self._preview.frame_ready.connect(self._on_frame)
@@ -1438,6 +1630,8 @@ class ImagingPage(QWidget):
         self.device_state_changed.emit("camera", "busy", "exposing")
 
     def _stop_preview(self) -> None:
+        self._live_requested = False
+        self._camera_dock.set_live_running(False)
         if self._preview and self._preview.isRunning():
             self._preview.stop()
             self._preview.wait(5000)
@@ -1450,13 +1644,15 @@ class ImagingPage(QWidget):
 
     @pyqtSlot(object, object, object, object)
     def _on_frame(self, preview_arr, full_arr, start_dt, end_dt) -> None:
-        # Update worker settings for the next frame from the dock form.
+        # Update worker settings for the next frame from the dock form. The
+        # preview scale (Full/Half quality) only shapes the display pipeline —
+        # saved FITS always use the full-resolution readout below.
         params = self._camera_dock.params()
         if self._preview:
             self._preview.update_settings(
                 params.exposure_s,
                 params.gain,
-                scale=1,
+                scale=self._camera_dock.preview_scale(),
                 light=_is_light_frame(params.frame_type),
             )
 
@@ -1464,14 +1660,17 @@ class ImagingPage(QWidget):
             self._last_exposure_mid = start_dt + (end_dt - start_dt) / 2
         except (TypeError, ValueError):
             self._last_exposure_mid = None
-        self._show_raw(full_arr)
+        # Display the (possibly decimated) preview; flag it so plate-solve /
+        # photometry skip half-quality frames (their plate scale is wrong).
+        self._last_raw_decimated = preview_arr.shape != full_arr.shape
+        self._show_raw(preview_arr)
 
-        # Single-shot save: persist the requested number of preview frames.
+        # Single-shot save: persist the requested number of FULL-RES frames.
         if self._capture_pending > 0:
             self._capture_pending -= 1
             self._save_fits_async(full_arr, start_dt, end_dt)
-            if self._capture_pending == 0:
-                self._stop_preview()
+            if self._capture_pending == 0 and not self._live_requested:
+                self._stop_preview()  # transient Take-shot loop; Live keeps going
 
     # ------------------------------------------------------------------
     # Mount actions
@@ -1823,6 +2022,8 @@ class ImagingPage(QWidget):
         self._stop_sequence_worker()
         self._stop_preview()
         self._stop_polling()
+        self._stop_camera_temp_poll()
+        self._stop_focuser_temp_poll()
         self._stop_autofocus()
         self._astrometry.wait(2000)
         if self._catalog_worker is not None and self._catalog_worker.isRunning():
