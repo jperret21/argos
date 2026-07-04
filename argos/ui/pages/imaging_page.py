@@ -90,6 +90,7 @@ from argos.ui.widgets.sequence_panel import SequencePanel
 from argos.ui.widgets.star_info_card import StarInfoCard
 from argos.workers.astrometry_controller import AstrometryController
 from argos.workers.autofocus_worker import AutofocusWorker
+from argos.workers.camera_service import CameraService, CameraState
 from argos.workers.catalog_worker import CatalogRequest, CatalogWorker
 from argos.workers.discovery_worker import DiscoveryWorker
 from argos.workers.exposure_worker import LivePreviewWorker
@@ -103,6 +104,17 @@ _SOFTWARE = "Argos v0.2.0-redesign"
 
 #: Live frame stats shown in the always-visible bar under the image.
 _STAT_KEYS = ("HFD", "Stars", "Sky", "Min", "Max", "Mean")
+
+#: Camera-ownership state → status-bar action text. The free-text
+#: ``action_changed`` strings stay for log/status display only; every
+#: enable/disable decision reads :class:`CameraState` from the service.
+_STATE_ACTION = {
+    CameraState.IDLE: "Idle",
+    CameraState.LIVE: "Live preview",
+    CameraState.SINGLE: "Taking shot…",
+    CameraState.SEQUENCE: "Sequence running",
+    CameraState.AUTOFOCUS: "Autofocus running",
+}
 
 
 def _stat_key(text: str) -> QLabel:
@@ -200,6 +212,12 @@ class ImagingPage(QWidget):
         self._sequence: SequenceWorker | None = None
         self._processor = PreviewProcessor(self)  # off-thread display compute
         self._jog_dialog: ManualControlDialog | None = None
+
+        # Single camera-ownership state machine (WS3): every "may I use the
+        # camera?" decision goes through acquire/release on this service —
+        # the workers keep their loops, the service owns WHO runs.
+        self._camera_service = CameraService(self)
+        self._camera_service.set_preview_hooks(self._start_preview, self._stop_preview)
 
         self._channel = VIEW_SUPERPIXEL
         self._last_position: MountPosition | None = None
@@ -385,6 +403,15 @@ class ImagingPage(QWidget):
     # ------------------------------------------------------------------
 
     def _wire_signals(self) -> None:
+        # Camera-ownership state machine → status bar + session log.
+        self._camera_service.state_changed.connect(self._on_camera_state)
+        self._camera_service.acquire_refused.connect(
+            lambda reason: self.log_message.emit("WARN", reason)
+        )
+        self._camera_service.preempted.connect(
+            lambda note: self.log_message.emit("INFO", note)
+        )
+
         # Toolbar
         self._toolbar.channel_changed.connect(self._on_channel_changed)
         self._toolbar.open_requested.connect(self._on_open_fits)
@@ -447,6 +474,25 @@ class ImagingPage(QWidget):
 
         # Logs reach the bottom log panel locally + propagate up to the Shell.
         self.log_message.connect(self._log_panel.append)
+
+    # ------------------------------------------------------------------
+    # Camera-ownership state (WS3) — one source of truth for guards
+    # ------------------------------------------------------------------
+
+    @property
+    def camera_service(self) -> CameraService:
+        """The ownership state machine (widgets may subscribe to state_changed)."""
+        return self._camera_service
+
+    @property
+    def camera_state(self) -> CameraState:
+        """Current camera owner — the value widgets base enable/disable on."""
+        return self._camera_service.state
+
+    @pyqtSlot(object)
+    def _on_camera_state(self, state: CameraState) -> None:
+        """Reflect ownership transitions in the status bar action text."""
+        self.action_changed.emit(_STATE_ACTION[state])
 
     # ------------------------------------------------------------------
     # Public connection API — driven by EquipmentPage via the Shell
@@ -552,7 +598,11 @@ class ImagingPage(QWidget):
         self.log_message.emit("INFO", "Mount disconnected.")
 
     def disconnect_camera(self) -> None:
-        self._stop_preview()
+        state = self._camera_service.state
+        if state in (CameraState.LIVE, CameraState.SINGLE):
+            self._camera_service.release(state)  # stops the preview loop
+        else:
+            self._stop_preview()  # belt-and-braces for a leaked worker
         self._stop_camera_temp_poll()
         if self._camera:
             try:
@@ -1079,7 +1129,7 @@ class ImagingPage(QWidget):
         self._remeasure_selection()  # refresh the clicked star's RA/Dec
         self._maybe_fetch_catalog()  # VSX/VSP once per field
         self._project_catalog()  # re-project cached catalog + targets onto the new WCS
-        if self._sequence is None or not self._sequence.isRunning():
+        if self._camera_service.state not in (CameraState.SEQUENCE, CameraState.AUTOFOCUS):
             self._measure_photometry()  # per-solve point; sequences measure per saved sub
 
     # ------------------------------------------------------------------
@@ -1375,19 +1425,18 @@ class ImagingPage(QWidget):
             self._overlay_bar.set_available(name, False)
 
     def _on_take_shot(self) -> None:
-        if self._sequence and self._sequence.isRunning():
-            self.log_message.emit(
-                "WARN", "Sequence running — the sequence owns the camera. Stop it first."
-            )
+        if not self._camera:
+            self.log_message.emit("WARN", "Camera not connected.")
             return
-        if self._autofocus and self._autofocus.isRunning():
-            self.log_message.emit(
-                "WARN", "Autofocus running — it owns the camera. Wait for it to finish."
-            )
+        if self._camera_service.state is CameraState.LIVE:
+            # The live loop already owns the camera — just tag its next frame
+            # for saving; no ownership change.
+            self._capture_pending = 1
+            self.log_message.emit("CMD", "Take shot — saving next frame…")
             return
+        if not self._camera_service.acquire(CameraState.SINGLE):
+            return  # refused (sequence/autofocus owns the camera) — reason logged
         self._capture_pending = 1
-        if not (self._preview and self._preview.isRunning()):
-            self._start_preview()
         self.log_message.emit("CMD", "Take shot — saving next frame…")
 
     # ------------------------------------------------------------------
@@ -1398,24 +1447,18 @@ class ImagingPage(QWidget):
         if not self._camera:
             self.log_message.emit("WARN", "Camera not connected.")
             return
-        if self._sequence and self._sequence.isRunning():
-            self.log_message.emit(
-                "WARN", "Sequence running — the sequence owns the camera. Stop it first."
-            )
-            return
-        if self._autofocus and self._autofocus.isRunning():
-            self.log_message.emit(
-                "WARN", "Autofocus running — it owns the camera. Wait for it to finish."
-            )
-            return
+        if self._camera_service.state is CameraState.LIVE:
+            return  # already live
+        if not self._camera_service.acquire(CameraState.LIVE):
+            return  # refused (sequence/autofocus owns the camera) — reason logged
+        # Granted: from IDLE the service started the preview loop; from a
+        # transient Take-shot loop the ownership was upgraded in place.
         self._live_requested = True
-        if not (self._preview and self._preview.isRunning()):
-            self._start_preview()
         self._camera_dock.set_live_running(True)
         self.log_message.emit("CMD", "Live preview started.")
 
     def _on_live_stop(self) -> None:
-        self._stop_preview()
+        self._camera_service.release(CameraState.LIVE)
         self.log_message.emit("INFO", "Live preview stopped.")
 
     # ------------------------------------------------------------------
@@ -1423,10 +1466,15 @@ class ImagingPage(QWidget):
     # ------------------------------------------------------------------
 
     def _camera_owner(self) -> str | None:
-        """Name of the worker that owns the camera right now, or ``None``."""
-        if self._sequence and self._sequence.isRunning():
+        """Name of the run that owns the camera right now, or ``None``.
+
+        Live/single previews don't block parameter changes — the next loop
+        iteration picks them up — so only the exclusive runs are named.
+        """
+        state = self._camera_service.state
+        if state is CameraState.SEQUENCE:
             return "Sequence"
-        if self._autofocus and self._autofocus.isRunning():
+        if state is CameraState.AUTOFOCUS:
             return "Autofocus"
         return None
 
@@ -1479,9 +1527,13 @@ class ImagingPage(QWidget):
             self.log_message.emit("WARN", "Connect the camera before running a sequence.")
             self._sequence_panel.set_running(False)
             return
-        if self._sequence and self._sequence.isRunning():
-            return
-        self._stop_preview()  # the sequence owns the camera
+        if self._sequence is not None:
+            return  # a sequence is already active (possibly paused for autofocus)
+        # Acquire preempts a running live/single preview — the sequence owns
+        # the camera from here on.
+        if not self._camera_service.acquire(CameraState.SEQUENCE):
+            self._sequence_panel.set_running(False)
+            return  # refused (autofocus owns the camera) — reason logged
 
         self._sequence = SequenceWorker(
             camera=self._camera,
@@ -1506,7 +1558,6 @@ class ImagingPage(QWidget):
         self._sequence.start()
         total = sum(s.count for s in plan.steps if s.enabled and s.count > 0) * max(1, plan.repeat)
         self.log_message.emit("CMD", f"Sequence started — {total} frame(s).")
-        self.action_changed.emit("Sequence running")
 
     def _on_sequence_stop(self) -> None:
         if self._sequence and self._sequence.isRunning():
@@ -1551,18 +1602,24 @@ class ImagingPage(QWidget):
             self._measure_photometry()
 
     def _on_seq_autofocus_due(self) -> None:
-        """Run an autofocus pass mid-sequence, then resume the worker."""
-        af_busy = self._autofocus is not None and self._autofocus.isRunning()
-        if not (self._focuser and self._camera) or af_busy:
+        """Run an autofocus pass mid-sequence, then resume the worker.
+
+        SEQUENCE → AUTOFOCUS → SEQUENCE through the service: the sequence
+        yields the camera for the sweep and gets it back when AF releases.
+        """
+        if not (self._focuser and self._camera):
             self._resume_sequence()
             return
+        if not self._camera_service.begin_sequence_autofocus():
+            self._resume_sequence()  # handshake refused — never block the run
+            return
         self.log_message.emit("CMD", "Sequence: autofocus…")
-        self._on_autofocus_requested()
-        if self._autofocus is not None and self._autofocus.isRunning():
+        if self._start_autofocus_worker():
             self._autofocus.finished.connect(self._resume_sequence)
         else:
-            # AF refused/failed to start — resume immediately, never leave the
-            # sequence blocked on the handshake.
+            # AF failed to start — hand the camera back and resume, never
+            # leave the sequence blocked on the handshake.
+            self._camera_service.release(CameraState.AUTOFOCUS)
             self._resume_sequence()
 
     def _resume_sequence(self) -> None:
@@ -1572,11 +1629,14 @@ class ImagingPage(QWidget):
     def _on_seq_finished(self, completed: bool) -> None:
         self._sequence_panel.set_running(False)
         self._sequence = None
+        # Hand the camera back (state_changed → "Idle" in the status bar). If
+        # the sequence died while a mid-run autofocus held the camera, this
+        # just cancels the pending resume — AF releases to IDLE on its own.
+        self._camera_service.release(CameraState.SEQUENCE)
         self.log_message.emit(
             "OK" if completed else "INFO",
             "Sequence complete." if completed else "Sequence stopped.",
         )
-        self.action_changed.emit("Idle")
 
     def _sequence_frame_context(self, object_name: str, filter_name: str) -> FrameContext:
         """Build a FrameContext for the worker thread from cached state."""
@@ -1640,7 +1700,14 @@ class ImagingPage(QWidget):
             self.device_state_changed.emit("camera", "connected", "")
 
     def _on_preview_finished(self) -> None:
-        self._stop_preview()
+        # The worker ended on its own (error) or after a stop — reconcile
+        # ownership. Stale signals after a preemption find the state already
+        # owned by sequence/autofocus and fall through to a no-op cleanup.
+        state = self._camera_service.state
+        if state in (CameraState.LIVE, CameraState.SINGLE):
+            self._camera_service.release(state)
+        else:
+            self._stop_preview()
 
     @pyqtSlot(object, object, object, object)
     def _on_frame(self, preview_arr, full_arr, start_dt, end_dt) -> None:
@@ -1670,7 +1737,9 @@ class ImagingPage(QWidget):
             self._capture_pending -= 1
             self._save_fits_async(full_arr, start_dt, end_dt)
             if self._capture_pending == 0 and not self._live_requested:
-                self._stop_preview()  # transient Take-shot loop; Live keeps going
+                # Transient Take-shot loop done; Live keeps going (its release
+                # would be a no-op here because LIVE owns the camera).
+                self._camera_service.release(CameraState.SINGLE)
 
     # ------------------------------------------------------------------
     # Mount actions
@@ -1856,7 +1925,7 @@ class ImagingPage(QWidget):
 
     def request_autofocus(self) -> None:
         """Public entry point (e.g. the Focus screen) to start/stop a sweep."""
-        if self._autofocus and self._autofocus.isRunning():
+        if self._camera_service.state is CameraState.AUTOFOCUS:
             self._stop_autofocus()
         else:
             self._on_autofocus_requested()
@@ -1869,13 +1938,24 @@ class ImagingPage(QWidget):
         if not (self._focuser and self._camera):
             self.log_message.emit("WARN", "Autofocus needs focuser + camera connected")
             return
-        if self._preview and self._preview.isRunning():
-            self.log_message.emit(
-                "WARN", "Live preview running — stop it before autofocus (one camera owner)."
-            )
-            return
+        if self._camera_service.state is CameraState.AUTOFOCUS:
+            return  # already sweeping
+        # Acquire preempts a running live/single preview (AF outranks LIVE)
+        # and is refused while a sequence owns the camera.
+        if not self._camera_service.acquire(CameraState.AUTOFOCUS):
+            return  # reason logged via acquire_refused
+        if not self._start_autofocus_worker():
+            self._camera_service.release(CameraState.AUTOFOCUS)
+
+    def _start_autofocus_worker(self) -> bool:
+        """Create + start the AF sweep worker.
+
+        The camera must already be owned as :attr:`CameraState.AUTOFOCUS`
+        (via ``acquire`` or the sequence handshake). Returns False if a
+        stale worker is still winding down.
+        """
         if self._autofocus and self._autofocus.isRunning():
-            return
+            return False
         params = self._camera_dock.params()
         self._autofocus = AutofocusWorker(
             focuser=self._focuser,
@@ -1892,7 +1972,7 @@ class ImagingPage(QWidget):
         self.autofocus_state.emit(True)
         self._autofocus.start()
         self.log_message.emit("CMD", "Autofocus started…")
-        self.action_changed.emit("Autofocus running")
+        return True
 
     def _stop_autofocus(self) -> None:
         if self._autofocus and self._autofocus.isRunning():
@@ -1901,6 +1981,9 @@ class ImagingPage(QWidget):
         self._autofocus = None
         self._focuser_dock.set_autofocus_running(False)
         self.autofocus_state.emit(False)
+        # Hand the camera back promptly (the worker's queued finished signal
+        # would also release, but that lands on a later event-loop turn).
+        self._camera_service.release(CameraState.AUTOFOCUS)
 
     @pyqtSlot(int, int, int, object)
     def _on_af_step(self, step: int, total: int, pos: int, hfd) -> None:
@@ -1921,6 +2004,10 @@ class ImagingPage(QWidget):
     def _on_af_finished(self) -> None:
         self._focuser_dock.set_autofocus_running(False)
         self.autofocus_state.emit(False)
+        # Release through the service: back to SEQUENCE when this was the
+        # mid-sequence handshake, else to IDLE. Double release (after a user
+        # _stop_autofocus already released) is a safe no-op.
+        self._camera_service.release(CameraState.AUTOFOCUS)
 
     # ------------------------------------------------------------------
     # FITS save
