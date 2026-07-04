@@ -68,6 +68,7 @@ class AcquisitionEngine(QObject):
     device_state_changed = pyqtSignal(str, str, str)  # camera busy/connected
     frame_ready = pyqtSignal(object)  # LiveFrame
     sequence_running = pyqtSignal(bool)
+    sequence_paused = pyqtSignal(bool)  # holding at a frame boundary
     sequence_progress = pyqtSignal(str, int, int, float)  # object, done, total, eta_s
     sequence_step = pyqtSignal(int, object)  # step index, FrameSpec
     frame_saved = pyqtSignal(str, object)  # path, FrameRecord | None
@@ -109,6 +110,7 @@ class AcquisitionEngine(QObject):
         self._autofocus: AutofocusWorker | None = None
         self._sequence: SequenceWorker | None = None
         self._seq_object = ""  # object name of the running sequence (for the strip)
+        self._on_complete = "Nothing"  # end-of-sequence mount action (plan option)
 
         # Single-shot capture: number of upcoming preview frames to save.
         self._capture_pending = 0
@@ -380,8 +382,10 @@ class AcquisitionEngine(QObject):
         self._sequence.frame_saved.connect(self._on_seq_frame_saved)
         self._sequence.progress.connect(self._on_seq_progress)
         self._sequence.autofocus_due.connect(self._on_seq_autofocus_due)
+        self._sequence.paused.connect(self.sequence_paused)
         self._sequence.error_occurred.connect(self._on_seq_error)
         self._sequence.finished.connect(self._on_seq_finished)
+        self._on_complete = plan.on_complete
 
         self._sequence.start()
         self.sequence_running.emit(True)
@@ -393,6 +397,17 @@ class AcquisitionEngine(QObject):
         if self._sequence and self._sequence.isRunning():
             self._sequence.stop()
             self.log_message.emit("INFO", "Stopping sequence…")
+
+    def pause_sequence(self) -> None:
+        """Hold at the next frame boundary (the current exposure completes)."""
+        if self._sequence and self._sequence.isRunning():
+            self._sequence.pause()
+            self.log_message.emit("CMD", "Pausing after the current frame…")
+
+    def resume_sequence_run(self) -> None:
+        """Release a user pause (distinct from the AF resume handshake)."""
+        if self._sequence and self._sequence.isRunning():
+            self._sequence.resume()
 
     def _stop_sequence_worker(self) -> None:
         if self._sequence and self._sequence.isRunning():
@@ -467,6 +482,22 @@ class AcquisitionEngine(QObject):
             "OK" if completed else "INFO",
             "Sequence complete." if completed else "Sequence stopped.",
         )
+        if completed:
+            self._run_on_complete_action()
+
+    def _run_on_complete_action(self) -> None:
+        """End-of-sequence mount action — an explicit plan choice, logged.
+
+        Runs only on FULL completion (never after a stop/error: the user is
+        likely at the scope, and an unexpected park closes the Seestar arm).
+        """
+        action = self._on_complete
+        if action == "Stop tracking":
+            self.log_message.emit("CMD", "Sequence complete → stopping tracking (plan option).")
+            self._session.set_tracking(False)
+        elif action == "Park mount":
+            self.log_message.emit("CMD", "Sequence complete → parking the mount (plan option).")
+            self._session.park()
 
     def _sequence_frame_context(self, object_name: str, filter_name: str) -> FrameContext:
         """Build a FrameContext for the worker thread from cached state."""

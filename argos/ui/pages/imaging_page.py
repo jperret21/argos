@@ -197,16 +197,15 @@ class ImagingPage(QWidget):
         self._log_panel = LogPanel()
 
         # Right rail grouped by the one-axis rule (docs/ui_design.md):
-        #   Session   — what you drive a run with: capture params + the sequence
-        #   Equipment — the devices (transitional: these migrate to the Target /
-        #               Focus phases once the session layer is extracted)
+        #   Camera    — capture params + single shots + live toggle
+        #   Equipment — mount / focuser (+ V-curve) / filter wheel
         #   Display   — image appearance (histogram / stretch)
-        # This replaces the previous six flat tabs (Capture/Sequence/Mount/Focus/
-        # Filter/Display) that mixed activity, equipment and appearance in one row.
+        # The sequencer lives in the WIDE bottom dock, not in this 360px rail —
+        # a step table needs width, and the night is planned there.
         self._rail = QTabWidget()
         self._rail.setMinimumWidth(360)
         self._rail.setMaximumWidth(460)
-        self._rail.addTab(self._tab_group(self._camera_dock, self._sequence_panel), "Session")
+        self._rail.addTab(self._tab_group(self._camera_dock), "Camera")
         self._rail.addTab(
             self._tab_group(self._mount_dock, self._focuser_dock, self._filterwheel_dock),
             "Equipment",
@@ -232,19 +231,21 @@ class ImagingPage(QWidget):
         top.setStretchFactor(1, 0)
         top.setSizes([1000, 400])
 
-        # Bottom strip: the session log (full width under the image). The
-        # histogram + stretch controls live in the "Display" rail tab.
-        self._log_panel.setMinimumHeight(90)
-        self._log_panel.setMaximumHeight(220)
+        # Bottom dock (full width under the image): the sequencer — a step
+        # table needs width — with the session log one tab away.
+        self._bottom = QTabWidget()
+        self._bottom.addTab(self._sequence_panel, "Sequence")
+        self._bottom.addTab(self._log_panel, "Log")
+        self._bottom.setMinimumHeight(180)
 
-        # Vertical split: the image area dominates, the log is a resizable band.
+        # Vertical split: the image area dominates, the dock is resizable.
         main = QSplitter(Qt.Orientation.Vertical)
         main.setChildrenCollapsible(False)
         main.addWidget(top)
-        main.addWidget(self._log_panel)
+        main.addWidget(self._bottom)
         main.setStretchFactor(0, 1)
         main.setStretchFactor(1, 0)
-        main.setSizes([720, 190])
+        main.setSizes([660, 250])
         root.addWidget(main, 1)
 
     @staticmethod
@@ -329,6 +330,7 @@ class ImagingPage(QWidget):
         e.action_changed.connect(self.action_changed)
         e.frame_ready.connect(self._on_frame)
         e.sequence_running.connect(self._on_sequence_running)
+        e.sequence_paused.connect(self._sequence_panel.set_paused)
         e.sequence_progress.connect(self._on_sequence_progress)
         e.sequence_step.connect(self._on_seq_step)
         e.frame_saved.connect(self._on_seq_frame_saved)
@@ -375,6 +377,8 @@ class ImagingPage(QWidget):
         self._camera_dock.binning_changed.connect(self._on_camera_binning)
         self._camera_dock.filter_selected.connect(self._on_camera_dock_filter)
         self._sequence_panel.start_requested.connect(self._on_sequence_start)
+        self._sequence_panel.pause_requested.connect(self._engine.pause_sequence)
+        self._sequence_panel.resume_requested.connect(self._engine.resume_sequence_run)
         self._sequence_panel.stop_requested.connect(self._engine.stop_sequence)
 
         # Filter wheel dock
@@ -1079,6 +1083,7 @@ class ImagingPage(QWidget):
         self.sequence_progress.emit(obj, done, total, eta_s)
 
     def _on_seq_step(self, index: int, step) -> None:
+        self._sequence_panel.set_active_step(index)
         self._sequence_panel.set_status(
             f"Step {index + 1}: {step.count}× {step.exposure_s:.1f}s {step.filter_name}"
         )
