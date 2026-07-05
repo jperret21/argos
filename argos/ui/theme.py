@@ -1,76 +1,168 @@
-"""Argos visual theme — Siril-inspired equilux dark palette.
+"""Argos visual theme — parameterized around :class:`~argos.ui.palettes.Palette`.
 
 Single source of truth for all colors and the global Qt stylesheet.
-Apply once at startup via QApplication.setStyleSheet(get_stylesheet()).
-Never hardcode colors in individual widgets — reference these constants.
 
-The palette mirrors the sibling project (Seestar variable-star photometry),
-which itself follows Siril's "equilux" dark theme: warm greys, blue accents,
-thin-border LabelFrame-style group boxes.
+Usage
+-----
+At startup, call :func:`apply_palette` with the desired preset::
+
+    from argos.ui import theme
+    from argos.ui.palettes import EQUILUX
+    theme.apply_palette(EQUILUX)           # or load from config
+
+All module-level constants (``theme.BG``, ``theme.ACCENT``, …) are rebound by
+:func:`apply_palette` so every consumer that does ``theme.BG`` at *call time*
+(not import time) picks up the new value automatically.  Widgets that embedded
+a color string into a local stylesheet at *construction time* (sidebar icons,
+dock_host QSS, statusbar) are **not** retroactively updated — see live-vs-restart
+note in the WS9c spec.
+
+:data:`get_stylesheet` returns a freshly generated QSS from the current palette.
+Call it after :func:`apply_palette` to regenerate the global stylesheet.
 """
 
 from __future__ import annotations
 
+import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from argos.ui.palettes import Palette
+
 # ---------------------------------------------------------------------------
-# Color palette — equilux warm greys, Siril blue accent
+# Active palette reference — replaced by apply_palette()
 # ---------------------------------------------------------------------------
 
-BG = "#2d2d2d"  # main application background
-BG2 = "#1f1f1f"  # input / sub-surface / log background
-SURFACE = "#3c3c3c"  # button / raised surface
-BORDER = "#484848"  # card borders, separators
-BORDER_SOFT = "#3a3a3a"  # subtle inner separators
+_active_palette: "Palette | None" = None
 
-FG = "#dedede"  # primary text
-FG_MUTED = "#9a9a9a"  # secondary / hint text
-FG_DISABLED = "#5a5a5a"
 
-ACCENT = "#5294e2"  # Siril blue — section titles, primary actions, focus
-ACCENT_HOVER = "#6aa3ea"
-ACCENT_DEEP = "#3a7bd5"
-CYAN = "#4eb3c9"  # info / secondary accent (coords, mount status)
-SUCCESS = "#7ab648"  # green — connected / OK
-WARNING = "#c89030"  # amber — field info, warnings
-DANGER = "#d45c6e"  # red — errors, disconnected, target name
-VARIABLE = "#c678dd"  # purple — variable-star (VSX) catalog markers
+def _bootstrap() -> None:
+    """Initialise module-level constants from EQUILUX without circular imports."""
+    from argos.ui.palettes import EQUILUX
+    apply_palette(EQUILUX)
+
+
+def apply_palette(palette: "Palette") -> None:
+    """Rebind every module-level color constant to the new *palette* values.
+
+    Also regenerates :data:`LOG_COLORS` from the new palette so log-panel
+    rendering picks up the change at the next message.  The caller is
+    responsible for calling ``app.setStyleSheet(get_stylesheet())`` afterwards.
+    """
+    global _active_palette
+    _active_palette = palette
+
+    m = sys.modules[__name__]
+
+    # ---- Backgrounds / surfaces ----
+    m.BG = palette.bg
+    m.BG2 = palette.bg2
+    m.SURFACE = palette.surface
+    m.BORDER = palette.border
+    m.BORDER_SOFT = palette.border_soft
+
+    # ---- Text ----
+    m.FG = palette.fg
+    m.FG_MUTED = palette.fg_muted
+    m.FG_DISABLED = palette.fg_disabled
+
+    # ---- Accent ----
+    m.ACCENT = palette.accent
+    m.ACCENT_HOVER = palette.accent_hover
+    m.ACCENT_DEEP = palette.accent_deep
+    m.CYAN = palette.cyan
+
+    # ---- Semantic ----
+    m.SUCCESS = palette.success
+    m.WARNING = palette.warning
+    m.DANGER = palette.danger
+    m.VARIABLE = palette.variable
+
+    # ---- Back-compat aliases ----
+    m.SURFACE_1 = palette.bg
+    m.SURFACE_2 = palette.bg
+    m.SURFACE_3 = palette.bg2
+    m.SURFACE_4 = palette.border
+    m.TEXT_PRIMARY = palette.fg
+    m.TEXT_MUTED = palette.fg_muted
+    m.TEXT_DISABLED = palette.fg_disabled
+    m.INFO = palette.cyan
+
+    # ---- Fonts ----
+    m.FONT_UI = palette.font_ui
+    m.FONT_MONO = palette.font_mono
+
+    # ---- Derived dicts ----
+    m.LOG_COLORS = {
+        "DEBUG": palette.fg_muted,
+        "INFO": palette.accent,
+        "OK": palette.success,
+        "WARNING": palette.warning,
+        "ERROR": palette.danger,
+        "CRITICAL": palette.danger,
+        "CMD": palette.cyan,
+        "DISC": palette.warning,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Module-level constants — initialised to empty strings here, then
+# immediately populated by _bootstrap() below.  apply_palette() rebinds them
+# on every subsequent palette switch.  Keeping real assignments (not just bare
+# annotations) means ruff/pyflakes can resolve these names inside get_stylesheet().
+# ---------------------------------------------------------------------------
+
+BG = ""
+BG2 = ""
+SURFACE = ""
+BORDER = ""
+BORDER_SOFT = ""
+
+FG = ""
+FG_MUTED = ""
+FG_DISABLED = ""
+
+ACCENT = ""
+ACCENT_HOVER = ""
+ACCENT_DEEP = ""
+CYAN = ""
+
+SUCCESS = ""
+WARNING = ""
+DANGER = ""
+VARIABLE = ""
 
 # Back-compat aliases (some panels reference the old SpaceX names)
-SURFACE_1 = BG
-SURFACE_2 = BG
-SURFACE_3 = BG2
-SURFACE_4 = BORDER
-TEXT_PRIMARY = FG
-TEXT_MUTED = FG_MUTED
-TEXT_DISABLED = FG_DISABLED
-INFO = CYAN
+SURFACE_1 = ""
+SURFACE_2 = ""
+SURFACE_3 = ""
+SURFACE_4 = ""
+TEXT_PRIMARY = ""
+TEXT_MUTED = ""
+TEXT_DISABLED = ""
+INFO = ""
 
-FONT_UI = '"SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif'
-FONT_MONO = '"SF Mono", "Menlo", "JetBrains Mono", "Consolas", monospace'
+FONT_UI = ""
+FONT_MONO = ""
 
+LOG_COLORS: dict[str, str] = {}
 
-# ---------------------------------------------------------------------------
-# Log level colors
-# ---------------------------------------------------------------------------
-
-LOG_COLORS: dict[str, str] = {
-    "DEBUG": FG_MUTED,
-    "INFO": ACCENT,
-    "OK": SUCCESS,
-    "WARNING": WARNING,
-    "ERROR": DANGER,
-    "CRITICAL": DANGER,
-    "CMD": CYAN,
-    "DISC": WARNING,
-}
+# Bootstrap with the default palette immediately so that any module that does
+# ``from argos.ui import theme`` at import time finds valid constants.
+_bootstrap()
 
 
 # ---------------------------------------------------------------------------
-# Global Qt stylesheet
+# Global Qt stylesheet — generated from the current palette
 # ---------------------------------------------------------------------------
 
 
 def get_stylesheet() -> str:
-    """Return the global Qt stylesheet for the application."""
+    """Return the global Qt stylesheet for the application.
+
+    Always reads the current module-level constants, so calling this after
+    :func:`apply_palette` yields a stylesheet for the new theme.
+    """
     return f"""
 /* ── Base ──────────────────────────────────────────────────────────────── */
 QWidget {{
