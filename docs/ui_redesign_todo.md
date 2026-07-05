@@ -85,22 +85,29 @@ Last updated: 2026-07-04 (WS5 landed).
 
 ### WS7 — Photometry consolidation
 
-The headline science flow, currently split across two divergent paths:
+The headline science flow, previously split across two divergent paths — now
+consolidated on the engine (WS7 landed):
 
-- [ ] **Delete `photometry_setup_window.py`** — its comps never get catalog
-      magnitudes so "Run Photometry" silently produces nothing; batch run
-      freezes the UI. Do not fix; replace.
-- [ ] Build the Photometry screen on the engine (the solve → catalog →
-      StarInfoCard role-assignment path that already works live)
-- [ ] Single object identity: the Target screen sets the session-level object
-      name once; it keys FITS `OBJECT`, target sets, CSVs and plans
-- [ ] One config-driven parameter set (band, aperture, annulus — today three
-      band defaults and two CSV schemas coexist)
-- [ ] Revive `comparison_table.py` (comp ensemble management on the screen)
-- [ ] `PhotometryWindow` gets a real API (`set_export_meta` / `feed_point` /
-      `load_curves`), one 9-column CSV schema, saturated-point rendering,
-      preview-vs-sub series distinction
-- [ ] Batch re-run in a worker with progress + cancel (never on the UI thread)
+- [x] **Delete `photometry_setup_window.py`** — replaced by the engine's live
+      solve → catalog → role-assignment path (which already bakes comp catalog
+      mags into `TargetStar.mags`, `imaging_page.py:_on_star_clicked` comparison
+      branch). Its one unique capability (batch re-run over saved subs) is
+      rebuilt as `argos/workers/photometry_batch_worker.py`.
+- [x] Photometry runs on the engine (no second window); the live curve is a dock.
+- [x] Single object identity: the camera-dock Object field → `CaptureParams`
+      → `AcquisitionEngine._object_name()` keys FITS `OBJECT`, target sets and
+      CSVs. The batch worker recovers the same identity from the target set.
+- [x] One config-driven parameter set — `argos/core/photometry/params.py`
+      (`PhotometryParams.from_config` + `measure_frame`) is the single source for
+      live and batch; the setup window's fixed spinboxes/band combo are gone.
+- [x] Revive `comparison_table.py` — `ComparisonEnsembleTable` shows the
+      in-use comps (target-set role=comparison + their catalog mags) with remove,
+      as a Comparisons tab of the Photometry window.
+- [x] `PhotometryWindow` real API (`set_export_meta` / `feed_point` /
+      `load_curves`), one 9-column CSV schema (`write_curves_csv`), saturated
+      points ringed (red ×).
+- [x] Batch re-run in a worker with progress + cancel (QThread, off the UI
+      thread), driven from the Capture toolbar's "Re-run subs" button.
 
 ### WS9 — UI design pass: dockable workspace + themes (see `ui_design_pass.md`)
 

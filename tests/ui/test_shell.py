@@ -233,44 +233,20 @@ def test_shell_three_mode_walkthrough() -> None:
                 awin.close()
                 awin.deleteLater()
 
-            # §6 catalog moved to the Photometry Setup window: VSX variables are
-            # projected onto the solved frame + hit-tested for clicks there.
-            from argos.core.catalog import VariableStar
-            from argos.ui.panels.photometry_setup_window import (
-                PhotometrySetupWindow,
-            )
+        # WS7: the live light curve is a dock in the workspace (not a floating
+        # setup window). It is registered, hidden by default, and survives the
+        # default layout so photometry_point can render into it during capture.
+        assert "lightcurve" in page._docks
+        assert ("lightcurve", "Light curve") in page._PANEL_ORDER
+        assert not page._docks["lightcurve"].isVisible()  # hidden by default
+        from argos.core.session.types import PhotometryPoint
 
-            psw = PhotometrySetupWindow()
-            try:
-                psw.load_frame(fpath)
-                assert psw._green_shape == (48, 48)
-                psw._wcs = frame_wcs(fields, psw._green_shape)
-                on_axis = VariableStar(
-                    name="TST Tau",
-                    ra_deg=83.6,
-                    dec_deg=22.0,
-                    auid="000-XYZ-001",
-                    var_type="EA",
-                    category="Variable",
-                    max_mag="12.0 V",
-                    min_mag="14.0 V",
-                    period=1.5,
-                )
-                off_frame = VariableStar(name="FAR", ra_deg=120.0, dec_deg=-40.0)
-                psw._variables = [on_axis, off_frame]
-                psw._project_variables()
-                # On-axis → reference pixel (CRPIX-1 ≈ 23.5); off-frame → None.
-                assert psw._var_green[0] is not None and psw._var_green[1] is None
-                vx, vy = psw._var_green[0]
-                assert abs(vx - 23.5) < 1.0 and abs(vy - 23.5) < 1.0
-                # Markers shown on the viewer once at least one is on-frame.
-                assert psw._viewer._catalog_item.isVisible()
-                # Hit-test: near the on-axis marker → its index; far → None.
-                assert psw._nearest_variable(vx + 1.0, vy + 1.0) == 0
-                assert psw._nearest_variable(2.0, 2.0) is None
-            finally:
-                psw.close()
-                psw.deleteLater()
+        page._on_photometry_point(
+            PhotometryPoint(
+                key="V1", name="V1 Tau", jd=2451545.0, mag=12.3, mag_err=0.02, saturated=False
+            )
+        )
+        assert page._lightcurve_panel.has_data()
 
         # §6 live-frame astrometry overlay path (controller solved → grid on viewer).
         from argos.core.imaging.astrometry_session import overlay_for

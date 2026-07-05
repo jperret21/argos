@@ -38,14 +38,30 @@ def test_photometry_window_accepts_points_and_metrics(qapp) -> None:
 
 
 def test_lightcurve_export_csv(tmp_path, qapp) -> None:
+    """Export CSV writes the canonical 9-column schema (+ target), round-trippable."""
+    from argos.core.photometry.lightcurve import LcPoint, LightCurve
+
     win = PhotometryWindow()
     try:
-        win.lightcurve.add_point("NU Ori", 2451545.0, 9.0, 0.02)
+        lc = LightCurve(name="NU Ori")
+        lc.append(LcPoint(jd_utc=2451545.0, mag=9.0, mag_err=0.02, bjd_tdb=2451545.001,
+                          airmass=1.2, comps_used=3, saturated=True))
+        win.load_curves({"t": lc})
         path = tmp_path / "lc.csv"
-        win.lightcurve.export_csv(path)
+        # Directly exercise the writer (bypass the file dialog).
+        from argos.core.photometry.lightcurve import write_curves_csv
+
+        write_curves_csv(path, list(win.lightcurves.values()))
         text = path.read_text().splitlines()
-        assert text[0] == "target,jd_utc,mag,mag_err"
+        assert text[0] == (
+            "target,jd_utc,bjd_tdb,mag,mag_err,airmass,fwhm,sky_adu,comps_used,saturated"
+        )
         assert text[1].startswith("NU Ori,")
+        # Round-trips back through the canonical reader (extra target column ignored).
+        reloaded = LightCurve.from_csv(path)
+        assert len(reloaded.points) == 1
+        assert reloaded.points[0].saturated is True
+        assert reloaded.points[0].comps_used == 3
     finally:
         win.close()
         win.deleteLater()

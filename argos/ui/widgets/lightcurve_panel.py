@@ -2,11 +2,11 @@
 
 One series per target: points + error bars, magnitude axis inverted (brighter at
 top), X = JD (UTC). Fed a point at a time from the page as solved frames arrive.
+Saturated points are ringed distinctly (× marker) so a busted sub is obvious;
+this same panel class backs the live dock and the detachable window.
 """
 
 from __future__ import annotations
-
-import csv
 
 import numpy as np
 import pyqtgraph as pg
@@ -47,14 +47,26 @@ class LightCurvePanel(QWidget):
                 x=np.array([]), y=np.array([]), pen=pg.mkPen(color, width=1), beam=0.0
             )
             self._plot.addItem(errbar)
-            s = {"jd": [], "mag": [], "err": [], "curve": curve, "errbar": errbar}
+            # Saturated overlay: red ×, drawn on top so a bad sub stands out.
+            sat = self._plot.plot(
+                [], [], pen=None, symbol="x", symbolSize=11,
+                symbolBrush=theme.DANGER, symbolPen=pg.mkPen(theme.DANGER, width=2),
+            )
+            s = {
+                "jd": [], "mag": [], "err": [], "sat_jd": [], "sat_mag": [],
+                "color": color, "curve": curve, "errbar": errbar, "sat": sat,
+            }
             self._series[name] = s
         s["jd"].append(float(jd))
         s["mag"].append(float(mag))
         s["err"].append(float(err or 0.0))
+        if saturated:
+            s["sat_jd"].append(float(jd))
+            s["sat_mag"].append(float(mag))
         x, y, e = np.array(s["jd"]), np.array(s["mag"]), np.array(s["err"])
         s["curve"].setData(x, y)
         s["errbar"].setData(x=x, y=y, top=e, bottom=e, beam=0.0)
+        s["sat"].setData(np.array(s["sat_jd"]), np.array(s["sat_mag"]))
 
     def has_data(self) -> bool:
         return any(s["jd"] for s in self._series.values())
@@ -63,13 +75,5 @@ class LightCurvePanel(QWidget):
         for s in self._series.values():
             self._plot.removeItem(s["errbar"])
             self._plot.removeItem(s["curve"])
+            self._plot.removeItem(s["sat"])
         self._series = {}
-
-    def export_csv(self, path) -> None:
-        """Write every series to one CSV (target, jd_utc, mag, mag_err)."""
-        with open(path, "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(["target", "jd_utc", "mag", "mag_err"])
-            for name, s in self._series.items():
-                for jd, mag, err in zip(s["jd"], s["mag"], s["err"]):
-                    w.writerow([name, jd, mag, err])

@@ -52,6 +52,8 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
+    QProgressDialog,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -90,8 +92,8 @@ from argos.ui.widgets.focuser_dock import FocuserDock
 from argos.ui.widgets.hfd_history_dock import HfdHistoryDock
 from argos.ui.widgets.histogram_dock import HistogramDock
 from argos.ui.widgets.image_toolbar import ImageToolbar
+from argos.ui.widgets.lightcurve_panel import LightCurvePanel
 from argos.ui.widgets.mount_dock import MountDock
-from argos.ui.panels.photometry_setup_window import PhotometrySetupWindow
 from argos.ui.panels.photometry_window import PhotometryWindow
 from argos.ui.widgets.overlay_bar import OverlayBar
 from argos.ui.widgets.sequence_panel import SequencePanel
@@ -175,6 +177,8 @@ class ImagingPage(QWidget):
         # §6 P4: live photometry preview (light curve + metrics window).
         self._photometry_window: PhotometryWindow | None = None
         self._metrics_t0: float | None = None
+        self._batch_worker = None  # WS7 batch re-run (QThread) + its progress dialog
+        self._batch_dialog: QProgressDialog | None = None
 
         self._build_ui()
         # The engine reads capture parameters through these providers — the
@@ -202,6 +206,7 @@ class ImagingPage(QWidget):
         # On-image star-info card (bottom-left overlay) for click → info + roles.
         self._info_card = StarInfoCard(self._viewer)
         self._camera_dock = CameraDock()
+        self._lightcurve_panel = LightCurvePanel()  # live curve, as a dock (WS7)
         self._sequence_panel = SequencePanel()
         self._mount_dock = MountDock()
         self._focuser_dock = FocuserDock()
@@ -258,6 +263,11 @@ class ImagingPage(QWidget):
                 "Sequence", self._sequence_panel, object_name="dock.sequence", scroll=False
             ),
             "log": make_dock("Log", self._log_panel, object_name="dock.log", scroll=False),
+            # Live differential light curve — visible during capture without a
+            # floating window (WS7). Owns its own plot layout (scroll=False).
+            "lightcurve": make_dock(
+                "Light curve", self._lightcurve_panel, object_name="dock.lightcurve", scroll=False
+            ),
         }
         self._sequence_panel.setMinimumHeight(180)
 
@@ -289,6 +299,7 @@ class ImagingPage(QWidget):
         ("hfd_history", "HFD History"),
         ("sequence", "Sequence"),
         ("log", "Log"),
+        ("lightcurve", "Light curve"),
     )
 
     def _build_panel_bar(self) -> QToolBar:
@@ -341,7 +352,7 @@ class ImagingPage(QWidget):
         hidden (right-area homes, summoned on demand). Called on first launch and
         by "Reset layout".
         """
-        hidden = ("display", "statistics", "hfd_history")
+        hidden = ("display", "statistics", "hfd_history", "lightcurve")
         w = self._workspace
         right = Qt.DockWidgetArea.RightDockWidgetArea
         bottom = Qt.DockWidgetArea.BottomDockWidgetArea
@@ -362,6 +373,9 @@ class ImagingPage(QWidget):
         w.addDockWidget(bottom, self._docks["sequence"])
         w.addDockWidget(bottom, self._docks["log"])
         w.tabifyDockWidget(self._docks["sequence"], self._docks["log"])
+        # Light curve joins the bottom stack (summoned on demand during a run).
+        w.addDockWidget(bottom, self._docks["lightcurve"])
+        w.tabifyDockWidget(self._docks["sequence"], self._docks["lightcurve"])
         self._docks["sequence"].raise_()
 
         # Display / Statistics / HFD History have right-area homes but start
@@ -442,7 +456,7 @@ class ImagingPage(QWidget):
         self._toolbar.solve_requested.connect(self._engine.solve_now)
         self._toolbar.auto_solve_toggled.connect(self._astrometry.set_auto)
         self._toolbar.photometry_requested.connect(self._open_photometry)
-        self._toolbar.photometry_setup_requested.connect(self._on_photometry_setup)
+        self._toolbar.rerun_requested.connect(self._on_rerun_subs)
         # Overlay chips + the on-image star-info card.
         self._overlay_bar.toggled.connect(self._on_overlay_toggled)
         self._info_card.role_selected.connect(self._on_card_role)
@@ -1035,15 +1049,123 @@ class ImagingPage(QWidget):
         if self._photometry_window is None:
             self._photometry_window = PhotometryWindow(self)
             self._photometry_window.lightcurves = self._engine.lightcurves
-            self._photometry_window.obscode = str(self._cfg("observer.obscode", "XXX") or "XXX")
+            self._photometry_window.set_export_meta(
+                str(self._cfg("observer.obscode", "XXX") or "XXX"),
+                str(self._cfg("photometry.default_band", "TG") or "TG"),
+                self._engine.target_set().object_name,
+            )
             self._photometry_window.targets.remove_requested.connect(self._engine.remove_target)
+            self._photometry_window.comparisons.remove_requested.connect(self._engine.remove_target)
+        # Backfill the window with the curve so far (points accrue in the dock).
+        self._photometry_window.load_curves(
+            self._engine.lightcurves,
+            obscode=str(self._cfg("observer.obscode", "XXX") or "XXX"),
+            filt=str(self._cfg("photometry.default_band", "TG") or "TG"),
+        )
+        # ``load_curves`` snapshots into a copy; restore the engine's live dict so
+        # AAVSO/CSV export reflects points (and targets) added after this open.
+        self._photometry_window.lightcurves = self._engine.lightcurves
         self._refresh_target_table()
         self._photometry_window.show()
         self._photometry_window.raise_()
 
     def _refresh_target_table(self) -> None:
         if self._photometry_window is not None:
-            self._photometry_window.targets.set_targets(self._engine.target_set().stars)
+            self._photometry_window.set_targets(self._engine.target_set().stars)
+
+    # ------------------------------------------------------------------
+    # Batch re-run over saved subs (WS7 — off the UI thread)
+    # ------------------------------------------------------------------
+
+    def _on_rerun_subs(self) -> None:
+        """Re-run differential photometry over a folder of saved FITS.
+
+        Uses the current live solve as the shared WCS and the engine's target
+        set — the same measurement core as the live path — so comps carry their
+        catalog magnitudes. Runs in a QThread with a cancellable progress dialog.
+        """
+        if self._batch_worker is not None:
+            return  # one at a time
+        from argos.core.photometry.params import PhotometryParams
+        from argos.workers.photometry_batch_worker import BatchRequest, PhotometryBatchWorker
+
+        wcs = self._astrometry.wcs
+        if wcs is None:
+            QMessageBox.information(
+                self, "Solve first", "Plate-solve the live frame before a batch re-run."
+            )
+            return
+        tset = self._engine.target_set()
+        if not tset.by_role("target"):
+            QMessageBox.information(
+                self, "No targets", "Assign at least one target star first."
+            )
+            return
+        start = str(self._engine.last_sequence_dir or self._config.sessions_path)
+        folder = QFileDialog.getExistingDirectory(self, "Folder of saved subs", start)
+        if not folder:
+            return
+        paths = sorted(Path(folder).glob("*.fits"), key=lambda p: p.stat().st_mtime)
+        if not paths:
+            paths = sorted(Path(folder).rglob("*.fits"), key=lambda p: p.stat().st_mtime)
+        if not paths:
+            QMessageBox.information(self, "No frames", f"No FITS files in {folder}")
+            return
+        params = PhotometryParams.from_config(self._cfg, egain=self._engine_egain())
+        req = BatchRequest(
+            fits_paths=paths,
+            wcs=wcs,
+            target_set=tset,
+            params=params,
+            out_dir=self._config.sessions_path.parent / "targets",
+            object_name=tset.object_name or "untitled",
+            site=(self._cfg("site.latitude", None), self._cfg("site.longitude", None),
+                  self._cfg("site.elevation", 0.0) or 0.0),
+        )
+        dialog = QProgressDialog("Re-running photometry…", "Cancel", 0, len(paths), self)
+        dialog.setWindowTitle("Batch photometry")
+        dialog.setMinimumDuration(0)
+        worker = PhotometryBatchWorker(req, parent=self)
+        dialog.canceled.connect(worker.cancel)
+        worker.progress.connect(lambda done, total: dialog.setValue(done))
+        worker.finished_batch.connect(self._on_batch_done)
+        self._batch_worker = worker
+        self._batch_dialog = dialog
+        dialog.show()
+        worker.start()
+
+    def _engine_egain(self) -> float:
+        """e-/ADU from the config table (batch has no live driver handle)."""
+        table = self._cfg("camera.egain_table", {}) or {}
+        gain = str(self._camera_dock.params().gain)
+        if isinstance(table, dict) and gain in table:
+            try:
+                return float(table[gain])
+            except (TypeError, ValueError):
+                pass
+        return 1.0
+
+    @pyqtSlot(object)
+    def _on_batch_done(self, result) -> None:
+        if self._batch_dialog is not None:
+            self._batch_dialog.reset()
+            self._batch_dialog = None
+        self._batch_worker = None
+        if not result.ok:
+            QMessageBox.warning(self, "Batch failed", result.error)
+            return
+        if not result.curves:
+            self.log_message.emit("WARN", "Batch photometry: no points measured.")
+            return
+        self.log_message.emit(
+            "OK", f"Batch photometry: {result.frames_done} frame(s), {len(result.curves)} target(s)."
+        )
+        self._open_photometry()
+        self._photometry_window.load_curves(
+            result.curves,
+            obscode=str(self._cfg("observer.obscode", "XXX") or "XXX"),
+            filt=str(self._cfg("photometry.default_band", "TG") or "TG"),
+        )
 
     @pyqtSlot()
     def _on_photometry_measuring(self) -> None:
@@ -1054,12 +1176,16 @@ class ImagingPage(QWidget):
 
     @pyqtSlot(object)
     def _on_photometry_point(self, point) -> None:
-        """Render one differential point (typed PhotometryPoint) on the curve."""
+        """Render one differential point (typed PhotometryPoint) on the curve.
+
+        The live dock always gets the point (it may be hidden but stays in sync);
+        the floating window mirrors it only while shown."""
+        self._lightcurve_panel.add_point(
+            point.name, point.jd, point.mag, point.mag_err, saturated=point.saturated
+        )
         win = self._photometry_window
         if win is not None and win.isVisible():
-            win.lightcurve.add_point(
-                point.name, point.jd, point.mag, point.mag_err, saturated=point.saturated
-            )
+            win.feed_point(point)
 
     def _elapsed(self) -> float:
         if self._metrics_t0 is None:
@@ -1082,24 +1208,6 @@ class ImagingPage(QWidget):
         """Sensor temperature (read only when the photometry window is open — a
         solved frame is infrequent, so this off-cadence network read is cheap)."""
         return self._session.ccd_temperature()
-
-    # ------------------------------------------------------------------
-    # Photometry setup (opens the standalone window)
-    # ------------------------------------------------------------------
-
-    def open_photometry_setup(self) -> None:
-        """Public entry point (e.g. the Photometry phase screen) for the companion."""
-        self._on_photometry_setup()
-
-    def _on_photometry_setup(self) -> None:
-        """Open the Photometry Setup window with the last sequence frame."""
-        win = PhotometrySetupWindow(
-            config=self._config,
-            sequence_dir=self._engine.last_sequence_dir,
-            parent=self,
-        )
-        win.show()
-        win.raise_()
 
     def _clear_astrometry(self) -> None:
         """Drop the WCS + catalog overlays — a slew/goto changes the field."""
@@ -1313,6 +1421,10 @@ class ImagingPage(QWidget):
         if self._photometry_window is not None:
             self._photometry_window.close()
             self._photometry_window = None
+        if self._batch_worker is not None:
+            self._batch_worker.cancel()
+            self._batch_worker.wait(3000)
+            self._batch_worker = None
         self._engine.shutdown()
         self._processor.stop()
         self._processor.wait(2000)

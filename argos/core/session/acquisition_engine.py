@@ -39,7 +39,7 @@ from argos.core.imaging.green import green_plane
 from argos.core.imaging.platesolve import angular_separation_deg
 from argos.core.photometry.airmass import airmass_from_altitude, bjd_tdb, julian_date
 from argos.core.photometry.lightcurve import LcPoint, LightCurve
-from argos.core.photometry.session import measure_targets
+from argos.core.photometry.params import DEFAULT_FWHM, PhotometryParams, measure_frame
 from argos.core.session.device_session import DeviceSession
 from argos.core.session.types import LiveFrame, PhotometryPoint
 from argos.workers.astrometry_controller import AstrometryController
@@ -784,20 +784,9 @@ class AcquisitionEngine(QObject):
         tset = self.target_set()
         if not tset.by_role(ROLE_TARGET):
             return
-        fwhm = self._last_fwhm or 3.0
-        r_ap = max(float(self._cfg("photometry.aperture_min_px", 4)),
-                   float(self._cfg("photometry.aperture_fwhm_mult", 2.5)) * fwhm)
-        r_in = float(self._cfg("photometry.annulus_in_px", 8))
-        r_out = float(self._cfg("photometry.annulus_out_px", 12))
-        results = measure_targets(
-            green_plane(self._last_raw), wcs, tset,
-            r_ap=r_ap, r_in=max(r_in, r_ap + 1), r_out=max(r_out, r_in + 2),
-            egain=self._egain(),
-            read_noise_e=float(self._cfg("photometry.read_noise_e", 1.5)),
-            sat_adu=float(self._cfg("camera.linearity_max_adu", 50000)),
-            band=str(self._cfg("photometry.default_band", "V")),
-            min_comps=int(self._cfg("photometry.min_comparisons", 2)),
-        )
+        fwhm = self._last_fwhm or DEFAULT_FWHM
+        params = PhotometryParams.from_config(self._cfg, egain=self._egain())
+        results = measure_frame(green_plane(self._last_raw), wcs, tset, params, fwhm=fwhm)
         jd = julian_date(self._last_exposure_mid or datetime.now(timezone.utc))
         pos = self._session.last_position
         air = airmass_from_altitude(pos.altitude) if pos else None
