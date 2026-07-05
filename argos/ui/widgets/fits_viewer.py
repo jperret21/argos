@@ -37,6 +37,12 @@ logger = logging.getLogger(__name__)
 _LOUPE_PX = 168
 _LOUPE_SRC = 42
 
+#: Display-rotation modes. "auto" turns portrait frames 90° CW so the wide
+#: Seestar sensor reads landscape; the fixed angles are clockwise. Rotation is
+#: display-only: the public API (star_clicked, mark_selection, set_*_markers)
+#: keeps speaking un-rotated frame coordinates, and saved FITS are untouched.
+ROTATION_MODES = ("auto", "0", "90", "180", "270")
+
 
 def _to_qimage(arr: np.ndarray) -> QImage:
     """Build a QImage from a uint8 grayscale (H,W) or RGB (H,W,3) array."""
@@ -56,7 +62,10 @@ class FitsViewer(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._last_arr: np.ndarray | None = None  # linear display array
+        self._last_arr: np.ndarray | None = None  # linear display array (rotated)
+        self._arr0: np.ndarray | None = None  # as delivered, un-rotated
+        self._rot_mode: str = "0"  # one of ROTATION_MODES
+        self._rot_k: int = 0  # 90°-CW turns applied to the current frame
         self._black: float = 0.0
         self._white: float = 65535.0
         self._mode: str = STRETCH_LINEAR
@@ -198,11 +207,54 @@ class FitsViewer(QWidget):
     # Display
     # ------------------------------------------------------------------
 
+    def set_rotation(self, mode: str) -> None:
+        """Set the display rotation ("auto" or CW degrees "0"/"90"/"180"/"270")."""
+        mode = str(mode).lower().rstrip("°")
+        if mode not in ROTATION_MODES or mode == self._rot_mode:
+            return
+        self._rot_mode = mode
+        if self._arr0 is not None:
+            self.display(self._arr0)  # re-derives k + refreshes every overlay
+
+    def _effective_k(self, arr: np.ndarray) -> int:
+        if self._rot_mode == "auto":
+            h, w = arr.shape[:2]
+            return 1 if h > w else 0  # portrait sensor → landscape view
+        return int(self._rot_mode) // 90
+
+    def _rot_pt(self, x, y):
+        """Un-rotated display px → rotated view px (scalars or arrays)."""
+        if self._rot_k == 0 or self._arr0 is None:
+            return x, y
+        h, w = self._arr0.shape[:2]
+        if self._rot_k == 1:
+            return (h - 1) - y, x
+        if self._rot_k == 2:
+            return (w - 1) - x, (h - 1) - y
+        return y, (w - 1) - x
+
+    def _unrot_pt(self, x, y):
+        """Rotated view px → un-rotated display px (inverse of _rot_pt)."""
+        if self._rot_k == 0 or self._arr0 is None:
+            return x, y
+        h, w = self._arr0.shape[:2]
+        if self._rot_k == 1:
+            return y, (h - 1) - x
+        if self._rot_k == 2:
+            return (w - 1) - x, (h - 1) - y
+        return (w - 1) - y, x
+
     def display(self, arr: np.ndarray) -> None:
         """Display a linear array (2-D uint16 plane or 3-D uint16 RGB)."""
         if arr.ndim not in (2, 3):
             return
-        self._last_arr = arr
+        self._arr0 = arr
+        k = self._effective_k(arr)
+        rotated = k != self._rot_k
+        self._rot_k = k
+        self._last_arr = np.ascontiguousarray(np.rot90(arr, -k)) if k else arr
+        if rotated:
+            self.clear_selection()  # old ring coords belong to the old orientation
         if self._auto_on:
             self._black, self._white, self._midtones = auto_stf(arr)
             self.levels_changed.emit(self._black, self._white, self._midtones)
@@ -212,6 +264,8 @@ class FitsViewer(QWidget):
         self._refresh_catalog()
         self._refresh_comparisons()
         self._refresh_targets()
+        if rotated:
+            self._view.getView().autoRange()  # the canvas aspect just changed
         if self._roi is not None:
             self._on_roi_changed()
 
@@ -316,11 +370,14 @@ class FitsViewer(QWidget):
                 self._hline.setPos(p.y())
                 self._vline.setVisible(True)
                 self._hline.setVisible(True)
+            # Label the un-rotated frame position (what FITS/analysis see);
+            # the value is read from the rotated array (same pixel).
+            ux, uy = (int(v) for v in self._unrot_pt(x, y))
             if a.ndim == 2:
-                self._readout.setText(f"({x}, {y})   {int(a[y, x])} ADU")
+                self._readout.setText(f"({ux}, {uy})   {int(a[y, x])} ADU")
             else:
                 r, g, b = (int(v) for v in a[y, x][:3])
-                self._readout.setText(f"({x}, {y})   R {r}  G {g}  B {b}")
+                self._readout.setText(f"({ux}, {uy})   R {r}  G {g}  B {b}")
             self._readout.adjustSize()
             self._readout.show()
             self._readout.raise_()
@@ -363,12 +420,12 @@ class FitsViewer(QWidget):
         if gh <= 0 or gw <= 0:
             self._scatter.setVisible(False)
             return
-        dh, dw = self._last_arr.shape[:2]
+        dh, dw = self._arr0.shape[:2]
         sx, sy = dw / gw, dh / gh  # green-plane → display px (×1 super-pixel, ×2 raw)
         spots = []
         for s in self._stars:
             size = float(np.clip(10.0 + s.fwhm * 2.0, 10.0, 36.0))
-            spots.append({"pos": (s.x * sx, s.y * sy), "size": size})
+            spots.append({"pos": self._rot_pt(s.x * sx, s.y * sy), "size": size})
         self._scatter.setData(spots)
         self._scatter.setVisible(True)
 
@@ -398,15 +455,18 @@ class FitsViewer(QWidget):
             self._astro_label.hide()
             self._clear_grid_labels()
             return
-        dh, dw = self._last_arr.shape[:2]
+        dh, dw = self._arr0.shape[:2]
         sx, sy = dw / gw, dh / gh  # green-plane px → display px
         self._draw_grid_labels(getattr(ov, "labels", ()), sx, sy)
 
         xs_parts, ys_parts = [], []
         gap = np.array([np.nan])
         for xs, ys in ov.lines:
-            xs_parts.extend((np.asarray(xs, dtype=float) * sx, gap))
-            ys_parts.extend((np.asarray(ys, dtype=float) * sy, gap))
+            rx, ry = self._rot_pt(
+                np.asarray(xs, dtype=float) * sx, np.asarray(ys, dtype=float) * sy
+            )
+            xs_parts.extend((rx, gap))
+            ys_parts.extend((ry, gap))
         if xs_parts:
             self._grid_item.setData(
                 np.concatenate(xs_parts), np.concatenate(ys_parts), connect="finite"
@@ -416,7 +476,7 @@ class FitsViewer(QWidget):
             self._grid_item.setVisible(False)
 
         if ov.target is not None:
-            tx, ty = ov.target[0] * sx, ov.target[1] * sy
+            tx, ty = self._rot_pt(ov.target[0] * sx, ov.target[1] * sy)
             rr = 0.05 * min(dw, dh)
             th = np.linspace(0.0, 2.0 * np.pi, 49)
             self._target_item.setData(tx + rr * np.cos(th), ty + rr * np.sin(th))
@@ -445,7 +505,7 @@ class FitsViewer(QWidget):
         view = self._view.getView()
         for x, y, text in labels or ():
             t = pg.TextItem(text=str(text), color=theme.ACCENT, anchor=(0.0, 0.0))
-            t.setPos(x * sx, y * sy)
+            t.setPos(*self._rot_pt(x * sx, y * sy))
             view.addItem(t, ignoreBounds=True)
             self._grid_labels.append(t)
 
@@ -476,12 +536,12 @@ class FitsViewer(QWidget):
         if gh <= 0 or gw <= 0:
             self._catalog_item.setVisible(False)
             return
-        dh, dw = self._last_arr.shape[:2]
+        dh, dw = self._arr0.shape[:2]
         sx, sy = dw / gw, dh / gh  # green-plane px → display px
         confirmed = pg.mkPen(theme.VARIABLE, width=2)
         suspected = pg.mkPen(theme.VARIABLE, width=1, style=Qt.PenStyle.DashLine)
         spots = [
-            {"pos": (x * sx, y * sy), "pen": (suspected if s else confirmed)}
+            {"pos": self._rot_pt(x * sx, y * sy), "pen": (suspected if s else confirmed)}
             for (x, y, s) in self._catalog
         ]
         self._catalog_item.setData(spots)
@@ -522,12 +582,12 @@ class FitsViewer(QWidget):
         if gh <= 0 or gw <= 0:
             self._comparison_item.setVisible(False)
             return
-        dh, dw = self._last_arr.shape[:2]
+        dh, dw = self._arr0.shape[:2]
         sx, sy = dw / gw, dh / gh  # green-plane px → display px
         view = self._view.getView()
         spots = []
         for x, y, label in self._comparisons:
-            px, py = x * sx, y * sy
+            px, py = self._rot_pt(x * sx, y * sy)
             spots.append({"pos": (px, py)})
             if label:
                 t = pg.TextItem(text=str(label), color=theme.CYAN, anchor=(0.0, 1.2))
@@ -564,11 +624,11 @@ class FitsViewer(QWidget):
         if gh <= 0 or gw <= 0:
             self._targets_item.setVisible(False)
             return
-        dh, dw = self._last_arr.shape[:2]
+        dh, dw = self._arr0.shape[:2]
         sx, sy = dw / gw, dh / gh
         spots = []
         for x, y, name in self._targets:
-            px, py = x * sx, y * sy
+            px, py = self._rot_pt(x * sx, y * sy)
             spots.append({"pos": (px, py)})
             if name:
                 t = pg.TextItem(text=str(name), color=theme.WARNING, anchor=(0.0, 1.4))
@@ -596,7 +656,8 @@ class FitsViewer(QWidget):
         x, y = p.x(), p.y()
         h, w = self._last_arr.shape[:2]
         if 0 <= x < w and 0 <= y < h:
-            self.star_clicked.emit(float(x), float(y))
+            ux, uy = self._unrot_pt(x, y)  # public API speaks un-rotated px
+            self.star_clicked.emit(float(ux), float(uy))
 
     def mark_selection(
         self,
@@ -613,6 +674,7 @@ class FitsViewer(QWidget):
         ``show_label=False`` draws only the ring (the live page shows the richer
         info in its on-image card instead of this built-in label).
         """
+        x_disp, y_disp = self._rot_pt(x_disp, y_disp)  # into the rotated view
         self._sel_center.setData([{"pos": (x_disp, y_disp), "size": 6}])
         self._sel_center.setVisible(True)
         if radius_disp is not None and radius_disp > 0:
@@ -684,6 +746,7 @@ class FitsViewer(QWidget):
     def reset(self) -> None:
         """Reset viewer state (call when switching targets)."""
         self._last_arr = None
+        self._arr0 = None
         self._disp_u8 = None
         self._stars = ()
         self._scatter.setVisible(False)

@@ -471,6 +471,11 @@ class ImagingPage(QWidget):
         self._histogram_dock.loupe_toggled.connect(self._viewer.set_loupe_enabled)
         self._histogram_dock.astrometry_toggled.connect(self._viewer.set_astrometry_enabled)
         self._histogram_dock.star_radius_changed.connect(self._on_star_radius)
+        self._histogram_dock.rotation_changed.connect(self._on_rotation_changed)
+        # Display rotation: default Auto = portrait sensor shown landscape.
+        rotation = str(self._config.get("ui.display.rotation", "auto") or "auto")
+        self._viewer.set_rotation(rotation)
+        self._histogram_dock.set_rotation_mode(rotation)
         self._viewer.star_clicked.connect(self._on_star_clicked)
         self._viewer.levels_changed.connect(self._histogram_dock.set_levels)
         self._viewer.region_info.connect(self._histogram_dock.set_region_info)
@@ -625,6 +630,10 @@ class ImagingPage(QWidget):
     def _on_saturation_toggled(self, enabled: bool) -> None:
         threshold = int(self._config.get("camera.full_well_adu", 60000))
         self._viewer.set_saturation(enabled, threshold)
+
+    def _on_rotation_changed(self, mode: str) -> None:
+        self._viewer.set_rotation(mode)
+        self._config.set("ui.display.rotation", mode)  # saved by the Shell on close
 
     def _show_raw(self, full_arr) -> None:
         """Submit a raw frame to the preview worker (heavy compute off-thread)."""

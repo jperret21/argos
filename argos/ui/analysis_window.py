@@ -207,6 +207,11 @@ class AnalysisWindow(QMainWindow):
         self._histogram.loupe_toggled.connect(self._viewer.set_loupe_enabled)
         self._histogram._astro_chk.hide()  # WCS grid is driven by our own Grid button
         self._histogram.star_radius_changed.connect(self._on_radius)
+        self._histogram.rotation_changed.connect(self._viewer.set_rotation)
+        # Same display rotation as the Capture screen (Auto → landscape).
+        rotation = str(self._cfg("ui.display.rotation", "auto") or "auto")
+        self._viewer.set_rotation(rotation)
+        self._histogram.set_rotation_mode(rotation)
         self._viewer.levels_changed.connect(self._histogram.set_levels)
         self._viewer.region_info.connect(self._histogram.set_region_info)
         self._viewer.star_clicked.connect(self._on_star_clicked)
