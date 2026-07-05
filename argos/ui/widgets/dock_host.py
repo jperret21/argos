@@ -80,7 +80,7 @@ def make_dock(
         )
         layout.setSpacing(design.SPACING_MD)
         layout.addWidget(content)
-        layout.addStretch()
+        # No addStretch(): stretch fights scroll when dock < content
 
         area = QScrollArea()
         area.setWidgetResizable(True)

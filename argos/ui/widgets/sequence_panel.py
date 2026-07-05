@@ -102,10 +102,11 @@ class SequencePanel(design.Card):
         header = self._table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         for col in (1, 2):
-            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
         for col in range(3, len(_COLUMNS)):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         self._table.setMinimumHeight(120)
+        self._table.setHorizontalScrollMode(QTableWidget.ScrollMode.ScrollPerPixel)
         left.addWidget(self._table, 1)
 
         edit_row = QHBoxLayout()
@@ -123,6 +124,7 @@ class SequencePanel(design.Card):
             edit_row.addWidget(btn)
         edit_row.addStretch()
         self._estimate_lbl = design.MutedLabel("")
+        self._estimate_lbl.setWordWrap(True)
         self._estimate_lbl.setToolTip(
             "Exposures + intervals + per-frame overhead; autofocus passes not counted"
         )
@@ -191,13 +193,13 @@ class SequencePanel(design.Card):
         self._progress.setVisible(False)
         right.addWidget(self._progress)
         self._status_lbl = design.MutedLabel("")
+        self._status_lbl.setWordWrap(True)
         right.addWidget(self._status_lbl)
 
         right_wrap = QWidget()
         right_wrap.setLayout(right)
-        right_wrap.setMinimumWidth(240)
-        right_wrap.setMaximumWidth(320)
-        body.addWidget(right_wrap)
+        right_wrap.setMinimumWidth(180)
+        body.addWidget(right_wrap, 0)
 
     # ------------------------------------------------------------------
     # Row management

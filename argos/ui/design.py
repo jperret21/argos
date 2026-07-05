@@ -93,15 +93,14 @@ VALUE_FIELD_WIDTH = 92
 class Card(QGroupBox):
     """Standard dock / panel container.
 
-    Reserves a Preferred-Fixed vertical size policy so that, even when its
-    parent shrinks past the preferred height, the card holds its layout
-    instead of collapsing widgets on top of each other (a common pyqtgraph /
-    pyqt6 gotcha that bit us in R2 before the QScrollArea wrapper landed).
+    Uses a Minimum vertical policy so the card can shrink below its sizeHint
+    when the dock is small -- the QScrollArea in make_dock() then takes over
+    instead of the content overflowing and overlapping.
     """
 
     def __init__(self, title: str, parent: QWidget | None = None) -> None:
         super().__init__(title, parent)
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
 
 
 def card_layout(card: Card) -> QVBoxLayout:
