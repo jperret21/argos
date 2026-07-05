@@ -44,8 +44,7 @@ import time
 from pathlib import Path
 
 import numpy as np
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
-from PyQt6.QtCore import QByteArray
+from PyQt6.QtCore import QByteArray, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
     QDockWidget,
     QFileDialog,
