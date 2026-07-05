@@ -39,13 +39,39 @@ use the bundled `seestar_alp` simulator instead — see
 
 ---
 
-## 2. Installing & building it (macOS arm64)
+## 2a. Running it via Docker (no .NET SDK needed — preferred on this Mac)
 
-The simulator is a .NET app. It is **not** vendored in this repo — clone it next
-to your other dev projects (here: `~/Documents/perso/dev/`):
+The clone lives at `~/Documents/dev/python/ASCOM.Alpaca.Simulators` on this
+machine and .NET is not installed, so use Docker. One-time build (the
+`ASCOM_COM` define in `ASCOM.Alpaca.Simulators.csproj` must be conditioned on
+Windows — see §2 below — or the Linux build fails):
 
 ```bash
-cd ~/Documents/perso/dev
+cd ~/Documents/dev/python/ASCOM.Alpaca.Simulators
+docker build -t omnisim .
+```
+
+Run / stop (quote the `--urls` glob or zsh eats it):
+
+```bash
+docker rm -f omnisim 2>/dev/null
+docker run -d --name omnisim -p 32323:32323 -p 32227:32227/udp \
+    omnisim dotnet ascom.alpaca.simulators.dll '--urls=http://0.0.0.0:32323'
+# … later:
+docker stop omnisim
+```
+
+All four devices (telescope, camera, filterwheel, focuser) answer on
+`http://localhost:32323` — unlike `scripts/mock_alpaca_server.py`, which only
+simulates telescope+camera on port **8765** and will make the filter wheel and
+focuser LOOK broken if you point the app at it.
+
+## 2. Installing & building it (macOS arm64, native .NET alternative)
+
+The simulator is a .NET app. It is **not** vendored in this repo — clone it next
+to your other dev projects:
+
+```bash
 git clone https://github.com/ASCOMInitiative/ASCOM.Alpaca.Simulators.git
 ```
 
