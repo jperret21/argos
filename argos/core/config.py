@@ -19,11 +19,12 @@ _CONFIG_FILE = _CONFIG_DIR / "config.json"
 _DEFAULTS: dict[str, Any] = {
     "alpaca": {
         "host": "",
-        "port": 4700,
+        "port": 32323,  # Alpaca HTTP port (4700 is the native JSON-RPC port)
     },
     "sessions_path": str(Path.home() / "Argos" / "sessions"),
     "observer": {
         "name": "",
+        "obscode": "",  # AAVSO observer code — stamped on every AAVSO export
         "latitude": 0.0,
         "longitude": 0.0,
         "elevation": 0.0,
@@ -153,7 +154,7 @@ class Config:
 
     @property
     def alpaca_port(self) -> int:
-        return self.get("alpaca.port", 4700)
+        return self.get("alpaca.port", 32323)
 
     @alpaca_port.setter
     def alpaca_port(self, value: int) -> None:

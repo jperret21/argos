@@ -7,7 +7,7 @@ Integration tests: require the ASCOM Alpaca Simulator on localhost:32323.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 

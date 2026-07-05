@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 
 from PyQt6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -19,6 +20,7 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QGridLayout,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QSpinBox,
     QVBoxLayout,
@@ -27,12 +29,12 @@ from PyQt6.QtWidgets import (
 
 from argos.core.config import Config
 from argos.core.imaging.platesolve import find_astap
-from argos.ui import design
+from argos.ui import design, theme
+from argos.ui.palettes import EQUILUX, PALETTES
 
 logger = logging.getLogger(__name__)
 
 _LANGUAGES = (("English", "en"), ("Français", "fr"))
-_THEMES = (("Dark", "dark"),)
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 _APP_VERSION = "0.2.0-redesign"
 #: ASTAP star databases (FOV-dependent). "" = let ASTAP auto-pick.
@@ -92,7 +94,13 @@ class ConfigurationPage(QWidget):
         self._observer_edit = QLineEdit()
         self._observer_edit.editingFinished.connect(self._save_observer)
         grid.addWidget(design.MutedLabel("Observer"), 0, 0)
-        grid.addWidget(self._observer_edit, 0, 1, 1, 3)
+        grid.addWidget(self._observer_edit, 0, 1)
+        self._obscode_edit = QLineEdit()
+        self._obscode_edit.setPlaceholderText("e.g. ABC")
+        self._obscode_edit.setToolTip("Your AAVSO observer code — stamped on every AAVSO export")
+        self._obscode_edit.editingFinished.connect(self._save_observer)
+        grid.addWidget(design.MutedLabel("AAVSO code"), 0, 2)
+        grid.addWidget(self._obscode_edit, 0, 3)
 
         self._lat_spin = self._make_deg_spin(-90.0, 90.0)
         self._lat_spin.valueChanged.connect(self._save_site)
@@ -242,11 +250,13 @@ class ConfigurationPage(QWidget):
         grid.setVerticalSpacing(design.SPACING_SM)
         grid.setColumnStretch(1, 1)
 
-        self._theme_combo = QComboBox()
-        for label, value in _THEMES:
-            self._theme_combo.addItem(label, value)
-        grid.addWidget(design.MutedLabel("Theme"), 0, 0)
-        grid.addWidget(self._theme_combo, 0, 1)
+        # Palette / theme preset picker
+        self._palette_combo = QComboBox()
+        for palette_name in PALETTES:
+            self._palette_combo.addItem(palette_name)
+        self._palette_combo.currentTextChanged.connect(self._save_palette)
+        grid.addWidget(design.MutedLabel("Color preset"), 0, 0)
+        grid.addWidget(self._palette_combo, 0, 1)
 
         self._lang_combo = QComboBox()
         for label, value in _LANGUAGES:
@@ -263,6 +273,21 @@ class ConfigurationPage(QWidget):
         grid.addWidget(self._log_combo, 2, 1)
 
         layout.addLayout(grid)
+
+        # Restart notice — shown after a palette change so users know the full
+        # effect requires a restart (widgets with baked-in local stylesheets
+        # won't repaint live: see WS9c live-vs-restart note).
+        self._palette_notice = QLabel(
+            "Restart to fully apply — global colors update live, "
+            "but some widgets (sidebar, status bar) take effect on next launch."
+        )
+        self._palette_notice.setWordWrap(True)
+        self._palette_notice.setStyleSheet(
+            f"color:{theme.WARNING}; font-size:11px; background:transparent;"
+        )
+        self._palette_notice.setVisible(False)
+        layout.addWidget(self._palette_notice)
+
         layout.addWidget(design.MutedLabel("Language change applies after restart."))
         return card
 
@@ -281,11 +306,15 @@ class ConfigurationPage(QWidget):
     def _load_config(self) -> None:
         self._loading = True
         self._observer_edit.setText(str(self._config.get("observer.name", "") or ""))
+        self._obscode_edit.setText(str(self._config.get("observer.obscode", "") or ""))
         self._lat_spin.setValue(float(self._config.get("site.latitude", 0.0) or 0.0))
         self._lon_spin.setValue(float(self._config.get("site.longitude", 0.0) or 0.0))
         self._elev_spin.setValue(float(self._config.get("site.elevation", 0.0) or 0.0))
         self._sessions_edit.setText(str(self._config.sessions_path))
-        self._select_combo_data(self._theme_combo, self._config.get("ui.theme", "dark"))
+        preset_name: str = self._config.get("ui.theme.preset", EQUILUX.name)  # type: ignore[assignment]
+        idx = self._palette_combo.findText(preset_name)
+        if idx >= 0:
+            self._palette_combo.setCurrentIndex(idx)
         self._select_combo_data(self._lang_combo, self._config.get("ui.language", "en"))
         idx = self._log_combo.findText(self._config.get("ui.log_level", "INFO"))
         if idx >= 0:
@@ -312,6 +341,7 @@ class ConfigurationPage(QWidget):
 
     def _save_observer(self) -> None:
         self._config.set("observer.name", self._observer_edit.text().strip())
+        self._config.set("observer.obscode", self._obscode_edit.text().strip().upper())
         self._config.save()
 
     def _save_site(self) -> None:
@@ -377,6 +407,32 @@ class ConfigurationPage(QWidget):
             self._astap_status.setText(f"✓ ASTAP detected: {found}")
         else:
             self._astap_status.setText("✗ ASTAP not found — install it or set the path above")
+
+    def _save_palette(self, preset_name: str) -> None:
+        """Apply *preset_name* live (best-effort) and persist it in config.
+
+        Live-vs-restart behaviour
+        -------------------------
+        - **Live (immediate)**: the global QSS is regenerated and applied via
+          ``QApplication.setStyleSheet``.  All QSS-driven colors (backgrounds,
+          buttons, inputs, labels, dock headers from the global sheet, …) update
+          immediately.
+        - **On restart only**: widgets that captured a color string in a local
+          ``setStyleSheet`` call *at construction time* — the dock_host
+          ``_DOCK_QSS`` f-string, sidebar icon cache, statusbar self-stylesheet —
+          are not retroactively repainted by a global QSS change.  They take the
+          new palette on the next application launch.
+        """
+        if self._loading:
+            return
+        palette = PALETTES.get(preset_name, EQUILUX)
+        theme.apply_palette(palette)
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(theme.get_stylesheet())
+        self._config.set("ui.theme.preset", preset_name)
+        self._config.save()
+        self._palette_notice.setVisible(True)
 
     def _save_language(self) -> None:
         if self._loading:

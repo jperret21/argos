@@ -22,6 +22,11 @@ _COLUMNS = (
     "saturated",
 )
 
+#: Multi-target export header: the canonical 9 columns prefixed with ``target``
+#: so several curves round-trip through one file. ``from_csv`` ignores the extra
+#: ``target`` column, so a single-curve file loads either way.
+_MULTI_COLUMNS = ("target", *_COLUMNS)
+
 
 @dataclass
 class LcPoint:
@@ -57,23 +62,83 @@ class LightCurve:
             writer = csv.writer(f)
             writer.writerow(_COLUMNS)
             for p in self.points:
-                writer.writerow(
-                    [
-                        p.jd_utc,
-                        "" if p.bjd_tdb is None else p.bjd_tdb,
-                        p.mag,
-                        p.mag_err,
-                        "" if p.airmass is None else p.airmass,
-                        "" if p.fwhm is None else p.fwhm,
-                        "" if p.sky_adu is None else p.sky_adu,
-                        p.comps_used,
-                        int(p.saturated),
-                    ]
-                )
+                writer.writerow(_row(p))
 
     def to_aavso(self, path, **kwargs) -> None:
         """Write this curve in AAVSO Extended File Format (ensemble photometry)."""
         write_aavso(path, [self], **kwargs)
+
+    @classmethod
+    def from_csv(cls, path, auid: str = "", name: str = "") -> "LightCurve":
+        """Reload a curve written by :meth:`to_csv` (round-trips it).
+
+        Lets a finished session be reopened for review/export without re-running
+        the night. Unknown/blank optional columns become ``None``; unparseable
+        rows are skipped rather than raising, so a partial file still loads.
+        """
+        path = Path(path)
+        lc = cls(auid=auid, name=name or Path(path).stem)
+        with path.open(newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                try:
+                    lc.append(
+                        LcPoint(
+                            jd_utc=float(row["jd_utc"]),
+                            mag=float(row["mag"]),
+                            mag_err=float(row["mag_err"]),
+                            bjd_tdb=_opt_float(row.get("bjd_tdb")),
+                            airmass=_opt_float(row.get("airmass")),
+                            fwhm=_opt_float(row.get("fwhm")),
+                            sky_adu=_opt_float(row.get("sky_adu")),
+                            comps_used=int(row.get("comps_used") or 0),
+                            saturated=bool(int(row.get("saturated") or 0)),
+                        )
+                    )
+                except (TypeError, ValueError):
+                    continue
+        return lc
+
+
+def _row(p: LcPoint) -> list:
+    """One CSV row (the canonical 9 columns) for a light-curve point."""
+    return [
+        p.jd_utc,
+        "" if p.bjd_tdb is None else p.bjd_tdb,
+        p.mag,
+        p.mag_err,
+        "" if p.airmass is None else p.airmass,
+        "" if p.fwhm is None else p.fwhm,
+        "" if p.sky_adu is None else p.sky_adu,
+        p.comps_used,
+        int(p.saturated),
+    ]
+
+
+def write_curves_csv(path, curves) -> None:
+    """Write several :class:`LightCurve` to one CSV (``target`` + the 9 columns).
+
+    The UI "Export CSV" writer: the same rich schema as :meth:`LightCurve.to_csv`
+    but with a leading ``target`` column so every shown curve lands in one file.
+    ``LightCurve.from_csv`` ignores the extra column, so the file still reloads.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(_MULTI_COLUMNS)
+        for lc in curves:
+            label = lc.name or lc.auid or "TARGET"
+            for p in lc.points:
+                writer.writerow([label, *_row(p)])
+
+
+def _opt_float(value) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def write_aavso(path, curves, *, obscode: str = "XXX", filt: str = "TG",

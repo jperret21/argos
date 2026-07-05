@@ -53,7 +53,8 @@ _fix_qt_plugin_path()
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from argos.core.config import Config  # noqa: E402
-from argos.ui.theme import get_stylesheet  # noqa: E402
+from argos.ui import theme  # noqa: E402
+from argos.ui.palettes import PALETTES, EQUILUX  # noqa: E402
 
 
 def _setup_logging(level: str) -> None:
@@ -62,6 +63,13 @@ def _setup_logging(level: str) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+
+
+def _load_palette(config: Config) -> None:
+    """Apply the palette stored in config (``ui.theme.preset``) before UI init."""
+    preset_name: str = config.get("ui.theme.preset", EQUILUX.name)  # type: ignore[assignment]
+    palette = PALETTES.get(preset_name, EQUILUX)
+    theme.apply_palette(palette)
 
 
 def _build_window(config: Config):
@@ -78,10 +86,14 @@ def main() -> None:
     logger = logging.getLogger(__name__)
     logger.info("Argos starting")
 
+    # Apply the saved palette *before* any widgets are constructed so that all
+    # module-level constants are correct at widget construction time.
+    _load_palette(config)
+
     app = QApplication(sys.argv)
     app.setApplicationName("Argos")
     app.setOrganizationName("Argos")
-    app.setStyleSheet(get_stylesheet())
+    app.setStyleSheet(theme.get_stylesheet())
 
     window = _build_window(config)
     window.show()

@@ -49,6 +49,10 @@ class ProcessedFrame:
     vmin: float
     vmax: float
     vmean: float
+    vmedian: float  # whole-frame median (ADU)
+    vstd: float  # whole-frame standard deviation (ADU)
+    vmad: float  # whole-frame median absolute deviation (ADU)
+    bit_depth: int  # sensor bit depth inferred from the raw dtype (bits)
 
 
 def build_processed_frame(
@@ -70,6 +74,14 @@ def build_processed_frame(
     if hi <= lo:
         hi = float(raw.max()) if float(raw.max()) > lo else lo + 1.0
     centers, r, g, b = channel_histograms(raw, bins=_HIST_BINS, lo=lo, hi=hi)
+    # Whole-frame statistics (off the UI thread). Median/MAD are the robust
+    # counterparts of mean/std; bit depth is inferred from the raw dtype
+    # (uint16 → 16, uint8 → 8) — Argos never rescales the raw, so its element
+    # width is the sensor's ADC depth.
+    vmedian = float(np.median(raw))
+    vstd = float(raw.std())
+    vmad = float(np.median(np.abs(raw.astype(np.float32) - vmedian)))
+    bit_depth = int(np.dtype(raw.dtype).itemsize) * 8
     return ProcessedFrame(
         display=display,
         metrics=metrics,
@@ -84,6 +96,10 @@ def build_processed_frame(
         vmin=float(raw.min()),
         vmax=float(raw.max()),
         vmean=float(raw.mean()),
+        vmedian=vmedian,
+        vstd=vstd,
+        vmad=vmad,
+        bit_depth=bit_depth,
     )
 
 

@@ -54,6 +54,12 @@ class Camera:
         self.height: int = 2160
         self.gain_min: int = 0
         self.gain_max: int = 100
+        self.exposure_min: float = 0.01
+        self.exposure_max: float = 600.0
+        # Optional capabilities — None / 1 until the driver proves otherwise.
+        self.offset_min: int | None = None
+        self.offset_max: int | None = None
+        self.max_bin: int = 1
 
     # ------------------------------------------------------------------
     # Connection
@@ -88,6 +94,27 @@ class Camera:
             )
         except Exception as exc:
             logger.warning("Could not read camera metadata (using defaults): %s", exc)
+
+        try:
+            self.exposure_min = float(self._cam.ExposureMin)
+            self.exposure_max = float(self._cam.ExposureMax)
+            logger.debug(
+                "Camera exposure range: %.4f–%.1f s", self.exposure_min, self.exposure_max
+            )
+        except Exception as exc:
+            logger.debug("Could not read exposure range (using defaults): %s", exc)
+
+        try:
+            self.offset_min = int(self._cam.OffsetMin)
+            self.offset_max = int(self._cam.OffsetMax)
+        except Exception:
+            self.offset_min = None
+            self.offset_max = None
+
+        try:
+            self.max_bin = max(1, min(int(self._cam.MaxBinX), int(self._cam.MaxBinY)))
+        except Exception:
+            self.max_bin = 1
 
         try:
             name = self._cam.Name or "Unknown"
@@ -207,6 +234,46 @@ class Camera:
             logger.debug("Offset read failed: %s", exc)
             return None
 
+    def set_offset(self, value: int) -> None:
+        """Set the electronic offset (clamped to the driver range). No-op if
+        the driver doesn't implement Offset — that must not break capture."""
+        if self.offset_min is not None and self.offset_max is not None:
+            value = max(self.offset_min, min(self.offset_max, int(value)))
+        try:
+            self._cam.Offset = int(value)
+            logger.debug("Offset set to %d", value)
+        except (AttributeError, NotImplementedException, InvalidValueException):
+            logger.warning("Camera does not implement Offset — skipping")
+        except Exception as exc:
+            raise _wrap(exc) from exc
+
+    def get_binning(self) -> int:
+        """Return the current symmetric binning factor (BinX), or 1."""
+        try:
+            return int(self._cam.BinX)
+        except (AttributeError, NotImplementedException, InvalidValueException, DriverException):
+            return 1
+        except Exception as exc:
+            logger.debug("BinX read failed: %s", exc)
+            return 1
+
+    def set_binning(self, value: int) -> None:
+        """Set symmetric binning (BinX = BinY, clamped to ``max_bin``) and
+        retarget the frame size so the next exposure fills the binned sensor."""
+        value = max(1, min(self.max_bin, int(value)))
+        try:
+            self._cam.BinX = value
+            self._cam.BinY = value
+            # Alpaca frame size is in *binned* pixels — resize or the exposure
+            # would fail with an out-of-range subframe.
+            self._cam.NumX = self.width // value
+            self._cam.NumY = self.height // value
+            logger.debug("Binning set to %d×%d", value, value)
+        except (AttributeError, NotImplementedException, InvalidValueException):
+            logger.warning("Camera does not implement binning — skipping")
+        except Exception as exc:
+            raise _wrap(exc) from exc
+
     def get_readout_mode_name(self) -> str | None:
         """Return current readout mode name (e.g. 'Normal', 'HCG'), or None."""
         try:
@@ -318,14 +385,17 @@ class Camera:
             dtype = _TYPECODE_DTYPE.get(raw.typecode, np.int32)
 
             # Binary layout: column-major [X][Y] — Dimension1=width, Dimension2=height
-            # np.frombuffer → zero-copy view; .T → metadata change only; .astype → one copy
+            # np.frombuffer → zero-copy view; .T → metadata change only
             arr = (
                 np.frombuffer(raw, dtype=dtype)
                 .reshape(meta.Dimension1, meta.Dimension2)
-                .T.astype(np.uint16)  # (height, width)  # makes a writeable copy
+                .T  # (height, width)
             )
             if dtype not in (np.uint16,):
-                np.clip(arr, 0, 65535, out=arr)
+                # Clamp in the source dtype BEFORE the uint16 cast — casting
+                # first would wrap out-of-range values instead of saturating.
+                arr = np.clip(arr, 0, 65535)
+            arr = arr.astype(np.uint16)  # makes a writeable copy
             logger.info(
                 "Image downloaded (ImageBytes): %.2fs  shape=%s  typecode=%s",
                 time.perf_counter() - t0,

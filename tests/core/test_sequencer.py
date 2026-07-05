@@ -115,3 +115,30 @@ def test_preset_round_trip_without_base_dir() -> None:
     restored = plan_from_dict(plan_to_dict(plan))
     assert restored.base_dir is None
     assert total_frames(restored) == 1
+
+
+def test_on_complete_round_trip_and_default() -> None:
+    from argos.core.imaging.sequencer import ON_COMPLETE_CHOICES
+
+    plan = SequencePlan(steps=[SequenceStep(count=1)], on_complete="Park mount")
+    assert plan.on_complete in ON_COMPLETE_CHOICES
+    restored = plan_from_dict(plan_to_dict(plan))
+    assert restored.on_complete == "Park mount"
+    # Old presets (no key) default to the safe choice.
+    legacy = plan_from_dict({"steps": [{"count": 1}]})
+    assert legacy.on_complete == "Nothing"
+
+
+def test_estimated_duration_counts_enabled_frames_only() -> None:
+    from argos.core.imaging.sequencer import estimated_duration_s
+
+    plan = SequencePlan(
+        steps=[
+            SequenceStep(count=10, exposure_s=30.0, interval_s=2.0),
+            SequenceStep(count=99, exposure_s=60.0, enabled=False),
+        ],
+        repeat=2,
+    )
+    est = estimated_duration_s(plan)
+    # 2 passes × 10 frames × (30 + 2 + overhead) — the disabled step is ignored.
+    assert 2 * 10 * 32 <= est <= 2 * 10 * 40

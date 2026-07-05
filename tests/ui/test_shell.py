@@ -32,17 +32,22 @@ def test_shell_three_mode_walkthrough() -> None:
 
     shell = Shell(Config({}))
     try:
-        # ── Shell skeleton: 3 modes, default = connection ────────────────
-        assert set(shell._pages.keys()) == {"connection", "acquisition", "configuration"}
-        assert shell._stack.currentIndex() == shell._page_indices["connection"]
+        # ── Shell skeleton: 4 modes (NINA-style), default = connect ───────
+        assert set(shell._pages.keys()) == {
+            "connect",
+            "capture",
+            "analyze",
+            "settings",
+        }
+        assert shell._stack.currentIndex() == shell._page_indices["connect"]
 
-        for mode in ("acquisition", "configuration", "connection"):
+        for mode in ("capture", "analyze", "settings", "connect"):
             shell.sidebar.select(mode)
             assert shell._stack.currentIndex() == shell._page_indices[mode], mode
 
-        assert isinstance(shell._pages["connection"], ConnectionPage)
-        assert isinstance(shell._pages["acquisition"], ImagingPage)
-        assert isinstance(shell._pages["configuration"], ConfigurationPage)
+        assert isinstance(shell._pages["connect"], ConnectionPage)
+        assert isinstance(shell._pages["capture"], ImagingPage)
+        assert isinstance(shell._pages["settings"], ConfigurationPage)
 
         # ── Status bar device states ─────────────────────────────────────
         shell.status.set_device_state("mount", "connected")
@@ -50,13 +55,13 @@ def test_shell_three_mode_walkthrough() -> None:
         assert shell.status.device_state("mount") == "connected"
         assert shell.status.device_state("camera") == "busy"
 
-        # Clicking a disconnected badge jumps to Connection.
-        shell.sidebar.select("acquisition")
+        # Clicking a disconnected badge jumps to Connect.
+        shell.sidebar.select("capture")
         shell._on_badge_clicked("focuser")  # still disconnected
-        assert shell._stack.currentIndex() == shell._page_indices["connection"]
+        assert shell._stack.currentIndex() == shell._page_indices["connect"]
 
-        # ── Acquisition page docks ───────────────────────────────────────
-        page = shell._pages["acquisition"]
+        # ── Capture page docks ───────────────────────────────────────────
+        page = shell._pages["capture"]
         assert isinstance(page._camera_dock, CameraDock)
         assert isinstance(page._mount_dock, MountDock)
         assert isinstance(page._histogram_dock, HistogramDock)
@@ -94,6 +99,50 @@ def test_shell_three_mode_walkthrough() -> None:
         page._filterwheel_dock._combo.setCurrentIndex(2)  # LP
         page._filterwheel_dock._move_btn.click()
         assert moves == [2]
+
+        # Analyze is a first-class mode.
+        from argos.ui.pages.analyze_page import AnalyzeScreen
+
+        assert isinstance(shell._pages["analyze"], AnalyzeScreen)
+
+        # Focuser dock V-curve: a sweep's live samples drive the fit + summary
+        # right on the Capture page (the AF signals route through the page).
+        dock = page._focuser_dock
+        dock.set_autofocus_running(True)  # resets + shows the curve
+        for i, (pos, hfd) in enumerate(
+            [(3800, 4.0), (3900, 2.6), (4000, 1.8), (4100, 2.0), (4200, 3.1)]
+        ):
+            page._on_af_step(i + 1, 5, pos, hfd)
+        res = dock.vcurve.result()
+        assert res.method == "parabola"
+        assert 3900 <= res.best_position <= 4100
+        page._on_af_done(res.best_position, res.best_hfd)
+        assert "Best focus" in dock.vcurve._summary.text()
+        dock.set_autofocus_running(False)
+
+        # Analyze screen: the export card surfaces the observer code (warns unset)
+        # and reflects Settings once a code is configured.
+        analyze = shell._pages["analyze"]
+        assert "unset" in analyze._obscode_value.text()  # no code in Config({})
+        shell._config.set("observer.obscode", "ABC")  # as Settings stores it (upper)
+        analyze._refresh_export_info()
+        assert analyze._obscode_value.text() == "ABC"
+        assert analyze._band_value.text() == "TG"
+
+        # Analyze → PhotometryWindow: a reloaded curve plots and carries the stamp.
+        from argos.core.photometry.lightcurve import LcPoint, LightCurve
+        from argos.ui.panels.photometry_window import PhotometryWindow
+
+        lc = LightCurve(name="NU Ori")
+        lc.append(LcPoint(jd_utc=2451545.0, mag=9.0, mag_err=0.02))
+        pw = PhotometryWindow()
+        try:
+            pw.load_curves({"t": lc}, obscode="ABC", filt="TG")
+            assert pw.lightcurve.has_data()
+            assert pw.obscode == "ABC" and pw.filt == "TG"
+        finally:
+            pw.close()
+            pw.deleteLater()
 
         # Open FITS → a floating analysis window (the live viewer is untouched).
         import tempfile
@@ -184,44 +233,20 @@ def test_shell_three_mode_walkthrough() -> None:
                 awin.close()
                 awin.deleteLater()
 
-            # §6 catalog moved to the Photometry Setup window: VSX variables are
-            # projected onto the solved frame + hit-tested for clicks there.
-            from argos.core.catalog import VariableStar
-            from argos.ui.panels.photometry_setup_window import (
-                PhotometrySetupWindow,
-            )
+        # WS7: the live light curve is a dock in the workspace (not a floating
+        # setup window). It is registered, hidden by default, and survives the
+        # default layout so photometry_point can render into it during capture.
+        assert "lightcurve" in page._docks
+        assert ("lightcurve", "Light curve") in page._PANEL_ORDER
+        assert not page._docks["lightcurve"].isVisible()  # hidden by default
+        from argos.core.session.types import PhotometryPoint
 
-            psw = PhotometrySetupWindow()
-            try:
-                psw.load_frame(fpath)
-                assert psw._green_shape == (48, 48)
-                psw._wcs = frame_wcs(fields, psw._green_shape)
-                on_axis = VariableStar(
-                    name="TST Tau",
-                    ra_deg=83.6,
-                    dec_deg=22.0,
-                    auid="000-XYZ-001",
-                    var_type="EA",
-                    category="Variable",
-                    max_mag="12.0 V",
-                    min_mag="14.0 V",
-                    period=1.5,
-                )
-                off_frame = VariableStar(name="FAR", ra_deg=120.0, dec_deg=-40.0)
-                psw._variables = [on_axis, off_frame]
-                psw._project_variables()
-                # On-axis → reference pixel (CRPIX-1 ≈ 23.5); off-frame → None.
-                assert psw._var_green[0] is not None and psw._var_green[1] is None
-                vx, vy = psw._var_green[0]
-                assert abs(vx - 23.5) < 1.0 and abs(vy - 23.5) < 1.0
-                # Markers shown on the viewer once at least one is on-frame.
-                assert psw._viewer._catalog_item.isVisible()
-                # Hit-test: near the on-axis marker → its index; far → None.
-                assert psw._nearest_variable(vx + 1.0, vy + 1.0) == 0
-                assert psw._nearest_variable(2.0, 2.0) is None
-            finally:
-                psw.close()
-                psw.deleteLater()
+        page._on_photometry_point(
+            PhotometryPoint(
+                key="V1", name="V1 Tau", jd=2451545.0, mag=12.3, mag_err=0.02, saturated=False
+            )
+        )
+        assert page._lightcurve_panel.has_data()
 
         # §6 live-frame astrometry overlay path (controller solved → grid on viewer).
         from argos.core.imaging.astrometry_session import overlay_for
@@ -256,7 +281,7 @@ def test_shell_three_mode_walkthrough() -> None:
         assert shell.status.device_state("camera") == "busy"
 
         # ── Connection page: Stellarium card + connect intents ───────────
-        conn = shell._pages["connection"]
+        conn = shell._pages["connect"]
         assert isinstance(conn.stellarium_card, StellariumCard)
 
         intents: list[tuple[str, str, int]] = []

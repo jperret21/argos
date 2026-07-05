@@ -48,6 +48,10 @@ class SequenceStep:
     dither_every: int = 0
 
 
+#: End-of-sequence actions (UI-facing values, stored in the plan).
+ON_COMPLETE_CHOICES: tuple[str, ...] = ("Nothing", "Stop tracking", "Park mount")
+
+
 @dataclass
 class SequencePlan:
     """An ordered list of steps plus sequence-level options.
@@ -58,6 +62,9 @@ class SequencePlan:
         repeat:                     Number of times the whole step list is replayed.
         autofocus_every_n:          Trigger autofocus every N frames (0 = off).
         autofocus_on_filter_change: Trigger autofocus whenever the filter changes.
+        on_complete:                One of ``ON_COMPLETE_CHOICES`` — what to do
+                                    with the mount when the plan finishes fully
+                                    (an explicit user choice, logged when run).
         base_dir:                   Output root (defaults to ``Config.sessions_path``
                                     when ``None``).
     """
@@ -67,6 +74,7 @@ class SequencePlan:
     repeat: int = 1
     autofocus_every_n: int = 0
     autofocus_on_filter_change: bool = False
+    on_complete: str = "Nothing"
     base_dir: Path | None = None
 
 
@@ -140,6 +148,24 @@ def total_frames(plan: SequencePlan) -> int:
     return per_pass * max(1, plan.repeat)
 
 
+#: Per-frame overhead (download + save + bookkeeping) used by the estimate.
+_FRAME_OVERHEAD_S = 3.0
+
+
+def estimated_duration_s(plan: SequencePlan) -> float:
+    """Rough pre-run duration: exposures + intervals + per-frame overhead.
+
+    Autofocus passes and filter moves are not counted — the estimate is a
+    floor, shown before the run so the user can sanity-check the night.
+    """
+    per_pass = sum(
+        s.count * (s.exposure_s + s.interval_s + _FRAME_OVERHEAD_S)
+        for s in plan.steps
+        if s.enabled and s.count > 0
+    )
+    return per_pass * max(1, plan.repeat)
+
+
 def plan_to_dict(plan: SequencePlan) -> dict:
     """Serialize a plan to a JSON-safe dict (for preset save)."""
     return {
@@ -147,6 +173,7 @@ def plan_to_dict(plan: SequencePlan) -> dict:
         "repeat": plan.repeat,
         "autofocus_every_n": plan.autofocus_every_n,
         "autofocus_on_filter_change": plan.autofocus_on_filter_change,
+        "on_complete": plan.on_complete,
         "base_dir": str(plan.base_dir) if plan.base_dir is not None else None,
         "steps": [asdict(s) for s in plan.steps],
     }
@@ -162,5 +189,6 @@ def plan_from_dict(data: dict) -> SequencePlan:
         repeat=data.get("repeat", 1),
         autofocus_every_n=data.get("autofocus_every_n", 0),
         autofocus_on_filter_change=data.get("autofocus_on_filter_change", False),
+        on_complete=data.get("on_complete", "Nothing"),
         base_dir=Path(base) if base else None,
     )

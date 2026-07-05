@@ -22,7 +22,7 @@ import logging
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from argos.core.alpaca.client import AlpacaConnectionError, AlpacaTimeoutError
-from argos.core.alpaca.telescope import MountPosition, Telescope
+from argos.core.alpaca.telescope import Telescope
 
 logger = logging.getLogger(__name__)
 
@@ -88,3 +88,50 @@ class MountPollingWorker(QThread):
         except Exception as exc:
             logger.error("Unexpected error during poll: %s", exc)
             self.error_occurred.emit(str(exc))
+
+
+TEMP_POLL_INTERVAL_MS = 10_000
+
+
+class TemperaturePollingWorker(QThread):
+    """Periodically reads a device temperature and emits it.
+
+    Generic over the device: takes a zero-arg callable returning
+    ``float | None`` (e.g. ``Camera.get_ccd_temperature`` or
+    ``Focuser.get_temperature``) so one worker class serves both the camera
+    dock's CCD readout and the focuser dock's ambient probe. The read happens
+    off the UI thread; errors are swallowed (a missing probe shows "—", it
+    never kills the loop).
+
+    Signals:
+        temperature_updated: Emitted every poll cycle with float | None.
+    """
+
+    temperature_updated = pyqtSignal(object)  # float | None
+
+    def __init__(
+        self, read_temperature, interval_ms: int = TEMP_POLL_INTERVAL_MS, parent=None
+    ) -> None:
+        super().__init__(parent)
+        self._read = read_temperature
+        self._interval_ms = int(interval_ms)
+        self._running = False
+
+    def run(self) -> None:
+        self._running = True
+        logger.info("TemperaturePollingWorker started (interval=%dms)", self._interval_ms)
+        while self._running:
+            try:
+                self.temperature_updated.emit(self._read())
+            except Exception as exc:  # device getters are tolerant; belt-and-braces
+                logger.debug("Temperature poll failed: %s", exc)
+            # Chunked sleep so stop() is honoured within ~200ms, not one interval.
+            waited = 0
+            while self._running and waited < self._interval_ms:
+                self.msleep(200)
+                waited += 200
+        logger.info("TemperaturePollingWorker stopped")
+
+    def stop(self) -> None:
+        """Request the polling loop to stop. Call wait() after to join the thread."""
+        self._running = False

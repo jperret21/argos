@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from alpaca.telescope import Telescope as _AlpacaTelescope
-from alpaca.exceptions import DriverException, NotConnectedException
+from alpaca.exceptions import DriverException
 
 from argos.core.alpaca.client import AlpacaError
 

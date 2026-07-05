@@ -50,6 +50,7 @@ class HistogramDock(design.Card):
     loupe_toggled = pyqtSignal(bool)
     star_radius_changed = pyqtSignal(int)
     astrometry_toggled = pyqtSignal(bool)
+    rotation_changed = pyqtSignal(str)  # a fits_viewer.ROTATION_MODES token
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Display", parent)
@@ -104,6 +105,16 @@ class HistogramDock(design.Card):
         self._mode_combo.addItems(STRETCH_MODES)
         self._mode_combo.currentTextChanged.connect(lambda _t: self._emit_stretch())
         mode_form.addRow(design.MutedLabel("Stretch"), self._mode_combo)
+        # Display rotation — visual only (saved FITS keep the sensor orientation).
+        self._rot_combo = QComboBox()
+        self._rot_combo.addItems(["Auto (landscape)", "0°", "90°", "180°", "270°"])
+        self._rot_combo.setToolTip(
+            "Rotate the displayed image (clockwise).\n"
+            "Auto turns portrait frames landscape. Display only — saved FITS\n"
+            "and measurements keep the sensor orientation."
+        )
+        self._rot_combo.currentIndexChanged.connect(self._emit_rotation)
+        mode_form.addRow(design.MutedLabel("Rotation"), self._rot_combo)
         outer.addLayout(mode_form)
 
         self._auto_btn = design.PrimaryButton("Auto-stretch")
@@ -246,9 +257,24 @@ class HistogramDock(design.Card):
         self._astro_chk.setChecked(bool(checked))
         self._astro_chk.blockSignals(False)
 
+    _ROTATION_TOKENS = ("auto", "0", "90", "180", "270")
+
+    def set_rotation_mode(self, mode: str) -> None:
+        """Select the rotation combo from a config token, no re-emit."""
+        try:
+            index = self._ROTATION_TOKENS.index(str(mode).lower().rstrip("°"))
+        except ValueError:
+            index = 0
+        self._rot_combo.blockSignals(True)
+        self._rot_combo.setCurrentIndex(index)
+        self._rot_combo.blockSignals(False)
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    def _emit_rotation(self, index: int) -> None:
+        self.rotation_changed.emit(self._ROTATION_TOKENS[max(0, int(index))])
 
     def _emit_stretch(self) -> None:
         if self._guard:

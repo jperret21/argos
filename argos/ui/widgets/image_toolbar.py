@@ -33,7 +33,8 @@ class ImageToolbar(QWidget):
         solve_requested():    plate-solve the current live frame (§6).
         auto_solve_toggled(bool): arm/disarm per-frame auto plate-solving (§6).
         photometry_requested(): open the live photometry window (§6 P4).
-        photometry_setup_requested(): open the photometry setup window.
+        rerun_requested(): re-run differential photometry over a folder of saved
+            subs, off the UI thread (WS7 batch worker).
     """
 
     channel_changed = pyqtSignal(str)
@@ -41,7 +42,7 @@ class ImageToolbar(QWidget):
     solve_requested = pyqtSignal()
     auto_solve_toggled = pyqtSignal(bool)
     photometry_requested = pyqtSignal()
-    photometry_setup_requested = pyqtSignal()
+    rerun_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None, *, show_solve: bool = True) -> None:
         super().__init__(parent)
@@ -112,15 +113,15 @@ class ImageToolbar(QWidget):
             self._phot_btn.clicked.connect(self.photometry_requested)
             layout.addWidget(self._phot_btn)
 
-            self._phot_setup_btn = QPushButton("Setup")
-            self._phot_setup_btn.setStyleSheet("font-size: 11px;")
-            self._phot_setup_btn.setToolTip(
-                "Open the photometry setup window — pick a reference frame, solve,\n"
-                "select targets (VSX), assign comparisons, configure apertures,\n"
-                "then run differential photometry on all sequence frames."
+            self._rerun_btn = QPushButton("Re-run subs")
+            self._rerun_btn.setStyleSheet("font-size: 11px;")
+            self._rerun_btn.setToolTip(
+                "Re-run differential photometry over a folder of saved subs against\n"
+                "the current target set, off the UI thread (needs a solve + targets).\n"
+                "Writes the canonical light-curve CSVs for Analyze / AAVSO export."
             )
-            self._phot_setup_btn.clicked.connect(self.photometry_setup_requested)
-            layout.addWidget(self._phot_setup_btn)
+            self._rerun_btn.clicked.connect(self.rerun_requested)
+            layout.addWidget(self._rerun_btn)
 
         layout.addStretch()
 

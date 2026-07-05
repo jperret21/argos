@@ -1,17 +1,20 @@
-"""Shell — the Argos main window built around 3 modes.
+"""Shell — the Argos main window. NINA-style: the night happens in ONE screen.
 
-A NINA-inspired structure: a left sidebar of modes, a permanent status bar
-across the top, and a single workspace area that swaps content per mode.
+    Equipment — connect the Seestar devices + the Stellarium server
+                (a 2-minute setup stop; mode id "connect" for back-compat)
+    Capture   — THE screen: hero image, camera + sequencer, mount goto,
+                focuser + V-curve, photometry overlays and the live curve
+    Analyze   — post-prod: reload curves, vetting, AAVSO export
+    Settings  — observer, site, paths, appearance
 
-    Connection    — connect the Seestar devices + the Stellarium server
-    Acquisition   — live preview, focus, capture and sequencing (where time is spent)
-    Configuration — observer, site, paths, appearance
-
-The Acquisition page (``ImagingPage``) owns the device handles and workers.
-The Connection page emits connect/disconnect intents that the Shell routes to
-the Acquisition page; device-state updates flow back to the status bar and the
-Connection page. Targeting is driven entirely by Stellarium (select an object,
-Ctrl+1) over the TCP telescope-control protocol — there is no in-app search.
+The session layer owns the hardware (WS5): ``DeviceSession`` holds the device
+handles, pollers and the Stellarium server; ``AcquisitionEngine`` holds the
+camera-ownership state machine and the capture/solve/photometry workers. The
+Capture page (``ImagingPage``) is a view over the two. The Equipment page
+emits connect/disconnect intents that the Shell routes to the DeviceSession;
+device-state updates flow back to the status bar and the Equipment page.
+Targeting is driven by Stellarium (select an object, Ctrl+1) over the TCP
+telescope-control protocol, or by the mount dock's goto fields.
 """
 
 from __future__ import annotations
@@ -29,19 +32,27 @@ from PyQt6.QtWidgets import (
 )
 
 from argos.core.config import Config
+from argos.core.session.acquisition_engine import AcquisitionEngine
+from argos.core.session.device_session import DeviceSession
 from argos.ui import theme
 from argos.ui.pages.configuration_page import ConfigurationPage
 from argos.ui.pages.connection_page import ConnectionPage
 from argos.ui.pages.imaging_page import ImagingPage
-from argos.ui.sidebar import Sidebar
+from argos.ui.pages.analyze_page import AnalyzeScreen
+from argos.ui.sidebar import MODES, Sidebar
 from argos.ui.statusbar import TopStatusBar
-from argos.workers.stellarium_worker import StellariumWorker
+from argos.workers.camera_service import CameraState
 
 logger = logging.getLogger(__name__)
 
 _CFG_GEOMETRY = "ui.shell.geometry"
 _CFG_STATE = "ui.shell.state"
 _CFG_MODE = "ui.shell.mode"
+
+#: Modes that need hardware to be useful. Devices are never connected at
+#: startup, so restoring one of these would land the user on a dead screen —
+#: we land on Equipment instead (the persisted mode is kept for the session).
+_HARDWARE_MODES = frozenset({"capture"})
 
 
 class Shell(QMainWindow):
@@ -52,7 +63,6 @@ class Shell(QMainWindow):
     def __init__(self, config: Config) -> None:
         super().__init__()
         self._config = config
-        self._stellarium_worker: StellariumWorker | None = None
 
         self.setWindowTitle(f"Argos  v{self.APP_VERSION}")
         self.setMinimumSize(1100, 700)
@@ -63,10 +73,11 @@ class Shell(QMainWindow):
         self._wire_signals()
         self._restore_state()
 
-        last_mode = self._config.get(_CFG_MODE) or "connection"
-        if last_mode not in self._pages:
-            last_mode = "connection"
+        last_mode = self._config.get(_CFG_MODE) or "connect"
+        if last_mode not in self._pages or last_mode in _HARDWARE_MODES:
+            last_mode = "connect"
         self._sidebar.select(last_mode)
+        self._refresh_sidebar_states()
 
         logger.info("Shell initialised (mode=%s)", last_mode)
 
@@ -92,23 +103,36 @@ class Shell(QMainWindow):
         self._sidebar = Sidebar(self)
         self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self._sidebar)
 
-        self._connection = ConnectionPage(self._config)
-        self._acquisition = ImagingPage(self._config)
-        self._configuration = ConfigurationPage(self._config)
+        # The session layer: DeviceSession owns the device handles/pollers
+        # and the Stellarium server; AcquisitionEngine owns the camera
+        # ownership state machine + capture/solve/photometry workers. The
+        # pages are views over the two.
+        self._session = DeviceSession(self._config, parent=self)
+        self._engine = AcquisitionEngine(self._config, self._session, parent=self)
 
+        self._connection = ConnectionPage(self._config)
+        self._acquisition = ImagingPage(self._config, self._session, self._engine)
+        self._configuration = ConfigurationPage(self._config)
+        self._analyze = AnalyzeScreen(self._config)
+
+        # NINA-style: the night happens in Capture; Equipment is setup,
+        # Analyze is post-prod. (Mode id "connect" kept for config back-compat.)
         self._pages: dict[str, QWidget] = {
-            "connection": self._connection,
-            "acquisition": self._acquisition,
-            "configuration": self._configuration,
+            "connect": self._connection,
+            "capture": self._acquisition,
+            "analyze": self._analyze,
+            "settings": self._configuration,
         }
         self._page_indices: dict[str, int] = {
             mode_id: self._stack.addWidget(page) for mode_id, page in self._pages.items()
         }
 
-        # Track connection state to know when to pulse the next-step hint.
+        # Connection/activity state feeding the sidebar phase dots.
         self._conn_state: dict[str, str] = dict.fromkeys(
             ("mount", "camera", "filterwheel", "focuser"), "disconnected"
         )
+        self._sequence_active = False
+        self._autofocus_active = False
 
         self._wire_pages()
 
@@ -120,13 +144,9 @@ class Shell(QMainWindow):
         bar = self.menuBar()
 
         view = bar.addMenu("View")
-        for i, (mode_id, label) in enumerate(
-            (
-                ("connection", "Connection"),
-                ("acquisition", "Acquisition"),
-                ("configuration", "Configuration"),
-            )
-        ):
+        # Derived from the sidebar's MODES tuple — one source of truth, so a
+        # phase insertion can't silently desynchronise the F-key bindings.
+        for i, (mode_id, label, _tooltip) in enumerate(MODES):
             action = QAction(label, self)
             action.setShortcut(QKeySequence(f"F{i + 1}"))
             action.triggered.connect(lambda _c, m=mode_id: self._sidebar.select(m))
@@ -156,97 +176,41 @@ class Shell(QMainWindow):
         self._acquisition.tracking_changed.connect(self._status.set_tracking)
         self._acquisition.action_changed.connect(self._status.set_action)
 
-        # Connection intents → acquisition session.
-        self._connection.discover_requested.connect(self._acquisition.start_discovery)
-        self._connection.connect_requested.connect(self._on_connect_device)
-        self._connection.disconnect_requested.connect(self._on_disconnect_device)
-        self._connection.connect_all_requested.connect(self._on_connect_all)
-        self._connection.disconnect_all_requested.connect(self._acquisition.disconnect_all)
-        self._acquisition.discovered_address.connect(self._connection.set_discovered_address)
+        # Capture visibility on every screen: sequence progress + LIVE chip in
+        # the top strip, activity dots on the sidebar (WS4).
+        self._acquisition.sequence_running.connect(self._on_sequence_running)
+        self._acquisition.sequence_progress.connect(self._status.set_sequence_progress)
+        self._acquisition.hfd_updated.connect(self._status.set_hfd)
+        self._acquisition.camera_state_changed.connect(self._on_camera_state)
+        self._acquisition.autofocus_state.connect(self._on_autofocus_state)
+        self._status.capture_clicked.connect(lambda: self._sidebar.select("capture"))
 
-        # Stellarium card (on the Connection page).
+        # Connection intents → device session (dict-dispatched per device).
+        self._connection.discover_requested.connect(self._session.discover)
+        self._connection.connect_requested.connect(self._session.connect_device)
+        self._connection.disconnect_requested.connect(self._session.disconnect_device)
+        self._connection.connect_all_requested.connect(self._session.connect_all)
+        self._connection.disconnect_all_requested.connect(self._session.disconnect_all)
+        self._session.discovered_address.connect(self._connection.set_discovered_address)
+
+        # Stellarium card (on the Connection page) ↔ the session-owned server.
         card = self._connection.stellarium_card
-        card.start_server_requested.connect(self._on_stellarium_start)
-        card.stop_server_requested.connect(self._on_stellarium_stop)
+        card.start_server_requested.connect(self._session.start_stellarium)
+        card.stop_server_requested.connect(self._session.stop_stellarium)
+        self._session.stellarium_state.connect(card.set_server_state)
+        self._session.stellarium_clients.connect(card.set_client_count)
+        self._session.stellarium_target.connect(self._on_stellarium_target)
+        self._session.stellarium_error.connect(self._on_stellarium_error)
 
     # ------------------------------------------------------------------
-    # Device connection routing
+    # Stellarium fan-out (the session owns the server worker)
     # ------------------------------------------------------------------
-
-    def _on_connect_device(self, device_id: str, host: str, port: int) -> None:
-        if device_id == "mount":
-            self._acquisition.connect_mount(host, port)
-        elif device_id == "camera":
-            self._acquisition.connect_camera(host, port)
-        elif device_id == "filterwheel":
-            self._acquisition.connect_filterwheel(host, port)
-        elif device_id == "focuser":
-            self._acquisition.connect_focuser(host, port)
-        else:
-            self._status.set_action(f"{device_id.title()} connect — not implemented yet")
-
-    def _on_disconnect_device(self, device_id: str) -> None:
-        if device_id == "mount":
-            self._acquisition.disconnect_mount()
-        elif device_id == "camera":
-            self._acquisition.disconnect_camera()
-        elif device_id == "filterwheel":
-            self._acquisition.disconnect_filterwheel()
-        elif device_id == "focuser":
-            self._acquisition.disconnect_focuser()
-
-    def _on_connect_all(self, host: str, port: int) -> None:
-        self._acquisition.connect_mount(host, port)
-        self._acquisition.connect_camera(host, port)
-        self._acquisition.connect_filterwheel(host, port)
-        self._acquisition.connect_focuser(host, port)
-
-    # ------------------------------------------------------------------
-    # Stellarium integration (TCP telescope-control server only)
-    # ------------------------------------------------------------------
-
-    def _on_stellarium_start(self, host: str, port: int) -> None:
-        if self._stellarium_worker is not None:
-            self._stop_stellarium_worker()
-        card = self._connection.stellarium_card
-
-        worker = StellariumWorker(host=host, port=port)
-        worker.target_received.connect(self._on_stellarium_target)
-        worker.client_count_changed.connect(card.set_client_count)
-        worker.server_started.connect(lambda: card.set_server_state(True))
-        worker.server_stopped.connect(lambda: card.set_server_state(False))
-        worker.error_occurred.connect(self._on_stellarium_error)
-        # Feed every mount position update so the Stellarium reticle follows.
-        self._acquisition.position_updated.connect(worker.update_mount_position)
-
-        self._config.set("stellarium.host", host)
-        self._config.set("stellarium.port", port)
-
-        self._stellarium_worker = worker
-        worker.start()
-        self._acquisition.log_message.emit("INFO", f"Stellarium server starting on {host}:{port}")
-
-    def _on_stellarium_stop(self) -> None:
-        self._stop_stellarium_worker()
-
-    def _stop_stellarium_worker(self) -> None:
-        worker = self._stellarium_worker
-        if worker is None:
-            return
-        try:
-            self._acquisition.position_updated.disconnect(worker.update_mount_position)
-        except (TypeError, RuntimeError):
-            pass
-        worker.stop()
-        worker.wait(3000)
-        self._stellarium_worker = None
 
     def _on_stellarium_target(self, ra_hours: float, dec_degrees: float) -> None:
         self._connection.stellarium_card.flash_goto(ra_hours, dec_degrees)
         self._acquisition.goto_target(ra_hours, dec_degrees, label="goto")
 
     def _on_stellarium_error(self, message: str) -> None:
-        self._acquisition.log_message.emit("ERROR", f"Stellarium: {message}")
         self._connection.stellarium_card.set_server_state(False, "✗  error")
 
     # ------------------------------------------------------------------
@@ -258,8 +222,32 @@ class Shell(QMainWindow):
         self._connection.set_device_state(device_id, state, info)
 
         self._conn_state[device_id] = state
-        if self._conn_state["mount"] == "connected" and self._conn_state["camera"] == "connected":
-            self._sidebar.pulse("acquisition")
+        self._refresh_sidebar_states()
+
+    def _on_sequence_running(self, running: bool) -> None:
+        self._sequence_active = running
+        self._status.set_sequence_running(running)
+        self._refresh_sidebar_states()
+
+    def _on_autofocus_state(self, running: bool) -> None:
+        self._autofocus_active = running
+        self._refresh_sidebar_states()
+
+    def _on_camera_state(self, state: CameraState) -> None:
+        self._status.set_live(state is CameraState.LIVE)
+
+    def _refresh_sidebar_states(self) -> None:
+        """Recompute the sidebar mode dots from device + activity state.
+
+        ready = prerequisites met, active = running now, blocked = a required
+        device is missing. Equipment/Analyze/Settings stay neutral — they are
+        always usable.
+        """
+        camera_up = self._conn_state["camera"] in ("connected", "busy")
+        if self._sequence_active or self._autofocus_active:
+            self._sidebar.set_mode_state("capture", "active")
+        else:
+            self._sidebar.set_mode_state("capture", "ready" if camera_up else "blocked")
 
     def _on_mode_changed(self, mode_id: str) -> None:
         index = self._page_indices.get(mode_id)
@@ -271,7 +259,7 @@ class Shell(QMainWindow):
 
     def _on_badge_clicked(self, device_id: str) -> None:
         if self._status.device_state(device_id) == "disconnected":
-            self._sidebar.select("connection")
+            self._sidebar.select("connect")
 
     # ------------------------------------------------------------------
     # Public accessors
@@ -306,6 +294,9 @@ class Shell(QMainWindow):
     def _save_state(self) -> None:
         self._config.set(_CFG_GEOMETRY, base64.b64encode(bytes(self.saveGeometry())).decode())
         self._config.set(_CFG_STATE, base64.b64encode(bytes(self.saveState())).decode())
+        # The Capture page owns its own dockable workspace (WS9a) — persist it
+        # alongside the shell's own dock state.
+        self._acquisition.save_layout()
 
     def _reset_layout(self) -> None:
         self._config.set(_CFG_GEOMETRY, None)
@@ -327,8 +318,10 @@ class Shell(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        self._stop_stellarium_worker()
+        # Order matters: stop the capture workers first (they hold device
+        # references), then the session's pollers + Stellarium server.
         self._acquisition.shutdown()
+        self._session.shutdown()
         self._save_state()
         self._config.save()
         logger.info("Shell closed")

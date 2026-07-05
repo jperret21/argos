@@ -70,6 +70,12 @@ class AstrometryController(QObject):
         """The last good :class:`FrameWCS`, or ``None``."""
         return self._wcs
 
+    @property
+    def green_shape(self) -> tuple[int, int] | None:
+        """Green shape of the frame the WCS was solved against — its pixel
+        coordinates are only valid for frames of this geometry."""
+        return self._green_shape
+
     def is_busy(self) -> bool:
         return self._worker is not None and self._worker.isRunning()
 
@@ -165,9 +171,20 @@ class AstrometryController(QObject):
         self._last_solve_monotonic = time.monotonic()
         self._last_solve_radec = mount_radec
         self.state.emit("Plate-solving…")
-        self._worker = SolveWorker(green, settings, parent=self)
-        self._worker.solved.connect(self._on_worker_solved)
-        self._worker.start()
+        worker = SolveWorker(green, settings, parent=self)
+        worker.solved.connect(self._on_worker_solved)
+        # Reap the QThread once it finishes — without this every solve leaks a
+        # parented SolveWorker (plus its frame copy) for the page's lifetime.
+        worker.finished.connect(lambda w=worker: self._reap_worker(w))
+        self._worker = worker
+        worker.start()
+
+    def _reap_worker(self, worker: SolveWorker) -> None:
+        """Release a finished SolveWorker (its ``solved`` result, if any, was
+        already delivered — ``finished`` is emitted after ``run()`` returns)."""
+        if self._worker is worker:
+            self._worker = None
+        worker.deleteLater()
 
     # ------------------------------------------------------------------
     # Result

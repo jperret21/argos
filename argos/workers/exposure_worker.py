@@ -21,7 +21,6 @@ import logging
 import time
 from datetime import datetime, timezone
 
-import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from argos.core.alpaca.camera import Camera
@@ -37,6 +36,8 @@ class LivePreviewWorker(QThread):
         camera: Connected Camera instance.
         exposure: Exposure time in seconds (default 1.0).
         gain: Camera gain value.
+        light: True exposes light frames (shutter open); False exposes
+            dark/bias frames — so single-shot darks are honest.
     """
 
     frame_ready    = pyqtSignal(object, object, object, object)  # (preview_arr, full_arr, start_dt, end_dt)
@@ -50,21 +51,27 @@ class LivePreviewWorker(QThread):
         exposure: float = 1.0,
         gain: int = 80,
         preview_scale: int = 4,
+        light: bool = True,
     ) -> None:
         super().__init__()
         self._camera        = camera
         self._exposure      = exposure
         self._gain          = gain
         self._preview_scale = max(1, preview_scale)
+        self._light         = light
         self._running       = False
 
-    def update_settings(self, exposure: float, gain: int, scale: int = 0) -> None:
+    def update_settings(
+        self, exposure: float, gain: int, scale: int = 0, light: bool | None = None
+    ) -> None:
         """Update exposure/gain/preview-scale for the next frame (thread-safe).
 
         Args:
             exposure: Exposure time in seconds. Ignored if < 0.001 s.
             gain:     Camera gain value.
             scale:    Preview decimation factor (1, 2, 4, 8). 0 = keep current.
+            light:    Shutter semantics for the next frame (True = light,
+                      False = dark/bias). None = keep current.
         """
         if exposure < 0.001:
             logger.warning("Ignoring suspiciously low exposure value: %.4f s — keeping %.4f s",
@@ -74,6 +81,8 @@ class LivePreviewWorker(QThread):
         self._gain = gain
         if scale > 0:
             self._preview_scale = max(1, scale)
+        if light is not None:
+            self._light = bool(light)
 
     def stop(self) -> None:
         """Request the loop to stop after the current frame."""
@@ -98,7 +107,7 @@ class LivePreviewWorker(QThread):
                 # --- Start exposure ------------------------------------------
                 self.status_updated.emit(f"Exposing  {self._exposure:.1f}s…")
                 exposure_start = datetime.now(timezone.utc)
-                self._camera.start_exposure(self._exposure)
+                self._camera.start_exposure(self._exposure, light=self._light)
 
                 # --- Wait for image ready ------------------------------------
                 deadline = time.time() + self._exposure + 20.0

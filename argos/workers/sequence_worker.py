@@ -43,6 +43,15 @@ _DOWNLOAD_MARGIN_S = 15.0
 _POLL_MS = 200
 #: Max time to wait for the filter wheel to settle after a move.
 _FILTER_SETTLE_S = 20.0
+#: Max time to wait for the controller to resume after an autofocus request —
+#: a lost AF must never hang the night's run.
+_AF_RESUME_TIMEOUT_S = 120.0
+#: Dither move: axis rate (deg/s) and pulse duration — a few arcminutes of
+#: offset, enough to move stars across pixels without losing the field.
+_DITHER_RATE_DEG_S = 0.05
+_DITHER_PULSE_S = 1.0
+#: Settle time after a dither move before the next exposure.
+_DITHER_SETTLE_S = 3.0
 
 #: Callback that builds a fresh FrameContext for the current frame. Called with
 #: keyword args ``object_name`` and ``filter_name``; returns a FrameContext.
@@ -89,6 +98,7 @@ class SequenceWorker(QThread):
     progress = pyqtSignal(int, int, float)
     frame_image = pyqtSignal(object)  # full uint16 array, for live display
     autofocus_due = pyqtSignal()
+    paused = pyqtSignal(bool)  # the run is holding at a frame boundary
     error_occurred = pyqtSignal(str)
     finished = pyqtSignal(bool)
 
@@ -111,15 +121,31 @@ class SequenceWorker(QThread):
         self._base_dir = Path(base_dir)
         self._stop_flag = False
         self._resume = threading.Event()
+        # Pause gate: set = run, cleared = hold at the next frame boundary.
+        self._pause_gate = threading.Event()
+        self._pause_gate.set()
 
     # ------------------------------------------------------------------ #
     # Control
     # ------------------------------------------------------------------ #
 
     def stop(self) -> None:
-        """Request a clean stop; also unblocks an autofocus wait."""
+        """Request a clean stop; also unblocks an autofocus or pause wait."""
         self._stop_flag = True
         self._resume.set()
+        self._pause_gate.set()
+
+    def pause(self) -> None:
+        """Hold the run at the next frame boundary (the current exposure
+        completes and is saved — a half-exposed frame is worthless)."""
+        self._pause_gate.clear()
+
+    def resume(self) -> None:
+        """Release a pause."""
+        self._pause_gate.set()
+
+    def is_paused(self) -> bool:
+        return not self._pause_gate.is_set()
 
     def resume_after_autofocus(self) -> None:
         """Resume the loop after the controller has finished autofocus."""
@@ -154,7 +180,7 @@ class SequenceWorker(QThread):
         logger.info("Sequence start: %d frame(s) → %s", total, self._base_dir)
 
         for spec in expand_plan(self._plan):
-            if self._stop_flag:
+            if self._stop_flag or not self._wait_if_paused():
                 return False
 
             if spec.step_index != current_step:
@@ -195,8 +221,10 @@ class SequenceWorker(QThread):
             avg = elapsed / done
             self.progress.emit(done, total, avg * (total - done))
 
-            if spec.dither_every:
-                logger.info("Dithering requested but unsupported on Seestar (no guiding) — skipped")
+            if spec.dither_every > 0 and done % spec.dither_every == 0:
+                self._dither()
+                if self._stop_flag:
+                    return False
 
             if spec.interval_s > 0 and not self._interruptible_sleep(spec.interval_s):
                 return False
@@ -206,6 +234,45 @@ class SequenceWorker(QThread):
     # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #
+
+    def _dither(self) -> None:
+        """Nudge the mount a few arcminutes so stars land on fresh pixels.
+
+        A short MoveAxis pulse on both axes with alternating sign, then a
+        settle wait. No-op without a mount. Best-effort: a failed nudge must
+        never abort the run.
+        """
+        if self._telescope is None:
+            return
+        self._dither_sign = -getattr(self, "_dither_sign", 1)
+        sign = self._dither_sign
+        try:
+            self._telescope.move_axis(0, sign * _DITHER_RATE_DEG_S)
+            self._telescope.move_axis(1, -sign * _DITHER_RATE_DEG_S)
+            self._interruptible_sleep(_DITHER_PULSE_S)
+            self._telescope.move_axis(0, 0.0)
+            self._telescope.move_axis(1, 0.0)
+            logger.info("Dither: ±%.0f″ nudge, settling %.0fs",
+                        _DITHER_RATE_DEG_S * _DITHER_PULSE_S * 3600, _DITHER_SETTLE_S)
+            self._interruptible_sleep(_DITHER_SETTLE_S)
+        except Exception:  # pragma: no cover - best effort, never abort the run
+            logger.warning("Dither move failed — continuing without", exc_info=True)
+            try:
+                self._telescope.move_axis(0, 0.0)
+                self._telescope.move_axis(1, 0.0)
+            except Exception:
+                pass
+
+    def _wait_if_paused(self) -> bool:
+        """Hold while the pause gate is down; False if stopped meanwhile."""
+        if self._pause_gate.is_set():
+            return True
+        self.paused.emit(True)
+        logger.info("Sequence paused")
+        self._pause_gate.wait()  # released by resume() or stop()
+        self.paused.emit(False)
+        logger.info("Sequence resumed")
+        return not self._stop_flag
 
     def _set_filter(self, filter_name: str) -> None:
         pos = _resolve_filter_position(filter_name)
@@ -323,10 +390,24 @@ class SequenceWorker(QThread):
             pass
 
     def _await_autofocus(self) -> None:
-        """Signal the controller and block until resumed (or stopped)."""
+        """Signal the controller and block until resumed (or stopped).
+
+        Bounded wait: if the controller never calls
+        :meth:`resume_after_autofocus` (lost AF worker, UI bug), abort the
+        sequence after ``_AF_RESUME_TIMEOUT_S`` instead of hanging all night.
+        """
         self._resume.clear()
         self.autofocus_due.emit()
-        self._resume.wait()  # set by resume_after_autofocus() or stop()
+        # Set by resume_after_autofocus() or stop(); False on timeout.
+        if not self._resume.wait(_AF_RESUME_TIMEOUT_S):
+            logger.error(
+                "Autofocus handshake timed out after %.0fs — aborting sequence",
+                _AF_RESUME_TIMEOUT_S,
+            )
+            self.error_occurred.emit(
+                f"Autofocus did not resume within {_AF_RESUME_TIMEOUT_S:.0f}s — sequence aborted"
+            )
+            self._stop_flag = True
 
     def _interruptible_sleep(self, seconds: float) -> bool:
         """Sleep in small slices; return False if a stop was requested."""

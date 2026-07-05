@@ -117,6 +117,40 @@ def test_lightcurve_csv_round_trip(tmp_path) -> None:
     assert rows[2][-1] == "1"  # saturated flag serialised as 1
 
 
+def test_lightcurve_from_csv_round_trips(tmp_path) -> None:
+    lc = LightCurve(auid="000-BBB-001", name="NU Ori")
+    lc.append(LcPoint(jd_utc=2451545.0, mag=9.0, mag_err=0.02, airmass=1.2, comps_used=3))
+    lc.append(LcPoint(jd_utc=2451545.1, mag=9.1, mag_err=0.03, saturated=True))
+    path = tmp_path / "photometry.csv"
+    lc.to_csv(path)
+
+    back = LightCurve.from_csv(path, auid="000-BBB-001", name="NU Ori")
+    assert len(back.points) == 2
+    p0, p1 = back.points
+    assert p0.jd_utc == 2451545.0 and p0.mag == 9.0 and p0.mag_err == 0.02
+    assert p0.airmass == 1.2 and p0.comps_used == 3
+    assert p0.bjd_tdb is None and p0.fwhm is None  # blank optionals → None
+    assert p1.saturated is True
+    # Reloaded curve re-exports to the same AAVSO data as the original.
+    a, b = tmp_path / "a.txt", tmp_path / "b.txt"
+    lc.to_aavso(a, obscode="ABC")
+    back.to_aavso(b, obscode="ABC")
+    assert a.read_text() == b.read_text()
+
+
+def test_lightcurve_from_csv_skips_bad_rows(tmp_path) -> None:
+    path = tmp_path / "partial.csv"
+    path.write_text(
+        "jd_utc,bjd_tdb,mag,mag_err,airmass,fwhm,sky_adu,comps_used,saturated\n"
+        "2451545.0,,9.0,0.02,,,,,0\n"
+        "bogus,,oops,,,,,,\n"  # unparseable → skipped, no crash
+        "2451545.2,,9.2,0.03,,,,,0\n",
+        encoding="utf-8",
+    )
+    lc = LightCurve.from_csv(path)
+    assert [p.jd_utc for p in lc.points] == [2451545.0, 2451545.2]
+
+
 def test_lightcurve_aavso_export(tmp_path) -> None:
     lc = LightCurve(name="NU Ori")
     lc.append(LcPoint(jd_utc=2451545.0, mag=9.0, mag_err=0.02, airmass=1.2))
