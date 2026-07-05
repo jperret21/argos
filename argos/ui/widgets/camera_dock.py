@@ -200,6 +200,12 @@ class CameraDock(design.Card):
         self._take_btn.clicked.connect(self.take_shot_clicked)
         outer.addLayout(design.button_row(self._live_btn, self._take_btn))
 
+        # Shown while a sequence owns the camera (set_sequence_lock).
+        self._lock_hint = design.MutedLabel("Sequence running — the sequence owns the camera.")
+        self._lock_hint.setWordWrap(True)
+        self._lock_hint.hide()
+        outer.addWidget(self._lock_hint)
+
     @staticmethod
     def _combo(items: tuple[str, ...]) -> QComboBox:
         """A combo that expands to the grid column so all combos match width."""
@@ -231,6 +237,27 @@ class CameraDock(design.Card):
         can be planned before the camera is connected."""
         self._take_btn.setEnabled(connected)
         self._live_btn.setEnabled(connected)
+
+    def set_sequence_lock(self, locked: bool) -> None:
+        """Freeze the capture form while a sequence owns the camera (WS8).
+
+        The running SequenceWorker reads its own plan — edits here would only
+        desynchronise what the user sees from what the camera does. Take
+        shot / Live are already refused by the CameraService; this makes the
+        ownership visible instead of letting dead-looking clicks explain it.
+        """
+        for w in (
+            self._type_combo,
+            self._object_edit,
+            self._filter_combo,
+            self._exp,
+            self._gain,
+            self._offset_spin,
+            self._bin_spin,
+            self._quality_combo,
+        ):
+            w.setEnabled(not locked)
+        self._lock_hint.setVisible(locked)
 
     def set_live_running(self, running: bool) -> None:
         """Reflect the live-loop state (the ImagingPage owns the worker)."""

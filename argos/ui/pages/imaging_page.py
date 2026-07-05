@@ -529,6 +529,12 @@ class ImagingPage(QWidget):
         """Reflect ownership transitions in the status bar + the Live toggle."""
         self.action_changed.emit(_STATE_ACTION[state])
         self._camera_dock.set_live_running(state is CameraState.LIVE)
+        # WS8 cockpit: freeze the capture form while the sequence owns the
+        # camera (SEQUENCE and its nested AUTOFOCUS pass); any release —
+        # complete, stopped or error — transitions state and unfreezes.
+        self._camera_dock.set_sequence_lock(
+            state in (CameraState.SEQUENCE, CameraState.AUTOFOCUS)
+        )
 
     # ------------------------------------------------------------------
     # Device session state → docks (the session owns the device handles)

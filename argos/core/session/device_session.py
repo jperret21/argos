@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import time
 
-from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal, pyqtSlot
 
 from argos.core.alpaca.camera import Camera
 from argos.core.alpaca.client import AlpacaError
@@ -150,6 +150,13 @@ class DeviceSession(QObject):
         # frame-context provider) see an atomic reference swap.
         self._target_radec: tuple[float, float] | None = None
 
+        # WS8: after a network drop the mount reconnects itself — a dead
+        # polling loop must not end the night. Cleared on user disconnect.
+        self._mount_endpoint: tuple[str, int] | None = None
+        self._mount_retry = QTimer(self)
+        self._mount_retry.setInterval(10_000)
+        self._mount_retry.timeout.connect(self._retry_mount)
+
         self._filter_settled.connect(self._on_filter_settled)
 
     # ------------------------------------------------------------------
@@ -255,6 +262,8 @@ class DeviceSession(QObject):
             scope = Telescope(host=host, port=port)
             name = scope.connect()
             self._telescope = scope
+            self._mount_endpoint = (host, port)
+            self._mount_retry.stop()
             self.log_message.emit("OK", f"Mount connected: {name}")
             self.device_state_changed.emit("mount", "connected", name)
             self._start_polling()
@@ -262,7 +271,29 @@ class DeviceSession(QObject):
             self.log_message.emit("ERROR", f"Mount: {exc}")
             self.device_state_changed.emit("mount", "error", str(exc)[:48])
 
+    @pyqtSlot()
+    def _retry_mount(self) -> None:
+        """One auto-reconnect attempt (every 10s after a lost connection)."""
+        if self._telescope is not None or self._mount_endpoint is None:
+            self._mount_retry.stop()
+            return
+        host, port = self._mount_endpoint
+        try:
+            scope = Telescope(host=host, port=port)
+            name = scope.connect()
+        except AlpacaError as exc:
+            logger.info("Mount reconnect attempt failed: %s", exc)
+            return  # timer keeps firing
+        self._telescope = scope
+        self._mount_retry.stop()
+        self.log_message.emit("OK", f"Mount reconnected: {name}")
+        self.device_state_changed.emit("mount", "connected", name)
+        self._start_polling()
+
     def disconnect_mount(self) -> None:
+        # Explicit user intent — never fight it with the auto-reconnect.
+        self._mount_retry.stop()
+        self._mount_endpoint = None
         self._stop_polling()
         if self._telescope:
             try:
@@ -461,6 +492,9 @@ class DeviceSession(QObject):
         self.mount_lost.emit()
         self.device_state_changed.emit("mount", "error", "")
         self.tracking_changed.emit(None)
+        if self._mount_endpoint is not None:
+            self.log_message.emit("INFO", "Retrying the mount every 10s — disconnect to stop.")
+            self._mount_retry.start()
 
     # ------------------------------------------------------------------
     # Mount commands
@@ -686,6 +720,7 @@ class DeviceSession(QObject):
     def shutdown(self) -> None:
         """Stop every session-owned thread. Call after the engine's shutdown
         (its workers hold device references) and before dropping the handles."""
+        self._mount_retry.stop()
         self.stop_stellarium()
         self._stop_polling()
         self._stop_camera_temp_poll()

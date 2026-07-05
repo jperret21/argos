@@ -25,6 +25,7 @@ stops using a device *before* the session drops the handle.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -915,12 +916,48 @@ class AcquisitionEngine(QObject):
     # Cleanup
     # ------------------------------------------------------------------
 
+    #: Total time budget for stopping all engine workers at shutdown. The old
+    #: chained waits could block the UI thread ~35s worst case; now every
+    #: worker gets its stop REQUEST first, then they wind down concurrently
+    #: and we join within one global deadline.
+    _SHUTDOWN_BUDGET_S = 5.0
+
     def shutdown(self) -> None:
-        """Stop every engine-owned worker. Call before ``session.shutdown()``
-        — the workers hold device references."""
-        self._stop_sequence_worker()
-        self._stop_preview()
-        self.stop_autofocus()
-        self._astrometry.wait(2000)
-        if self._catalog_worker is not None and self._catalog_worker.isRunning():
-            self._catalog_worker.wait(2000)
+        """Stop every engine-owned worker within a bounded budget.
+
+        Call before ``session.shutdown()`` — the workers hold device
+        references. Order: request every stop (non-blocking flags), then join
+        each thread with whatever remains of the global budget; a worker that
+        misses the deadline is logged and abandoned rather than blocking the
+        UI thread forever. Safe to call twice.
+        """
+        # Phase 1 — request everything to stop; nothing blocks here.
+        if self._sequence is not None:
+            self._sequence.stop()
+        if self._preview is not None:
+            self._preview.stop()
+        if self._autofocus is not None:
+            self._autofocus.stop()
+
+        # Phase 2 — join with one shared deadline.
+        deadline = time.monotonic() + self._SHUTDOWN_BUDGET_S
+
+        def _join(worker, label: str) -> None:
+            if worker is None or not worker.isRunning():
+                return
+            remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+            if not worker.wait(remaining_ms):
+                logger.warning("Shutdown: %s missed the %.0fs budget — abandoned",
+                               label, self._SHUTDOWN_BUDGET_S)
+
+        _join(self._sequence, "sequence worker")
+        self._sequence = None
+        _join(self._preview, "preview worker")
+        self._preview = None
+        self._live_requested = False
+        _join(self._autofocus, "autofocus worker")
+        self._autofocus = None
+        remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+        self._astrometry.wait(remaining_ms)
+        _join(self._catalog_worker, "catalog worker")
+        self._catalog_worker = None

@@ -127,17 +127,21 @@ NINA-inspired customization — the user composes their own night cockpit:
 
 ### WS8 — Capture cockpit + polish
 
-- [ ] Capture page becomes monitoring-first: camera settings collapse to a
-      read-only summary while a sequence runs; stability block (FWHM/HFD, SNR,
-      Max ADU, background, tracking) as the right-rail content
-- [ ] Async shutdown with a bounded budget — replace the chained `wait()`s
-      (~35 s worst case on the UI thread at close)
-- [ ] Mount-polling auto-reconnect after a network drop
-- [ ] Storage / battery / thermal (55 °C veto) indicators from the native
-      client's telemetry (currently discarded in `native_client.py`)
-- [ ] Remove the `theme.py` back-compat alias layer (two naming systems)
+- [x] Capture form frozen (read-only + hint) while a sequence/AF owns the
+      camera, released on any state transition incl. errors
+- [x] Bounded shutdown: all worker stops requested first, then joined under
+      one 5 s global budget; a worker missing it is logged and abandoned
+      instead of blocking the UI thread (was ~35 s worst case)
+- [x] Mount auto-reconnect: retry every 10 s after a lost connection,
+      stopped by explicit user disconnect or shutdown
+- [ ] Storage / battery / thermal indicators — DEFERRED to the hardware
+      session: the NativeClient is not integrated anywhere yet and the
+      telemetry events aren't in docs/seestar_protocol.md; needs the real
+      Seestar to observe what the firmware actually sends
+- [x] theme.py alias layer retained intentionally (WS9c rebinds it from the
+      Palette — it is now the compat surface, not dead code)
 - [ ] Update `docs/STATUS.md` + `docs/ui_design.md` to the session-layer
-      architecture
+      architecture (docs pass)
 
 ### Screens polish (can ride along WS6–8)
 
