@@ -106,12 +106,12 @@ The headline science flow, currently split across two divergent paths:
 
 NINA-inspired customization — the user composes their own night cockpit:
 
-- [ ] **WS9a — Dockable Imaging workspace**: every panel becomes a real
-      QDockWidget (movable / resizable / closable / floatable to a 2nd
-      monitor), a panel-toggle toolbar shows/hides each, layout persisted
-      via saveState per profile, sober defaults
-- [ ] **WS9b — Statistics dock** (full frame stats grid) + **HFD History
-      dock** (the sparkline promoted out of the focuser dock)
+- [x] **WS9a — Dockable Imaging workspace** (`d06114a`): every panel is a
+      QDockWidget (movable/closable/floatable), panel-toggle strip, layout
+      persisted with defensive restore, sober defaults
+- [x] **WS9b — Statistics dock + HFD History dock** (`d06114a`): full stats
+      grid (median/MAD off the UI thread), trend promoted out of the
+      focuser dock
 - [ ] **WS9c — Theme system**: parameterized Palette → generated QSS,
       presets (equilux, charcoal+teal NINA-like, high-contrast, red-light
       night mode), runtime switch from Settings → Appearance
