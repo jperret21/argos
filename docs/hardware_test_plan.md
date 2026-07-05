@@ -15,18 +15,21 @@
 - [ ] The Seestar S30 Pro is powered on, opened via the ZWO app once (arm
       raised), then the ZWO app is fully CLOSED (it holds the connection).
 - [ ] Seestar and this Mac are on the same Wi-Fi network (or the Mac is on
-      the Seestar's own AP). Two valid setups — Argos always talks to the
-      local `seestar_alp` bridge, which relays to the Seestar:
+      the Seestar's own AP). The S30 Pro (firmware 7.18+) serves Alpaca
+      ITSELF on port 32323 — no seestar_alp bridge needed (validated
+      2026-07-05; see `seestar_protocol.md` §2 — port 4700 is silent, this
+      is normal). Two valid setups:
       - **Station mode** (home): Seestar joined to the house Wi-Fi; its IP is
         assigned by the router. The Mac keeps internet, so the VSX/VSP
         catalog fetch in §7.2 works.
       - **AP mode** (field): the Mac joins the Seestar's own hotspot
-        (`S30_xxxx`); the Seestar is then at the fixed IP **10.0.0.1** — use
-        that in the seestar_alp config. The Mac has NO internet in this mode:
-        ASTAP solving and photometry still work (local), but §7.2 catalog
-        fetch will fail — mark it SKIP, or tether the phone's 4G.
-- [ ] `seestar_alp` (or an Alpaca bridge on the Seestar) is running and
-      reachable: `curl -s http://<SEESTAR_IP>:32323/api/v1/telescope/0/connected`
+        (`S30_xxxx`); the Seestar is then at the fixed IP **10.0.0.1** —
+        enter that IP + port 32323 in the Equipment screen. The Mac has NO
+        internet in this mode: ASTAP solving and photometry still work
+        (local), but §7.2 catalog fetch will fail — mark it SKIP, or tether
+        the phone's 4G.
+- [ ] The Seestar's built-in Alpaca server answers:
+      `curl -s http://<SEESTAR_IP>:32323/api/v1/telescope/0/connected`
       returns JSON with `"ErrorNumber":0`. Record `<SEESTAR_IP>`.
 - [ ] Repo on branch `feat/ux-redesign`, clean tree. Launch with `./run.sh`.
 - [ ] Note: run at DUSK or NIGHT for sections 6-8 (stars needed). Sections
