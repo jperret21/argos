@@ -102,6 +102,22 @@ The headline science flow, currently split across two divergent paths:
       preview-vs-sub series distinction
 - [ ] Batch re-run in a worker with progress + cancel (never on the UI thread)
 
+### WS9 — UI design pass: dockable workspace + themes (see `ui_design_pass.md`)
+
+NINA-inspired customization — the user composes their own night cockpit:
+
+- [ ] **WS9a — Dockable Imaging workspace**: every panel becomes a real
+      QDockWidget (movable / resizable / closable / floatable to a 2nd
+      monitor), a panel-toggle toolbar shows/hides each, layout persisted
+      via saveState per profile, sober defaults
+- [ ] **WS9b — Statistics dock** (full frame stats grid) + **HFD History
+      dock** (the sparkline promoted out of the focuser dock)
+- [ ] **WS9c — Theme system**: parameterized Palette → generated QSS,
+      presets (equilux, charcoal+teal NINA-like, high-contrast, red-light
+      night mode), runtime switch from Settings → Appearance
+- Note: WS9a should land BEFORE WS7's light-curve dock so the curve arrives
+  as a dock, not another fixed splitter.
+
 ### WS8 — Capture cockpit + polish
 
 - [ ] Capture page becomes monitoring-first: camera settings collapse to a
