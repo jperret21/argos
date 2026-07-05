@@ -294,6 +294,9 @@ class Shell(QMainWindow):
     def _save_state(self) -> None:
         self._config.set(_CFG_GEOMETRY, base64.b64encode(bytes(self.saveGeometry())).decode())
         self._config.set(_CFG_STATE, base64.b64encode(bytes(self.saveState())).decode())
+        # The Capture page owns its own dockable workspace (WS9a) — persist it
+        # alongside the shell's own dock state.
+        self._acquisition.save_layout()
 
     def _reset_layout(self) -> None:
         self._config.set(_CFG_GEOMETRY, None)

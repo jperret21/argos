@@ -1,16 +1,24 @@
 """Acquisition mode — the work surface where most session time is spent.
 
-Layout::
+Layout (WS9a — dockable workspace)::
 
     ┌─ ImageToolbar (View · Open FITS · "display ≠ data") ───────────┐
-    ├──────────────────────────────────────────┬───────────────────┤
-    │   FitsViewer (hero) + crosshair + pixel  │  Rail tabs:        │
-    │   readout overlay                        │  Capture · Sequence│
-    ├──────────────────────────────────────────┤  · Mount · Focus   │
-    │   Stats bar: HFD·Stars·Sky·Min·Max·Mean  │  · Display         │
-    ├──────────────────────────────────────────┴───────────────────┤
-    │                     Session log                                │
+    ├─ Panel-toggle strip: Camera · Mount · Focuser · Filters · … ───┤
+    ├─ OverlayBar: Grid · Stars · Variables · … ────────────────────┤
+    │  ┌──────────────────────────────────┬─────────────────────┐   │
+    │  │  FitsViewer (hero, central) +    │  Camera dock (right, │   │
+    │  │  crosshair + pixel readout       │  Mount/Focuser/Filter│   │
+    │  │                                  │  tabbed behind it)   │   │
+    │  │  Stats bar: HFD·Stars·Sky·…      │                      │   │
+    │  ├──────────────────────────────────┴─────────────────────┤   │
+    │  │  Sequence dock (bottom, Log tabbed with it)            │   │
+    │  └────────────────────────────────────────────────────────┘   │
     └────────────────────────────────────────────────────────────────┘
+
+Every panel is a real ``QDockWidget`` (movable / resizable / closable /
+floatable to a 2nd monitor), hosted in an internal ``QMainWindow`` used as a
+plain widget. The central widget is the viewer + the always-visible stats strip.
+Layout is persisted via ``QMainWindow.saveState()`` into ``ui.imaging.layout``.
 
 The page is a *view* over the session layer (WS5): the DeviceSession owns the
 device handles and pollers, the AcquisitionEngine owns the camera-ownership
@@ -30,19 +38,21 @@ tests keep one stable surface):
 
 from __future__ import annotations
 
+import base64
 import logging
 import time
 from pathlib import Path
 
 import numpy as np
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QByteArray
 from PyQt6.QtWidgets import (
+    QDockWidget,
     QFileDialog,
     QHBoxLayout,
     QLabel,
-    QScrollArea,
-    QSplitter,
-    QTabWidget,
+    QMainWindow,
+    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -73,9 +83,11 @@ from argos.ui import design, theme
 from argos.ui.panels.log_panel import LogPanel
 from argos.ui.panels.manual_control_dialog import ManualControlDialog
 from argos.ui.widgets.camera_dock import CameraDock
+from argos.ui.widgets.dock_host import make_dock, style_toggle_action
 from argos.ui.widgets.filterwheel_dock import FilterWheelDock
 from argos.ui.widgets.fits_viewer import FitsViewer
 from argos.ui.widgets.focuser_dock import FocuserDock
+from argos.ui.widgets.hfd_history_dock import HfdHistoryDock
 from argos.ui.widgets.histogram_dock import HistogramDock
 from argos.ui.widgets.image_toolbar import ImageToolbar
 from argos.ui.widgets.mount_dock import MountDock
@@ -84,6 +96,7 @@ from argos.ui.panels.photometry_window import PhotometryWindow
 from argos.ui.widgets.overlay_bar import OverlayBar
 from argos.ui.widgets.sequence_panel import SequencePanel
 from argos.ui.widgets.star_info_card import StarInfoCard
+from argos.ui.widgets.statistics_dock import StatisticsDock
 from argos.workers.camera_service import CameraState
 from argos.workers.preview_processor import PreviewProcessor
 
@@ -91,6 +104,9 @@ logger = logging.getLogger(__name__)
 
 #: Live frame stats shown in the always-visible bar under the image.
 _STAT_KEYS = ("HFD", "Stars", "Sky", "Min", "Max", "Mean")
+
+#: Config key for the base64-encoded inner QMainWindow.saveState() blob (WS9a).
+_CFG_LAYOUT = "ui.imaging.layout"
 
 #: Camera-ownership state → status-bar action text. The free-text
 #: ``action_changed`` strings stay for log/status display only; every
@@ -180,11 +196,8 @@ class ImagingPage(QWidget):
         # Display controls (channel / gamma / auto-stretch) sit above the image.
         self._toolbar = ImageToolbar()
         root.addWidget(self._toolbar)
-        # Slim overlay-toggle chips under the toolbar (Grid/Stars/Variables/…).
-        self._overlay_bar = OverlayBar()
-        root.addWidget(self._overlay_bar)
 
-        # Build the control surfaces once; placed into the layout below.
+        # Build the control surfaces once; wrapped into docks below.
         self._viewer = FitsViewer()
         # On-image star-info card (bottom-left overlay) for click → info + roles.
         self._info_card = StarInfoCard(self._viewer)
@@ -194,25 +207,23 @@ class ImagingPage(QWidget):
         self._focuser_dock = FocuserDock()
         self._filterwheel_dock = FilterWheelDock()
         self._histogram_dock = HistogramDock()
+        self._statistics_dock = StatisticsDock()
+        self._hfd_history_dock = HfdHistoryDock()
         self._log_panel = LogPanel()
 
-        # Right rail grouped by the one-axis rule (docs/ui_design.md):
-        #   Camera    — capture params + single shots + live toggle
-        #   Equipment — mount / focuser (+ V-curve) / filter wheel
-        #   Display   — image appearance (histogram / stretch)
-        # The sequencer lives in the WIDE bottom dock, not in this 360px rail —
-        # a step table needs width, and the night is planned there.
-        self._rail = QTabWidget()
-        self._rail.setMinimumWidth(360)
-        self._rail.setMaximumWidth(460)
-        self._rail.addTab(self._tab_group(self._camera_dock), "Camera")
-        self._rail.addTab(
-            self._tab_group(self._mount_dock, self._focuser_dock, self._filterwheel_dock),
-            "Equipment",
+        # The workspace is an internal QMainWindow used as a plain widget
+        # (Qt.WindowType.Widget) so its whole docking machinery — movable,
+        # floatable, tabbed docks — works INSIDE the page without it being a
+        # top-level window. The Shell owns the real window.
+        self._workspace = QMainWindow()
+        self._workspace.setWindowFlags(Qt.WindowType.Widget)
+        self._workspace.setDockNestingEnabled(True)
+        self._workspace.setDockOptions(
+            QMainWindow.DockOption.AllowTabbedDocks
+            | QMainWindow.DockOption.AllowNestedDocks
         )
-        self._rail.addTab(self._tab_group(self._histogram_dock), "Display")
 
-        # Image column: the viewer (hero) + a thin always-visible stats strip
+        # Central widget: the viewer (hero) + a thin always-visible stats strip
         # (HFD / Stars / Sky / Min / Max / Mean) — what an astrophotographer
         # glances at constantly while framing and focusing.
         image_col = QWidget()
@@ -221,56 +232,86 @@ class ImagingPage(QWidget):
         col.setSpacing(0)
         col.addWidget(self._viewer, 1)
         col.addWidget(self._build_stats_bar())
+        self._workspace.setCentralWidget(image_col)
 
-        # Top region: the image is the hero (gets the stretch); the rail is capped.
-        top = QSplitter(Qt.Orientation.Horizontal)
-        top.setChildrenCollapsible(False)
-        top.addWidget(image_col)
-        top.addWidget(self._rail)
-        top.setStretchFactor(0, 1)
-        top.setStretchFactor(1, 0)
-        top.setSizes([1000, 400])
+        # Every former panel becomes a real dock. Object names are stable —
+        # QMainWindow.saveState()/restoreState() key on them.
+        self._docks: dict[str, QDockWidget] = {
+            "camera": make_dock("Camera", self._camera_dock, object_name="dock.camera"),
+            "mount": make_dock("Mount", self._mount_dock, object_name="dock.mount"),
+            "focuser": make_dock("Focuser", self._focuser_dock, object_name="dock.focuser"),
+            "filterwheel": make_dock(
+                "Filter wheel", self._filterwheel_dock, object_name="dock.filterwheel"
+            ),
+            "display": make_dock("Display", self._histogram_dock, object_name="dock.display"),
+            # Statistics is a compact key/value card (scrolls if the dock is
+            # short); HFD History owns an expanding trend plot, so it manages its
+            # own layout (scroll=False) and grows with the dock (WS9b).
+            "statistics": make_dock(
+                "Statistics", self._statistics_dock, object_name="dock.statistics"
+            ),
+            "hfd_history": make_dock(
+                "HFD History", self._hfd_history_dock, object_name="dock.hfd_history", scroll=False
+            ),
+            # Sequence + Log are wide, self-scrolling panels.
+            "sequence": make_dock(
+                "Sequence", self._sequence_panel, object_name="dock.sequence", scroll=False
+            ),
+            "log": make_dock("Log", self._log_panel, object_name="dock.log", scroll=False),
+        }
+        self._sequence_panel.setMinimumHeight(180)
 
-        # Bottom dock (full width under the image): the sequencer — a step
-        # table needs width — with the session log one tab away.
-        self._bottom = QTabWidget()
-        self._bottom.addTab(self._sequence_panel, "Sequence")
-        self._bottom.addTab(self._log_panel, "Log")
-        self._bottom.setMinimumHeight(180)
+        # Slim panel-toggle strip (NINA's top strip): one checkable chip per
+        # dock, wired to the dock's toggleViewAction() — which keeps the check
+        # state in sync with real visibility and, unlike visibilityChanged,
+        # does NOT fire on tab switches.
+        self._panel_bar = self._build_panel_bar()
+        root.addWidget(self._panel_bar)
 
-        # Vertical split: the image area dominates, the dock is resizable.
-        main = QSplitter(Qt.Orientation.Vertical)
-        main.setChildrenCollapsible(False)
-        main.addWidget(top)
-        main.addWidget(self._bottom)
-        main.setStretchFactor(0, 1)
-        main.setStretchFactor(1, 0)
-        main.setSizes([660, 250])
-        root.addWidget(main, 1)
+        # Slim overlay-toggle chips under the panel strip (Grid/Stars/…).
+        self._overlay_bar = OverlayBar()
+        root.addWidget(self._overlay_bar)
 
-    @staticmethod
-    def _tab_group(*widgets: QWidget) -> QScrollArea:
-        """Wrap one or more control docks in a scrollable, top-aligned tab page.
+        root.addWidget(self._workspace, 1)
 
-        Each dock keeps its natural (Fixed) height and the page scrolls if the
-        rail is shorter than the stacked content, instead of stretching them.
-        """
-        inner = QWidget()
-        layout = QVBoxLayout(inner)
-        layout.setContentsMargins(
-            design.SPACING_MD, design.SPACING_MD, design.SPACING_MD, design.SPACING_MD
+        # Apply the sober default arrangement, then a saved layout if present.
+        self._apply_default_layout()
+        self._restore_layout()
+
+    #: dock key → (chip label, default-visible). Ordering drives the strip.
+    _PANEL_ORDER = (
+        ("camera", "Camera"),
+        ("mount", "Mount"),
+        ("focuser", "Focuser"),
+        ("filterwheel", "Filters"),
+        ("display", "Display"),
+        ("statistics", "Statistics"),
+        ("hfd_history", "HFD History"),
+        ("sequence", "Sequence"),
+        ("log", "Log"),
+    )
+
+    def _build_panel_bar(self) -> QToolBar:
+        """A slim strip of checkable dock-toggle chips + a Reset-layout action."""
+        bar = QToolBar()
+        bar.setMovable(False)
+        bar.setStyleSheet(
+            f"QToolBar {{ background-color: {theme.SURFACE_3};"
+            f" border-bottom: 1px solid {theme.SURFACE_4}; padding: 2px 6px; spacing: 4px; }}"
+            f" QToolBar QToolButton {{ color: {theme.FG_MUTED}; font-size: 11px;"
+            f" padding: 1px 8px; }}"
+            f" QToolBar QToolButton:checked {{ color: {theme.FG}; }}"
         )
-        layout.setSpacing(design.SPACING_MD)
-        for widget in widgets:
-            layout.addWidget(widget)
-        layout.addStretch()
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setWidget(inner)
-        return scroll
+        for key, label in self._PANEL_ORDER:
+            action = style_toggle_action(self._docks[key].toggleViewAction(), label)
+            bar.addAction(action)
+        # Reset-layout lives in the strip's overflow / at its end (also on the
+        # workspace context menu).
+        bar.addSeparator()
+        reset = bar.addAction("Reset layout")
+        reset.setToolTip("Restore the default panel arrangement")
+        reset.triggered.connect(self.reset_layout)
+        return bar
 
     def _build_stats_bar(self) -> QWidget:
         """Thin always-visible strip of live frame stats under the image."""
@@ -288,17 +329,68 @@ class ImagingPage(QWidget):
         row.addStretch()
         return bar
 
-    def select_rail_tab(self, label: str) -> None:
-        """Select the right-rail control tab whose text matches ``label``.
+    # ------------------------------------------------------------------
+    # Dockable workspace layout (WS9a)
+    # ------------------------------------------------------------------
 
-        Used by the workflow-rail phase screens (Target/Focus/Photometry) to
-        deep-link into the controls that still live on the shared Capture page
-        until the per-phase split lands.
+    def _apply_default_layout(self) -> None:
+        """Sober-by-default arrangement (the docks live in fixed home areas).
+
+        Camera right; Mount / Focuser / Filter wheel tabbed behind it; Sequence
+        bottom with Log tabbed behind it; Display / Statistics / HFD History
+        hidden (right-area homes, summoned on demand). Called on first launch and
+        by "Reset layout".
         """
-        for i in range(self._rail.count()):
-            if self._rail.tabText(i) == label:
-                self._rail.setCurrentIndex(i)
-                return
+        hidden = ("display", "statistics", "hfd_history")
+        w = self._workspace
+        right = Qt.DockWidgetArea.RightDockWidgetArea
+        bottom = Qt.DockWidgetArea.BottomDockWidgetArea
+
+        # Detach everything first so a reset is idempotent.
+        for dock in self._docks.values():
+            w.removeDockWidget(dock)
+
+        w.addDockWidget(right, self._docks["camera"])
+        w.addDockWidget(right, self._docks["mount"])
+        w.addDockWidget(right, self._docks["focuser"])
+        w.addDockWidget(right, self._docks["filterwheel"])
+        # Mount / Focuser / Filter wheel share Camera's stack, tabbed behind it.
+        for key in ("mount", "focuser", "filterwheel"):
+            w.tabifyDockWidget(self._docks["camera"], self._docks[key])
+        self._docks["camera"].raise_()
+
+        w.addDockWidget(bottom, self._docks["sequence"])
+        w.addDockWidget(bottom, self._docks["log"])
+        w.tabifyDockWidget(self._docks["sequence"], self._docks["log"])
+        self._docks["sequence"].raise_()
+
+        # Display / Statistics / HFD History have right-area homes but start
+        # hidden — docks the user summons on demand from the panel strip.
+        for key in hidden:
+            w.addDockWidget(right, self._docks[key])
+
+        for key, dock in self._docks.items():
+            dock.setVisible(key not in hidden)
+
+    def _restore_layout(self) -> None:
+        """Restore a persisted layout over the defaults, if one exists."""
+        blob = self._config.get(_CFG_LAYOUT)
+        if not blob:
+            return
+        try:
+            self._workspace.restoreState(QByteArray(base64.b64decode(blob)))
+        except Exception as exc:  # noqa: BLE001 — a corrupt blob must not crash startup
+            logger.warning("Imaging layout restore failed: %s", exc)
+
+    def save_layout(self) -> None:
+        """Persist the current dock arrangement (called by the Shell on close)."""
+        state = bytes(self._workspace.saveState())
+        self._config.set(_CFG_LAYOUT, base64.b64encode(state).decode())
+
+    def reset_layout(self) -> None:
+        """Clear the saved layout and restore the sober defaults, live."""
+        self._config.set(_CFG_LAYOUT, None)
+        self._apply_default_layout()
 
     # ------------------------------------------------------------------
     # Signal wiring
@@ -531,7 +623,8 @@ class ImagingPage(QWidget):
         self._green_shape = pf.green_shape
         self._disp_shape = pf.display.shape[:2]
         self._camera_dock.set_hfd(pf.metrics.hfd)
-        self._focuser_dock.push_metrics(pf.metrics)
+        self._hfd_history_dock.push_metrics(pf.metrics)  # trend panel (WS9b)
+        self._statistics_dock.set_frame(pf)  # full stats grid (WS9b)
         self.hfd_updated.emit(pf.metrics.hfd)  # Shell capture strip
         self._update_stats(pf)
         # Histogram first: sets the slider/data range, then the viewer's
