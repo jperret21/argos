@@ -107,6 +107,7 @@ class DeviceSession(QObject):
 
     # Typed device state.
     mount_position = pyqtSignal(object)  # MountPosition
+    mount_mode = pyqtSignal(object)  # str | None — "Alt-Az" / "EQ" / "EQ (GEM)"
     mount_lost = pyqtSignal()
     capabilities_ready = pyqtSignal(object)  # CameraCapabilities
     filterwheel_state = pyqtSignal(object)  # FilterWheelState
@@ -273,6 +274,7 @@ class DeviceSession(QObject):
             self._mount_retry.stop()
             self.log_message.emit("OK", f"Mount connected: {name}")
             self.device_state_changed.emit("mount", "connected", name)
+            self.mount_mode.emit(scope.alignment_mode)
             self._start_polling()
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Mount: {exc}")
@@ -295,6 +297,7 @@ class DeviceSession(QObject):
         self._mount_retry.stop()
         self.log_message.emit("OK", f"Mount reconnected: {name}")
         self.device_state_changed.emit("mount", "connected", name)
+        self.mount_mode.emit(scope.alignment_mode)
         self._start_polling()
 
     def disconnect_mount(self) -> None:
@@ -310,6 +313,7 @@ class DeviceSession(QObject):
             self._telescope = None
         self.device_state_changed.emit("mount", "disconnected", "")
         self.tracking_changed.emit(None)
+        self.mount_mode.emit(None)
         self.log_message.emit("INFO", "Mount disconnected.")
 
     def connect_camera(self, host: str, port: int) -> None:
@@ -497,6 +501,7 @@ class DeviceSession(QObject):
         self._stop_polling()
         self._telescope = None
         self.mount_lost.emit()
+        self.mount_mode.emit(None)
         self.device_state_changed.emit("mount", "error", "")
         self.tracking_changed.emit(None)
         if self._mount_endpoint is not None:

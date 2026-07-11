@@ -55,6 +55,14 @@ def test_shell_three_mode_walkthrough() -> None:
         assert shell.status.device_state("mount") == "connected"
         assert shell.status.device_state("camera") == "busy"
 
+        # Mount geometry label — shown while the mount reports a mode,
+        # hidden again on disconnect (None).
+        shell.status.set_mount_mode("Alt-Az")
+        assert shell.status._mode_lbl.text() == "Alt-Az"
+        assert not shell.status._mode_lbl.isHidden()
+        shell.status.set_mount_mode(None)
+        assert shell.status._mode_lbl.isHidden()
+
         # Clicking a disconnected badge jumps to Connect.
         shell.sidebar.select("capture")
         shell._on_badge_clicked("focuser")  # still disconnected

@@ -40,12 +40,12 @@ def _wrap(exc: Exception) -> AlpacaError:
 class MountPosition:
     """Current pointing position of the mount."""
 
-    ra: float           # Right Ascension in decimal hours (J2000)
-    dec: float          # Declination in decimal degrees (J2000)
-    altitude: float     # Altitude in degrees
-    azimuth: float      # Azimuth in degrees
-    tracking: bool      # Tracking enabled
-    slewing: bool       # Slew in progress
+    ra: float  # Right Ascension in decimal hours (J2000)
+    dec: float  # Declination in decimal degrees (J2000)
+    altitude: float  # Altitude in degrees
+    azimuth: float  # Azimuth in degrees
+    tracking: bool  # Tracking enabled
+    slewing: bool  # Slew in progress
 
     def ra_str(self) -> str:
         total_seconds = int(self.ra * 3600)
@@ -81,6 +81,7 @@ class Telescope:
         self._scope = _AlpacaTelescope(f"{host}:{port}", 0)
         self._connected = False
         self._can_slew_async = True
+        self._alignment_mode: str | None = None
 
     # ------------------------------------------------------------------
     # Connection
@@ -131,11 +132,29 @@ class Telescope:
 
         try:
             from alpaca.telescope import TelescopeAxes
+
             can_primary = self._scope.CanMoveAxis(TelescopeAxes.axisPrimary)
             can_secondary = self._scope.CanMoveAxis(TelescopeAxes.axisSecondary)
             logger.info("CanMoveAxis Primary=%s Secondary=%s", can_primary, can_secondary)
         except Exception as exc:
             logger.debug("CanMoveAxis query failed (non-fatal): %s", exc)
+
+        # Mount geometry — the Seestar runs either alt-az (native) or EQ
+        # (on a wedge, switched in the Seestar app). Field rotation only
+        # exists in alt-az, so surface which one the firmware reports.
+        try:
+            from alpaca.telescope import AlignmentModes
+
+            mode = self._scope.AlignmentMode
+            self._alignment_mode = {
+                AlignmentModes.algAltAz: "Alt-Az",
+                AlignmentModes.algPolar: "EQ",
+                AlignmentModes.algGermanPolar: "EQ (GEM)",
+            }.get(mode)
+            logger.info("AlignmentMode: %s → %s", mode, self._alignment_mode)
+        except Exception as exc:
+            self._alignment_mode = None
+            logger.debug("AlignmentMode query failed (non-fatal): %s", exc)
 
         try:
             name = self._scope.Name or "Unknown"
@@ -157,6 +176,12 @@ class Telescope:
     @property
     def is_connected(self) -> bool:
         return self._connected
+
+    @property
+    def alignment_mode(self) -> str | None:
+        """Mount geometry reported at connect: ``"Alt-Az"``, ``"EQ"``,
+        ``"EQ (GEM)"``, or None when the firmware doesn't say."""
+        return self._alignment_mode
 
     # ------------------------------------------------------------------
     # Status
@@ -319,7 +344,9 @@ class Telescope:
         """
         try:
             if not self._scope.Tracking:
-                raise AlpacaError(0, "Tracking must be enabled before syncing — enable tracking first")
+                raise AlpacaError(
+                    0, "Tracking must be enabled before syncing — enable tracking first"
+                )
             logger.info("Syncing to RA=%.6f Dec=%.6f", ra, dec)
             self._scope.SyncToCoordinates(ra, dec)
         except AlpacaError:
@@ -342,6 +369,7 @@ class Telescope:
         """
         try:
             from alpaca.telescope import TelescopeAxes
+
             ax = TelescopeAxes.axisPrimary if axis == 0 else TelescopeAxes.axisSecondary
             self._scope.MoveAxis(ax, rate)
             logger.debug("MoveAxis axis=%d rate=%.3f", axis, rate)
@@ -384,6 +412,7 @@ class Telescope:
         """
         try:
             from alpaca.telescope import DriveRates
+
             self._scope.TrackingRate = DriveRates(rate)
             logger.info("Tracking rate set to %s", DriveRates(rate).name)
         except Exception as exc:

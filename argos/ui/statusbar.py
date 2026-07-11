@@ -93,6 +93,22 @@ class TopStatusBar(QWidget):
         layout.addWidget(self._network_lbl)
         layout.addSpacing(12)
 
+        # Mount geometry — "Alt-Az" or "EQ", hidden until the mount says.
+        # Alt-az means the field rotates during a session; EQ means it doesn't.
+        self._mode_lbl = QLabel("")
+        self._mode_lbl.setStyleSheet(
+            f"color:{theme.FG_MUTED}; font-size:{design.FONT_SIZE_SMALL}px;"
+            f" background:transparent;"
+        )
+        self._mode_lbl.setToolTip(
+            "Mount geometry reported by the firmware.\n"
+            "Alt-Az: the field rotates during a session (apertures drift on long runs).\n"
+            "EQ (wedge): no field rotation."
+        )
+        self._mode_lbl.hide()
+        layout.addWidget(self._mode_lbl)
+        layout.addSpacing(12)
+
         self._tracking_lbl = QLabel("Tracking —")
         self._tracking_lbl.setStyleSheet(
             f"color:{theme.FG_MUTED}; font-size:{design.FONT_SIZE_SMALL}px;"
@@ -150,6 +166,15 @@ class TopStatusBar(QWidget):
         self._network_lbl.setText(
             f"Seestar {dot(seestar_ok)}&nbsp;&nbsp;&nbsp;Net {dot(internet_ok)}"
         )
+
+    def set_mount_mode(self, mode: object) -> None:
+        """Show the mount geometry ("Alt-Az" / "EQ" / "EQ (GEM)"); hide on None."""
+        if mode:
+            self._mode_lbl.setText(str(mode))
+            self._mode_lbl.show()
+        else:
+            self._mode_lbl.clear()
+            self._mode_lbl.hide()
 
     def set_tracking(self, tracking: bool | None) -> None:
         if tracking is None:

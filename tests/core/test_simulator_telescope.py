@@ -39,9 +39,13 @@ def _wait_slew_started(scope: Telescope, timeout: float = 8.0) -> bool:
 @simulator_required
 def test_connect_and_position_ranges() -> None:
     scope = Telescope(SIMULATOR_HOST, SIMULATOR_PORT)
+    assert scope.alignment_mode is None  # unknown until connected
     name = scope.connect()
     try:
         assert isinstance(name, str)
+        # The simulator always reports an AlignmentMode; the wrapper must map
+        # it onto a display string (Seestar: Alt-Az native, EQ on a wedge).
+        assert scope.alignment_mode in ("Alt-Az", "EQ", "EQ (GEM)")
         pos = scope.get_position()
         assert 0.0 <= pos.ra < 24.0
         assert -90.0 <= pos.dec <= 90.0

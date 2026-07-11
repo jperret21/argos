@@ -157,8 +157,10 @@ NINA-inspired customization — the user composes their own night cockpit:
 
 ### Science & robustness (selected from `ui_design.md` §12)
 
-- [ ] Mount mode alt-az vs equatorial [SCI] — detect, surface (Target +
-      status bar), gate field-rotation handling
+- [~] Mount mode alt-az vs equatorial [SCI] — detect + surface DONE
+      (AlignmentMode read at connect, shown in the status bar next to
+      Tracking); field-rotation handling (aperture drift warning, session
+      cap) still to gate on it
 - [~] AAVSO observer code DONE (`observer.obscode`); transform coefficients
       (Tg, …) still to add in Settings
 - [ ] Target queue / "tonight's plan" — cycle several variable stars a night
