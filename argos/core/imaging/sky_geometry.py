@@ -34,6 +34,31 @@ def compute_airmass(altitude_deg: float) -> Optional[float]:
     return round(1.0 / denom, 4)
 
 
+def field_rotation_rate(
+    altitude_deg: float, azimuth_deg: float, latitude_deg: float
+) -> Optional[float]:
+    """Alt-az field rotation rate in degrees/hour (signed), or None near zenith.
+
+    On an alt-az mount the field rotates at the rate the parallactic angle
+    changes: ``15.041 · cos(lat) · cos(az) / cos(alt)`` (azimuth from north,
+    eastward — the astropy AltAz convention). Zero for a target due east/west,
+    divergent at the zenith (returns None above 89°, where the mount can't
+    track anyway). Irrelevant on a wedge (EQ mode) — the caller gates on the
+    mount mode.
+    """
+    if altitude_deg > 89.0:
+        return None
+    cos_alt = math.cos(math.radians(altitude_deg))
+    if cos_alt <= 0:
+        return None
+    return (
+        15.041
+        * math.cos(math.radians(latitude_deg))
+        * math.cos(math.radians(azimuth_deg))
+        / cos_alt
+    )
+
+
 def compute_moon_info(
     when_utc: datetime,
     site_lat: Optional[float],
@@ -130,6 +155,8 @@ def compute_target_geometry(
         transit_in:  Hours until the next meridian transit (>= 0).
         transit_utc: Datetime (UTC) of the next meridian transit.
         moon_sep:    Angular separation target-Moon in degrees.
+        field_rotation: Alt-az field rotation rate in deg/hour (signed);
+                     only meaningful while the mount runs alt-az.
 
     Args mirror :func:`compute_moon_info`; ``when_utc`` naive is treated as UTC.
     Pure and network-free (astropy built-in ephemeris), but ~50 ms — call off the
@@ -164,6 +191,9 @@ def compute_target_geometry(
         airmass = compute_airmass(alt)
         if airmass is not None:
             out["airmass"] = airmass
+        rot = field_rotation_rate(alt, float(altaz.az.deg), site_lat)
+        if rot is not None:
+            out["field_rotation"] = round(rot, 2)  # deg/hour, alt-az mounts only
 
         # Hour angle + next meridian transit from local apparent sidereal time.
         lst_hours = float(t.sidereal_time("apparent", longitude=site_lon * u.deg).hour)

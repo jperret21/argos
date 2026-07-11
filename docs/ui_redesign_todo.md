@@ -159,8 +159,12 @@ NINA-inspired customization — the user composes their own night cockpit:
 
 - [~] Mount mode alt-az vs equatorial [SCI] — detect + surface DONE
       (AlignmentMode read at connect, shown in the status bar next to
-      Tracking); field-rotation handling (aperture drift warning, session
-      cap) still to gate on it
+      Tracking). Field-rotation handling DONE for batch photometry
+      (`photometry/tracking.py`: apertures follow the field via anchor-star
+      re-centroiding + rigid fit; `photometry.track_apertures` to disable)
+      and `sky_geometry.field_rotation_rate()` feeds `compute_target_geometry`
+      for the planned mount-dock geometry line. Still open: live-path
+      rotation warning / session-length cap gated on the Alt-Az mode.
 - [~] AAVSO observer code DONE (`observer.obscode`); transform coefficients
       (Tg, …) still to add in Settings
 - [ ] Target queue / "tonight's plan" — cycle several variable stars a night

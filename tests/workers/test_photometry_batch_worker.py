@@ -150,3 +150,99 @@ def test_batch_reports_progress(_scene) -> None:
     worker.progress.connect(lambda done, total: steps.append((done, total)))
     worker.run()
     assert steps == [(1, 3), (2, 3), (3, 3)]
+
+
+# ── Field rotation (alt-az) — apertures must follow the rotating field ──────
+
+
+def _rotate(x, y, cx, cy, deg):
+    import math
+
+    a = math.radians(deg)
+    dx, dy = x - cx, y - cy
+    return (
+        cx + math.cos(a) * dx - math.sin(a) * dy,
+        cy + math.sin(a) * dx + math.cos(a) * dy,
+    )
+
+
+def _rotating_scene(tmp_path, total_deg=10.0, n_frames=10, track=True):
+    """Frames whose star field rotates around the green-frame centre.
+
+    The reference WCS is exact for frame 0 only — the alt-az session case.
+    """
+    import dataclasses
+
+    ref = {
+        (1.0, 1.0): (30.0, 30.0),  # target
+        (2.0, 2.0): (90.0, 35.0),  # comp 1
+        (3.0, 3.0): (60.0, 95.0),  # comp 2
+    }
+    center = (60.0, 60.0)
+    ts = TargetSet(object_name="ROT Tau")
+    ts.set_role(TargetStar(role=ROLE_TARGET, ra_deg=1.0, dec_deg=1.0, auid="T"))
+    ts.set_role(
+        TargetStar(role=ROLE_COMPARISON, ra_deg=2.0, dec_deg=2.0, auid="C1", mags={"V": 11.0})
+    )
+    ts.set_role(
+        TargetStar(role=ROLE_COMPARISON, ra_deg=3.0, dec_deg=3.0, auid="C2", mags={"V": 11.0})
+    )
+    paths = []
+    for i in range(n_frames):
+        ang = total_deg * i / (n_frames - 1)
+        stars = [
+            (_rotate(30.0, 30.0, *center, ang), 20000.0),
+            (_rotate(90.0, 35.0, *center, ang), 8000.0),
+            (_rotate(60.0, 95.0, *center, ang), 8000.0),
+        ]
+        raw = _raw_with_green_stars(stars, green_shape=(120, 120))
+        p = tmp_path / f"rot_{i:03d}.fits"
+        _write_fits(p, raw, f"2026-07-05T00:{i:02d}:00")
+        paths.append(p)
+    params = PhotometryParams.from_config(lambda k, d: d)
+    if not track:
+        params = dataclasses.replace(params, track_apertures=False)
+    return BatchRequest(
+        fits_paths=paths,
+        wcs=_FakeWCS(ref),
+        target_set=ts,
+        params=params,
+        out_dir=tmp_path / "targets",
+        object_name="ROT Tau",
+    )
+
+
+def test_batch_tracks_field_rotation(tmp_path) -> None:
+    req = _rotating_scene(tmp_path, total_deg=10.0, n_frames=10, track=True)
+    result_box = []
+    worker = PhotometryBatchWorker(req)
+    worker.finished_batch.connect(result_box.append)
+    worker.run()
+
+    result = result_box[0]
+    assert result.ok and result.frames_done == 10
+    # The tracker measured the session's rotation…
+    assert abs(result.rotation_deg - 10.0) < 0.5
+    # …and the target stayed in its aperture on every frame, at a steady mag.
+    curve = next(iter(result.curves.values()))
+    assert len(curve.points) == 10
+    mags = [p.mag for p in curve.points]
+    assert max(mags) - min(mags) < 0.05
+
+
+def test_batch_without_tracking_corrupts_the_rotating_curve(tmp_path) -> None:
+    """Control: the same rotating scene, tracking off — the reference WCS
+    alone cannot follow the field, so the apertures slide off the stars and
+    the light curve acquires a spurious fade (~0.4 mag here, a plausible
+    'eclipse'). This is the artefact the tracker exists to remove."""
+    req = _rotating_scene(tmp_path, total_deg=10.0, n_frames=10, track=False)
+    result_box = []
+    worker = PhotometryBatchWorker(req)
+    worker.finished_batch.connect(result_box.append)
+    worker.run()
+
+    result = result_box[0]
+    assert result.ok and result.rotation_deg == 0.0  # no tracker ran
+    curve = next(iter(result.curves.values()))
+    mags = [p.mag for p in curve.points]
+    assert max(mags) - min(mags) > 0.2  # constant star reads as variable

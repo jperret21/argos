@@ -38,6 +38,7 @@ class PhotometryParams:
     sat_adu: float
     band: str
     min_comps: int
+    track_apertures: bool = True  # follow field rotation / drift across a batch
 
     @classmethod
     def from_config(
@@ -59,6 +60,7 @@ class PhotometryParams:
             sat_adu=float(cfg("camera.linearity_max_adu", 50000)),
             band=str(cfg("photometry.default_band", "TG") or "TG"),
             min_comps=int(cfg("photometry.min_comparisons", 2)),
+            track_apertures=bool(cfg("photometry.track_apertures", True)),
         )
 
     def aperture_px(self, fwhm: float | None) -> float:

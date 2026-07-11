@@ -1199,6 +1199,12 @@ class ImagingPage(QWidget):
             "OK",
             f"Batch photometry: {result.frames_done} frame(s), {len(result.curves)} target(s).",
         )
+        if abs(result.rotation_deg) > 0.05 or result.shift_px > 1.0:
+            self.log_message.emit(
+                "INFO",
+                f"Apertures tracked the field: {result.rotation_deg:+.2f}° rotation, "
+                f"{result.shift_px:.1f} px drift vs the reference solve.",
+            )
         self._open_photometry()
         self._photometry_window.load_curves(
             result.curves,
