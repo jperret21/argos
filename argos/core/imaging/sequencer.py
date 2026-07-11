@@ -124,7 +124,9 @@ def expand_plan(plan: SequencePlan) -> Iterator[FrameSpec]:
             if not step.enabled or step.count <= 0:
                 continue
             image_type = _image_type_for(step.frame_type)
-            is_light = step.frame_type == "Light"
+            # ASCOM StartExposure(light=): shutter open. Flats need light —
+            # a flat shot with light=False IS a dark on a shuttered camera (P10).
+            is_light = step.frame_type in ("Light", "Flat")
             for _ in range(step.count):
                 key = (image_type, step.filter_name)
                 counters[key] = counters.get(key, 0) + 1

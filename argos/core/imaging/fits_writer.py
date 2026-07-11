@@ -265,7 +265,8 @@ class FITSWriter:
         """
         obj = _sanitize(object_name) or "Unknown"
         date = exposure_start.strftime("%Y%m%d")
-        typ = image_type.replace(" Frame", "") + "s"  # e.g. "Lights"
+        base = image_type.replace(" Frame", "")  # e.g. "Light"
+        typ = "Biases" if base == "Bias" else base + "s"  # naive +s gives "Biass"
         filt = _sanitize(FILTER_ABBREV.get(filter_name, filter_name))
 
         return base_dir / "sessions" / f"{date}_{obj}" / typ / filt

@@ -213,3 +213,60 @@ def test_headers_record_the_actual_wheel_position(tmp_path) -> None:
     (session_path,) = list(tmp_path.glob("sessions/**/" + SESSION_FILENAME))
     doc = json.loads(session_path.read_text())
     assert doc["frames"][0]["filter_name"] == actual_name
+
+
+@simulator_required
+def test_calibration_frames_land_typed_and_foldered(tmp_path) -> None:
+    """P10 contract with postprod: a mixed plan puts each frame type in its
+    Siril folder with a truthful IMAGETYP, the flat keeps the shutter open
+    (is_light) and carries the actual wheel filter."""
+    _app = QApplication.instance() or QApplication(["test"])  # noqa: F841
+
+    cam = Camera(SIMULATOR_HOST, SIMULATOR_PORT)
+    cam.connect()
+    fw = FilterWheel(SIMULATOR_HOST, SIMULATOR_PORT)
+    fw.connect()
+
+    plan = SequencePlan(
+        steps=[
+            SequenceStep(frame_type="Light", filter_name="IR", exposure_s=0.5, count=1),
+            SequenceStep(frame_type="Dark", exposure_s=0.5, count=1),
+            SequenceStep(frame_type="Flat", filter_name="LP", exposure_s=0.3, count=1),
+            SequenceStep(frame_type="Bias", exposure_s=0.1, count=1),
+        ],
+        object_name="CalTarget",
+    )
+    worker = SequenceWorker(
+        camera=cam,
+        telescope=None,
+        filterwheel=fw,
+        plan=plan,
+        frame_context_provider=_context_provider,
+        base_dir=tmp_path,
+    )
+    finished: list = []
+    worker.finished.connect(lambda ok: finished.append(ok))
+    try:
+        worker.run()
+    finally:
+        cam.disconnect()
+        fw.disconnect()
+
+    assert finished == [True]
+    root = next((tmp_path / "sessions").iterdir())
+    by_type = {
+        "Lights": "Light Frame",
+        "Darks": "Dark Frame",
+        "Flats": "Flat Frame",
+        "Biases": "Bias Frame",
+    }
+    for folder, imagetyp in by_type.items():
+        matches = list(root.glob(f"{folder}/**/*.fits"))
+        assert len(matches) == 1, f"expected one frame under {folder}/"
+        with fits.open(matches[0]) as hdul:
+            assert hdul[0].header["IMAGETYP"] == imagetyp
+
+    # The flat records the wheel's real position (P1 read-back), i.e. LP.
+    (flat,) = list(root.glob("Flats/**/*.fits"))
+    with fits.open(flat) as hdul:
+        assert hdul[0].header["FILTER"] == "LP"
