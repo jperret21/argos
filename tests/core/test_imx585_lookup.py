@@ -9,9 +9,9 @@ def test_egain_monotonically_decreases_with_gain() -> None:
     """Higher gain setting → more amplification → fewer e- per ADU."""
     values = [imx585.lookup_egain(g) for g in (0, 80, 100, 200, 300, 500, 600)]
     for i in range(len(values) - 1):
-        assert values[i] > values[i + 1], (
-            f"EGAIN should decrease with gain, but {values[i]} <= {values[i + 1]}"
-        )
+        assert (
+            values[i] > values[i + 1]
+        ), f"EGAIN should decrease with gain, but {values[i]} <= {values[i + 1]}"
 
 
 def test_egain_within_postprod_range_at_typical_gain() -> None:

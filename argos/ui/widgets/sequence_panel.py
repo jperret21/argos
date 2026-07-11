@@ -458,17 +458,13 @@ class SequencePanel(design.Card):
             for col in range(self._table.columnCount()):
                 w = self._table.cellWidget(r, col)
                 if w is not None:
-                    w.setStyleSheet(
-                        f"background:{theme.SURFACE_3};" if r == index else ""
-                    )
+                    w.setStyleSheet(f"background:{theme.SURFACE_3};" if r == index else "")
 
     def set_progress(self, done: int, total: int, eta_seconds: float) -> None:
         self._progress.setRange(0, max(1, total))
         self._progress.setValue(done)
         self._progress.setFormat(f"%v / {total}")
-        self._status_lbl.setText(
-            f"Frame {done}/{total} — ETA {_format_duration(eta_seconds)}"
-        )
+        self._status_lbl.setText(f"Frame {done}/{total} — ETA {_format_duration(eta_seconds)}")
 
     def set_status(self, text: str) -> None:
         self._status_lbl.setText(text)

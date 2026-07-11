@@ -159,8 +159,9 @@ class StellariumServer:
                 msg = decode_goto(frame)
                 if msg is None or self._on_goto is None:
                     continue
-                logger.info("Goto from Stellarium: ra=%.4fh dec=%+.4f°",
-                            msg.ra_hours, msg.dec_degrees)
+                logger.info(
+                    "Goto from Stellarium: ra=%.4fh dec=%+.4f°", msg.ra_hours, msg.dec_degrees
+                )
                 try:
                     self._on_goto(msg.ra_hours, msg.dec_degrees)
                 except Exception as exc:

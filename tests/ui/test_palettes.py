@@ -20,10 +20,10 @@ import pytest
 from argos.ui.palettes import EQUILUX, NIGHT_RED, PALETTES, Palette
 from argos.ui import theme
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _all_color_fields(palette: Palette) -> list[tuple[str, str]]:
     """Return (field_name, value) for every str field whose name is not a font."""
@@ -45,13 +45,14 @@ def _parse_hex(color: str) -> tuple[int, int, int]:
 # Test 1 — all palettes are complete
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("palette", list(PALETTES.values()))
 def test_palette_complete(palette: Palette) -> None:
     """Every color field must be a non-empty string."""
     for field_name, value in _all_color_fields(palette):
-        assert isinstance(value, str) and value.strip(), (
-            f"Palette '{palette.name}' field '{field_name}' is empty or not a string"
-        )
+        assert (
+            isinstance(value, str) and value.strip()
+        ), f"Palette '{palette.name}' field '{field_name}' is empty or not a string"
     # Font stacks must also be non-empty
     assert palette.font_ui.strip(), f"Palette '{palette.name}' font_ui is empty"
     assert palette.font_mono.strip(), f"Palette '{palette.name}' font_mono is empty"
@@ -62,35 +63,37 @@ def test_palette_complete(palette: Palette) -> None:
 # ---------------------------------------------------------------------------
 
 _HISTORICAL = {
-    "bg":          "#2d2d2d",
-    "bg2":         "#1f1f1f",
-    "surface":     "#3c3c3c",
-    "border":      "#484848",
+    "bg": "#2d2d2d",
+    "bg2": "#1f1f1f",
+    "surface": "#3c3c3c",
+    "border": "#484848",
     "border_soft": "#3a3a3a",
-    "fg":          "#dedede",
-    "fg_muted":    "#9a9a9a",
+    "fg": "#dedede",
+    "fg_muted": "#9a9a9a",
     "fg_disabled": "#5a5a5a",
-    "accent":      "#5294e2",
-    "accent_hover":"#6aa3ea",
+    "accent": "#5294e2",
+    "accent_hover": "#6aa3ea",
     "accent_deep": "#3a7bd5",
-    "cyan":        "#4eb3c9",
-    "success":     "#7ab648",
-    "warning":     "#c89030",
-    "danger":      "#d45c6e",
-    "variable":    "#c678dd",
+    "cyan": "#4eb3c9",
+    "success": "#7ab648",
+    "warning": "#c89030",
+    "danger": "#d45c6e",
+    "variable": "#c678dd",
 }
+
 
 @pytest.mark.parametrize("field,expected", list(_HISTORICAL.items()))
 def test_equilux_matches_historical(field: str, expected: str) -> None:
     actual = getattr(EQUILUX, field)
-    assert actual.lower() == expected.lower(), (
-        f"EQUILUX.{field}: expected {expected!r}, got {actual!r}"
-    )
+    assert (
+        actual.lower() == expected.lower()
+    ), f"EQUILUX.{field}: expected {expected!r}, got {actual!r}"
 
 
 # ---------------------------------------------------------------------------
 # Test 3 — Night (Red) has no green-dominant or blue-dominant colours
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("field_name,value", _all_color_fields(NIGHT_RED))
 def test_night_palette_no_green_blue_dominant(field_name: str, value: str) -> None:
@@ -105,6 +108,7 @@ def test_night_palette_no_green_blue_dominant(field_name: str, value: str) -> No
 # ---------------------------------------------------------------------------
 # Test 4 — apply_palette() rebinds module-level constants
 # ---------------------------------------------------------------------------
+
 
 def test_apply_palette_rebinds_constants() -> None:
     from argos.ui.palettes import CHARCOAL
@@ -129,6 +133,7 @@ def test_apply_palette_rebinds_constants() -> None:
 # ---------------------------------------------------------------------------
 # Test 5 — get_stylesheet() reflects the applied palette
 # ---------------------------------------------------------------------------
+
 
 def test_get_stylesheet_reflects_palette() -> None:
     from argos.ui.palettes import HIGH_CONTRAST

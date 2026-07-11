@@ -34,16 +34,13 @@ def julian_date(dt: datetime) -> float:
     a = (14 - dt.month) // 12
     y = dt.year + 4800 - a
     m = dt.month + 12 * a - 3
-    jdn = (
-        dt.day
-        + (153 * m + 2) // 5
-        + 365 * y
-        + y // 4
-        - y // 100
-        + y // 400
-        - 32045
+    jdn = dt.day + (153 * m + 2) // 5 + 365 * y + y // 4 - y // 100 + y // 400 - 32045
+    frac = (
+        (dt.hour - 12) / 24.0
+        + dt.minute / 1440.0
+        + dt.second / 86400.0
+        + dt.microsecond / 86_400_000_000.0
     )
-    frac = (dt.hour - 12) / 24.0 + dt.minute / 1440.0 + dt.second / 86400.0 + dt.microsecond / 86_400_000_000.0
     return jdn + frac
 
 

@@ -160,17 +160,17 @@ NIGHT_RED = Palette(
     surface="#280a0a",
     border="#3d1010",
     border_soft="#2a0808",
-    fg="#c08080",          # desaturated warm red — readable but dim
-    fg_muted="#7a4040",    # secondary: noticeably dimmer
+    fg="#c08080",  # desaturated warm red — readable but dim
+    fg_muted="#7a4040",  # secondary: noticeably dimmer
     fg_disabled="#3d2020",
-    accent="#e03030",      # bright red — primary action / focus
+    accent="#e03030",  # bright red — primary action / focus
     accent_hover="#f04040",
     accent_deep="#b82020",
-    cyan="#c45050",        # "info" tint — warm mid-red, no blue component
-    success="#882828",     # dim red — "connected / OK" (lowest brightness)
-    warning="#c44040",     # mid-bright red — caution
-    danger="#ff5050",      # maximum brightness — error / alarm
-    variable="#a03838",    # VSX markers — mid-dark red variant
+    cyan="#c45050",  # "info" tint — warm mid-red, no blue component
+    success="#882828",  # dim red — "connected / OK" (lowest brightness)
+    warning="#c44040",  # mid-bright red — caution
+    danger="#ff5050",  # maximum brightness — error / alarm
+    variable="#a03838",  # VSX markers — mid-dark red variant
     font_ui='"SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif',
     font_mono='"SF Mono", "Menlo", "JetBrains Mono", "Consolas", monospace',
 )
@@ -180,6 +180,4 @@ NIGHT_RED = Palette(
 # ---------------------------------------------------------------------------
 
 #: All available preset palettes, in display order.
-PALETTES: dict[str, Palette] = {
-    p.name: p for p in (EQUILUX, CHARCOAL, HIGH_CONTRAST, NIGHT_RED)
-}
+PALETTES: dict[str, Palette] = {p.name: p for p in (EQUILUX, CHARCOAL, HIGH_CONTRAST, NIGHT_RED)}

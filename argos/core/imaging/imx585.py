@@ -29,19 +29,19 @@ logger = logging.getLogger(__name__)
 
 
 # Sensor-intrinsic constants (datasheet)
-FULL_WELL_E      = 38_000     # electrons at saturation (low-gain mode)
-HCG_THRESHOLD    = 252        # gain setting at which HCG mode engages
-PIXEL_SIZE_UM    = 2.9
-SENSOR_NAME      = "IMX585"
+FULL_WELL_E = 38_000  # electrons at saturation (low-gain mode)
+HCG_THRESHOLD = 252  # gain setting at which HCG mode engages
+PIXEL_SIZE_UM = 2.9
+SENSOR_NAME = "IMX585"
 
 
 # Reference points: (gain_setting, EGAIN [e-/ADU], read_noise [e-]).
 # Derived from ZWO ASI585MC published characterisation; piecewise log-linear
 # fit between anchors. Validated against forum bias-frame measurements.
 _ANCHORS: list[tuple[int, float, float]] = [
-    (0,   3.00, 3.60),
+    (0, 3.00, 3.60),
     (100, 1.50, 2.60),
-    (252, 0.55, 1.05),   # HCG mode kicks in
+    (252, 0.55, 1.05),  # HCG mode kicks in
     (300, 0.40, 0.95),
     (400, 0.18, 0.92),
     (500, 0.07, 0.90),
@@ -90,6 +90,7 @@ def full_well_capacity(gain_setting: int) -> int:
 # --------------------------------------------------------------------------- #
 # Internals                                                                    #
 # --------------------------------------------------------------------------- #
+
 
 def _clamp_gain(g: int) -> int:
     return max(_ANCHORS[0][0], min(_ANCHORS[-1][0], int(g)))

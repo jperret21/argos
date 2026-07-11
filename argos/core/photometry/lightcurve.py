@@ -141,8 +141,9 @@ def _opt_float(value) -> float | None:
         return None
 
 
-def write_aavso(path, curves, *, obscode: str = "XXX", filt: str = "TG",
-                software: str = "Argos") -> None:
+def write_aavso(
+    path, curves, *, obscode: str = "XXX", filt: str = "TG", software: str = "Argos"
+) -> None:
     """Write one or more :class:`LightCurve` to an AAVSO Extended File.
 
     A *preview* export — DATE is the JD_UTC midpoint, MTYPE=STD, comparison is the

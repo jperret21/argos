@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_SETTLE_S    = 1.0   # seconds to wait after focuser stops moving
+_SETTLE_S = 1.0  # seconds to wait after focuser stops moving
 _POLL_INTERVAL_MS = 300
 
 
@@ -54,10 +54,10 @@ class AutofocusWorker(QThread):
                     starting position is sampled). Default 9.
     """
 
-    step_done      = pyqtSignal(int, int, int, object)   # step, total, pos, hfd|None
-    best_found     = pyqtSignal(int, object)             # position, hfd|None
+    step_done = pyqtSignal(int, int, int, object)  # step, total, pos, hfd|None
+    best_found = pyqtSignal(int, object)  # position, hfd|None
     error_occurred = pyqtSignal(str)
-    finished       = pyqtSignal()
+    finished = pyqtSignal()
 
     def __init__(
         self,
@@ -70,13 +70,13 @@ class AutofocusWorker(QThread):
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self._focuser    = focuser
-        self._camera     = camera
-        self._exposure   = exposure_s
-        self._gain       = gain
+        self._focuser = focuser
+        self._camera = camera
+        self._exposure = exposure_s
+        self._gain = gain
         self._half_range = half_range
-        self._num_steps  = max(3, num_steps)
-        self._stop_flag  = False
+        self._num_steps = max(3, num_steps)
+        self._stop_flag = False
 
     def stop(self) -> None:
         self._stop_flag = True
@@ -96,7 +96,7 @@ class AutofocusWorker(QThread):
 
     def _run(self) -> None:
         start_pos = self._focuser.get_position()
-        low  = max(0, start_pos - self._half_range)
+        low = max(0, start_pos - self._half_range)
         high = min(self._focuser.max_step, start_pos + self._half_range)
 
         positions = np.linspace(low, high, self._num_steps, dtype=int)

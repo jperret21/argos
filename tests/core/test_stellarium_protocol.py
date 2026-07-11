@@ -16,10 +16,10 @@ from argos.core.stellarium.protocol import (
     find_next_message,
 )
 
-
 # --------------------------------------------------------------------------- #
 # Helpers                                                                      #
 # --------------------------------------------------------------------------- #
+
 
 def _build_goto(ra_hours: float, dec_degrees: float, ts: int = 1700000000_000000) -> bytes:
     """Re-implement the client-side packing so the test is independent of the
@@ -36,6 +36,7 @@ def _build_goto(ra_hours: float, dec_degrees: float, ts: int = 1700000000_000000
 # --------------------------------------------------------------------------- #
 # decode_goto                                                                  #
 # --------------------------------------------------------------------------- #
+
 
 @pytest.mark.parametrize(
     "ra,dec",
@@ -70,6 +71,7 @@ def test_decode_goto_rejects_wrong_type() -> None:
 # encode_position                                                              #
 # --------------------------------------------------------------------------- #
 
+
 def test_encode_position_has_expected_size_and_type() -> None:
     pkt = encode_position(5.59, -5.39, status=0)
     assert len(pkt) == _POS_SIZE  # 24 bytes
@@ -95,6 +97,7 @@ def test_encode_position_roundtrip_via_decoding() -> None:
 # --------------------------------------------------------------------------- #
 # Streaming / framing                                                          #
 # --------------------------------------------------------------------------- #
+
 
 def test_find_next_message_returns_zero_on_incomplete_buffer() -> None:
     assert find_next_message(b"") == 0

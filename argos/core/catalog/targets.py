@@ -90,12 +90,18 @@ class TargetSet:
         }
 
     def to_dict(self) -> dict:
-        return {"schema": SCHEMA, "object": self.object_name, "stars": [asdict(s) for s in self.stars]}
+        return {
+            "schema": SCHEMA,
+            "object": self.object_name,
+            "stars": [asdict(s) for s in self.stars],
+        }
 
     @classmethod
     def from_dict(cls, d: dict) -> "TargetSet":
         valid = {f.name for f in fields(TargetStar)}
-        stars = [TargetStar(**{k: v for k, v in s.items() if k in valid}) for s in d.get("stars", [])]
+        stars = [
+            TargetStar(**{k: v for k, v in s.items() if k in valid}) for s in d.get("stars", [])
+        ]
         return cls(object_name=str(d.get("object", "")), stars=stars)
 
     def save(self, path) -> None:

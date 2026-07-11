@@ -163,9 +163,7 @@ class AstrometryController(QObject):
         live: bool,
     ) -> None:
         green = extract_plane(raw, VIEW_G)
-        settings = build_solve_settings(
-            self._cfg, green_shape, live=live, mount_radec=mount_radec
-        )
+        settings = build_solve_settings(self._cfg, green_shape, live=live, mount_radec=mount_radec)
         self._green_shape = green_shape
         self._pending_target = target_radec
         self._last_solve_monotonic = time.monotonic()

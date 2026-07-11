@@ -57,8 +57,8 @@ class CameraState(Enum):
     """Who owns the camera right now."""
 
     IDLE = "idle"
-    LIVE = "live"          # user-requested continuous preview loop
-    SINGLE = "single"      # transient Take-shot preview loop (saves N frames)
+    LIVE = "live"  # user-requested continuous preview loop
+    SINGLE = "single"  # transient Take-shot preview loop (saves N frames)
     SEQUENCE = "sequence"  # SequenceWorker runs the plan
     AUTOFOCUS = "autofocus"  # AutofocusWorker sweeps the focuser
 
@@ -108,9 +108,7 @@ class CameraService(QObject):
     # Wiring
     # ------------------------------------------------------------------
 
-    def set_preview_hooks(
-        self, start: Callable[[], None], stop: Callable[[], None]
-    ) -> None:
+    def set_preview_hooks(self, start: Callable[[], None], stop: Callable[[], None]) -> None:
         """Register how to start/stop the LivePreviewWorker.
 
         The service centralises when the preview loop runs (grant of
@@ -175,9 +173,7 @@ class CameraService(QObject):
         SEQUENCE. Returns False (with a refusal reason) otherwise.
         """
         if self._state is not CameraState.SEQUENCE:
-            self.acquire_refused.emit(
-                "Autofocus handshake refused — no sequence owns the camera."
-            )
+            self.acquire_refused.emit("Autofocus handshake refused — no sequence owns the camera.")
             return False
         self._resume_to = CameraState.SEQUENCE
         self._set_state(CameraState.AUTOFOCUS)

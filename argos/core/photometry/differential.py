@@ -31,9 +31,7 @@ def ensemble_zero_point(
     ``zp = mean(cat − inst)``; ``zp_rms`` is the sample RMS about it (0 for a
     single comp). Pairs with a missing magnitude are skipped.
     """
-    diffs = [
-        cat - inst for inst, cat in comps if inst is not None and cat is not None
-    ]
+    diffs = [cat - inst for inst, cat in comps if inst is not None and cat is not None]
     n = len(diffs)
     if n == 0:
         return None, None, 0

@@ -48,8 +48,14 @@ class MetricsPanel(QWidget):
         self._plot.setBackground(theme.BG2)
         self._plot.setLabel("bottom", "elapsed (s)")
         self._plot.showGrid(x=True, y=True, alpha=0.2)
-        self._curve = self._plot.plot([], [], pen=pg.mkPen(theme.SUCCESS, width=2),
-                                      symbol="o", symbolSize=4, symbolBrush=theme.SUCCESS)
+        self._curve = self._plot.plot(
+            [],
+            [],
+            pen=pg.mkPen(theme.SUCCESS, width=2),
+            symbol="o",
+            symbolSize=4,
+            symbolBrush=theme.SUCCESS,
+        )
         layout.addWidget(self._plot)
         self._data: dict[str, tuple[list, list]] = {}
 

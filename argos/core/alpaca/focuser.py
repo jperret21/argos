@@ -40,10 +40,10 @@ class Focuser:
         self._focuser = _AlpacaFocuser(f"{host}:{port}", device_index)
         self._connected = False
         # Cached capability flags filled by ``connect()``.
-        self.max_step:       int  = 100_000
-        self.max_increment:  int  = 1_000
-        self.step_size_um:   float | None = None
-        self.absolute:       bool = True
+        self.max_step: int = 100_000
+        self.max_increment: int = 1_000
+        self.step_size_um: float | None = None
+        self.absolute: bool = True
         self.tempcomp_available: bool = False
 
     # ------------------------------------------------------------------
@@ -59,10 +59,10 @@ class Focuser:
         self._connected = True
 
         for attr, name in (
-            ("MaxStep",      "max_step"),
+            ("MaxStep", "max_step"),
             ("MaxIncrement", "max_increment"),
-            ("StepSize",     "step_size_um"),
-            ("Absolute",     "absolute"),
+            ("StepSize", "step_size_um"),
+            ("Absolute", "absolute"),
             ("TempCompAvailable", "tempcomp_available"),
         ):
             try:
@@ -77,7 +77,10 @@ class Focuser:
             display = "Focuser"
         logger.info(
             "Focuser connected: %s  MaxStep=%s  MaxIncrement=%s  Absolute=%s",
-            display, self.max_step, self.max_increment, self.absolute,
+            display,
+            self.max_step,
+            self.max_increment,
+            self.absolute,
         )
         return display
 

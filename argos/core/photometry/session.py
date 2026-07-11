@@ -55,8 +55,15 @@ def measure_targets(
     for s in target_set.stars:
         x, y = wcs.world_to_pixel_deg(s.ra_deg, s.dec_deg)
         phot = measure_aperture(
-            green, float(x), float(y), r_ap, r_in, r_out,
-            egain=egain, read_noise_e=read_noise_e, sat_adu=sat_adu,
+            green,
+            float(x),
+            float(y),
+            r_ap,
+            r_in,
+            r_out,
+            egain=egain,
+            read_noise_e=read_noise_e,
+            sat_adu=sat_adu,
         )
         measured.append((s, phot))
 

@@ -57,9 +57,9 @@ _RAD_TO_INT = 0x80000000 / math.pi
 class GotoMessage:
     """A Stellarium "go to this RA/Dec" command in J2000."""
 
-    ra_hours: float        # decimal hours, 0 <= ra < 24
-    dec_degrees: float     # decimal degrees, -90 <= dec <= +90
-    sent_time_us: int      # microseconds since epoch (informational only)
+    ra_hours: float  # decimal hours, 0 <= ra < 24
+    dec_degrees: float  # decimal degrees, -90 <= dec <= +90
+    sent_time_us: int  # microseconds since epoch (informational only)
 
 
 def encode_position(
@@ -111,6 +111,7 @@ def find_next_message(buf: bytes) -> int:
 # --------------------------------------------------------------------------- #
 # Coord packing                                                                #
 # --------------------------------------------------------------------------- #
+
 
 def _radec_to_int(ra_hours: float, dec_degrees: float) -> tuple[int, int]:
     """Pack J2000 RA hours / Dec degrees into Stellarium wire integers."""

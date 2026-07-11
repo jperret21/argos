@@ -66,11 +66,13 @@ def _write_fits(path, raw, date_obs):
 
 @pytest.fixture
 def _scene(tmp_path):
-    wcs = _FakeWCS({
-        (1.0, 1.0): (30.0, 30.0),  # target
-        (2.0, 2.0): (10.0, 10.0),  # comp 1
-        (3.0, 3.0): (50.0, 50.0),  # comp 2
-    })
+    wcs = _FakeWCS(
+        {
+            (1.0, 1.0): (30.0, 30.0),  # target
+            (2.0, 2.0): (10.0, 10.0),  # comp 1
+            (3.0, 3.0): (50.0, 50.0),  # comp 2
+        }
+    )
     ts = TargetSet(object_name="TST Tau")
     ts.set_role(TargetStar(role=ROLE_TARGET, ra_deg=1.0, dec_deg=1.0, auid="T"))
     ts.set_role(
@@ -89,8 +91,12 @@ def _scene(tmp_path):
     out_dir = tmp_path / "targets"
     params = PhotometryParams.from_config(lambda k, d: d)  # all config defaults
     req = BatchRequest(
-        fits_paths=paths, wcs=wcs, target_set=ts, params=params,
-        out_dir=out_dir, object_name="TST Tau",
+        fits_paths=paths,
+        wcs=wcs,
+        target_set=ts,
+        params=params,
+        out_dir=out_dir,
+        object_name="TST Tau",
     )
     return req, out_dir
 

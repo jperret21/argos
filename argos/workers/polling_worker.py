@@ -38,7 +38,7 @@ class MountPollingWorker(QThread):
         connection_lost: Emitted when the device becomes unreachable.
     """
 
-    position_updated = pyqtSignal(object)   # MountPosition
+    position_updated = pyqtSignal(object)  # MountPosition
     error_occurred = pyqtSignal(str)
     connection_lost = pyqtSignal()
 

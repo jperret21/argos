@@ -53,7 +53,8 @@ class FilterWheel:
             pos = self.get_position()
             logger.info(
                 "FilterWheel connected  current position=%d (%s)",
-                pos, POSITION_NAMES.get(pos, "?"),
+                pos,
+                POSITION_NAMES.get(pos, "?"),
             )
         except AlpacaError:
             raise
@@ -103,7 +104,8 @@ class FilterWheel:
         try:
             logger.info(
                 "FilterWheel moving to position %d (%s)",
-                position, POSITION_NAMES[position],
+                position,
+                POSITION_NAMES[position],
             )
             self._fw.Position = position
         except Exception as exc:

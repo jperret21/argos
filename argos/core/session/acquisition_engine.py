@@ -622,11 +622,7 @@ class AcquisitionEngine(QObject):
         # Auto-solve policy (no-op unless armed + due): re-solve the live frame
         # so the WCS grid tracks the sequence instead of going stale. Half-
         # quality previews are skipped — their plate scale would poison the solve.
-        if (
-            self._last_raw is not None
-            and green_shape is not None
-            and not self._last_raw_decimated
-        ):
+        if self._last_raw is not None and green_shape is not None and not self._last_raw_decimated:
             self._astrometry.on_new_frame(
                 self._last_raw, green_shape, self._mount_radec(), self._session.target_radec
             )
@@ -772,8 +768,8 @@ class AcquisitionEngine(QObject):
         return 1.0
 
     def _photometry_csv_path(self, star) -> Path:
-        obj = (self.target_set().object_name or "untitled")
-        tag = (star.auid or star.display_name)
+        obj = self.target_set().object_name or "untitled"
+        tag = star.auid or star.display_name
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in f"{obj}_{tag}")
         return self._sessions_base() / "targets" / f"{safe or 'photometry'}.csv"
 
@@ -803,9 +799,15 @@ class AcquisitionEngine(QObject):
                 else None
             )
             point = LcPoint(
-                jd_utc=jd, mag=res.diff.mag, mag_err=res.diff.mag_err or 0.0, bjd_tdb=bjd,
-                airmass=air, fwhm=fwhm, sky_adu=res.phot.sky_adu if res.phot else None,
-                comps_used=res.diff.comps_used, saturated=bool(res.phot and res.phot.saturated),
+                jd_utc=jd,
+                mag=res.diff.mag,
+                mag_err=res.diff.mag_err or 0.0,
+                bjd_tdb=bjd,
+                airmass=air,
+                fwhm=fwhm,
+                sky_adu=res.phot.sky_adu if res.phot else None,
+                comps_used=res.diff.comps_used,
+                saturated=bool(res.phot and res.phot.saturated),
             )
             key = res.star.auid or res.star.display_name
             lc = self._lightcurves.setdefault(
@@ -947,8 +949,11 @@ class AcquisitionEngine(QObject):
                 return
             remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
             if not worker.wait(remaining_ms):
-                logger.warning("Shutdown: %s missed the %.0fs budget — abandoned",
-                               label, self._SHUTDOWN_BUDGET_S)
+                logger.warning(
+                    "Shutdown: %s missed the %.0fs budget — abandoned",
+                    label,
+                    self._SHUTDOWN_BUDGET_S,
+                )
 
         _join(self._sequence, "sequence worker")
         self._sequence = None

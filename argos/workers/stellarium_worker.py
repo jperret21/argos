@@ -37,11 +37,11 @@ class StellariumWorker(QThread):
             The asyncio server raised — typically port-in-use on bind.
     """
 
-    target_received      = pyqtSignal(float, float)
+    target_received = pyqtSignal(float, float)
     client_count_changed = pyqtSignal(int)
-    server_started       = pyqtSignal()
-    server_stopped       = pyqtSignal()
-    error_occurred       = pyqtSignal(str)
+    server_started = pyqtSignal()
+    server_stopped = pyqtSignal()
+    error_occurred = pyqtSignal(str)
 
     def __init__(self, host: str = "127.0.0.1", port: int = 10001) -> None:
         super().__init__()

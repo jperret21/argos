@@ -445,8 +445,11 @@ def wcs_grid(
         d += dec_step
     a = math.ceil(ra_min / ra_step) * ra_step
     while a <= ra_max + 1e-9:  # iso-RA lines (constant RA, varying Dec)
-        _line(np.full(samples, a), np.linspace(dec_min, dec_max, samples),
-              format_ra_hms((a % 360.0) / 15.0))
+        _line(
+            np.full(samples, a),
+            np.linspace(dec_min, dec_max, samples),
+            format_ra_hms((a % 360.0) / 15.0),
+        )
         a += ra_step
 
     cx, cy = wcs.world_to_pixel_deg(wcs.crval1, wcs.crval2)

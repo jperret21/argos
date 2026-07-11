@@ -54,9 +54,7 @@ def test_build_solve_settings_live_small_radius_no_blind() -> None:
 
 
 def test_build_solve_settings_static_thorough() -> None:
-    s = build_solve_settings(
-        _cfg({"astrometry.search_radius_deg": 30}), (600, 800), live=False
-    )
+    s = build_solve_settings(_cfg({"astrometry.search_radius_deg": 30}), (600, 800), live=False)
     assert s.search_radius_deg == 30
     assert s.timeout_s == 120.0
     assert s.allow_blind_retry is True
@@ -64,9 +62,7 @@ def test_build_solve_settings_static_thorough() -> None:
 
 
 def test_build_solve_settings_no_scale_hint() -> None:
-    s = build_solve_settings(
-        _cfg({"astrometry.use_scale_hint": False}), (600, 800), live=False
-    )
+    s = build_solve_settings(_cfg({"astrometry.use_scale_hint": False}), (600, 800), live=False)
     assert s.fov_hint_deg is None
 
 

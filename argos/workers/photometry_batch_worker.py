@@ -102,8 +102,14 @@ class PhotometryBatchWorker(QThread):
                     if res.diff is None or res.diff.mag is None:
                         continue
                     bjd = (
-                        bjd_tdb(jd, res.star.ra_deg, res.star.dec_deg,
-                                float(lat), float(lon), float(elev))
+                        bjd_tdb(
+                            jd,
+                            res.star.ra_deg,
+                            res.star.dec_deg,
+                            float(lat),
+                            float(lon),
+                            float(elev),
+                        )
                         if jd is not None and lat is not None and lon is not None
                         else None
                     )
@@ -125,8 +131,12 @@ class PhotometryBatchWorker(QThread):
                     lc.append(pt)
                     self.point.emit(
                         PhotometryPoint(
-                            key=key, name=res.star.display_name, jd=pt.jd_utc,
-                            mag=pt.mag, mag_err=pt.mag_err, saturated=pt.saturated,
+                            key=key,
+                            name=res.star.display_name,
+                            jd=pt.jd_utc,
+                            mag=pt.mag,
+                            mag_err=pt.mag_err,
+                            saturated=pt.saturated,
                         )
                     )
                 done += 1
@@ -168,8 +178,7 @@ class PhotometryBatchWorker(QThread):
         for lc in curves.values():
             tag = lc.auid or lc.name or "photometry"
             safe = "".join(
-                c if c.isalnum() or c in "-_" else "_"
-                for c in f"{self._req.object_name}_{tag}"
+                c if c.isalnum() or c in "-_" else "_" for c in f"{self._req.object_name}_{tag}"
             )
             try:
                 lc.to_csv(self._req.out_dir / f"{safe or 'photometry'}.csv")

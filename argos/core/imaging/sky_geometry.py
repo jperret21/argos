@@ -28,7 +28,7 @@ def compute_airmass(altitude_deg: float) -> Optional[float]:
     if altitude_deg <= 0:
         return None
     # Pickering 2002, "The Southern Limits of the Ancient Star Catalog"
-    denom = math.sin(math.radians(altitude_deg + 244.0 / (165.0 + 47.0 * altitude_deg ** 1.1)))
+    denom = math.sin(math.radians(altitude_deg + 244.0 / (165.0 + 47.0 * altitude_deg**1.1)))
     if denom <= 0:
         return None
     return round(1.0 / denom, 4)

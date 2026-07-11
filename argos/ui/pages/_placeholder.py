@@ -23,16 +23,11 @@ class PlaceholderPage(QWidget):
         head = QLabel(title.upper())
         head.setAlignment(Qt.AlignmentFlag.AlignCenter)
         head.setStyleSheet(
-            f"color:{theme.ACCENT}; font-size:24px; font-weight:bold;"
-            f" background:transparent;"
+            f"color:{theme.ACCENT}; font-size:24px; font-weight:bold;" f" background:transparent;"
         )
         layout.addWidget(head)
 
-        sub = QLabel(
-            f"Coming in sprint {sprint_name}." if sprint_name else "Coming soon."
-        )
+        sub = QLabel(f"Coming in sprint {sprint_name}." if sprint_name else "Coming soon.")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sub.setStyleSheet(
-            f"color:{theme.FG_MUTED}; font-size:12px; background:transparent;"
-        )
+        sub.setStyleSheet(f"color:{theme.FG_MUTED}; font-size:12px; background:transparent;")
         layout.addWidget(sub)

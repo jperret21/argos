@@ -36,9 +36,9 @@ logger = logging.getLogger(__name__)
 
 # Jog speed levels in deg/s
 SPEEDS: dict[str, float] = {
-    "Slow":   0.5,
+    "Slow": 0.5,
     "Normal": 2.0,
-    "Fast":   5.0,
+    "Fast": 5.0,
 }
 
 # Axis/rate for each direction
@@ -46,10 +46,10 @@ SPEEDS: dict[str, float] = {
 # Positive rate on axis 1 → altitude increases → North
 # Positive rate on axis 0 → azimuth increases → East
 _DIRECTIONS: dict[str, tuple[int, float]] = {
-    "North": (1,  1.0),
+    "North": (1, 1.0),
     "South": (1, -1.0),
-    "East":  (0,  1.0),
-    "West":  (0, -1.0),
+    "East": (0, 1.0),
+    "West": (0, -1.0),
 }
 
 
@@ -185,9 +185,9 @@ class ManualControlDialog(QDialog):
         if event.isAutoRepeat():
             return
         mapping = {
-            Qt.Key.Key_Up:    "North",
-            Qt.Key.Key_Down:  "South",
-            Qt.Key.Key_Left:  "West",
+            Qt.Key.Key_Up: "North",
+            Qt.Key.Key_Down: "South",
+            Qt.Key.Key_Left: "West",
             Qt.Key.Key_Right: "East",
         }
         direction = mapping.get(event.key())
@@ -199,8 +199,7 @@ class ManualControlDialog(QDialog):
     def keyReleaseEvent(self, event) -> None:
         if event.isAutoRepeat():
             return
-        if event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down,
-                            Qt.Key.Key_Left, Qt.Key.Key_Right):
+        if event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_Left, Qt.Key.Key_Right):
             self._stop()
         else:
             super().keyReleaseEvent(event)

@@ -252,8 +252,11 @@ class SequenceWorker(QThread):
             self._interruptible_sleep(_DITHER_PULSE_S)
             self._telescope.move_axis(0, 0.0)
             self._telescope.move_axis(1, 0.0)
-            logger.info("Dither: ±%.0f″ nudge, settling %.0fs",
-                        _DITHER_RATE_DEG_S * _DITHER_PULSE_S * 3600, _DITHER_SETTLE_S)
+            logger.info(
+                "Dither: ±%.0f″ nudge, settling %.0fs",
+                _DITHER_RATE_DEG_S * _DITHER_PULSE_S * 3600,
+                _DITHER_SETTLE_S,
+            )
             self._interruptible_sleep(_DITHER_SETTLE_S)
         except Exception:  # pragma: no cover - best effort, never abort the run
             logger.warning("Dither move failed — continuing without", exc_info=True)

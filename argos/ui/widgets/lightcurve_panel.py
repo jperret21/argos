@@ -35,13 +35,21 @@ class LightCurvePanel(QWidget):
         layout.addWidget(self._plot)
         self._series: dict[str, dict] = {}
 
-    def add_point(self, name: str, jd: float, mag: float, err: float, saturated: bool = False) -> None:
+    def add_point(
+        self, name: str, jd: float, mag: float, err: float, saturated: bool = False
+    ) -> None:
         s = self._series.get(name)
         if s is None:
             color = _PALETTE[len(self._series) % len(_PALETTE)]
             curve = self._plot.plot(
-                [], [], pen=None, symbol="o", symbolSize=6, symbolBrush=color,
-                symbolPen=color, name=name,
+                [],
+                [],
+                pen=None,
+                symbol="o",
+                symbolSize=6,
+                symbolBrush=color,
+                symbolPen=color,
+                name=name,
             )
             errbar = pg.ErrorBarItem(
                 x=np.array([]), y=np.array([]), pen=pg.mkPen(color, width=1), beam=0.0
@@ -49,12 +57,24 @@ class LightCurvePanel(QWidget):
             self._plot.addItem(errbar)
             # Saturated overlay: red ×, drawn on top so a bad sub stands out.
             sat = self._plot.plot(
-                [], [], pen=None, symbol="x", symbolSize=11,
-                symbolBrush=theme.DANGER, symbolPen=pg.mkPen(theme.DANGER, width=2),
+                [],
+                [],
+                pen=None,
+                symbol="x",
+                symbolSize=11,
+                symbolBrush=theme.DANGER,
+                symbolPen=pg.mkPen(theme.DANGER, width=2),
             )
             s = {
-                "jd": [], "mag": [], "err": [], "sat_jd": [], "sat_mag": [],
-                "color": color, "curve": curve, "errbar": errbar, "sat": sat,
+                "jd": [],
+                "mag": [],
+                "err": [],
+                "sat_jd": [],
+                "sat_mag": [],
+                "color": color,
+                "curve": curve,
+                "errbar": errbar,
+                "sat": sat,
             }
             self._series[name] = s
         s["jd"].append(float(jd))

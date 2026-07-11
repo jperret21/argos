@@ -40,10 +40,12 @@ class LivePreviewWorker(QThread):
             dark/bias frames — so single-shot darks are honest.
     """
 
-    frame_ready    = pyqtSignal(object, object, object, object)  # (preview_arr, full_arr, start_dt, end_dt)
+    frame_ready = pyqtSignal(
+        object, object, object, object
+    )  # (preview_arr, full_arr, start_dt, end_dt)
     status_updated = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
-    finished       = pyqtSignal()
+    finished = pyqtSignal()
 
     def __init__(
         self,
@@ -54,12 +56,12 @@ class LivePreviewWorker(QThread):
         light: bool = True,
     ) -> None:
         super().__init__()
-        self._camera        = camera
-        self._exposure      = exposure
-        self._gain          = gain
+        self._camera = camera
+        self._exposure = exposure
+        self._gain = gain
         self._preview_scale = max(1, preview_scale)
-        self._light         = light
-        self._running       = False
+        self._light = light
+        self._running = False
 
     def update_settings(
         self, exposure: float, gain: int, scale: int = 0, light: bool | None = None
@@ -74,8 +76,11 @@ class LivePreviewWorker(QThread):
                       False = dark/bias). None = keep current.
         """
         if exposure < 0.001:
-            logger.warning("Ignoring suspiciously low exposure value: %.4f s — keeping %.4f s",
-                           exposure, self._exposure)
+            logger.warning(
+                "Ignoring suspiciously low exposure value: %.4f s — keeping %.4f s",
+                exposure,
+                self._exposure,
+            )
         else:
             self._exposure = exposure
         self._gain = gain
@@ -132,7 +137,9 @@ class LivePreviewWorker(QThread):
                 preview_arr = full_arr[::s, ::s] if s > 1 else full_arr
                 logger.debug(
                     "Preview scale=%dx: full=%s preview=%s",
-                    s, full_arr.shape, preview_arr.shape,
+                    s,
+                    full_arr.shape,
+                    preview_arr.shape,
                 )
 
                 self.frame_ready.emit(preview_arr, full_arr, exposure_start, exposure_end)

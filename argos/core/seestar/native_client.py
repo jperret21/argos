@@ -41,25 +41,25 @@ logger = logging.getLogger(__name__)
 
 # Compass angles for the four cardinal directions.
 ANGLE_NORTH = 0
-ANGLE_EAST  = 90
+ANGLE_EAST = 90
 ANGLE_SOUTH = 180
-ANGLE_WEST  = 270
+ANGLE_WEST = 270
 
 # Speed presets based on seestar_alp documentation (speed=4000 = default normal move).
-SPEED_SLOW   = 1000
+SPEED_SLOW = 1000
 SPEED_NORMAL = 4000
-SPEED_FAST   = 8000
+SPEED_FAST = 8000
 
-NATIVE_PORT    = 4700
+NATIVE_PORT = 4700
 UDP_INTRO_PORT = 4720  # Port for the UDP scan_iscope handshake (guest mode unlock)
 
 # Firmware version thresholds for verify injection (from seestar_alp source).
 _VERIFY_MIN = 2582  # First firmware that requires verify in params
 _VERIFY_MAX = 2706  # First firmware where verify in dict params is rejected (SSL auth)
 
-_HEARTBEAT_INTERVAL = 10.0   # seconds between scope_get_equ_coord pings
-_RESPONSE_TIMEOUT   = 3.0    # seconds to wait for a command response
-_RESPONSE_POLL      = 0.05   # polling interval when waiting for response
+_HEARTBEAT_INTERVAL = 10.0  # seconds between scope_get_equ_coord pings
+_RESPONSE_TIMEOUT = 3.0  # seconds to wait for a command response
+_RESPONSE_POLL = 0.05  # polling interval when waiting for response
 
 
 class SeestarNativeError(Exception):
@@ -85,7 +85,7 @@ class SeestarNativeClient:
         self._port = port
         self._socket: socket.socket | None = None
         self._cmdid = 10000
-        self._lock = threading.Lock()          # protects socket + cmdid
+        self._lock = threading.Lock()  # protects socket + cmdid
         self._connected = False
         self._firmware_ver_int: int = 0
 
@@ -122,8 +122,13 @@ class SeestarNativeClient:
             self._connected = True
             logger.info("Native: connected to %s:%d", self._host, self._port)
         except OSError as exc:
-            logger.error("Native: connection failed to %s:%d — %s: %s",
-                         self._host, self._port, type(exc).__name__, exc)
+            logger.error(
+                "Native: connection failed to %s:%d — %s: %s",
+                self._host,
+                self._port,
+                type(exc).__name__,
+                exc,
+            )
             raise SeestarNativeError(f"Cannot connect to {self._host}:{self._port}: {exc}") from exc
 
         # Start background threads.
@@ -131,12 +136,16 @@ class SeestarNativeClient:
         self._response_dict.clear()
 
         self._reader_thread = threading.Thread(
-            target=self._reader_loop, name="seestar-reader", daemon=True,
+            target=self._reader_loop,
+            name="seestar-reader",
+            daemon=True,
         )
         self._reader_thread.start()
 
         self._heartbeat_thread = threading.Thread(
-            target=self._heartbeat_loop, name="seestar-heartbeat", daemon=True,
+            target=self._heartbeat_loop,
+            name="seestar-heartbeat",
+            daemon=True,
         )
         self._heartbeat_thread.start()
 
@@ -227,6 +236,7 @@ class SeestarNativeClient:
                 # Use select to wait for data without modifying socket timeout
                 # (avoids race with sendall in _send).
                 import select
+
                 ready, _, _ = select.select([sock], [], [], 1.0)
                 if not ready:
                     continue
@@ -247,7 +257,7 @@ class SeestarNativeClient:
             while True:
                 # Find the earliest line ending.
                 idx_crlf = buf.find(b"\r\n")
-                idx_lf   = buf.find(b"\n")
+                idx_lf = buf.find(b"\n")
                 if idx_crlf == -1 and idx_lf == -1:
                     break
                 if idx_crlf == -1:
@@ -261,7 +271,7 @@ class SeestarNativeClient:
                     end = idx + 1
 
                 line = buf[:idx]
-                buf  = buf[end:]
+                buf = buf[end:]
                 if not line:
                     continue
 
@@ -274,15 +284,21 @@ class SeestarNativeClient:
 
                 msg_id = msg.get("id")
                 if msg_id is None:
-                    logger.info("Native: unsolicited event: method=%s  full=%s",
-                                msg.get("method", "?"), msg)
+                    logger.info(
+                        "Native: unsolicited event: method=%s  full=%s", msg.get("method", "?"), msg
+                    )
                     continue
 
                 code = msg.get("code", 0)
                 method = msg.get("method", "?")
                 if code != 0:
-                    logger.warning("Native: device error id=%d method=%s code=%d full=%s",
-                                   msg_id, method, code, msg)
+                    logger.warning(
+                        "Native: device error id=%d method=%s code=%d full=%s",
+                        msg_id,
+                        method,
+                        code,
+                        msg,
+                    )
                 else:
                     logger.info("Native: response id=%d method=%s OK", msg_id, method)
 
@@ -367,7 +383,8 @@ class SeestarNativeClient:
                 self._firmware_ver_int = int(device.get("firmware_ver_int", 0))
                 logger.info(
                     "Native: firmware ver_int=%d  verify_needed=%s",
-                    self._firmware_ver_int, self._needs_verify(),
+                    self._firmware_ver_int,
+                    self._needs_verify(),
                 )
                 return
             time.sleep(0.1)
@@ -395,8 +412,7 @@ class SeestarNativeClient:
                 pass
             logger.debug("Native: UDP intro sent to %s:%d", self._host, UDP_INTRO_PORT)
         except OSError as exc:
-            logger.warning("Native: UDP intro failed (non-fatal): %s: %s",
-                           type(exc).__name__, exc)
+            logger.warning("Native: UDP intro failed (non-fatal): %s: %s", type(exc).__name__, exc)
         finally:
             if sock is not None:
                 try:
@@ -458,31 +474,44 @@ class SeestarNativeClient:
             cmd_id = self._cmdid
             self._cmdid += 1
             payload = json.dumps({"method": method, "params": params, "id": cmd_id}) + "\r\n"
-            logger.info("Native → [%d] %s  params=%s  firmware=%d",
-                        cmd_id, method, params, self._firmware_ver_int)
+            logger.info(
+                "Native → [%d] %s  params=%s  firmware=%d",
+                cmd_id,
+                method,
+                params,
+                self._firmware_ver_int,
+            )
             try:
                 self._socket.sendall(payload.encode("utf-8"))
             except OSError as exc:
                 logger.warning(
                     "Native: sendall failed (%s: %s) — reconnecting and retrying %s",
-                    type(exc).__name__, exc, method,
+                    type(exc).__name__,
+                    exc,
+                    method,
                 )
                 self._connected = False
                 self._socket = None
                 self._reconnect()
                 cmd_id = self._cmdid
                 self._cmdid += 1
-                payload = json.dumps({
-                    "method": method, "params": params, "id": cmd_id,
-                }) + "\r\n"
+                payload = (
+                    json.dumps(
+                        {
+                            "method": method,
+                            "params": params,
+                            "id": cmd_id,
+                        }
+                    )
+                    + "\r\n"
+                )
                 try:
                     self._socket.sendall(payload.encode("utf-8"))
                     logger.info("Native: retry [%d] sent for %s", cmd_id, method)
                 except OSError as exc2:
                     self._connected = False
                     self._socket = None
-                    logger.error("Native: retry also failed: %s: %s",
-                                 type(exc2).__name__, exc2)
+                    logger.error("Native: retry also failed: %s: %s", type(exc2).__name__, exc2)
                     raise SeestarNativeError(f"Send failed after reconnect: {exc2}") from exc2
 
         # Wait for response outside the lock (reader thread needs socket access).
@@ -494,5 +523,6 @@ class SeestarNativeClient:
                 return  # success/error already logged by reader thread
             time.sleep(_RESPONSE_POLL)
 
-        logger.warning("Native: %s [%d] — no response within %.1fs",
-                       method, cmd_id, _RESPONSE_TIMEOUT)
+        logger.warning(
+            "Native: %s [%d] — no response within %.1fs", method, cmd_id, _RESPONSE_TIMEOUT
+        )

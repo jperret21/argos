@@ -60,9 +60,22 @@ def read_fits_meta(path: str) -> dict:
     """Return a dict of useful header keywords from a FITS file."""
     from astropy.io import fits
 
-    keys = ("OBJECT", "DATE-OBS", "EXPTIME", "FILTER", "GAIN",
-            "INSTRUME", "OBSERVER", "SITENAME",
-            "CRPIX1", "CRPIX2", "CRVAL1", "CRVAL2", "CD1_1", "CD2_2")
+    keys = (
+        "OBJECT",
+        "DATE-OBS",
+        "EXPTIME",
+        "FILTER",
+        "GAIN",
+        "INSTRUME",
+        "OBSERVER",
+        "SITENAME",
+        "CRPIX1",
+        "CRPIX2",
+        "CRVAL1",
+        "CRVAL2",
+        "CD1_1",
+        "CD2_2",
+    )
     meta = {}
     try:
         with fits.open(path) as hdul:
@@ -150,6 +163,7 @@ class AnalysisWindow(QMainWindow):
         tab_layout.setContentsMargins(0, 0, 0, 0)
         tab_layout.setSpacing(0)
         from PyQt6.QtWidgets import QTabWidget
+
         self._tab_widget = QTabWidget()
         self._tab_widget.addTab(self._histogram, "Histogram")
         self._tab_widget.addTab(self._info_panel, "Info")
@@ -166,9 +180,7 @@ class AnalysisWindow(QMainWindow):
 
         # Bottom bar: plate-solve + WCS grid + solve status.
         bar = QWidget()
-        bar.setStyleSheet(
-            f"background:{theme.SURFACE_3}; border-top:1px solid {theme.SURFACE_4};"
-        )
+        bar.setStyleSheet(f"background:{theme.SURFACE_3}; border-top:1px solid {theme.SURFACE_4};")
         brow = QHBoxLayout(bar)
         brow.setContentsMargins(10, 4, 10, 4)
         brow.setSpacing(10)
@@ -259,8 +271,17 @@ class AnalysisWindow(QMainWindow):
         lines.append(f"Mean / σ:    {self._raw.mean():.0f} / {self._raw.std():.0f}")
         lines.append("")
         # Header keywords
-        for k in ("OBJECT", "DATE-OBS", "EXPTIME", "FILTER", "GAIN",
-                  "INSTRUME", "OBSERVER", "SITENAME", "ORIGIN"):
+        for k in (
+            "OBJECT",
+            "DATE-OBS",
+            "EXPTIME",
+            "FILTER",
+            "GAIN",
+            "INSTRUME",
+            "OBSERVER",
+            "SITENAME",
+            "ORIGIN",
+        ):
             v = self._meta.get(k)
             if v:
                 lines.append(f"{k}:  {v}")

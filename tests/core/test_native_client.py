@@ -27,10 +27,10 @@ from argos.core.seestar.native_client import (
     SeestarNativeError,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _raw_send(host: str, port: int, method: str, params: dict | list, cmd_id: int = 1) -> dict:
     """Send one JSON-RPC message and read the response. For assertion checks."""
@@ -52,6 +52,7 @@ def _raw_send(host: str, port: int, method: str, params: dict | list, cmd_id: in
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def client(seestar_simulator):
     """Connected SeestarNativeClient pointed at the simulator."""
@@ -67,6 +68,7 @@ def client(seestar_simulator):
 # ---------------------------------------------------------------------------
 # Tests — connection
 # ---------------------------------------------------------------------------
+
 
 class TestConnect:
     def test_connect_sets_connected(self, seestar_simulator):
@@ -102,6 +104,7 @@ class TestConnect:
 # ---------------------------------------------------------------------------
 # Tests — scope_speed_move
 # ---------------------------------------------------------------------------
+
 
 class TestMove:
     def test_move_north(self, client):
@@ -144,6 +147,7 @@ class TestMove:
 # Tests — iscope_stop_view
 # ---------------------------------------------------------------------------
 
+
 class TestStop:
     def test_stop_after_move(self, client):
         client.move(ANGLE_NORTH, SPEED_NORMAL, dur_sec=5)
@@ -165,6 +169,7 @@ class TestStop:
 # ---------------------------------------------------------------------------
 # Tests — reconnect on broken socket
 # ---------------------------------------------------------------------------
+
 
 class TestReconnect:
     def test_move_after_socket_closed(self, seestar_simulator):
@@ -188,6 +193,7 @@ class TestReconnect:
 # Tests — verify injection
 # ---------------------------------------------------------------------------
 
+
 class TestVerifyInjection:
     def test_firmware_2470_no_verify(self, client):
         """Simulator firmware 2470 < 2582 — verify should NOT be injected."""
@@ -200,14 +206,17 @@ class TestVerifyInjection:
         assert c.firmware_ver_int == 0
         assert not c._needs_verify()
 
-    @pytest.mark.parametrize("ver,expected", [
-        (0,    False),  # unknown → assume modern, don't inject
-        (2470, False),  # < 2582 → no inject
-        (2600, True),   # 2582 < ver < 2706 → inject
-        (2705, True),   # boundary − 1 → inject
-        (2706, False),  # SSL-auth → don't inject (would be rejected)
-        (2800, False),  # newer SSL-auth → don't inject
-    ])
+    @pytest.mark.parametrize(
+        "ver,expected",
+        [
+            (0, False),  # unknown → assume modern, don't inject
+            (2470, False),  # < 2582 → no inject
+            (2600, True),  # 2582 < ver < 2706 → inject
+            (2705, True),  # boundary − 1 → inject
+            (2706, False),  # SSL-auth → don't inject (would be rejected)
+            (2800, False),  # newer SSL-auth → don't inject
+        ],
+    )
     def test_needs_verify_logic(self, ver, expected):
         c = SeestarNativeClient("127.0.0.1")
         c._firmware_ver_int = ver

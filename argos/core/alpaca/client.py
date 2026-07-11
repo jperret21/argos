@@ -34,6 +34,7 @@ def _next_transaction_id() -> int:
 # Exceptions
 # ---------------------------------------------------------------------------
 
+
 class AlpacaError(Exception):
     """Alpaca device returned a non-zero ErrorNumber."""
 
@@ -64,6 +65,7 @@ class AlpacaConnectionError(AlpacaError):
 # ---------------------------------------------------------------------------
 # Client
 # ---------------------------------------------------------------------------
+
 
 class AlpacaClient:
     """Synchronous ASCOM Alpaca client for a single device endpoint.

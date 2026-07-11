@@ -172,9 +172,7 @@ class _NavButton(QWidget):
         if color is None:
             self._dot.hide()
             return
-        self._dot.setStyleSheet(
-            f"background:transparent; font-size:8px; color:{color};"
-        )
+        self._dot.setStyleSheet(f"background:transparent; font-size:8px; color:{color};")
         self._dot.show()
 
     def enterEvent(self, event) -> None:  # noqa: N802 (Qt override)

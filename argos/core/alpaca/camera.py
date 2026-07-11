@@ -98,9 +98,7 @@ class Camera:
         try:
             self.exposure_min = float(self._cam.ExposureMin)
             self.exposure_max = float(self._cam.ExposureMax)
-            logger.debug(
-                "Camera exposure range: %.4f–%.1f s", self.exposure_min, self.exposure_max
-            )
+            logger.debug("Camera exposure range: %.4f–%.1f s", self.exposure_min, self.exposure_max)
         except Exception as exc:
             logger.debug("Could not read exposure range (using defaults): %s", exc)
 

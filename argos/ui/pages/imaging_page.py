@@ -223,8 +223,7 @@ class ImagingPage(QWidget):
         self._workspace.setWindowFlags(Qt.WindowType.Widget)
         self._workspace.setDockNestingEnabled(True)
         self._workspace.setDockOptions(
-            QMainWindow.DockOption.AllowTabbedDocks
-            | QMainWindow.DockOption.AllowNestedDocks
+            QMainWindow.DockOption.AllowTabbedDocks | QMainWindow.DockOption.AllowNestedDocks
         )
 
         # Central widget: the viewer (hero) + a thin always-visible stats strip
@@ -536,9 +535,7 @@ class ImagingPage(QWidget):
         # WS8 cockpit: freeze the capture form while the sequence owns the
         # camera (SEQUENCE and its nested AUTOFOCUS pass); any release —
         # complete, stopped or error — transitions state and unfreezes.
-        self._camera_dock.set_sequence_lock(
-            state in (CameraState.SEQUENCE, CameraState.AUTOFOCUS)
-        )
+        self._camera_dock.set_sequence_lock(state in (CameraState.SEQUENCE, CameraState.AUTOFOCUS))
 
     # ------------------------------------------------------------------
     # Device session state → docks (the session owns the device handles)
@@ -711,15 +708,25 @@ class ImagingPage(QWidget):
             return
         gx, gy = gp
         # 1) a saved target (only if its markers are showing)
-        i = self._nearest(self._target_green, gx, gy) if self._overlay_bar.is_checked("targets") else None
+        i = (
+            self._nearest(self._target_green, gx, gy)
+            if self._overlay_bar.is_checked("targets")
+            else None
+        )
         if i is not None:
             s = self._engine.target_set().stars[i]
             self._present_card(
                 self._target_green[i],
                 f"Target · {s.display_name}",
                 self._target_body(s),
-                dict(ra_deg=s.ra_deg, dec_deg=s.dec_deg, auid=s.auid, name=s.name,
-                     source=s.source, mags=dict(s.mags)),
+                dict(
+                    ra_deg=s.ra_deg,
+                    dec_deg=s.dec_deg,
+                    auid=s.auid,
+                    name=s.name,
+                    source=s.source,
+                    mags=dict(s.mags),
+                ),
             )
             return
         # 2) a VSX variable
@@ -730,20 +737,36 @@ class ImagingPage(QWidget):
                 self._var_green[i],
                 f"Variable · {v.name}",
                 self._variable_body(v),
-                dict(ra_deg=v.ra_deg, dec_deg=v.dec_deg, auid=v.auid, name=v.name,
-                     source="vsx", mags={}),
+                dict(
+                    ra_deg=v.ra_deg,
+                    dec_deg=v.dec_deg,
+                    auid=v.auid,
+                    name=v.name,
+                    source="vsx",
+                    mags={},
+                ),
             )
             return
         # 3) a VSP comparison (only if its markers are showing)
-        i = self._nearest(self._comp_green, gx, gy) if self._overlay_bar.is_checked("comparisons") else None
+        i = (
+            self._nearest(self._comp_green, gx, gy)
+            if self._overlay_bar.is_checked("comparisons")
+            else None
+        )
         if i is not None:
             c = self._engine.comparisons[i]
             self._present_card(
                 self._comp_green[i],
                 f"Comparison · {c.label or c.auid}",
                 self._comparison_body(c),
-                dict(ra_deg=c.ra_deg, dec_deg=c.dec_deg, auid=c.auid, name=c.label,
-                     source="vsp", mags={b.band: b.mag for b in c.bands}),
+                dict(
+                    ra_deg=c.ra_deg,
+                    dec_deg=c.dec_deg,
+                    auid=c.auid,
+                    name=c.label,
+                    source="vsp",
+                    mags={b.band: b.mag for b in c.bands},
+                ),
             )
             return
         # 4) a measured field star
@@ -789,16 +812,18 @@ class ImagingPage(QWidget):
         pending = None
         if wcs is not None:
             ra_h, dec_d = wcs.pixel_to_radec(meas.x, meas.y)
-            pending = dict(ra_deg=ra_h * 15.0, dec_deg=dec_d, auid=None, name=None,
-                           source="manual", mags={})
+            pending = dict(
+                ra_deg=ra_h * 15.0, dec_deg=dec_d, auid=None, name=None, source="manual", mags={}
+            )
         self._pending_star = pending
         dp = self._green_to_disp(meas.x, meas.y)
         if dp is not None:
             self._viewer.mark_selection(
                 dp[0], dp[1], "", self._green_len_to_disp(meas.radius), show_label=False
             )
-        self._info_card.show_star("Field star", self._format_star_text(meas),
-                                  roles_enabled=pending is not None)
+        self._info_card.show_star(
+            "Field star", self._format_star_text(meas), roles_enabled=pending is not None
+        )
         self._info_card.reposition()
 
     def _variable_body(self, v) -> str:
@@ -1016,9 +1041,7 @@ class ImagingPage(QWidget):
         self._var_green = project_points(wcs, gs, ((v.ra_deg, v.dec_deg) for v in variables))
         var_pts = [(p[0], p[1], v.is_suspected) for p, v in zip(self._var_green, variables) if p]
         self._viewer.set_catalog_markers(var_pts, gs)
-        self._comp_green = project_points(
-            wcs, gs, ((c.ra_deg, c.dec_deg) for c in comparisons)
-        )
+        self._comp_green = project_points(wcs, gs, ((c.ra_deg, c.dec_deg) for c in comparisons))
         comp_pts = [(p[0], p[1], c.label) for p, c in zip(self._comp_green, comparisons) if p]
         self._viewer.set_comparison_markers(comp_pts, gs)
         self._arm_overlay("variables", bool(var_pts), self._viewer.set_catalog_enabled)
@@ -1111,9 +1134,7 @@ class ImagingPage(QWidget):
             return
         tset = self._engine.target_set()
         if not tset.by_role("target"):
-            QMessageBox.information(
-                self, "No targets", "Assign at least one target star first."
-            )
+            QMessageBox.information(self, "No targets", "Assign at least one target star first.")
             return
         start = str(self._engine.last_sequence_dir or self._config.sessions_path)
         folder = QFileDialog.getExistingDirectory(self, "Folder of saved subs", start)
@@ -1133,8 +1154,11 @@ class ImagingPage(QWidget):
             params=params,
             out_dir=self._config.sessions_path.parent / "targets",
             object_name=tset.object_name or "untitled",
-            site=(self._cfg("site.latitude", None), self._cfg("site.longitude", None),
-                  self._cfg("site.elevation", 0.0) or 0.0),
+            site=(
+                self._cfg("site.latitude", None),
+                self._cfg("site.longitude", None),
+                self._cfg("site.elevation", 0.0) or 0.0,
+            ),
         )
         dialog = QProgressDialog("Re-running photometry…", "Cancel", 0, len(paths), self)
         dialog.setWindowTitle("Batch photometry")
@@ -1172,7 +1196,8 @@ class ImagingPage(QWidget):
             self.log_message.emit("WARN", "Batch photometry: no points measured.")
             return
         self.log_message.emit(
-            "OK", f"Batch photometry: {result.frames_done} frame(s), {len(result.curves)} target(s)."
+            "OK",
+            f"Batch photometry: {result.frames_done} frame(s), {len(result.curves)} target(s).",
         )
         self._open_photometry()
         self._photometry_window.load_curves(
@@ -1214,8 +1239,12 @@ class ImagingPage(QWidget):
         pos = self._session.last_position
         air = airmass_from_altitude(pos.altitude) if pos else None
         win.metrics.add_sample(
-            self._elapsed(), sky=m.sky_adu, fwhm=pf.stars.mean_fwhm, hfd=m.hfd,
-            stars=m.star_count, airmass=air,
+            self._elapsed(),
+            sky=m.sky_adu,
+            fwhm=pf.stars.mean_fwhm,
+            hfd=m.hfd,
+            stars=m.star_count,
+            airmass=air,
         )
 
     def _ccd_temp(self) -> float | None:
@@ -1253,9 +1282,7 @@ class ImagingPage(QWidget):
         if owner is not None:
             # Offset is device-global — changing it mid-run would shift the
             # bias level of the frames the worker is acquiring.
-            self.log_message.emit(
-                "WARN", f"{owner} running — it owns the camera. Stop it first."
-            )
+            self.log_message.emit("WARN", f"{owner} running — it owns the camera. Stop it first.")
             offset = cam.get_offset()  # re-sync the spinbox with the device
             if offset is not None and cam.offset_min is not None and cam.offset_max is not None:
                 self._camera_dock.set_offset_support(cam.offset_min, cam.offset_max, offset)
@@ -1270,9 +1297,7 @@ class ImagingPage(QWidget):
         if owner is not None:
             # Binning is device-global — changing it mid-run would change the
             # frame geometry (and plate scale) under the worker.
-            self.log_message.emit(
-                "WARN", f"{owner} running — it owns the camera. Stop it first."
-            )
+            self.log_message.emit("WARN", f"{owner} running — it owns the camera. Stop it first.")
             self._camera_dock.set_binning_support(cam.max_bin, cam.get_binning())
             return
         self._session.set_camera_binning(value)

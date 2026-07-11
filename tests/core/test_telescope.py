@@ -15,7 +15,6 @@ from argos.core.alpaca.client import AlpacaError
 from argos.core.alpaca.telescope import MountPosition, Telescope
 from tests.conftest import SIMULATOR_HOST, SIMULATOR_PORT, simulator_required
 
-
 # ===========================================================================
 # Fixtures
 # ===========================================================================
@@ -63,6 +62,7 @@ def connected_telescope(mock_scope: MagicMock) -> Telescope:
 # Unit tests — connection
 # ===========================================================================
 
+
 class TestConnection:
 
     def test_connect_sets_connected_true(self, telescope, mock_scope):
@@ -99,6 +99,7 @@ class TestConnection:
 # Unit tests — get_position
 # ===========================================================================
 
+
 class TestGetPosition:
 
     def test_returns_mount_position(self, connected_telescope, mock_scope):
@@ -130,6 +131,7 @@ class TestGetPosition:
 
     def test_raises_alpaca_error_on_exception(self, connected_telescope, mock_scope):
         from alpaca.exceptions import DriverException
+
         mock_scope.RightAscension = property(
             fget=MagicMock(side_effect=DriverException(1032, "not implemented"))
         )
@@ -141,12 +143,15 @@ class TestGetPosition:
 # Unit tests — MountPosition formatting
 # ===========================================================================
 
+
 class TestMountPositionFormatting:
 
-    def _pos(self, ra=5.5753, dec=-5.3911, alt=42.5, az=178.3,
-             tracking=True, slewing=False) -> MountPosition:
-        return MountPosition(ra=ra, dec=dec, altitude=alt, azimuth=az,
-                             tracking=tracking, slewing=slewing)
+    def _pos(
+        self, ra=5.5753, dec=-5.3911, alt=42.5, az=178.3, tracking=True, slewing=False
+    ) -> MountPosition:
+        return MountPosition(
+            ra=ra, dec=dec, altitude=alt, azimuth=az, tracking=tracking, slewing=slewing
+        )
 
     def test_ra_str_format(self):
         pos = self._pos(ra=5.5753)
@@ -172,6 +177,7 @@ class TestMountPositionFormatting:
 # ===========================================================================
 # Unit tests — commands
 # ===========================================================================
+
 
 class TestCommands:
 
@@ -221,6 +227,7 @@ class TestCommands:
 # ===========================================================================
 # Integration tests — ASCOM Alpaca Simulator
 # ===========================================================================
+
 
 @simulator_required
 class TestTelescopeIntegration:

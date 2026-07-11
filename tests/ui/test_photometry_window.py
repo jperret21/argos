@@ -44,8 +44,17 @@ def test_lightcurve_export_csv(tmp_path, qapp) -> None:
     win = PhotometryWindow()
     try:
         lc = LightCurve(name="NU Ori")
-        lc.append(LcPoint(jd_utc=2451545.0, mag=9.0, mag_err=0.02, bjd_tdb=2451545.001,
-                          airmass=1.2, comps_used=3, saturated=True))
+        lc.append(
+            LcPoint(
+                jd_utc=2451545.0,
+                mag=9.0,
+                mag_err=0.02,
+                bjd_tdb=2451545.001,
+                airmass=1.2,
+                comps_used=3,
+                saturated=True,
+            )
+        )
         win.load_curves({"t": lc})
         path = tmp_path / "lc.csv"
         # Directly exercise the writer (bypass the file dialog).

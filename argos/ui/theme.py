@@ -39,6 +39,7 @@ _active_palette: "Palette | None" = None
 def _bootstrap() -> None:
     """Initialise module-level constants from EQUILUX without circular imports."""
     from argos.ui.palettes import EQUILUX
+
     apply_palette(EQUILUX)
 
 
