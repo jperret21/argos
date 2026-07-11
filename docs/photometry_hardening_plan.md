@@ -46,7 +46,7 @@ and a WARN is logged. Same pattern for gain.
 
 ---
 
-## P2 — Check-star curve (the standard quality control)  `[ ]`
+## P2 — Check-star curve (the standard quality control)  `[x]`
 
 **Defect.** `ROLE_CHECK` exists in the catalog model, but `measure_targets`
 returns results only for `role == "target"` — the check star is never
@@ -68,7 +68,7 @@ CSV written.
 
 ---
 
-## P3 — Ensemble zero-point: reject outlier comparisons  `[ ]`
+## P3 — Ensemble zero-point: reject outlier comparisons  `[x]`
 
 **Defect.** `ensemble_zero_point` is a plain mean of `cat − inst`. One bad
 comparison (blend, cloud edge, bad catalog mag, near-saturation) biases every
@@ -86,7 +86,7 @@ clean comps).
 
 ---
 
-## P4 — Airmass: one formula, filled everywhere  `[ ]`
+## P4 — Airmass: one formula, filled everywhere  `[x]`
 
 **Defect.** Two implementations coexist: Pickering 2002
 (`sky_geometry.compute_airmass` — the deliberate, low-altitude-accurate one;
@@ -113,7 +113,7 @@ tests.
 
 ---
 
-## P5 — JD at exposure midpoint, not start  `[ ]`
+## P5 — JD at exposure midpoint, not start  `[x]`
 
 **Defect.** Batch does `julian_date(DATE-OBS)` — start of exposure. A 30 s
 sub gets a 15 s systematic timing bias on every point (visible on fast
@@ -130,7 +130,7 @@ back to start + WARN when absent). Audit the live path for the same bias.
 
 ---
 
-## P6 — Autofocus must detect a degenerate V-curve  `[ ]`
+## P6 — Autofocus must detect a degenerate V-curve  `[x]`
 
 **Defect.** On a perfectly flat HFD curve (5 × 3.40 against the simulator —
 optically decoupled focuser; on sky: clouds, wrong step size, saturated star)
@@ -149,7 +149,7 @@ restored; clean V → best at vertex. Simulator run doubles as the flat case.
 
 ---
 
-## P7 — One fixed aperture per series, measured from the frames  `[ ]`
+## P7 — One fixed aperture per series, measured from the frames  `[x]`
 
 **Defect.** Live adapts the aperture radius to each frame's FWHM (injects
 correlated variance into the series); batch floors it to `aperture_min_px`
@@ -170,7 +170,7 @@ log it. Live: hold the radius for the session once enough FWHM samples exist
 
 ---
 
-## P8 — Anchor-fit outlier rejection (tracking robustness)  `[ ]`
+## P8 — Anchor-fit outlier rejection (tracking robustness)  `[x]`
 
 **Defect.** `fit_rigid` accepts every matched anchor; with the typical 2–3
 comps, one wrong lock (hot pixel, neighbour star) skews the transform for the
@@ -187,7 +187,7 @@ within tolerance of the clean fit.
 
 ---
 
-## P9 — Hot-pixel flag in the quick-look aperture  `[ ]`  *(downgraded)*
+## P9 — Hot-pixel flag in the quick-look aperture  `[x]`  *(downgraded)*
 
 **Defect.** The in-app quick-look measures raw subs, so a hot pixel inside
 the aperture adds flux → spurious dips/rises as field rotation carries it in
@@ -208,7 +208,7 @@ no PSF support (reuse the `_has_psf_support` idea from `metrics`) as
 
 ---
 
-## P10 — Calibration frames as first-class sequence citizens  `[ ]`
+## P10 — Calibration frames as first-class sequence citizens  `[x]`
 
 **Defect (contract).** Since calibration happens in postprod, Argos's job is
 to *capture and label* the calibration frames right. The sequencer already
