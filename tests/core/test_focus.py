@@ -79,3 +79,35 @@ def test_empty_is_method_none() -> None:
     assert result.method == "none"
     assert result.best_hfd is None
     assert result.samples == ()
+
+
+# ── sweep_is_degenerate (P6) ────────────────────────────────────────────────
+
+
+def test_flat_sweep_is_degenerate() -> None:
+    from argos.core.imaging.focus import sweep_is_degenerate
+
+    flat = tuple((p, 3.40) for p in (100, 200, 300, 400, 500))
+    reason = sweep_is_degenerate(flat)
+    assert reason is not None and "flat" in reason
+
+
+def test_clean_v_is_not_degenerate() -> None:
+    from argos.core.imaging.focus import sweep_is_degenerate
+
+    v = ((100, 6.0), (200, 4.0), (300, 2.5), (400, 4.1), (500, 6.2))
+    assert sweep_is_degenerate(v) is None
+
+
+def test_edge_minimum_is_degenerate() -> None:
+    from argos.core.imaging.focus import sweep_is_degenerate
+
+    slope = ((100, 2.5), (200, 3.5), (300, 4.5), (400, 5.5), (500, 6.5))
+    reason = sweep_is_degenerate(slope)
+    assert reason is not None and "edge" in reason
+
+
+def test_too_few_samples_is_degenerate() -> None:
+    from argos.core.imaging.focus import sweep_is_degenerate
+
+    assert sweep_is_degenerate(((100, 3.0), (200, 2.0))) is not None

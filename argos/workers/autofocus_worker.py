@@ -28,7 +28,7 @@ import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from argos.core.imaging.debayer import compute_hfd
-from argos.core.imaging.focus import fit_v_curve
+from argos.core.imaging.focus import fit_v_curve, sweep_is_degenerate
 
 if TYPE_CHECKING:
     from argos.core.alpaca.camera import Camera
@@ -126,7 +126,20 @@ class AutofocusWorker(QThread):
             self.best_found.emit(start_pos, None)
             return
 
-        best_pos, best_hfd = self._find_best(measurements, low, high)
+        result = fit_v_curve(measurements, low, high)
+        # P6: never move the focus on a curve that isn't a V — a flat sweep
+        # (clouds, wrong step size) or an edge minimum would send the focuser
+        # to a parabola fitted on noise.
+        reason = sweep_is_degenerate(result.samples)
+        if reason is not None:
+            logger.warning("Autofocus rejected: %s — focus unchanged", reason)
+            self._focuser.move_to(start_pos)
+            self._wait_for_focuser()
+            self.error_occurred.emit(f"Autofocus: {reason} — focus unchanged")
+            self.best_found.emit(start_pos, None)
+            return
+
+        best_pos, best_hfd = result.best_position, result.best_hfd
         logger.info("AF best position: %d (HFD=%.1f)", best_pos, best_hfd or -1)
 
         self._focuser.move_to(best_pos)
@@ -174,17 +187,3 @@ class AutofocusWorker(QThread):
             return None
 
         return compute_hfd(arr)
-
-    @staticmethod
-    def _find_best(
-        measurements: list[tuple[int, float]],
-        low: int,
-        high: int,
-    ) -> tuple[int, float | None]:
-        """Return (best_position, best_hfd) from a list of (pos, hfd) pairs.
-
-        Delegates to the pure :func:`~argos.core.imaging.focus.fit_v_curve`
-        (parabola vertex, with a raw-minimum fallback for degenerate sweeps).
-        """
-        result = fit_v_curve(measurements, low, high)
-        return result.best_position, result.best_hfd

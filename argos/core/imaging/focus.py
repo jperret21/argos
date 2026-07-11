@@ -66,6 +66,33 @@ class FocusResult:
         return xs.tolist(), ys.tolist()
 
 
+#: Minimum relative HFD span (max−min vs min) for a sweep to count as a
+#: V-curve. Below this the sweep is flat — clouds, wrong step size, optically
+#: decoupled focuser — and any "best" is a fit to noise (P6).
+MIN_RELATIVE_SPAN = 0.15
+
+
+def sweep_is_degenerate(samples: tuple[tuple[int, float], ...]) -> Optional[str]:
+    """None when the sweep looks like a V-curve, else why it doesn't (P6).
+
+    Degenerate cases: fewer than three valid samples, an HFD span under
+    :data:`MIN_RELATIVE_SPAN` of the minimum (flat curve), or the minimum
+    sitting on a sweep edge (the true focus is outside the scanned range —
+    re-centre and re-run rather than trust an extrapolation).
+    """
+    if len(samples) < 3:
+        return "fewer than 3 valid samples"
+    hfds = [h for _, h in samples]
+    mn, mx = min(hfds), max(hfds)
+    if mn <= 0:
+        return "non-positive HFD"
+    if (mx - mn) < MIN_RELATIVE_SPAN * mn:
+        return f"flat HFD curve ({mn:.2f}–{mx:.2f}, span < {MIN_RELATIVE_SPAN:.0%})"
+    if hfds.index(mn) in (0, len(hfds) - 1):
+        return "HFD minimum at the sweep edge — best focus outside the scanned range"
+    return None
+
+
 def fit_v_curve(
     measurements: list[tuple[int, float]],
     low: Optional[int] = None,
