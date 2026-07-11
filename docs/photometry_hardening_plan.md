@@ -230,6 +230,59 @@ type in the right folder with truthful headers; Siril loads the tree as-is.
 
 ---
 
+## P11 — Diagnostics flight recorder (per-frame, machine-readable)  `[ ]`
+
+**Goal (infrastructure — schedule early: it validates every other item).**
+Postprod must be able to audit what Argos measured and decided on every
+frame: did the apertures stay locked, did a comparison drift or cloud out,
+did the zero-point wander, was a header value read back or assumed. Today
+that story is scattered across human-oriented log lines and lost at the end
+of the night.
+
+**Fix.** A `SessionDiagnostics` writer (core, Qt-free) producing one
+**JSON-Lines** file per run — `diagnostics.jsonl` next to `session.json`
+(and in the batch `out_dir` for re-runs). One record per frame per subsystem,
+`{"t": iso8601, "frame": n, "kind": ..., ...}`; kinds and their variables of
+interest:
+
+- `star` — one per measured star per frame (target, **every comparison**,
+  check): auid/name, role, predicted vs measured (x, y), `refine_centroid`
+  offset, r_ap/r_in/r_out, flux_adu, sky_adu, peak_adu, snr, inst_mag,
+  inst_mag_err, saturated. This is what lets postprod watch each comp's
+  *individual* behaviour over the night instead of only the calibrated
+  target curve.
+- `ensemble` — per frame: zp, zp_rms, comps_used, comps_rejected (auids +
+  residuals once P3 lands), min_comps satisfied.
+- `tracking` — per frame: anchors matched/total, cumulative rotation_deg,
+  shift_px, fit residual (P8), frames_lost streak.
+- `frame` — DATE-OBS, EXPTIME, jd_mid, airmass, altitude/azimuth, FWHM, HFD,
+  star_count, sky_adu, filter *as read back* (P1), gain as read back,
+  ccd_temp.
+- `event` — sparse: connect/disconnect, goto (target vs arrived), solve
+  (ra/dec/rotation/scale), refocus (positions + HFDs + accepted/refused),
+  filter change, sequence start/stop, monitor state changes.
+
+Analysis-friendly by construction: `pandas.read_json(..., lines=True)` then
+`df[df.kind == "star"].pivot(index="frame", columns="auid", values="inst_mag")`
+plots every comp's raw behaviour in three lines of notebook code.
+
+Wiring: `AcquisitionEngine` (live) and `PhotometryBatchWorker` (re-runs) emit
+records; `measure_targets` returns the per-star detail it already computes
+(today it drops everything but the calibrated targets). Config key
+`diagnostics.enabled` (default **true** — a few kB/frame; a night is worth
+having the black box on).
+
+**Prove it.** Batch test: rotating synthetic scene → jsonl exists, one `star`
+record per star per frame, `tracking.rotation_deg` matches BatchResult,
+records parse with `json.loads` line by line. Simulator session: `event`
+records for goto/sequence, `frame` records carry read-back filter.
+
+**Files.** New `argos/core/session/diagnostics.py`;
+`argos/core/photometry/session.py` (return per-star detail),
+`photometry_batch_worker.py`, `acquisition_engine.py`, tests.
+
+---
+
 ## Explicitly out of scope (tracked elsewhere)
 
 - Colour transformation coefficients (Tg…) — `ui_redesign_todo.md` §Science.
@@ -238,7 +291,13 @@ type in the right folder with truthful headers; Siril loads the tree as-is.
   captures and labels the frames (P10) and keeps the quick-look honest.
 - Live-path field-rotation warning / session cap — `ui_redesign_todo.md`.
 
-## Validation once P1–P9 land
+## Suggested order
+
+P11 first or alongside P1 (the recorder is how the other fixes get audited),
+then P1 + P10 (the postprod contract), then P2–P5 (honest quick-look), then
+P6–P9.
+
+## Validation once P1–P11 land
 
 Re-run the scripted OmniSim session (headers now truthful, autofocus refuses
 the flat curve) and the full suite; then one real-sky session: 30 min on a
