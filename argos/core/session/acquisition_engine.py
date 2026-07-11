@@ -42,6 +42,7 @@ from argos.core.photometry.airmass import airmass_from_altitude, bjd_tdb, julian
 from argos.core.photometry.lightcurve import LcPoint, LightCurve
 from argos.core.photometry.params import DEFAULT_FWHM, PhotometryParams, measure_frame
 from argos.core.session.device_session import DeviceSession
+from argos.core.session.diagnostics import SessionDiagnostics
 from argos.core.session.types import LiveFrame, PhotometryPoint
 from argos.workers.astrometry_controller import AstrometryController
 from argos.workers.autofocus_worker import AutofocusWorker
@@ -142,6 +143,12 @@ class AcquisitionEngine(QObject):
 
         # §6 P4: live photometry preview state.
         self._lightcurves: dict[str, LightCurve] = {}  # key → per-target curve
+
+        # P11 flight recorder for the live measurement path — created lazily
+        # on the first measured frame, re-created when the object changes.
+        self._diag: SessionDiagnostics | None = None
+        self._diag_object: str | None = None
+        self._diag_frame = 0
 
         # Last sequence directory (for the photometry setup window).
         self._last_sequence_dir: Path | None = None
@@ -531,6 +538,25 @@ class AcquisitionEngine(QObject):
         except AttributeError:
             return Path.home() / "Argos"
 
+    def _diagnostics(self, tset) -> SessionDiagnostics:
+        """The live flight recorder for the current object (P11).
+
+        One jsonl per object next to the light-curve CSVs; a change of object
+        closes the previous file and starts a fresh frame counter.
+        """
+        obj = tset.object_name or "untitled"
+        if self._diag is None or self._diag_object != obj:
+            if self._diag is not None:
+                self._diag.close()
+            safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in obj)
+            self._diag = SessionDiagnostics(
+                self._sessions_base() / "targets" / f"{safe or 'untitled'}_live_diagnostics.jsonl",
+                enabled=bool(self._cfg("diagnostics.enabled", True)),
+            )
+            self._diag_object = obj
+            self._diag_frame = 0
+        return self._diag
+
     # ------------------------------------------------------------------
     # Autofocus
     # ------------------------------------------------------------------
@@ -783,14 +809,35 @@ class AcquisitionEngine(QObject):
             return
         fwhm = self._last_fwhm or DEFAULT_FWHM
         params = PhotometryParams.from_config(self._cfg, egain=self._egain())
-        results = measure_frame(green_plane(self._last_raw), wcs, tset, params, fwhm=fwhm)
+        diag = self._diagnostics(tset)
+        frame_no = self._diag_frame
+        self._diag_frame += 1
+        results = measure_frame(
+            green_plane(self._last_raw),
+            wcs,
+            tset,
+            params,
+            fwhm=fwhm,
+            on_star=lambda s, phot, x, y: diag.star(frame_no, s, phot, x, y),
+        )
         jd = julian_date(self._last_exposure_mid or datetime.now(timezone.utc))
         pos = self._session.last_position
         air = airmass_from_altitude(pos.altitude) if pos else None
         lat, lon = self._cfg("site.latitude", None), self._cfg("site.longitude", None)
         elev = self._cfg("site.elevation", 0.0) or 0.0
+        diag.record("frame", frame=frame_no, jd_utc=jd, airmass=air, fwhm=fwhm)
         self.photometry_measuring.emit()  # the page samples the CCD temp if open
         for res in results:
+            if res.diff is not None:
+                diag.record(
+                    "ensemble",
+                    frame=frame_no,
+                    target=res.star.auid or res.star.display_name,
+                    zp=res.diff.zero_point,
+                    zp_rms=res.diff.zp_rms,
+                    comps_used=res.diff.comps_used,
+                    note=res.diff.note or None,
+                )
             if res.diff is None or res.diff.mag is None:
                 continue
             bjd = (
@@ -966,3 +1013,7 @@ class AcquisitionEngine(QObject):
         self._astrometry.wait(remaining_ms)
         _join(self._catalog_worker, "catalog worker")
         self._catalog_worker = None
+
+        if self._diag is not None:
+            self._diag.close()
+            self._diag = None

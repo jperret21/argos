@@ -21,6 +21,7 @@ class DiffResult:
     zero_point: float | None
     comps_used: int
     note: str = ""  # "" when fully calibrated; else why it's provisional
+    zp_rms: float | None = None  # ensemble scatter about the zero-point
 
 
 def ensemble_zero_point(
@@ -57,11 +58,12 @@ def differential_mag(
     zp, rms, n = ensemble_zero_point(comps)
     if zp is None:
         return DiffResult(None, None, None, 0, note="no valid comparisons")
+    zp_rms = round(rms, 4) if rms is not None else None
     if target_inst_mag is None:
-        return DiffResult(None, None, round(zp, 4), n, note="no target flux")
+        return DiffResult(None, None, round(zp, 4), n, note="no target flux", zp_rms=zp_rms)
     mag = target_inst_mag + zp
     terr = target_inst_err or 0.0
     ens = (rms / math.sqrt(n)) if (rms and n) else 0.0
     mag_err = math.sqrt(terr * terr + ens * ens)
     note = "" if n >= min_comps else f"only {n} comparison(s)"
-    return DiffResult(round(mag, 4), round(mag_err, 4), round(zp, 4), n, note)
+    return DiffResult(round(mag, 4), round(mag_err, 4), round(zp, 4), n, note, zp_rms=zp_rms)

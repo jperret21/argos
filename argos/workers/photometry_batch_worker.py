@@ -29,6 +29,7 @@ from argos.core.photometry.airmass import bjd_tdb, julian_date
 from argos.core.photometry.lightcurve import LcPoint, LightCurve
 from argos.core.photometry.params import PhotometryParams, measure_frame
 from argos.core.photometry.tracking import ApertureTracker, TrackedWCS
+from argos.core.session.diagnostics import SessionDiagnostics
 from argos.core.session.types import PhotometryPoint
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ class BatchRequest:
     out_dir: Path  # where the per-target 9-column CSVs are written
     object_name: str = "untitled"
     site: tuple[float | None, float | None, float] = (None, None, 0.0)  # lat, lon, elev
+    diagnostics: bool = True  # flight recorder (diagnostics.jsonl in out_dir, P11)
 
 
 @dataclass
@@ -90,19 +92,24 @@ class PhotometryBatchWorker(QThread):
         curves: dict[str, LightCurve] = {}
         total = len(req.fits_paths)
         done = 0
+        safe_obj = "".join(c if c.isalnum() or c in "-_" else "_" for c in req.object_name)
+        diag = SessionDiagnostics(
+            req.out_dir / f"{safe_obj or 'batch'}_diagnostics.jsonl",
+            enabled=req.diagnostics,
+        )
         try:
+            diag.record(
+                "event",
+                what="batch_start",
+                object=req.object_name,
+                n_frames=total,
+                track_apertures=req.params.track_apertures,
+                band=req.params.band,
+            )
             for fpath in req.fits_paths:
                 if self._cancel:
                     break
-                arr, jd = self._read_frame(fpath)
-                if arr is None:
-                    done += 1
-                    self.progress.emit(done, total)
-                    continue
-                green = green_plane(arr)
-                wcs = self._wcs_for_frame(green, fpath.name)
-                results = measure_frame(green, wcs, req.target_set, req.params)
-                self._emit_points(results, jd, curves)
+                self._process_frame(diag, fpath, done, curves)
                 done += 1
                 self.progress.emit(done, total)
             self._write_csvs(curves)
@@ -116,12 +123,59 @@ class PhotometryBatchWorker(QThread):
                     result.shift_px,
                     done,
                 )
+            diag.record(
+                "event",
+                what="batch_end",
+                frames_done=done,
+                rotation_deg=result.rotation_deg,
+                shift_px=result.shift_px,
+            )
             self.finished_batch.emit(result)
         except Exception as exc:  # pragma: no cover - safety net
             logger.exception("Batch photometry crashed")
+            diag.record("event", what="batch_crash", error=str(exc))
             self.finished_batch.emit(BatchResult(curves=curves, frames_done=done, error=str(exc)))
+        finally:
+            diag.close()
 
     # ------------------------------------------------------------------
+
+    def _process_frame(self, diag, fpath: Path, frame_no: int, curves) -> None:
+        """Measure one frame: tracker update, diagnostics records, points."""
+        arr, jd = self._read_frame(fpath)
+        if arr is None:
+            return
+        green = green_plane(arr)
+        wcs = self._wcs_for_frame(green, fpath.name)
+        diag.record("frame", frame=frame_no, file=fpath.name, jd_utc=jd)
+        if self._tracker is not None:
+            diag.record(
+                "tracking",
+                frame=frame_no,
+                anchors=self._tracker.anchors_used,
+                rotation_deg=self._tracker.transform.rotation_deg,
+                shift_px=self._tracker.transform.shift_px,
+                frames_lost=self._tracker.frames_lost,
+            )
+        results = measure_frame(
+            green,
+            wcs,
+            self._req.target_set,
+            self._req.params,
+            on_star=lambda s, phot, x, y: diag.star(frame_no, s, phot, x, y),
+        )
+        for res in results:
+            if res.diff is not None:
+                diag.record(
+                    "ensemble",
+                    frame=frame_no,
+                    target=res.star.auid or res.star.display_name,
+                    zp=res.diff.zero_point,
+                    zp_rms=res.diff.zp_rms,
+                    comps_used=res.diff.comps_used,
+                    note=res.diff.note or None,
+                )
+        self._emit_points(results, jd, curves)
 
     def _wcs_for_frame(self, green, fname: str):
         """Reference WCS, rotation/drift-corrected by the tracker when it locks.

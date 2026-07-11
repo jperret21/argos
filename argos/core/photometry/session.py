@@ -9,6 +9,7 @@ per-frame cost is a handful of small aperture sums, so it runs synchronously.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 
@@ -44,12 +45,17 @@ def measure_targets(
     sat_adu: float = 60000.0,
     band: str = "V",
     min_comps: int = 2,
+    on_star: Callable[[TargetStar, AperturePhot | None, float, float], None] | None = None,
 ) -> list[TargetResult]:
     """Aperture-measure every saved star, then calibrate targets vs comparisons.
 
     ``wcs`` only needs ``world_to_pixel_deg(ra_deg, dec_deg) -> (x, y)`` (green px).
     Comparisons without a catalog magnitude in ``band``/V are skipped from the
     ensemble. Returns one :class:`TargetResult` per ``role == 'target'`` star.
+
+    ``on_star`` (diagnostics tap, P11) is called once per star of *any* role
+    with ``(star, phot, x, y)`` — the raw measurement the calibrated output
+    discards for comparisons and checks.
     """
     measured: list[tuple[TargetStar, AperturePhot | None]] = []
     for s in target_set.stars:
@@ -65,6 +71,8 @@ def measure_targets(
             read_noise_e=read_noise_e,
             sat_adu=sat_adu,
         )
+        if on_star is not None:
+            on_star(s, phot, float(x), float(y))
         measured.append((s, phot))
 
     comps = [

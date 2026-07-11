@@ -246,3 +246,49 @@ def test_batch_without_tracking_corrupts_the_rotating_curve(tmp_path) -> None:
     curve = next(iter(result.curves.values()))
     mags = [p.mag for p in curve.points]
     assert max(mags) - min(mags) > 0.2  # constant star reads as variable
+
+
+def test_batch_writes_diagnostics_jsonl(tmp_path) -> None:
+    """P11: the flight recorder captures every comp's raw behaviour per frame,
+    the ensemble zero-point and the tracker state, in parseable JSONL."""
+    import json
+
+    req = _rotating_scene(tmp_path, total_deg=10.0, n_frames=10, track=True)
+    worker = PhotometryBatchWorker(req)
+    result_box = []
+    worker.finished_batch.connect(result_box.append)
+    worker.run()
+
+    diag_files = list((tmp_path / "targets").glob("*_diagnostics.jsonl"))
+    assert len(diag_files) == 1
+    docs = [json.loads(line) for line in diag_files[0].read_text().splitlines()]
+
+    by_kind = {}
+    for d in docs:
+        by_kind.setdefault(d["kind"], []).append(d)
+
+    # One star record per star (1 target + 2 comps) per frame.
+    assert len(by_kind["star"]) == 3 * 10
+    comp_records = [d for d in by_kind["star"] if d["role"] == "comparison"]
+    assert len(comp_records) == 2 * 10
+    assert all("inst_mag" in d and "x" in d and "y" in d for d in comp_records)
+
+    # Ensemble health per frame, tracker state per frame, frame + events.
+    assert len(by_kind["ensemble"]) == 10
+    assert all(d["comps_used"] == 2 for d in by_kind["ensemble"])
+    assert len(by_kind["tracking"]) == 10
+    final_rot = by_kind["tracking"][-1]["rotation_deg"]
+    assert abs(final_rot - result_box[0].rotation_deg) < 1.5  # last-frame vs final
+    assert len(by_kind["frame"]) == 10
+    whats = [d["what"] for d in by_kind["event"]]
+    assert whats[0] == "batch_start" and whats[-1] == "batch_end"
+
+
+def test_batch_diagnostics_can_be_disabled(tmp_path) -> None:
+    import dataclasses
+
+    req = _rotating_scene(tmp_path, total_deg=2.0, n_frames=3, track=True)
+    req = dataclasses.replace(req, diagnostics=False)
+    worker = PhotometryBatchWorker(req)
+    worker.run()
+    assert not list((tmp_path / "targets").glob("*_diagnostics.jsonl"))

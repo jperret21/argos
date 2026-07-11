@@ -76,6 +76,7 @@ def measure_frame(
     params: PhotometryParams,
     *,
     fwhm: float | None = None,
+    on_star=None,
 ) -> list[TargetResult]:
     """Aperture-measure one solved green frame with the shared parameter set.
 
@@ -98,4 +99,5 @@ def measure_frame(
         sat_adu=params.sat_adu,
         band=params.band,
         min_comps=params.min_comps,
+        on_star=on_star,
     )

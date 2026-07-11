@@ -1159,6 +1159,7 @@ class ImagingPage(QWidget):
                 self._cfg("site.longitude", None),
                 self._cfg("site.elevation", 0.0) or 0.0,
             ),
+            diagnostics=bool(self._cfg("diagnostics.enabled", True)),
         )
         dialog = QProgressDialog("Re-running photometry…", "Cancel", 0, len(paths), self)
         dialog.setWindowTitle("Batch photometry")
