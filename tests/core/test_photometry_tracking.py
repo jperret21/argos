@@ -133,3 +133,28 @@ class _FakeRefWCS:
 
     def world_to_pixel_deg(self, ra_deg, dec_deg):
         return self._m[(ra_deg, dec_deg)]
+
+
+def test_tracker_rejects_a_bad_anchor() -> None:
+    """P8: one anchor locked on the wrong thing (hot pixel, neighbour) must
+    not skew the transform when two clean anchors plus one more agree."""
+    anchors = [(30.0, 30.0), (90.0, 35.0), (60.0, 95.0), (95.0, 85.0)]
+    # Wide search window: the displaced star is measured where it really is,
+    # not truncated by the window edge.
+    tracker = ApertureTracker(anchors, _CENTER, search_r=10.0)
+
+    ang = 1.5
+    pos = [_rotate(x, y, *_CENTER, ang) for x, y in anchors]
+    pos[3] = (pos[3][0] + 4.2, pos[3][1] - 4.2)  # 4th star displaced ~6 px
+    assert tracker.update(_green_with_stars(pos)) == 3  # bad anchor dropped
+    assert tracker.anchors_rejected == 1
+    assert abs(tracker.transform.rotation_deg - ang) < 0.2
+    assert tracker.residual_px < 0.5
+
+
+def test_tracker_keeps_all_clean_anchors() -> None:
+    tracker = ApertureTracker(_ANCHORS, _CENTER, search_r=6.0)
+    pos = [_rotate(x, y, *_CENTER, 1.0) for x, y in _ANCHORS]
+    assert tracker.update(_green_with_stars(pos)) == 3
+    assert tracker.anchors_rejected == 0
+    assert tracker.residual_px < 0.3

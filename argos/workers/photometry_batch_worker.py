@@ -167,6 +167,8 @@ class PhotometryBatchWorker(QThread):
                 "tracking",
                 frame=frame_no,
                 anchors=self._tracker.anchors_used,
+                anchors_rejected=self._tracker.anchors_rejected or None,
+                residual_px=self._tracker.residual_px,
                 rotation_deg=self._tracker.transform.rotation_deg,
                 shift_px=self._tracker.transform.shift_px,
                 frames_lost=self._tracker.frames_lost,

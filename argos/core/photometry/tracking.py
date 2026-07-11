@@ -155,6 +155,16 @@ class ApertureTracker:
             generous without risking a lock onto a neighbouring star.
     """
 
+    #: The worst anchor is only examined when its residual exceeds this floor
+    #: (px) — centroid noise on a faint anchor must never trigger a rejection.
+    RESIDUAL_FLOOR_PX = 2.0
+    #: …and it is dropped only when refitting without it shrinks the median
+    #: residual below this fraction of the original. A residuals-vs-threshold
+    #: test can't work here: a least-squares rigid fit smears a lone outlier's
+    #: error over *all* anchors, so with 3-4 anchors the outlier's own residual
+    #: never stands out. The leave-worst-out improvement is decisive instead.
+    REJECT_IMPROVEMENT = 0.3
+
     def __init__(
         self,
         anchors_xy: list[tuple[float, float]],
@@ -165,6 +175,8 @@ class ApertureTracker:
         self._search_r = float(search_r)
         self.transform = RigidTransform.identity(*frame_center)
         self.anchors_used = 0
+        self.anchors_rejected = 0  # dropped by the last residual clip
+        self.residual_px = 0.0  # median |fit − measured| of the kept anchors
         self.frames_lost = 0  # consecutive frames with no anchor found
 
     def update(self, green: np.ndarray) -> int:
@@ -172,6 +184,10 @@ class ApertureTracker:
 
         On zero matches (clouds, slew glitch) the previous transform is kept —
         the next frame's windows still sit where the stars were last seen.
+        With ≥3 matches, the worst-fitting anchor is dropped (P8) when its
+        residual exceeds RESIDUAL_FLOOR_PX *and* refitting without it improves
+        the median residual by REJECT_IMPROVEMENT — one wrong lock (hot pixel,
+        neighbouring star) must not skew every aperture of the frame.
         """
         matched_ref: list[tuple[float, float]] = []
         matched_meas: list[tuple[float, float]] = []
@@ -182,13 +198,45 @@ class ApertureTracker:
                 matched_ref.append(ref)
                 matched_meas.append(meas)
 
-        self.anchors_used = len(matched_ref)
+        self.anchors_rejected = 0
         if not matched_ref:
+            self.anchors_used = 0
             self.frames_lost += 1
             return 0
         self.frames_lost = 0
-        self.transform = fit_rigid(matched_ref, matched_meas, self.transform.cx, self.transform.cy)
+
+        t = fit_rigid(matched_ref, matched_meas, self.transform.cx, self.transform.cy)
+        residuals = self._residuals(t, matched_ref, matched_meas)
+
+        if len(matched_ref) >= 3 and max(residuals) > self.RESIDUAL_FLOOR_PX:
+            worst = int(np.argmax(residuals))
+            kept_ref = matched_ref[:worst] + matched_ref[worst + 1 :]
+            kept_meas = matched_meas[:worst] + matched_meas[worst + 1 :]
+            t2 = fit_rigid(kept_ref, kept_meas, self.transform.cx, self.transform.cy)
+            res2 = self._residuals(t2, kept_ref, kept_meas)
+            if float(np.median(res2)) < self.REJECT_IMPROVEMENT * float(np.median(residuals)):
+                logger.warning(
+                    "Tracker: anchor at (%.0f, %.0f) rejected (%.1f px off the "
+                    "consensus of the other %d) — refit",
+                    matched_ref[worst][0],
+                    matched_ref[worst][1],
+                    residuals[worst],
+                    len(kept_ref),
+                )
+                self.anchors_rejected = 1
+                matched_ref, matched_meas = kept_ref, kept_meas
+                t, residuals = t2, res2
+
+        self.transform = t
+        self.anchors_used = len(matched_ref)
+        self.residual_px = float(np.median(residuals))
         return self.anchors_used
+
+    @staticmethod
+    def _residuals(t: RigidTransform, refs, meas) -> list[float]:
+        return [
+            math.hypot(m[0] - t.apply(*r)[0], m[1] - t.apply(*r)[1]) for r, m in zip(refs, meas)
+        ]
 
 
 class TrackedWCS:
