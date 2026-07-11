@@ -150,6 +150,11 @@ class AcquisitionEngine(QObject):
         self._diag_object: str | None = None
         self._diag_frame = 0
 
+        # P7: one aperture radius per series — the FWHM is frozen on the first
+        # measured frame and only re-sampled after a refocus or object change,
+        # so the aperture size doesn't inject correlated variance into the curve.
+        self._phot_fwhm: float | None = None
+
         # Last sequence directory (for the photometry setup window).
         self._last_sequence_dir: Path | None = None
 
@@ -555,6 +560,7 @@ class AcquisitionEngine(QObject):
             )
             self._diag_object = obj
             self._diag_frame = 0
+            self._phot_fwhm = None  # new object → re-sample the series FWHM (P7)
         return self._diag
 
     # ------------------------------------------------------------------
@@ -623,6 +629,9 @@ class AcquisitionEngine(QObject):
 
     def _on_af_finished(self) -> None:
         self.autofocus_state.emit(False)
+        # The focus (and hence the PSF) may have changed — re-sample the
+        # series aperture FWHM on the next measured frame (P7).
+        self._phot_fwhm = None
         # Release through the service: back to SEQUENCE when this was the
         # mid-sequence handshake, else to IDLE. Double release (after a user
         # stop_autofocus already released) is a safe no-op.
@@ -807,7 +816,9 @@ class AcquisitionEngine(QObject):
         tset = self.target_set()
         if not tset.by_role(ROLE_TARGET):
             return
-        fwhm = self._last_fwhm or DEFAULT_FWHM
+        if self._phot_fwhm is None and self._last_fwhm:
+            self._phot_fwhm = self._last_fwhm
+        fwhm = self._phot_fwhm or DEFAULT_FWHM
         params = PhotometryParams.from_config(self._cfg, egain=self._egain())
         diag = self._diagnostics(tset)
         frame_no = self._diag_frame
@@ -840,41 +851,46 @@ class AcquisitionEngine(QObject):
                 )
             if res.diff is None or res.diff.mag is None:
                 continue
-            bjd = (
-                bjd_tdb(jd, res.star.ra_deg, res.star.dec_deg, float(lat), float(lon), float(elev))
-                if lat is not None and lon is not None
-                else None
-            )
-            point = LcPoint(
-                jd_utc=jd,
+            self._emit_live_point(res, jd, air, fwhm, (lat, lon, elev))
+
+    def _emit_live_point(self, res, jd: float, air, fwhm, site) -> None:
+        """Append one measured star to its live curve + CSV and signal it."""
+        lat, lon, elev = site
+        bjd = (
+            bjd_tdb(jd, res.star.ra_deg, res.star.dec_deg, float(lat), float(lon), float(elev))
+            if lat is not None and lon is not None
+            else None
+        )
+        point = LcPoint(
+            jd_utc=jd,
+            mag=res.diff.mag,
+            mag_err=res.diff.mag_err or 0.0,
+            bjd_tdb=bjd,
+            airmass=air,
+            fwhm=fwhm,
+            sky_adu=res.phot.sky_adu if res.phot else None,
+            comps_used=res.diff.comps_used,
+            saturated=bool(res.phot and res.phot.saturated),
+        )
+        key = res.star.auid or res.star.display_name
+        lc = self._lightcurves.setdefault(
+            key, LightCurve(auid=res.star.auid or "", name=res.star.display_name)
+        )
+        lc.append(point)
+        self.photometry_point.emit(
+            PhotometryPoint(
+                key=key,
+                name=res.star.display_name,
+                jd=jd,
                 mag=res.diff.mag,
                 mag_err=res.diff.mag_err or 0.0,
-                bjd_tdb=bjd,
-                airmass=air,
-                fwhm=fwhm,
-                sky_adu=res.phot.sky_adu if res.phot else None,
-                comps_used=res.diff.comps_used,
-                saturated=bool(res.phot and res.phot.saturated),
+                saturated=point.saturated,
             )
-            key = res.star.auid or res.star.display_name
-            lc = self._lightcurves.setdefault(
-                key, LightCurve(auid=res.star.auid or "", name=res.star.display_name)
-            )
-            lc.append(point)
-            self.photometry_point.emit(
-                PhotometryPoint(
-                    key=key,
-                    name=res.star.display_name,
-                    jd=jd,
-                    mag=res.diff.mag,
-                    mag_err=res.diff.mag_err or 0.0,
-                    saturated=point.saturated,
-                )
-            )
-            try:
-                lc.to_csv(self._photometry_csv_path(res.star))
-            except OSError as exc:
-                self.log_message.emit("WARN", f"photometry.csv: {exc}")
+        )
+        try:
+            lc.to_csv(self._photometry_csv_path(res.star))
+        except OSError as exc:
+            self.log_message.emit("WARN", f"photometry.csv: {exc}")
 
     # ------------------------------------------------------------------
     # FITS save

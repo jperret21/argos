@@ -392,3 +392,23 @@ def test_batch_points_carry_airmass_when_site_known(tmp_path) -> None:
     for pt in curve.points:
         assert pt.airmass is not None and 1.0 <= pt.airmass < 3.0
         assert pt.bjd_tdb is not None
+
+
+def test_batch_aperture_sized_from_measured_fwhm(tmp_path) -> None:
+    """P7: the series aperture comes from the first frame's measured FWHM
+    (σ=1.5 px Gaussians → FWHM ≈ 3.5 px → r_ap ≈ 8.8 px), not the 4 px floor,
+    and stays fixed for the whole run."""
+    import json
+
+    req = _rotating_scene(tmp_path, total_deg=2.0, n_frames=4, track=True)
+    worker = PhotometryBatchWorker(req)
+    worker.run()
+
+    diag_file = next((tmp_path / "targets").glob("*_diagnostics.jsonl"))
+    docs = [json.loads(line) for line in diag_file.read_text().splitlines()]
+    (ap_event,) = [d for d in docs if d["kind"] == "event" and d["what"] == "aperture"]
+    assert ap_event["fwhm"] is not None and 2.5 < ap_event["fwhm"] < 4.5
+    assert ap_event["r_ap"] > 6.0  # 2.5 × FWHM, not the 4 px floor
+    # Every frame reports the same frozen FWHM.
+    frame_fwhms = {d.get("fwhm") for d in docs if d["kind"] == "frame"}
+    assert frame_fwhms == {ap_event["fwhm"]}

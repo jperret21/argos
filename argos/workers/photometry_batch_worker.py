@@ -84,6 +84,7 @@ class PhotometryBatchWorker(QThread):
         self._cancel = False
         self._tracker: ApertureTracker | None = None
         self._check_keys: set[str] = set()  # curve keys that are check stars (P2)
+        self._series_fwhm: float | None = None  # measured once, fixed all series (P7)
 
     def cancel(self) -> None:
         """Ask the run to stop at the next frame boundary."""
@@ -158,7 +159,9 @@ class PhotometryBatchWorker(QThread):
             return
         green = green_plane(arr)
         wcs = self._wcs_for_frame(green, fpath.name)
-        diag.record("frame", frame=frame_no, file=fpath.name, jd_utc=jd)
+        if self._series_fwhm is None:
+            self._series_fwhm = self._measure_series_fwhm(arr, diag)
+        diag.record("frame", frame=frame_no, file=fpath.name, jd_utc=jd, fwhm=self._series_fwhm)
         if self._tracker is not None:
             diag.record(
                 "tracking",
@@ -173,6 +176,7 @@ class PhotometryBatchWorker(QThread):
             wcs,
             self._req.target_set,
             self._req.params,
+            fwhm=self._series_fwhm,
             on_star=lambda s, phot, x, y: diag.star(frame_no, s, phot, x, y),
         )
         for res in results:
@@ -187,6 +191,24 @@ class PhotometryBatchWorker(QThread):
                     note=res.diff.note or None,
                 )
         self._emit_points(results, jd, curves)
+
+    def _measure_series_fwhm(self, raw, diag) -> float | None:
+        """Field FWHM from the first readable frame — one aperture per series (P7).
+
+        Time-series practice: a single radius for the whole run, sized from
+        the measured seeing, instead of the aperture_min_px floor (saved subs
+        carry no FWHM header). None (→ floor) when no stars are detected.
+        """
+        from argos.core.imaging.metrics import detect_stars
+
+        try:
+            fwhm = detect_stars(raw).mean_fwhm
+        except Exception:  # pragma: no cover - defensive: bad first frame
+            fwhm = None
+        r_ap = self._req.params.aperture_px(fwhm)
+        logger.info("Series FWHM %.2f px → aperture %.1f px", fwhm or -1, r_ap)
+        diag.record("event", what="aperture", fwhm=fwhm, r_ap=r_ap)
+        return fwhm
 
     def _wcs_for_frame(self, green, fname: str):
         """Reference WCS, rotation/drift-corrected by the tracker when it locks.
@@ -241,7 +263,7 @@ class PhotometryBatchWorker(QThread):
                 mag_err=res.diff.mag_err or 0.0,
                 bjd_tdb=bjd,
                 airmass=self._airmass(jd, res.star),
-                fwhm=None,
+                fwhm=self._series_fwhm,
                 sky_adu=res.phot.sky_adu if res.phot else None,
                 comps_used=res.diff.comps_used,
                 saturated=bool(res.phot and res.phot.saturated),
