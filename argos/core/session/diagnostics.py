@@ -108,6 +108,7 @@ class SessionDiagnostics:
             inst_mag=phot.inst_mag if phot else None,
             inst_mag_err=phot.inst_mag_err if phot else None,
             saturated=bool(phot.saturated) if phot else None,
+            suspect=bool(getattr(phot, "suspect", False)) or None if phot else None,
             measured=phot is not None,
         )
 

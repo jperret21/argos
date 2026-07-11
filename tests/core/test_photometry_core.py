@@ -191,3 +191,40 @@ def test_bjd_tdb_close_to_jd() -> None:
     bjd = bjd_tdb(2451545.0, ra_deg=83.6, dec_deg=22.0, lat_deg=43.6, lon_deg=1.4, elev_m=150.0)
     assert bjd is not None
     assert abs(bjd - 2451545.0) < 0.01
+
+
+# --------------------------------------------------------------------------- #
+# hot-pixel suspect flag (P9)                                                  #
+# --------------------------------------------------------------------------- #
+
+
+def _noisy_sky(shape=(60, 60), sky=200.0, sigma=3.0, seed=7):
+    rng = np.random.default_rng(seed)
+    return rng.normal(sky, sigma, shape).astype(np.float32)
+
+
+def test_hot_pixel_is_flagged_suspect() -> None:
+    from argos.core.photometry.aperture import measure_aperture
+
+    g = _noisy_sky()
+    g[30, 30] = 5000.0  # single hot pixel, no PSF
+    phot = measure_aperture(g, 30.0, 30.0, r_ap=5, r_in=8, r_out=12)
+    assert phot is not None and phot.suspect is True
+
+
+def test_real_star_is_not_suspect() -> None:
+    from argos.core.photometry.aperture import measure_aperture
+
+    g = _noisy_sky()
+    yy, xx = np.mgrid[0:60, 0:60]
+    g += 5000.0 * np.exp(-((xx - 30.0) ** 2 + (yy - 30.0) ** 2) / (2 * 1.5**2))
+    phot = measure_aperture(g, 30.0, 30.0, r_ap=5, r_in=8, r_out=12)
+    assert phot is not None and phot.suspect is False
+
+
+def test_faint_signal_is_not_accused() -> None:
+    from argos.core.photometry.aperture import measure_aperture
+
+    g = _noisy_sky()  # nothing but sky noise — peak is not significant
+    phot = measure_aperture(g, 30.0, 30.0, r_ap=5, r_in=8, r_out=12)
+    assert phot is not None and phot.suspect is False

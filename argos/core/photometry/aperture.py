@@ -25,6 +25,7 @@ class AperturePhot:
     saturated: bool  # any aperture pixel at/above the linearity threshold
     inst_mag: float | None  # -2.5·log10(flux); None when flux ≤ 0
     inst_mag_err: float | None  # 1.0857·flux_err/flux; None when flux ≤ 0
+    suspect: bool = False  # peak has no PSF support — hot pixel / cosmic (P9)
 
 
 def measure_aperture(
@@ -71,11 +72,13 @@ def measure_aperture(
 
     sky_pixels = sub[ann]
     sky = float(np.median(sky_pixels)) if sky_pixels.size else 0.0
+    sky_sigma = float(np.std(sky_pixels)) if sky_pixels.size else 0.0
     ap_vals = sub[ap]
     n_pix = int(ap.sum())
     flux = float(ap_vals.sum()) - sky * n_pix
     peak = float(ap_vals.max())
     saturated = bool(peak >= sat_adu)
+    suspect = _peak_lacks_psf_support(sub, ap, sky, sky_sigma, peak)
 
     egain = egain if egain and egain > 0 else 1.0
     flux_e = max(flux, 0.0) * egain
@@ -99,4 +102,35 @@ def measure_aperture(
         saturated=saturated,
         inst_mag=inst_mag if inst_mag is None else round(inst_mag, 4),
         inst_mag_err=inst_mag_err if inst_mag_err is None else round(inst_mag_err, 4),
+        suspect=suspect,
     )
+
+
+def _peak_lacks_psf_support(
+    sub: np.ndarray, ap: np.ndarray, sky: float, sky_sigma: float, peak: float
+) -> bool:
+    """True when the aperture's brightest pixel looks like a hot pixel (P9).
+
+    A real star spreads over neighbouring pixels; a hot pixel / cosmic hit
+    doesn't. The flag fires when the peak is strongly significant (>10σ over
+    sky) while its 4-neighbours average under 10% of the peak's excess. The
+    in-app curves measure *raw* subs (calibration is postprod), so a hot pixel
+    rotating through an aperture would otherwise paint a fake dip/brightening
+    with nothing pointing at the culprit.
+    """
+    excess = peak - sky
+    if sky_sigma <= 0 or excess < 10.0 * sky_sigma:
+        return False  # peak not significant — nothing to accuse
+    ys, xs = np.nonzero(ap & (sub == peak))
+    if ys.size == 0:  # pragma: no cover - peak is inside ap by construction
+        return False
+    py, px = int(ys[0]), int(xs[0])
+    h, w = sub.shape
+    neigh = [
+        float(sub[py + dy, px + dx])
+        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1))
+        if 0 <= py + dy < h and 0 <= px + dx < w
+    ]
+    if not neigh:
+        return False
+    return (sum(neigh) / len(neigh) - sky) < 0.10 * excess
