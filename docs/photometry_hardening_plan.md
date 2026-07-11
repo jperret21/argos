@@ -5,6 +5,19 @@ the OmniSim (connect → goto → filter → autofocus sweep → sequence → FI
 plus a code read of the measurement chain. Each item states the defect, the
 fix, and how to prove it. Ordered by science impact — work top to bottom.
 
+**Division of roles (project decision, 2026-07-11).** Darks and flats WILL be
+taken, and the publishable analysis happens in **post-production** (Siril +
+external photometry tools) — not in Argos. Argos therefore owns two things:
+
+1. **The contract with postprod** — FITS that are calibratable and trustworthy:
+   truthful headers (filter, gain, timing, pointing, site, airmass), correct
+   session tree, dark/flat frame types captured and labelled correctly. Any
+   header lie silently corrupts the postprod result → highest priority.
+2. **In-field quick-look** — the live/batch curves exist to answer *tonight*:
+   "is the target in frame, are the comps clean, is the run worth continuing?"
+   They must be honest (check star, clipping, airmass) but they are not the
+   publishable product; sub-mmag refinements belong to postprod.
+
 Status legend: `[ ]` open · `[~]` partial · `[x]` done.
 
 ---
@@ -174,17 +187,19 @@ within tolerance of the clean fit.
 
 ---
 
-## P9 — Hot-pixel guard in the aperture (no-calibration mitigation)  `[ ]`
+## P9 — Hot-pixel flag in the quick-look aperture  `[ ]`  *(downgraded)*
 
-**Defect.** No dark/flat pipeline exists (acceptable for now — Seestar), but
-a hot pixel inside the aperture adds constant flux → spurious dips/rises as
-the field rotates it in and out. Nothing flags it.
+**Defect.** The in-app quick-look measures raw subs, so a hot pixel inside
+the aperture adds flux → spurious dips/rises as field rotation carries it in
+and out of the aperture.
+
+**Scope note.** Downgraded to nice-to-have: darks/flats are taken and the
+publishable analysis runs on calibrated frames in postprod, so this only
+affects the in-field curve. Worth a cheap flag, not a calibration pipeline.
 
 **Fix (scoped).** In `measure_aperture`, flag apertures whose peak pixel has
 no PSF support (reuse the `_has_psf_support` idea from `metrics`) as
-`suspect=True`; carry the flag into `LcPoint`/CSV so a curve point can be
-greyed in the panel. Full dark/flat calibration stays out of scope until a
-calibration-frame workflow exists.
+`suspect=True`; grey the point in the panel.
 
 **Prove it.** Unit: single bright pixel in the aperture of a faint star →
 `suspect`; clean Gaussian star → not suspect.
@@ -193,10 +208,34 @@ calibration-frame workflow exists.
 
 ---
 
+## P10 — Calibration frames as first-class sequence citizens  `[ ]`
+
+**Defect (contract).** Since calibration happens in postprod, Argos's job is
+to *capture and label* the calibration frames right. The sequencer already
+has Dark/Bias frame types; verify the full contract postprod needs: correct
+`IMAGETYP` (`Dark Frame`, `Flat Frame`, `Bias Frame`), matching `EXPTIME`/
+`GAIN`/`CCD-TEMP` recorded truthfully (P1), flats with the *actual* filter
+(P1 again), and a session tree Siril picks up without manual sorting
+(`darks/`, `flats/`, `biases/` alongside `lights/`).
+
+**Fix.** Audit `SequenceStep`/`fits_writer`/session tree against Siril's
+expectations; add a `Flat` frame type if missing; simulator test capturing
+one of each type and asserting headers + folder layout.
+
+**Prove it.** OmniSim run: a mixed plan (lights + darks + flats) lands each
+type in the right folder with truthful headers; Siril loads the tree as-is.
+
+**Files.** `argos/core/imaging/sequencer.py`, `fits_writer.py`,
+`session_log.py`, `tests/core/test_simulator_sequence.py`.
+
+---
+
 ## Explicitly out of scope (tracked elsewhere)
 
 - Colour transformation coefficients (Tg…) — `ui_redesign_todo.md` §Science.
-- Dark/flat calibration workflow — needs a capture-side design first.
+- Applying darks/flats inside Argos — calibration and the publishable
+  analysis are postprod (Siril + external tools) by project decision; Argos
+  captures and labels the frames (P10) and keeps the quick-look honest.
 - Live-path field-rotation warning / session cap — `ui_redesign_todo.md`.
 
 ## Validation once P1–P9 land
