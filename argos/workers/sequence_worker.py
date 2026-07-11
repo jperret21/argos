@@ -292,6 +292,46 @@ class SequenceWorker(QThread):
             self.msleep(_POLL_MS)
         logger.info("Filter → %s (position %d)", filter_name, pos)
 
+    def _read_back_gain(self, requested: int) -> int:
+        """Gain the driver reports after apply; requested when unreadable.
+
+        A driver without Gain (ASCOM sim) leaves us nothing to verify — keep
+        the requested value (the IMX585 noise-model headers need *a* gain) but
+        say so. A readable driver that differs wins over the plan.
+        """
+        actual = self._camera.try_get_gain()
+        if actual is None:
+            logger.warning(
+                "Gain %d not verifiable (driver has no Gain) — header unverified", requested
+            )
+            return requested
+        if actual != requested:
+            logger.warning(
+                "Gain read-back %d != requested %d — headers record %d", actual, requested, actual
+            )
+        return actual
+
+    def _read_back_filter(self, requested: str) -> str:
+        """Filter name the wheel actually sits on; requested without a wheel."""
+        if self._filterwheel is None:
+            return requested
+        try:
+            actual = self._filterwheel.position_name()
+        except Exception as exc:
+            logger.warning("Filter read-back failed (%s) — header unverified", exc)
+            return requested
+        if actual == "Moving…" or not actual:
+            logger.warning("Wheel still moving at exposure start — header unverified")
+            return requested
+        if actual.lower() != requested.lower():
+            logger.warning(
+                "Filter read-back '%s' != planned '%s' — headers record '%s'",
+                actual,
+                requested,
+                actual,
+            )
+        return actual
+
     def _shoot_one(self, spec: FrameSpec) -> tuple[str | None, FrameRecord | None]:
         """Expose, wait for ImageReady, write FITS + session record.
 
@@ -299,6 +339,10 @@ class SequenceWorker(QThread):
         """
         start_dt = datetime.now(timezone.utc)
         self._camera.set_gain(spec.gain)
+        # P1 header truthfulness: read the achieved state back from the
+        # devices — a header must never record a setting the hardware refused.
+        gain_actual = self._read_back_gain(spec.gain)
+        filter_actual = self._read_back_filter(spec.filter_name)
         self._camera.start_exposure(spec.exposure_s, light=spec.is_light)
 
         deadline = time.monotonic() + spec.exposure_s + _DOWNLOAD_MARGIN_S
@@ -327,7 +371,7 @@ class SequenceWorker(QThread):
         except Exception:  # pragma: no cover - metrics are best-effort
             logger.warning("Frame metrics failed — writing frame without QA", exc_info=True)
 
-        ctx = self._make_context(object_name=self._plan.object_name, filter_name=spec.filter_name)
+        ctx = self._make_context(object_name=self._plan.object_name, filter_name=filter_actual)
         self._software = ctx.software
         if metrics is not None:
             ctx.hfd = metrics.hfd
@@ -349,15 +393,15 @@ class SequenceWorker(QThread):
         )
         path = folder / filename
         FITSWriter.write(
-            arr, path, start_dt, end_dt, spec.exposure_s, spec.gain, spec.image_type, context=ctx
+            arr, path, start_dt, end_dt, spec.exposure_s, gain_actual, spec.image_type, context=ctx
         )
 
         record = FrameRecord(
             filename=filename,
             image_type=spec.image_type,
-            filter_name=spec.filter_name,
+            filter_name=filter_actual,
             exposure_s=spec.exposure_s,
-            gain=spec.gain,
+            gain=gain_actual,
             timestamp=start_dt.isoformat(),
             hfd=metrics.hfd if metrics else None,
             fwhm=fwhm,

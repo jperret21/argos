@@ -22,7 +22,7 @@ Status legend: `[ ]` open · `[~]` partial · `[x]` done.
 
 ---
 
-## P1 — FITS headers must record reality, not the request  `[ ]`
+## P1 — FITS headers must record reality, not the request  `[x]`
 
 **Defect.** The sequence worker writes the *planned* values into the FITS
 headers even when applying them failed. Demonstrated against the simulator:
@@ -230,7 +230,7 @@ type in the right folder with truthful headers; Siril loads the tree as-is.
 
 ---
 
-## P11 — Diagnostics flight recorder (per-frame, machine-readable)  `[ ]`
+## P11 — Diagnostics flight recorder (per-frame, machine-readable)  `[x]`
 
 **Goal (infrastructure — schedule early: it validates every other item).**
 Postprod must be able to audit what Argos measured and decided on every

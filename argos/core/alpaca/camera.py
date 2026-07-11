@@ -169,6 +169,20 @@ class Camera:
         except Exception as exc:
             raise _wrap(exc) from exc
 
+    def try_get_gain(self) -> int | None:
+        """Gain as the driver reports it, or None when the driver has no Gain.
+
+        Unlike :meth:`get_gain` this never substitutes a default — it exists
+        for header truthfulness (P1): a value we cannot read back must not be
+        presented as verified.
+        """
+        try:
+            return int(self._cam.Gain)
+        except (NotImplementedException, InvalidValueException):
+            return None
+        except Exception as exc:
+            raise _wrap(exc) from exc
+
     def set_gain(self, gain: int) -> None:
         """Set camera gain (clamped to range). No-op if the driver doesn't
         implement Gain — some cameras / the ASCOM sim don't expose it, and that

@@ -169,3 +169,47 @@ def test_sequence_drives_filter_wheel(tmp_path) -> None:
     assert len(list(tmp_path.glob("sessions/**/*.fits"))) == 2
     # The wheel ended on the last requested filter (LP = position 2).
     assert final_pos == 2
+
+
+@simulator_required
+def test_headers_record_the_actual_wheel_position(tmp_path) -> None:
+    """P1 header truthfulness: a plan naming a filter the wheel doesn't have
+    must NOT put that name in FILTER — the header records where the wheel
+    really sits (this exact lie shipped a frame shot through IR labelled
+    'LRGB' during the 2026-07-11 review session)."""
+    _app = QApplication.instance() or QApplication(["test"])  # noqa: F841
+
+    cam = Camera(SIMULATOR_HOST, SIMULATOR_PORT)
+    cam.connect()
+    fw = FilterWheel(SIMULATOR_HOST, SIMULATOR_PORT)
+    fw.connect()
+
+    plan = SequencePlan(
+        steps=[SequenceStep(frame_type="Light", filter_name="LRGB", exposure_s=0.5, count=1)],
+        object_name="SimTarget",
+    )
+    worker = SequenceWorker(
+        camera=cam,
+        telescope=None,
+        filterwheel=fw,
+        plan=plan,
+        frame_context_provider=_context_provider,
+        base_dir=tmp_path,
+    )
+    actual_name = ""
+    try:
+        worker.run()
+        actual_name = fw.position_name()
+    finally:
+        cam.disconnect()
+        fw.disconnect()
+
+    (fits_path,) = list(tmp_path.glob("sessions/**/*.fits"))
+    with fits.open(fits_path) as hdul:
+        assert hdul[0].header["FILTER"] == actual_name
+        assert hdul[0].header["FILTER"] != "LRGB"
+
+    # session.json tells the same truth.
+    (session_path,) = list(tmp_path.glob("sessions/**/" + SESSION_FILENAME))
+    doc = json.loads(session_path.read_text())
+    assert doc["frames"][0]["filter_name"] == actual_name
