@@ -1,28 +1,28 @@
 """Airmass + Julian date helpers (docs/photometry_plan.md §6 C4).
 
-Qt-free, dependency-light. Airmass uses Kasten & Young (1989); JD is the standard
-calendar→Julian-date conversion for an exposure-midpoint UTC datetime. (BJD_TDB,
-the publishable standard, is a post-processing step.)
+Qt-free, dependency-light. JD is the standard calendar→Julian-date conversion
+for an exposure-midpoint UTC datetime. (BJD_TDB, the publishable standard, is
+a post-processing step.)
 """
 
 from __future__ import annotations
 
-import math
 from datetime import datetime
 
 
 def airmass_from_altitude(alt_deg: float | None) -> float | None:
-    """Airmass for a target at altitude ``alt_deg`` (Kasten–Young 1989).
+    """Airmass for a target at altitude ``alt_deg``.
 
-    Returns ``None`` at or below the horizon (no useful airmass).
+    One formula project-wide (P4): delegates to Pickering 2002
+    (``sky_geometry.compute_airmass`` — what the FITS ``AIRMASS`` header
+    uses), so a frame's header and its light-curve point can never disagree.
+    Returns ``None`` at or below the horizon.
     """
-    if alt_deg is None or alt_deg <= 0.0:
+    if alt_deg is None:
         return None
-    z = 90.0 - float(alt_deg)  # zenith angle, degrees
-    denom = math.cos(math.radians(z)) + 0.50572 * (96.07995 - z) ** (-1.6364)
-    if denom <= 0.0:
-        return None
-    return round(1.0 / denom, 4)
+    from argos.core.imaging.sky_geometry import compute_airmass
+
+    return compute_airmass(float(alt_deg))
 
 
 def julian_date(dt: datetime) -> float:

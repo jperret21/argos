@@ -92,3 +92,36 @@ def test_target_geometry_includes_field_rotation() -> None:
     if "altitude" in out and out["altitude"] < 89.0:
         assert "field_rotation" in out
         assert isinstance(out["field_rotation"], float)
+
+
+# ── altitude_at (fast trig altitude for batch airmass, P4) ──────────────────
+
+
+def test_altitude_at_matches_astropy() -> None:
+    import astropy.units as u
+    from astropy.coordinates import AltAz, EarthLocation, SkyCoord
+
+    from argos.core.imaging.sky_geometry import altitude_at
+
+    lat, lon = 46.2, 6.1
+    t = Time(datetime(2026, 7, 11, 22, 30, tzinfo=timezone.utc))
+    for ra_h, dec in ((18.6, 38.8), (5.5, -5.4), (12.0, 89.0)):
+        got = altitude_at(t.jd, ra_h, dec, lat, lon)
+        loc = EarthLocation(lat=lat * u.deg, lon=lon * u.deg)
+        ref = (
+            SkyCoord(ra=ra_h * 15 * u.deg, dec=dec * u.deg)
+            .transform_to(AltAz(obstime=t, location=loc))
+            .alt.deg
+        )
+        assert abs(got - float(ref)) < 0.3, f"RA={ra_h}h Dec={dec}"
+
+
+def test_airmass_formulas_agree_project_wide() -> None:
+    """P4: the photometry entry point delegates to Pickering — no more
+    header-vs-curve disagreement."""
+    from argos.core.imaging.sky_geometry import compute_airmass
+    from argos.core.photometry.airmass import airmass_from_altitude
+
+    for alt in (5.0, 15.0, 30.0, 45.0, 60.0, 89.0):
+        assert airmass_from_altitude(alt) == compute_airmass(alt)
+    assert airmass_from_altitude(0.0) is None and airmass_from_altitude(-5.0) is None

@@ -34,6 +34,29 @@ def compute_airmass(altitude_deg: float) -> Optional[float]:
     return round(1.0 / denom, 4)
 
 
+def altitude_at(
+    jd_utc: float,
+    ra_hours: float,
+    dec_deg: float,
+    lat_deg: float,
+    lon_deg: float,
+) -> float:
+    """Target altitude (degrees) at a JD — fast spherical trig, no astropy.
+
+    GMST from the JD (IAU 1982 linear term), LST from the site longitude,
+    then the standard HA→altitude formula. Accurate to ~0.1° (no nutation or
+    refraction), which is far below what airmass needs; exists so a batch of
+    hundreds of frames doesn't pay astropy's ~50 ms per transform.
+    """
+    gmst_h = (18.697374558 + 24.06570982441908 * (jd_utc - 2451545.0)) % 24.0
+    lst_h = (gmst_h + lon_deg / 15.0) % 24.0
+    ha_rad = math.radians((lst_h - ra_hours) * 15.0)
+    lat = math.radians(lat_deg)
+    dec = math.radians(dec_deg)
+    sin_alt = math.sin(lat) * math.sin(dec) + math.cos(lat) * math.cos(dec) * math.cos(ha_rad)
+    return math.degrees(math.asin(max(-1.0, min(1.0, sin_alt))))
+
+
 def field_rotation_rate(
     altitude_deg: float, azimuth_deg: float, latitude_deg: float
 ) -> Optional[float]:

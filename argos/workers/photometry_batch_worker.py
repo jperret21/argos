@@ -25,7 +25,8 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from argos.core.catalog.targets import ROLE_CHECK, ROLE_COMPARISON, TargetSet
 from argos.core.imaging.green import green_plane
-from argos.core.photometry.airmass import bjd_tdb, julian_date
+from argos.core.imaging.sky_geometry import altitude_at
+from argos.core.photometry.airmass import airmass_from_altitude, bjd_tdb, julian_date
 from argos.core.photometry.lightcurve import LcPoint, LightCurve
 from argos.core.photometry.params import PhotometryParams, measure_frame
 from argos.core.photometry.tracking import ApertureTracker, TrackedWCS
@@ -239,7 +240,7 @@ class PhotometryBatchWorker(QThread):
                 mag=res.diff.mag,
                 mag_err=res.diff.mag_err or 0.0,
                 bjd_tdb=bjd,
-                airmass=None,
+                airmass=self._airmass(jd, res.star),
                 fwhm=None,
                 sky_adu=res.phot.sky_adu if res.phot else None,
                 comps_used=res.diff.comps_used,
@@ -268,9 +269,26 @@ class PhotometryBatchWorker(QThread):
             return None
         return bjd_tdb(jd, star.ra_deg, star.dec_deg, float(lat), float(lon), float(elev))
 
+    def _airmass(self, jd: float | None, star) -> float | None:
+        """Per-star airmass at this frame's JD (P4), or None without site/time.
+
+        Uses the fast trig altitude (no astropy) + the project-wide Pickering
+        airmass — the same formula as the FITS AIRMASS header.
+        """
+        lat, lon, _elev = self._req.site
+        if jd is None or lat is None or lon is None:
+            return None
+        alt = altitude_at(jd, star.ra_deg / 15.0, star.dec_deg, float(lat), float(lon))
+        return airmass_from_altitude(alt)
+
     @staticmethod
     def _read_frame(fpath: Path) -> tuple[np.ndarray | None, float | None]:
-        """Read a FITS frame → (float32 array, exposure-midpoint JD or None)."""
+        """Read a FITS frame → (float32 array, exposure-midpoint JD or None).
+
+        DATE-OBS is the exposure *start*; half of EXPTIME is added (P5) so a
+        30 s sub doesn't carry a 15 s systematic timing bias. Without EXPTIME
+        the start JD is kept (and the bias with it — a WARN says so).
+        """
         from astropy.io import fits
 
         try:
@@ -290,6 +308,11 @@ class PhotometryBatchWorker(QThread):
                 jd = julian_date(dt)
             except ValueError:
                 jd = None
+        if jd is not None:
+            try:
+                jd += float(header["EXPTIME"]) / 2.0 / 86400.0
+            except (KeyError, TypeError, ValueError):
+                logger.warning("%s: no EXPTIME — JD is exposure start, not midpoint", fpath.name)
         return arr, jd
 
     def _write_csvs(self, curves: dict[str, LightCurve]) -> None:

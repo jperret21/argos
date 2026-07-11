@@ -332,3 +332,63 @@ def test_batch_exports_the_check_star_curve(tmp_path) -> None:
     rms_events = [e for e in events if e["what"] == "check_rms"]
     assert len(rms_events) == 1 and rms_events[0]["star"] == "K1"
     assert rms_events[0]["rms_mag"] < 0.05
+
+
+def test_batch_jd_is_exposure_midpoint(tmp_path) -> None:
+    """P5: DATE-OBS is exposure start; EXPTIME/2 must be added to the JD."""
+    raw = _raw_with_green_stars([((30.0, 30.0), 20000.0)])
+    p = tmp_path / "sub.fits"
+    hdu = fits.PrimaryHDU(np.clip(raw, 0, 65535).astype(np.uint16))
+    hdu.header["DATE-OBS"] = "2026-07-05T00:00:00"
+    hdu.header["EXPTIME"] = 30.0
+    hdu.writeto(p)
+
+    _, jd = PhotometryBatchWorker._read_frame(p)
+    from argos.core.photometry.airmass import julian_date
+    from datetime import datetime, timezone
+
+    start_jd = julian_date(datetime(2026, 7, 5, 0, 0, 0, tzinfo=timezone.utc))
+    assert abs(jd - (start_jd + 15.0 / 86400.0)) < 1e-9
+
+
+def test_batch_points_carry_airmass_when_site_known(tmp_path) -> None:
+    """P4: with a site configured, every batch point gets a Pickering airmass."""
+
+    # Circumpolar target/comps (dec≈+89) — always above the horizon from 46°N.
+    ref = {
+        (10.0, 89.0): (30.0, 30.0),
+        (20.0, 89.1): (10.0, 10.0),
+        (30.0, 89.2): (50.0, 50.0),
+    }
+    ts = TargetSet(object_name="POLE")
+    ts.set_role(TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=89.0, auid="T"))
+    ts.set_role(
+        TargetStar(role=ROLE_COMPARISON, ra_deg=20.0, dec_deg=89.1, auid="C1", mags={"V": 11.0})
+    )
+    ts.set_role(
+        TargetStar(role=ROLE_COMPARISON, ra_deg=30.0, dec_deg=89.2, auid="C2", mags={"V": 11.0})
+    )
+    stars = [((30.0, 30.0), 20000.0), ((10.0, 10.0), 8000.0), ((50.0, 50.0), 8000.0)]
+    paths = []
+    for i in range(2):
+        p = tmp_path / f"sub_{i}.fits"
+        _write_fits(p, _raw_with_green_stars(stars), f"2026-07-05T0{i}:00:00")
+        paths.append(p)
+    req = BatchRequest(
+        fits_paths=paths,
+        wcs=_FakeWCS(ref),
+        target_set=ts,
+        params=PhotometryParams.from_config(lambda k, d: d),
+        out_dir=tmp_path / "targets",
+        object_name="POLE",
+        site=(46.0, 6.0, 400.0),
+    )
+    result_box = []
+    worker = PhotometryBatchWorker(req)
+    worker.finished_batch.connect(result_box.append)
+    worker.run()
+
+    curve = next(iter(result_box[0].curves.values()))
+    for pt in curve.points:
+        assert pt.airmass is not None and 1.0 <= pt.airmass < 3.0
+        assert pt.bjd_tdb is not None
