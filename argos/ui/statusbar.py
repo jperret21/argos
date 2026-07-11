@@ -20,10 +20,10 @@ logger = logging.getLogger(__name__)
 
 # (device_id, display label). Order is what the user sees, left to right.
 DEVICES: tuple[tuple[str, str], ...] = (
-    ("mount",       "Mount"),
-    ("camera",      "Camera"),
+    ("mount", "Mount"),
+    ("camera", "Camera"),
     ("filterwheel", "Filter Wheel"),
-    ("focuser",     "Focuser"),
+    ("focuser", "Focuser"),
 )
 
 
@@ -38,15 +38,13 @@ class TopStatusBar(QWidget):
     chip appears while the user preview loop owns the camera.
     """
 
-    badge_clicked = pyqtSignal(str)   # device id ('mount', 'camera', …)
-    capture_clicked = pyqtSignal()    # click on the capture strip → Capture mode
+    badge_clicked = pyqtSignal(str)  # device id ('mount', 'camera', …)
+    capture_clicked = pyqtSignal()  # click on the capture strip → Capture mode
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setFixedHeight(32)
-        self.setStyleSheet(
-            f"background:{theme.BG}; border-bottom:1px solid {theme.BORDER};"
-        )
+        self.setStyleSheet(f"background:{theme.BG}; border-bottom:1px solid {theme.BORDER};")
         # Capture-strip state (rendered together by _render_capture).
         self._seq_object = ""
         self._seq_done = 0
@@ -80,6 +78,20 @@ class TopStatusBar(QWidget):
         layout.addWidget(self._capture_lbl)
 
         layout.addStretch()
+
+        # Network dots — quiet reachability summary (fed by NetworkMonitor).
+        # ● up / ○ down; muted grey until the first check lands.
+        self._network_lbl = QLabel("")
+        self._network_lbl.setStyleSheet(
+            f"color:{theme.FG_MUTED}; font-size:{design.FONT_SIZE_SMALL}px;"
+            f" background:transparent;"
+        )
+        self._network_lbl.setToolTip(
+            "Seestar: the configured address answers on the Alpaca port.\n"
+            "Net: internet is reachable (AAVSO catalogs available)."
+        )
+        layout.addWidget(self._network_lbl)
+        layout.addSpacing(12)
 
         self._tracking_lbl = QLabel("Tracking —")
         self._tracking_lbl.setStyleSheet(
@@ -121,6 +133,24 @@ class TopStatusBar(QWidget):
             return
         badge.set_state(state, info)
 
+    def set_network(self, seestar_ok: object, internet_ok: bool) -> None:
+        """Update the network dots.
+
+        Args:
+            seestar_ok: True/False reachability, or None when no host is
+                        configured yet (dot stays muted).
+            internet_ok: Internet reachability.
+        """
+
+        def dot(ok: object) -> str:
+            if ok:
+                return f'<span style="color:{theme.SUCCESS};">●</span>'
+            return "○"  # down/unknown — stays in the label's muted grey
+
+        self._network_lbl.setText(
+            f"Seestar {dot(seestar_ok)}&nbsp;&nbsp;&nbsp;Net {dot(internet_ok)}"
+        )
+
     def set_tracking(self, tracking: bool | None) -> None:
         if tracking is None:
             self._tracking_lbl.setText("Tracking —")
@@ -155,8 +185,9 @@ class TopStatusBar(QWidget):
             self._seq_eta_s = 0.0
         self._render_capture()
 
-    def set_sequence_progress(self, object_name: str, done: int, total: int,
-                              eta_seconds: float) -> None:
+    def set_sequence_progress(
+        self, object_name: str, done: int, total: int, eta_seconds: float
+    ) -> None:
         self._seq_object = object_name
         self._seq_done = done
         self._seq_total = total
@@ -239,15 +270,15 @@ class _Badge(QLabel):
         self._state = state
         glyph = {
             "disconnected": "○",
-            "connected":    "●",
-            "busy":         "◐",
-            "error":        "✗",
+            "connected": "●",
+            "busy": "◐",
+            "error": "✗",
         }.get(state, "○")
         color = {
             "disconnected": theme.FG_MUTED,
-            "connected":    theme.SUCCESS,
-            "busy":         theme.WARNING,
-            "error":        theme.DANGER,
+            "connected": theme.SUCCESS,
+            "busy": theme.WARNING,
+            "error": theme.DANGER,
         }.get(state, theme.FG_MUTED)
 
         text = f"{glyph}  {self._label}"

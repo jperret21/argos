@@ -20,6 +20,7 @@ import logging
 
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
+    QComboBox,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -35,6 +36,15 @@ from argos.ui.panels.stellarium_card import StellariumCard
 
 logger = logging.getLogger(__name__)
 
+
+# (profile_id, display label) — one per network situation. "field_ap" comes
+# pre-filled with the Seestar's fixed AP-mode address; the other two remember
+# whatever host the user last used on that network (docs/field_connectivity.md).
+_PROFILES: tuple[tuple[str, str], ...] = (
+    ("home", "Home network"),
+    ("field_ap", "Field — Seestar AP"),
+    ("hotspot", "Field — Phone hotspot"),
+)
 
 # (device_id, display label, hint) — one row per device. Order matches the
 # global status bar so connection state reads left-to-right consistently.
@@ -59,6 +69,7 @@ class ConnectionPage(QWidget):
         super().__init__(parent)
         self._config = config
         self._cards: dict[str, _DeviceCard] = {}
+        self._loading = True  # mute form→config sync until _load_config is done
         self._build_ui()
         self._load_config()
 
@@ -95,6 +106,12 @@ class ConnectionPage(QWidget):
 
         row = QHBoxLayout()
         row.setSpacing(design.SPACING_MD)
+        self._profile_combo = QComboBox()
+        for profile_id, label in _PROFILES:
+            self._profile_combo.addItem(label, profile_id)
+        self._profile_combo.setToolTip("Network profile — each remembers its own Seestar address")
+        self._profile_combo.currentIndexChanged.connect(self._on_profile_changed)
+        row.addWidget(self._profile_combo)
         row.addWidget(design.MutedLabel("Host"))
         self._host_edit = QLineEdit()
         self._host_edit.setPlaceholderText("192.168.x.x")
@@ -161,14 +178,45 @@ class ConnectionPage(QWidget):
     # ------------------------------------------------------------------
 
     def _load_config(self) -> None:
+        profile = str(self._config.get("alpaca.profile", "home"))
+        index = next((i for i, (pid, _) in enumerate(_PROFILES) if pid == profile), 0)
+        self._loading = True
+        self._profile_combo.setCurrentIndex(index)
         self._host_edit.setText(self._config.alpaca_host or "")
         self._port_spin.setValue(self._config.alpaca_port or 32323)
+        self._loading = False
+        # Pre-profile configs have alpaca.host but an empty profile entry —
+        # adopt the current address into the active profile once.
+        self._save_into_profile()
+
+    def _on_profile_changed(self, index: int) -> None:
+        if self._loading:
+            return
+        profile_id = _PROFILES[index][0]
+        self._config.set("alpaca.profile", profile_id)
+        host = str(self._config.get(f"alpaca.profiles.{profile_id}.host", ""))
+        port = int(self._config.get(f"alpaca.profiles.{profile_id}.port", 32323) or 32323)
+        # Filling the form re-enters _on_host/port_changed, which mirrors the
+        # profile's address into alpaca.host/port for the device wrappers.
+        self._host_edit.setText(host)
+        self._port_spin.setValue(port)
+
+    def _save_into_profile(self) -> None:
+        profile_id = _PROFILES[self._profile_combo.currentIndex()][0]
+        self._config.set(f"alpaca.profiles.{profile_id}.host", self._config.alpaca_host)
+        self._config.set(f"alpaca.profiles.{profile_id}.port", self._config.alpaca_port)
 
     def _on_host_changed(self, text: str) -> None:
+        if self._loading:
+            return
         self._config.alpaca_host = text.strip()
+        self._save_into_profile()
 
     def _on_port_changed(self, value: int) -> None:
+        if self._loading:
+            return
         self._config.alpaca_port = value
+        self._save_into_profile()
 
     def _on_connect_one(self, device_id: str) -> None:
         host = self._host_edit.text().strip()

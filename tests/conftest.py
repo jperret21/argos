@@ -12,6 +12,27 @@ import pytest
 import requests
 
 # ---------------------------------------------------------------------------
+# Filesystem isolation — tests must never touch the user's real ~/.argos
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _isolated_argos_home(tmp_path, monkeypatch):
+    """Redirect config + catalog cache to a per-test directory.
+
+    Config.set() persists immediately, so any test that builds a page or the
+    Shell would otherwise clobber the developer's real ~/.argos/config.json.
+    """
+    from argos.core import config as config_module
+    from argos.core.catalog import aavso
+
+    home = tmp_path / ".argos"
+    monkeypatch.setattr(config_module, "_CONFIG_DIR", home)
+    monkeypatch.setattr(config_module, "_CONFIG_FILE", home / "config.json")
+    monkeypatch.setattr(aavso, "_CACHE_DIR", home / "cache" / "catalog")
+
+
+# ---------------------------------------------------------------------------
 # ASCOM Alpaca Simulator (localhost:32323) — for telescope/camera Alpaca tests
 # ---------------------------------------------------------------------------
 
@@ -47,7 +68,7 @@ _SEESTAR_SIM_DIR = Path(__file__).parents[2] / "seestar_alp-main" / "simulator" 
 #: Ports used by the simulator during tests (different from real device ports).
 _SIM_TCP_PORT = 14700
 _SIM_UDP_PORT = 14720
-_SIM_HOST     = "127.0.0.1"
+_SIM_HOST = "127.0.0.1"
 
 
 def _is_seestar_sim_available() -> bool:
@@ -91,8 +112,8 @@ def seestar_simulator():
 
     try:
         from config import Config as _SimConfig  # type: ignore[import]
-        import log as _sim_log                   # type: ignore[import]
-        from listener import SocketListener      # type: ignore[import]
+        import log as _sim_log  # type: ignore[import]
+        from listener import SocketListener  # type: ignore[import]
     except ModuleNotFoundError as exc:
         pytest.skip(
             f"Seestar simulator dependency missing: {exc}. "
@@ -103,13 +124,13 @@ def seestar_simulator():
     # Configure the simulator to use test ports so it doesn't collide with a
     # real device that might be on the network.
     _SimConfig.load_toml()
-    _SimConfig.ip_address         = _SIM_HOST
-    _SimConfig.tcp_port           = _SIM_TCP_PORT
-    _SimConfig.udp_port           = _SIM_UDP_PORT
-    _SimConfig.log_to_stdout      = False
+    _SimConfig.ip_address = _SIM_HOST
+    _SimConfig.tcp_port = _SIM_TCP_PORT
+    _SimConfig.udp_port = _SIM_UDP_PORT
+    _SimConfig.log_to_stdout = False
     _SimConfig.log_heartbeat_msgs = False
 
-    logger   = _sim_log.init_logging()
+    logger = _sim_log.init_logging()
     listener = SocketListener(logger, _SIM_HOST, _SIM_TCP_PORT, _SIM_UDP_PORT)
     shutdown = threading.Event()
     listener.shutdown_event = shutdown
@@ -127,7 +148,7 @@ def seestar_simulator():
         pytest.fail("Seestar simulator TCP port did not open within 8 s")
 
     yield {
-        "host":     _SIM_HOST,
+        "host": _SIM_HOST,
         "tcp_port": _SIM_TCP_PORT,
         "udp_port": _SIM_UDP_PORT,
     }

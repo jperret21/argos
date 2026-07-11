@@ -29,6 +29,7 @@ from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal, py
 
 from argos.core.alpaca.camera import Camera
 from argos.core.alpaca.client import AlpacaError
+from argos.core.alpaca.discovery import SEESTAR_AP_HOST
 from argos.core.alpaca.filterwheel import POSITION_NAMES, FilterWheel
 from argos.core.alpaca.focuser import Focuser
 from argos.core.alpaca.telescope import MountPosition, Telescope
@@ -198,19 +199,25 @@ class DeviceSession(QObject):
         if self._discovery and self._discovery.isRunning():
             return
         self.log_message.emit("INFO", "Starting Alpaca discovery…")
-        self._discovery = DiscoveryWorker(timeout=8.0, parent=self)
+        # Fallback candidates when the UDP broadcast is silent (hotspots
+        # block it): the last-used host, then the Seestar's AP-mode address.
+        candidates = (self._config.alpaca_host, SEESTAR_AP_HOST)
+        self._discovery = DiscoveryWorker(
+            port=self._config.alpaca_port, candidates=candidates, timeout=8.0, parent=self
+        )
         self._discovery.devices_found.connect(self._on_devices_found)
         self._discovery.error_occurred.connect(self._on_discovery_error)
         self._discovery.start()
 
     def _on_devices_found(self, devices) -> None:
         if not devices:
-            self.log_message.emit("WARN", "No Alpaca devices found.")
+            self.log_message.emit(
+                "WARN", "No Alpaca devices found (broadcast, direct probes and subnet scan)."
+            )
             return
         first = devices[0]
-        host, port = first.get("address", ""), int(first.get("port", 32323))
-        self.log_message.emit("OK", f"Found {host}:{port}")
-        self.discovered_address.emit(host, port)
+        self.log_message.emit("OK", f"Found {first.host}:{first.port}")
+        self.discovered_address.emit(first.host, first.port)
 
     def _on_discovery_error(self, message: str) -> None:
         self.log_message.emit("ERROR", f"Discovery: {message}")
@@ -586,9 +593,7 @@ class DeviceSession(QObject):
     @staticmethod
     def filter_position_for(name: str) -> int | None:
         """Wheel position whose slot name matches ``name`` (case-insensitive)."""
-        return next(
-            (i for i, n in POSITION_NAMES.items() if str(n).lower() == name.lower()), None
-        )
+        return next((i for i, n in POSITION_NAMES.items() if str(n).lower() == name.lower()), None)
 
     @pyqtSlot(int, str)
     def _on_filter_settled(self, position: int, name: str) -> None:

@@ -61,6 +61,7 @@ What this documentation covers
 
    CONTRIBUTING.md
    simulator_testing.md
+   field_connectivity.md
 
 .. toctree::
    :maxdepth: 2

@@ -42,6 +42,7 @@ from argos.ui.pages.analyze_page import AnalyzeScreen
 from argos.ui.sidebar import MODES, Sidebar
 from argos.ui.statusbar import TopStatusBar
 from argos.workers.camera_service import CameraState
+from argos.workers.network_monitor import NetworkMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ _HARDWARE_MODES = frozenset({"capture"})
 class Shell(QMainWindow):
     """Three-mode workspace shell."""
 
-    APP_VERSION = "0.2.1"
+    APP_VERSION = "0.3.1"
 
     def __init__(self, config: Config) -> None:
         super().__init__()
@@ -109,6 +110,11 @@ class Shell(QMainWindow):
         # pages are views over the two.
         self._session = DeviceSession(self._config, parent=self)
         self._engine = AcquisitionEngine(self._config, self._session, parent=self)
+
+        # Quiet background reachability checks → the status-bar network dots.
+        self._network_monitor = NetworkMonitor(self._config, parent=self)
+        self._network_monitor.state_changed.connect(self._status.set_network)
+        self._network_monitor.start()
 
         self._connection = ConnectionPage(self._config)
         self._acquisition = ImagingPage(self._config, self._session, self._engine)
@@ -322,6 +328,10 @@ class Shell(QMainWindow):
         # references), then the session's pollers + Stellarium server.
         self._acquisition.shutdown()
         self._session.shutdown()
+        self._network_monitor.stop()
+        # A check in flight can hold the thread for up to three connect
+        # timeouts (host + two internet targets) — wait long enough.
+        self._network_monitor.wait(6000)
         self._save_state()
         self._config.save()
         logger.info("Shell closed")

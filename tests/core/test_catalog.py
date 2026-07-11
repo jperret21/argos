@@ -16,7 +16,11 @@ from argos.core.catalog import (
     vsp_chart,
     vsx_cone_search,
 )
+from argos.core.catalog import aavso
 from argos.core.catalog.aavso import _dms_to_deg, _hms_to_deg
+
+# The offline cache is redirected to tmp_path by the autouse
+# _isolated_argos_home fixture in tests/conftest.py.
 
 # --- recorded responses (trimmed) ----------------------------------------- #
 
@@ -194,10 +198,11 @@ def test_vsx_mag_limit_and_cap() -> None:
 
 
 def test_vsx_handles_single_object_and_empty() -> None:
+    # Distinct fields per call — identical coords would share a cache entry.
     one = {"VSXObjects": {"VSXObject": _VSX_JSON["VSXObjects"]["VSXObject"][0]}}
     assert len(vsx_cone_search(0, 0, 0.1, session=_FakeSession(one))) == 1
-    assert vsx_cone_search(0, 0, 0.1, session=_FakeSession({"VSXObjects": ""})) == []
-    assert vsx_cone_search(0, 0, 0.1, session=_FakeSession({})) == []
+    assert vsx_cone_search(10, 0, 0.1, session=_FakeSession({"VSXObjects": ""})) == []
+    assert vsx_cone_search(20, 0, 0.1, session=_FakeSession({})) == []
 
 
 # --- VSP ------------------------------------------------------------------- #
@@ -220,6 +225,50 @@ def test_vsp_parses_comparison_stars() -> None:
 def test_vsp_empty_chart() -> None:
     assert vsp_chart(0, 0, 10, session=_FakeSession({"photometry": []})) == []
     assert vsp_chart(0, 0, 10, session=_FakeSession({})) == []
+
+
+# --- offline cache ---------------------------------------------------------- #
+
+
+def test_cache_serves_fresh_result_without_network() -> None:
+    first = _FakeSession(_VSX_JSON)
+    stars = vsx_cone_search(83.82, -5.39, 0.4, session=first)
+    assert len(stars) == 2
+    # Same query again: served from the fresh cache, no HTTP round-trip.
+    offline = _FakeSession(raise_exc=requests.ConnectionError("offline"))
+    cached = vsx_cone_search(83.82, -5.39, 0.4, session=offline)
+    assert [s.name for s in cached] == [s.name for s in stars]
+    assert offline.last_params is None  # session never called
+
+
+def test_cache_key_survives_resolve_jitter() -> None:
+    """A re-solve of the same field lands a few arcsec away — same cache key."""
+    vsx_cone_search(83.82, -5.39, 0.4, session=_FakeSession(_VSX_JSON))
+    offline = _FakeSession(raise_exc=requests.ConnectionError("offline"))
+    jittered = vsx_cone_search(83.821, -5.389, 0.4, session=offline)
+    assert len(jittered) == 2 and offline.last_params is None
+
+
+def test_stale_cache_served_when_network_down(monkeypatch) -> None:
+    vsx_cone_search(83.82, -5.39, 0.4, session=_FakeSession(_VSX_JSON))
+    monkeypatch.setattr(aavso, "_CACHE_FRESH_S", 0.0)  # everything is stale now
+    offline = _FakeSession(raise_exc=requests.ConnectionError("offline"))
+    stars = vsx_cone_search(83.82, -5.39, 0.4, session=offline)
+    assert len(stars) == 2
+    assert offline.last_params is not None  # a refresh was attempted first
+
+
+def test_radius_padding_never_shrinks_the_cone() -> None:
+    sess = _FakeSession(_VSX_JSON)
+    vsx_cone_search(83.82, -5.39, 0.4, session=sess)
+    assert float(sess.last_params["radius"]) >= 0.4 + aavso._CENTER_STEP_DEG
+
+
+def test_vsp_cache_roundtrip() -> None:
+    vsp_chart(83.82, -5.39, 40.0, session=_FakeSession(_VSP_JSON))
+    offline = _FakeSession(raise_exc=requests.ConnectionError("offline"))
+    stars = vsp_chart(83.82, -5.39, 40.0, session=offline)
+    assert [c.auid for c in stars] == ["000-BJX-214", "000-BJX-211"]
 
 
 # --- error handling -------------------------------------------------------- #

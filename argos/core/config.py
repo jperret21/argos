@@ -20,6 +20,16 @@ _DEFAULTS: dict[str, Any] = {
     "alpaca": {
         "host": "",
         "port": 32323,  # Alpaca HTTP port (4700 is the native JSON-RPC port)
+        # Connection profiles — one per network situation. "host"/"port" above
+        # always mirror the active profile (kept for back-compat: every device
+        # wrapper reads them). "field_ap" is pre-set to the Seestar's fixed
+        # address when it runs its own access point (see docs/field_connectivity.md).
+        "profile": "home",
+        "profiles": {
+            "home": {"host": "", "port": 32323},
+            "field_ap": {"host": "10.0.0.1", "port": 32323},
+            "hotspot": {"host": "", "port": 32323},
+        },
     },
     "sessions_path": str(Path.home() / "Argos" / "sessions"),
     "observer": {

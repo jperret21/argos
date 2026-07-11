@@ -346,7 +346,8 @@ Key sections:
 
 | Path | Key | Default | Notes |
 |------|-----|---------|-------|
-| `alpaca` | `host` / `port` | `""` / `32323` | Device IP and Alpaca port |
+| `alpaca` | `host` / `port` | `""` / `32323` | Device IP and Alpaca port (mirror of the active profile) |
+| `alpaca` | `profile` / `profiles` | `home` | Per-network connection profiles (see docs/field_connectivity.md) |
 | `sessions_path` | — | `~/Argos/sessions/` | Output; Siril-compatible layout |
 | `observer` | `name` / `lat` / `lon` / `elev` | empty / 0 | FITS header site info |
 | `camera` | `adc_bits` / `full_well_adu` | 12 / 60000 | IMX585: 12-bit ADC → 16-bit FITS |

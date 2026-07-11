@@ -1,10 +1,11 @@
-"""QThread worker for Alpaca UDP discovery.
+"""QThread worker for Alpaca discovery (UDP broadcast + TCP fallbacks).
 
-Runs the blocking UDP scan in a background thread and emits
-signals when results are available or an error occurs.
+Runs the blocking layered scan (:func:`argos.core.alpaca.discovery.discover_all`)
+in a background thread and emits signals when results are available or an
+error occurs.
 
 Usage:
-    worker = DiscoveryWorker(timeout=8.0)
+    worker = DiscoveryWorker(port=32323, candidates=("192.168.1.42",))
     worker.devices_found.connect(self._on_devices_found)
     worker.error_occurred.connect(self._on_error)
     worker.finished.connect(worker.deleteLater)
@@ -17,13 +18,13 @@ import logging
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from argos.core.alpaca.discovery import discover
+from argos.core.alpaca.discovery import discover_all
 
 logger = logging.getLogger(__name__)
 
 
 class DiscoveryWorker(QThread):
-    """One-shot worker that performs an Alpaca UDP broadcast scan.
+    """One-shot worker that performs the layered Alpaca discovery.
 
     Signals:
         devices_found: Emitted on success with a list of AlpacaDevice.
@@ -31,17 +32,32 @@ class DiscoveryWorker(QThread):
         finished: Emitted when the thread completes (success or error).
     """
 
-    devices_found = pyqtSignal(list)   # list[AlpacaDevice]
+    devices_found = pyqtSignal(list)  # list[AlpacaDevice]
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, timeout: float = 8.0, parent=None) -> None:
+    def __init__(
+        self,
+        port: int = 32323,
+        candidates: tuple[str, ...] = (),
+        timeout: float = 8.0,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
+        self._port = port
+        self._candidates = candidates
         self._timeout = timeout
 
     def run(self) -> None:
-        logger.debug("DiscoveryWorker started (timeout=%.1fs)", self._timeout)
+        logger.debug(
+            "DiscoveryWorker started (port=%d, candidates=%s, timeout=%.1fs)",
+            self._port,
+            self._candidates,
+            self._timeout,
+        )
         try:
-            devices = discover(timeout=self._timeout)
+            devices = discover_all(
+                self._port, candidates=self._candidates, broadcast_timeout=self._timeout
+            )
             self.devices_found.emit(devices)
         except Exception as exc:
             logger.error("Discovery failed: %s", exc)

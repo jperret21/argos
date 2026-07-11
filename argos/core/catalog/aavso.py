@@ -9,12 +9,25 @@ Network/parse failures raise :class:`CatalogError` with a human message; the
 worker turns that into a status line instead of crashing the UI. Coordinates are
 normalised to **decimal degrees** (J2000) on the way out — VSX already returns
 degrees, VSP returns sexagesimal, so both are handled here, once.
+
+**Offline cache.** Every successful response is cached on disk
+(``~/.argos/cache/catalog``); a fresh entry short-circuits the network, and a
+stale one is served when the network is down — so a field previously observed
+(or pre-fetched at home) keeps its variables/comparisons with no internet in
+the field (docs/field_connectivity.md). Query coordinates are quantised to a
+small grid so re-solves of the same field land on the same cache entry; the
+cone radius is padded by the worst-case quantisation shift to compensate.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import math
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -26,6 +39,14 @@ _VSX_URL = "https://vsx.aavso.org/index.php"
 _VSP_URL = "https://app.aavso.org/vsp/api/chart/"
 
 _DEFAULT_TIMEOUT = 20.0
+
+# Offline cache (see module docstring). Tests monkeypatch _CACHE_DIR.
+_CACHE_DIR = Path.home() / ".argos" / "cache" / "catalog"
+_CACHE_FRESH_S = 7 * 86400.0  # younger than this → no network round-trip
+
+# Quantisation grid for query coordinates — 0.05° = 3′, well under any frame's
+# margin once the radius is padded by _CENTER_STEP_DEG.
+_CENTER_STEP_DEG = 0.05
 
 
 class CatalogError(RuntimeError):
@@ -136,7 +157,40 @@ def _leading_float(value: Any) -> float | None:
 # --------------------------------------------------------------------------- #
 
 
-def _get_json(url: str, params: dict[str, Any], timeout: float, session: Any) -> Any:
+def _quantize_deg(value: float, step: float = _CENTER_STEP_DEG) -> float:
+    """Snap ``value`` to the cache grid (so re-solves share a cache key)."""
+    return round(round(value / step) * step, 4)
+
+
+def _pad_and_quantize_radius(radius: float, step: float = _CENTER_STEP_DEG) -> float:
+    """Grow ``radius`` to cover the worst-case centre-quantisation shift,
+    then snap it up to the grid — never smaller than the caller asked for."""
+    return round(math.ceil((radius + step) / step) * step, 4)
+
+
+def _cache_path(url: str, params: dict[str, Any]) -> Path:
+    key = hashlib.sha1(json.dumps([url, sorted(params.items())]).encode()).hexdigest()
+    return _CACHE_DIR / f"{key}.json"
+
+
+def _cache_load(path: Path) -> tuple[Any, float] | None:
+    """Cached ``(data, age_seconds)``, or None when absent/unreadable."""
+    try:
+        entry = json.loads(path.read_text(encoding="utf-8"))
+        return entry["data"], time.time() - float(entry["fetched_at"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _cache_store(path: Path, data: Any) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"fetched_at": time.time(), "data": data}), encoding="utf-8")
+    except OSError as exc:  # a full disk must not sink the query itself
+        logger.warning("catalog cache write failed: %s", exc)
+
+
+def _fetch_json(url: str, params: dict[str, Any], timeout: float, session: Any) -> Any:
     """GET ``url`` and return parsed JSON, or raise :class:`CatalogError`."""
     getter = session.get if session is not None else requests.get
     try:
@@ -147,6 +201,27 @@ def _get_json(url: str, params: dict[str, Any], timeout: float, session: Any) ->
         raise CatalogError(f"catalog request failed: {exc}") from exc
     except ValueError as exc:  # JSON decode
         raise CatalogError(f"catalog returned invalid JSON: {exc}") from exc
+
+
+def _get_json(url: str, params: dict[str, Any], timeout: float, session: Any) -> Any:
+    """Cache-aware GET: fresh cache → no network; network down → stale cache."""
+    path = _cache_path(url, params)
+    cached = _cache_load(path)
+    if cached is not None and cached[1] < _CACHE_FRESH_S:
+        logger.debug("catalog cache hit (%.1f h old): %s", cached[1] / 3600.0, path.name)
+        return cached[0]
+    try:
+        data = _fetch_json(url, params, timeout, session)
+    except CatalogError as exc:
+        if cached is not None:
+            logger.warning(
+                "catalog unreachable — serving cached result (%.1f days old)",
+                cached[1] / 86400.0,
+            )
+            return cached[0]
+        raise CatalogError(f"{exc} (no cached result for this field)") from exc
+    _cache_store(path, data)
+    return data
 
 
 # --------------------------------------------------------------------------- #
@@ -171,11 +246,13 @@ def vsx_cone_search(
     has >1500 faint variables; a frame shows few). ``max_results`` caps the
     count, keeping the brightest. Results are returned brightest-first.
     """
+    # Centre/radius are quantised so re-solves of the same field share a cache
+    # entry; the radius padding guarantees the caller's cone stays covered.
     params = {
         "view": "api.list",
-        "ra": f"{ra_deg:.6f}",
-        "dec": f"{dec_deg:.6f}",
-        "radius": f"{radius_deg:.4f}",
+        "ra": f"{_quantize_deg(ra_deg):.4f}",
+        "dec": f"{_quantize_deg(dec_deg):.4f}",
+        "radius": f"{_pad_and_quantize_radius(radius_deg):.4f}",
         "format": "json",
     }
     if mag_limit is not None:
@@ -238,10 +315,13 @@ def vsp_chart(
     session: Any = None,
 ) -> list[ComparisonStar]:
     """Comparison stars from the VSP photometry chart for this field."""
+    # Quantised like the VSX cone (shared cache entries across re-solves); the
+    # fov is padded by the centre grid step (0.05° = 3′) and snapped up to 5′.
+    fov_padded = math.ceil((fov_arcmin + 3.0) / 5.0) * 5.0
     params = {
-        "ra": f"{ra_deg:.6f}",
-        "dec": f"{dec_deg:.6f}",
-        "fov": f"{fov_arcmin:.1f}",
+        "ra": f"{_quantize_deg(ra_deg):.4f}",
+        "dec": f"{_quantize_deg(dec_deg):.4f}",
+        "fov": f"{fov_padded:.1f}",
         "maglimit": f"{maglimit:.1f}",
         "format": "json",
     }
