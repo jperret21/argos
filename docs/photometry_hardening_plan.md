@@ -1,0 +1,207 @@
+# Photometry hardening plan
+
+Findings from the 2026-07-11 expert review: a full scripted session against
+the OmniSim (connect → goto → filter → autofocus sweep → sequence → FITS)
+plus a code read of the measurement chain. Each item states the defect, the
+fix, and how to prove it. Ordered by science impact — work top to bottom.
+
+Status legend: `[ ]` open · `[~]` partial · `[x]` done.
+
+---
+
+## P1 — FITS headers must record reality, not the request  `[ ]`
+
+**Defect.** The sequence worker writes the *planned* values into the FITS
+headers even when applying them failed. Demonstrated against the simulator:
+wheel physically on **IR**, log says `No wheel position matches filter 'LRGB'
+— skipping`, header says `FILTER='LRGB'`. Same for `GAIN=80` after
+`Camera does not implement Gain — skipping`. A frame measured in one band and
+labelled another poisons every downstream product (photometry band, AAVSO
+submission, Siril session sort).
+
+**Fix.** After applying each setting in `SequenceWorker._shoot_one`, read the
+achieved state back from the device (`filterwheel.position_name()`, camera
+gain) and put *that* in the `FrameContext`. When apply was skipped/failed and
+the read-back differs from the plan, log WARN and write the read-back.
+
+**Prove it.** Simulator test: plan filter `LRGB` against the sim wheel (which
+has no such slot) → header `FILTER` equals the wheel's actual position name,
+and a WARN is logged. Same pattern for gain.
+
+**Files.** `argos/workers/sequence_worker.py`, `argos/core/imaging/fits_writer.py`
+(context fields), `tests/core/test_simulator_sequence.py`.
+
+---
+
+## P2 — Check-star curve (the standard quality control)  `[ ]`
+
+**Defect.** `ROLE_CHECK` exists in the catalog model, but `measure_targets`
+returns results only for `role == "target"` — the check star is never
+calibrated, plotted, or exported. Without a K-star curve there is no evidence
+a target's variation is real rather than an ensemble/sky artefact.
+
+**Fix.** Calibrate check stars exactly like targets (against the comparison
+ensemble, never including the check itself), flag the result as `role=check`,
+and carry it through: live points, batch curves, CSV (own file), light-curve
+panel (muted trace, per the sober-UI preference), and the K-star RMS in the
+batch summary log.
+
+**Prove it.** Unit: a synthetic constant check star yields a flat calibrated
+curve with RMS ≈ photon noise. Batch test: `curves` contains the check key;
+CSV written.
+
+**Files.** `argos/core/photometry/session.py`, `photometry_batch_worker.py`,
+`acquisition_engine.py`, `ui/widgets/lightcurve_panel.py`.
+
+---
+
+## P3 — Ensemble zero-point: reject outlier comparisons  `[ ]`
+
+**Defect.** `ensemble_zero_point` is a plain mean of `cat − inst`. One bad
+comparison (blend, cloud edge, bad catalog mag, near-saturation) biases every
+point of the night; the RMS is computed but never acted on.
+
+**Fix.** Sigma-clipped zero-point (e.g. 2.5 σ, ≤ 2 iterations, only when
+n ≥ 3 so a pair is never silently halved). Report which comps were rejected
+(`DiffResult.note`), count them in `comps_used`. Keep the mean path for n < 3.
+
+**Prove it.** Unit: 4 comps, one offset by 0.5 mag → zp within mmag of the
+clean-3 answer, note names the rejection. Existing tests unchanged (they use
+clean comps).
+
+**Files.** `argos/core/photometry/differential.py`, tests.
+
+---
+
+## P4 — Airmass: one formula, filled everywhere  `[ ]`
+
+**Defect.** Two implementations coexist: Pickering 2002
+(`sky_geometry.compute_airmass` — the deliberate, low-altitude-accurate one;
+feeds the FITS `AIRMASS` header) and Kasten–Young 1989
+(`photometry/airmass.airmass_from_altitude` — feeds the *live* curve points).
+The same frame can carry two slightly different airmasses, and **batch points
+carry none** (`airmass=None` in `_emit_points`) even though site, DATE-OBS
+and star coordinates are all available (we already compute BJD from them).
+Airmass is required for AAVSO extended format and for spotting extinction
+trends.
+
+**Fix.** Standardise on Pickering: make `airmass_from_altitude` delegate to
+(or be replaced by) `sky_geometry.compute_airmass`, keep the public name the
+photometry layer imports. In the batch worker compute per-frame altitude from
+site + DATE-OBS + target coords (astropy AltAz, same machinery as
+`compute_target_geometry`) and fill `LcPoint.airmass`.
+
+**Prove it.** Unit: both entry points agree to 1e-4 across 5–90° altitude.
+Batch test with a site: every emitted point has `airmass` set and plausible
+(≥ 1, monotone with altitude).
+
+**Files.** `argos/core/photometry/airmass.py`, `photometry_batch_worker.py`,
+tests.
+
+---
+
+## P5 — JD at exposure midpoint, not start  `[ ]`
+
+**Defect.** Batch does `julian_date(DATE-OBS)` — start of exposure. A 30 s
+sub gets a 15 s systematic timing bias on every point (visible on fast
+eclipsing binaries; ruinous for exoplanet timing).
+
+**Fix.** `jd_mid = julian_date(DATE-OBS) + EXPTIME / 2 / 86400` in
+`_read_frame` (header `EXPTIME` is already written by our FITS writer; fall
+back to start + WARN when absent). Audit the live path for the same bias.
+
+**Prove it.** Unit: frame with `EXPTIME=30` → JD is 15 s after DATE-OBS.
+
+**Files.** `argos/workers/photometry_batch_worker.py`,
+`argos/core/session/acquisition_engine.py`, tests.
+
+---
+
+## P6 — Autofocus must detect a degenerate V-curve  `[ ]`
+
+**Defect.** On a perfectly flat HFD curve (5 × 3.40 against the simulator —
+optically decoupled focuser; on sky: clouds, wrong step size, saturated star)
+the worker still announces a confident `best_found` from a parabola fitted to
+noise, and the app moves the focuser there.
+
+**Fix.** Before accepting the fit: require a minimum relative HFD span
+(e.g. max−min > 15 % of min) and the minimum not at a sweep edge. Otherwise
+emit `error_occurred("no V-curve — focus unchanged")` and return to the
+start position (the return-to-start machinery already exists in `stop()`).
+
+**Prove it.** Unit with a fake camera/focuser: flat curve → error + position
+restored; clean V → best at vertex. Simulator run doubles as the flat case.
+
+**Files.** `argos/workers/autofocus_worker.py`, `tests/workers/`.
+
+---
+
+## P7 — One fixed aperture per series, measured from the frames  `[ ]`
+
+**Defect.** Live adapts the aperture radius to each frame's FWHM (injects
+correlated variance into the series); batch floors it to `aperture_min_px`
+because saved subs "carry no FWHM" — yet the tracker already centroids the
+anchor stars every frame, so a per-frame FWHM is nearly free. Time-series
+practice is one radius for the whole series, sized from the median seeing.
+
+**Fix.** Batch: measure FWHM on the anchor stars over the first N frames
+(reuse `metrics` moments), set `r_ap = aperture_fwhm_mult × median FWHM` once,
+log it. Live: hold the radius for the session once enough FWHM samples exist
+(update only on a re-solve/refocus), instead of per frame.
+
+**Prove it.** Batch test: synthetic 3 px-FWHM stars → chosen aperture ≈ 7.5 px
+(not the 4 px floor); mags across frames tighter than the floored run.
+
+**Files.** `photometry_batch_worker.py`, `photometry/params.py`,
+`acquisition_engine.py`, tests.
+
+---
+
+## P8 — Anchor-fit outlier rejection (tracking robustness)  `[ ]`
+
+**Defect.** `fit_rigid` accepts every matched anchor; with the typical 2–3
+comps, one wrong lock (hot pixel, neighbour star) skews the transform for the
+frame with no warning.
+
+**Fix.** With n ≥ 3 anchors: fit, compute residuals, drop any anchor beyond
+max(2 px, 3×median residual), refit once. Expose `ApertureTracker.residual_px`
+and WARN when it stays high (aperture placement suspect).
+
+**Prove it.** Unit: 3 good anchors + 1 displaced by 5 px → recovered rotation
+within tolerance of the clean fit.
+
+**Files.** `argos/core/photometry/tracking.py`, tests.
+
+---
+
+## P9 — Hot-pixel guard in the aperture (no-calibration mitigation)  `[ ]`
+
+**Defect.** No dark/flat pipeline exists (acceptable for now — Seestar), but
+a hot pixel inside the aperture adds constant flux → spurious dips/rises as
+the field rotates it in and out. Nothing flags it.
+
+**Fix (scoped).** In `measure_aperture`, flag apertures whose peak pixel has
+no PSF support (reuse the `_has_psf_support` idea from `metrics`) as
+`suspect=True`; carry the flag into `LcPoint`/CSV so a curve point can be
+greyed in the panel. Full dark/flat calibration stays out of scope until a
+calibration-frame workflow exists.
+
+**Prove it.** Unit: single bright pixel in the aperture of a faint star →
+`suspect`; clean Gaussian star → not suspect.
+
+**Files.** `argos/core/photometry/aperture.py`, `lightcurve.py`, tests.
+
+---
+
+## Explicitly out of scope (tracked elsewhere)
+
+- Colour transformation coefficients (Tg…) — `ui_redesign_todo.md` §Science.
+- Dark/flat calibration workflow — needs a capture-side design first.
+- Live-path field-rotation warning / session cap — `ui_redesign_todo.md`.
+
+## Validation once P1–P9 land
+
+Re-run the scripted OmniSim session (headers now truthful, autofocus refuses
+the flat curve) and the full suite; then one real-sky session: 30 min on a
+known-constant field in alt-az — acceptance is a flat check-star curve with
+RMS at the photon limit and airmass filled on every CSV row.
