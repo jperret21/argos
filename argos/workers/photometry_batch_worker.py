@@ -82,6 +82,7 @@ class PhotometryBatchWorker(QThread):
         self._req = request
         self._cancel = False
         self._tracker: ApertureTracker | None = None
+        self._check_keys: set[str] = set()  # curve keys that are check stars (P2)
 
     def cancel(self) -> None:
         """Ask the run to stop at the next frame boundary."""
@@ -114,6 +115,15 @@ class PhotometryBatchWorker(QThread):
                 self.progress.emit(done, total)
             self._write_csvs(curves)
             result = BatchResult(curves=curves, frames_done=done)
+            for key in sorted(self._check_keys):
+                lc = curves.get(key)
+                if lc is None or len(lc.points) < 2:
+                    continue
+                mags = [p.mag for p in lc.points]
+                mean = sum(mags) / len(mags)
+                k_rms = (sum((m - mean) ** 2 for m in mags) / (len(mags) - 1)) ** 0.5
+                logger.info("Check star %s: RMS %.4f mag over %d frames", key, k_rms, len(mags))
+                diag.record("event", what="check_rms", star=key, rms_mag=k_rms, n=len(mags))
             if self._tracker is not None:
                 result.rotation_deg = self._tracker.transform.rotation_deg
                 result.shift_px = self._tracker.transform.shift_px
@@ -213,23 +223,17 @@ class PhotometryBatchWorker(QThread):
         )
 
     def _emit_points(self, results, jd: float | None, curves: dict[str, LightCurve]) -> None:
-        """Convert one frame's measurements into curve points + point signals."""
-        lat, lon, elev = self._req.site
+        """Convert one frame's measurements into curve points + point signals.
+
+        ``results`` carry targets and check stars (P2); checks flow into their
+        own curves/CSVs and their keys are remembered for the K-RMS summary.
+        """
         for res in results:
             if res.diff is None or res.diff.mag is None:
                 continue
-            bjd = (
-                bjd_tdb(
-                    jd,
-                    res.star.ra_deg,
-                    res.star.dec_deg,
-                    float(lat),
-                    float(lon),
-                    float(elev),
-                )
-                if jd is not None and lat is not None and lon is not None
-                else None
-            )
+            if res.star.role == ROLE_CHECK:
+                self._check_keys.add(res.star.auid or res.star.display_name)
+            bjd = self._bjd(jd, res.star)
             pt = LcPoint(
                 jd_utc=jd or 0.0,
                 mag=res.diff.mag,
@@ -256,6 +260,13 @@ class PhotometryBatchWorker(QThread):
                     saturated=pt.saturated,
                 )
             )
+
+    def _bjd(self, jd: float | None, star) -> float | None:
+        """BJD_TDB for a star at this frame's JD, or None without site/time."""
+        lat, lon, elev = self._req.site
+        if jd is None or lat is None or lon is None:
+            return None
+        return bjd_tdb(jd, star.ra_deg, star.dec_deg, float(lat), float(lon), float(elev))
 
     @staticmethod
     def _read_frame(fpath: Path) -> tuple[np.ndarray | None, float | None]:

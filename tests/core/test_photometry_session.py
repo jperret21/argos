@@ -64,3 +64,44 @@ def test_measure_targets_without_comps_is_provisional() -> None:
     ts.set_role(TargetStar(role=ROLE_TARGET, ra_deg=1.0, dec_deg=1.0, auid="T"))
     r = measure_targets(green, wcs, ts, r_ap=6, r_in=8, r_out=12)[0]
     assert r.diff is not None and r.diff.mag is None  # no comps → uncalibrated
+
+
+def test_check_star_is_calibrated_but_not_in_the_ensemble() -> None:
+    """P2: the check star gets its own calibrated result (K curve) and its
+    flux never contaminates the comparison ensemble."""
+    from argos.core.catalog.targets import ROLE_CHECK
+
+    tgt = ((30.0, 30.0), 20000.0)
+    chk = ((45.0, 15.0), 12000.0)
+    c1 = ((10.0, 10.0), 8000.0)
+    c2 = ((50.0, 50.0), 8000.0)
+    green = _green_with_stars([tgt, chk, c1, c2])
+    wcs = _FakeWCS(
+        {
+            (1.0, 1.0): (30.0, 30.0),
+            (4.0, 4.0): (45.0, 15.0),
+            (2.0, 2.0): (10.0, 10.0),
+            (3.0, 3.0): (50.0, 50.0),
+        }
+    )
+    ts = TargetSet(object_name="X")
+    ts.set_role(TargetStar(role=ROLE_TARGET, ra_deg=1.0, dec_deg=1.0, auid="T"))
+    ts.set_role(TargetStar(role=ROLE_CHECK, ra_deg=4.0, dec_deg=4.0, auid="K", mags={"V": 10.5}))
+    ts.set_role(
+        TargetStar(role=ROLE_COMPARISON, ra_deg=2.0, dec_deg=2.0, auid="C1", mags={"V": 11.0})
+    )
+    ts.set_role(
+        TargetStar(role=ROLE_COMPARISON, ra_deg=3.0, dec_deg=3.0, auid="C2", mags={"V": 11.0})
+    )
+
+    results = measure_targets(green, wcs, ts, r_ap=6, r_in=8, r_out=12)
+    by_auid = {r.star.auid: r for r in results}
+    assert set(by_auid) == {"T", "K"}  # target AND check, comps stay internal
+
+    k = by_auid["K"]
+    assert k.diff is not None and k.diff.mag is not None
+    # Calibrated against the 2 comps only (the check never calibrates itself).
+    assert k.diff.comps_used == 2
+    # 12000 ADU vs the comps' 8000 at V=11 → K reads brighter than 11 but
+    # fainter than the 20000-ADU target.
+    assert by_auid["T"].diff.mag < k.diff.mag < 11.0

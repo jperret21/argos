@@ -292,3 +292,43 @@ def test_batch_diagnostics_can_be_disabled(tmp_path) -> None:
     worker = PhotometryBatchWorker(req)
     worker.run()
     assert not list((tmp_path / "targets").glob("*_diagnostics.jsonl"))
+
+
+def test_batch_exports_the_check_star_curve(tmp_path) -> None:
+    """P2: the K star gets its own curve + CSV and a check_rms summary event."""
+    import dataclasses
+    import json
+
+    from argos.core.catalog.targets import ROLE_CHECK
+
+    req = _rotating_scene(tmp_path, total_deg=2.0, n_frames=5, track=True)
+    ts = req.target_set
+    # Promote comp C2 (at green px 60,95) to check star.
+    ts.set_role(TargetStar(role=ROLE_CHECK, ra_deg=3.0, dec_deg=3.0, auid="K1", mags={"V": 11.0}))
+    req = dataclasses.replace(req, target_set=ts)
+
+    worker = PhotometryBatchWorker(req)
+    result_box = []
+    worker.finished_batch.connect(result_box.append)
+    worker.run()
+
+    result = result_box[0]
+    assert result.ok
+    assert "K1" in result.curves  # the K curve exists…
+    k_curve = result.curves["K1"]
+    assert len(k_curve.points) == 5
+    k_mags = [p.mag for p in k_curve.points]
+    assert max(k_mags) - min(k_mags) < 0.05  # …and the constant K star is flat
+
+    csv_names = [p.name for p in (tmp_path / "targets").glob("*.csv")]
+    assert any("K1" in n for n in csv_names)
+
+    diag_file = next((tmp_path / "targets").glob("*_diagnostics.jsonl"))
+    events = [
+        json.loads(line)
+        for line in diag_file.read_text().splitlines()
+        if json.loads(line)["kind"] == "event"
+    ]
+    rms_events = [e for e in events if e["what"] == "check_rms"]
+    assert len(rms_events) == 1 and rms_events[0]["star"] == "K1"
+    assert rms_events[0]["rms_mag"] < 0.05

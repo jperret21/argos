@@ -13,7 +13,13 @@ from typing import Callable
 
 import numpy as np
 
-from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+from argos.core.catalog.targets import (
+    ROLE_CHECK,
+    ROLE_COMPARISON,
+    ROLE_TARGET,
+    TargetSet,
+    TargetStar,
+)
 from argos.core.photometry.aperture import AperturePhot, measure_aperture
 from argos.core.photometry.differential import DiffResult, differential_mag
 
@@ -51,11 +57,16 @@ def measure_targets(
 
     ``wcs`` only needs ``world_to_pixel_deg(ra_deg, dec_deg) -> (x, y)`` (green px).
     Comparisons without a catalog magnitude in ``band``/V are skipped from the
-    ensemble. Returns one :class:`TargetResult` per ``role == 'target'`` star.
+    ensemble. Returns one :class:`TargetResult` per target *and* per check star
+    (distinguish them by ``result.star.role``).
 
     ``on_star`` (diagnostics tap, P11) is called once per star of *any* role
     with ``(star, phot, x, y)`` — the raw measurement the calibrated output
-    discards for comparisons and checks.
+    discards for comparisons.
+
+    Check stars (P2) are calibrated exactly like targets — against the
+    comparison ensemble, never as part of it — so a flat check curve can
+    certify the night and a wandering one condemn it.
     """
     measured: list[tuple[TargetStar, AperturePhot | None]] = []
     for s in target_set.stars:
@@ -87,7 +98,7 @@ def measure_targets(
 
     out: list[TargetResult] = []
     for s, phot in measured:
-        if s.role != ROLE_TARGET:
+        if s.role not in (ROLE_TARGET, ROLE_CHECK):
             continue
         if phot is None or phot.inst_mag is None:
             out.append(TargetResult(s, None, phot))

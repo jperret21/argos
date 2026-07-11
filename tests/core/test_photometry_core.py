@@ -59,9 +59,32 @@ def test_measure_aperture_no_flux_has_no_mag() -> None:
 
 
 def test_ensemble_zero_point() -> None:
-    zp, rms, n = ensemble_zero_point([(-5.0, 10.0), (-5.0, 10.0)])
-    assert zp == 15.0 and rms == 0.0 and n == 2
-    assert ensemble_zero_point([]) == (None, None, 0)
+    zp, rms, n, rejected = ensemble_zero_point([(-5.0, 10.0), (-5.0, 10.0)])
+    assert zp == 15.0 and rms == 0.0 and n == 2 and rejected == 0
+    assert ensemble_zero_point([]) == (None, None, 0, 0)
+
+
+def test_ensemble_clips_a_bad_comp() -> None:
+    """P3: one polluted comp (blend/cloud/bad catalog mag) must not drag the
+    zero-point — median+MAD clipping drops it and reports it."""
+    good = [(-5.0, 10.0), (-5.005, 10.0), (-4.995, 10.0)]
+    bad = [(-5.5, 10.0)]  # 0.5 mag off
+    zp, rms, n, rejected = ensemble_zero_point(good + bad)
+    assert rejected == 1 and n == 3
+    assert abs(zp - 15.0) < 0.01  # the clean answer, not the dragged mean
+    r = differential_mag(-6.0, 0.01, good + bad)
+    assert r.comps_used == 3 and "1 comp(s) clipped" in r.note
+    assert abs(r.mag - 9.0) < 0.01
+
+
+def test_ensemble_never_clips_below_two_or_tight_pairs() -> None:
+    # Two comps: no clipping possible even if they disagree.
+    zp, _, n, rejected = ensemble_zero_point([(-5.0, 10.0), (-5.3, 10.0)])
+    assert n == 2 and rejected == 0
+    # Scatter within the 10 mmag floor: nothing rejected.
+    tight = [(-5.0, 10.0), (-5.004, 10.0), (-4.996, 10.0), (-5.002, 10.0)]
+    _, _, n, rejected = ensemble_zero_point(tight)
+    assert n == 4 and rejected == 0
 
 
 def test_differential_mag_calibrates_target() -> None:
