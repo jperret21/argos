@@ -91,6 +91,39 @@ def test_shell_three_mode_walkthrough() -> None:
         assert shell._engine._variables == [] and shell._engine._comparisons == []
         catalog_dlg.deleteLater()
 
+        # A target assigned while the field's VSP comps were still unknown left
+        # the set comp-less ("no valid comparisons" on every frame); the catalog
+        # arriving later backfills the auto-selected ensemble.
+        import tempfile as _tempfile
+        from pathlib import Path as _Path
+
+        from argos.core.catalog.aavso import Band, ComparisonStar
+        from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetStar
+        from argos.workers.catalog_worker import CatalogResult
+
+        with _tempfile.TemporaryDirectory() as _td:
+            shell._config.set("sessions_path", str(_Path(_td) / "sessions"))
+            engine = shell._engine
+            engine.set_target_role(
+                TargetStar(role=ROLE_TARGET, ra_deg=300.0, dec_deg=22.5, name="Var X")
+            )
+            tset = engine.target_set()
+            assert not tset.by_role(ROLE_COMPARISON)  # no comps known yet
+            engine._on_catalog(
+                CatalogResult(
+                    comparisons=[
+                        ComparisonStar("000-AAA-001", 300.1, 22.4, "114", (Band("V", 11.4),)),
+                        ComparisonStar("000-AAA-002", 299.9, 22.6, "121", (Band("V", 12.1),)),
+                    ]
+                )
+            )
+            comps = engine.target_set().by_role(ROLE_COMPARISON)
+            assert len(comps) == 2 and comps[0].mags.get("V") is not None
+            # The persisted set carries the backfilled ensemble too.
+            reloaded = type(tset).load(engine._target_path(tset.object_name))
+            assert len(reloaded.by_role(ROLE_COMPARISON)) == 2
+            engine._target_set = None  # drop the tempdir-backed set
+
         # ── Status bar device states ─────────────────────────────────────
         shell.status.set_device_state("mount", "connected")
         shell.status.set_device_state("camera", "busy", info="exposing")

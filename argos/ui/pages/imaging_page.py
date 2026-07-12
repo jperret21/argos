@@ -1192,6 +1192,19 @@ class ImagingPage(QWidget):
         if not tset.by_role("target"):
             QMessageBox.information(self, "No targets", "Assign at least one target star first.")
             return
+        if not tset.by_role("comparison"):
+            # Without comps every frame ends "no valid comparisons" → an empty
+            # curve; refuse up front with the fix instead of a post-run WARN.
+            QMessageBox.information(
+                self,
+                "No comparison stars",
+                "The target set has no comparison stars, so differential\n"
+                "photometry cannot produce magnitudes.\n\n"
+                "Solve the field and wait for the catalog (comps auto-select\n"
+                "once it arrives), or click a comparison marker on the image\n"
+                "and assign it the Comp role.",
+            )
+            return
         start = str(self._engine.last_sequence_dir or self._config.sessions_path)
         folder = QFileDialog.getExistingDirectory(self, "Folder of saved subs", start)
         if not folder:
@@ -1250,7 +1263,11 @@ class ImagingPage(QWidget):
             QMessageBox.warning(self, "Batch failed", result.error)
             return
         if not result.curves:
-            self.log_message.emit("WARN", "Batch photometry: no points measured.")
+            self.log_message.emit(
+                "WARN",
+                "Batch photometry: no points measured — see the per-frame notes "
+                "in targets/*_diagnostics.jsonl.",
+            )
             return
         self.log_message.emit(
             "OK",

@@ -779,6 +779,19 @@ class AcquisitionEngine(QObject):
         self.catalog_ready.emit(result)  # the page re-projects onto the WCS
         if self._variables:
             self.log_message.emit("OK", f"Catalog: {len(self._variables)} variable(s) in field")
+        # A target assigned before the VSP answer arrived got no auto-selected
+        # comparisons (the set stayed comp-less and every differential measure
+        # would say "no valid comparisons") — backfill now that the field's
+        # comps are known. A manual/earlier ensemble is never clobbered.
+        if self._comparisons:
+            tset = self.target_set()
+            targets = tset.by_role(ROLE_TARGET)
+            if targets and not tset.by_role(ROLE_COMPARISON):
+                self._auto_select_comparisons(tset, targets[0])
+                if tset.by_role(ROLE_COMPARISON):
+                    self._save_target_set(tset)
+                    self._reset_tracker()  # the anchor constellation changed
+                    self.targets_changed.emit(tset)
 
     # ------------------------------------------------------------------
     # Target set persistence (targets.json per object)
