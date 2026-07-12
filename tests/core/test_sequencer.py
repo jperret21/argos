@@ -41,6 +41,22 @@ def test_ordering_and_step_index() -> None:
     assert [f.step_index for f in frames] == [0, 0, 1, 1]
 
 
+def test_wheel_filter_sends_calibration_frames_to_the_dark_slot() -> None:
+    # A shutterless camera's wheel is its only shutter: Dark/Bias must sit on
+    # the opaque slot whatever the step's filter says (field bug 2026-07-11 —
+    # "darks" shot through IR were lights). Light/Flat keep the step's filter.
+    plan = SequencePlan(
+        steps=[
+            SequenceStep(frame_type="Light", filter_name="IR", count=1),
+            SequenceStep(frame_type="Dark", filter_name="IR", count=1),
+            SequenceStep(frame_type="Bias", filter_name="LP", count=1),
+            SequenceStep(frame_type="Flat", filter_name="LP", count=1),
+        ]
+    )
+    frames = list(expand_plan(plan))
+    assert [f.wheel_filter for f in frames] == ["IR", "Dark", "Dark", "LP"]
+
+
 def test_frame_index_is_per_bucket_and_monotonic_across_repeats() -> None:
     plan = SequencePlan(steps=[SequenceStep(filter_name="Ha", count=3)], repeat=2)
     frames = list(expand_plan(plan))

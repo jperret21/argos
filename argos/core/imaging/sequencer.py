@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 #: Frame types accepted in a step (UI-facing short names).
 FRAME_TYPES: tuple[str, ...] = ("Light", "Dark", "Flat", "Bias")
 
+#: Name of the wheel's opaque slot (Seestar position 0) — matched
+#: case-insensitively by the worker; wheels without one skip the move.
+DARK_FILTER_NAME = "Dark"
+
 
 @dataclass
 class SequenceStep:
@@ -97,6 +101,17 @@ class FrameSpec:
     def needs_filter(self) -> bool:
         """True for frame types that require a filter selection."""
         return self.frame_type in ("Light", "Flat")
+
+    @property
+    def wheel_filter(self) -> str:
+        """Filter slot the wheel must sit on for this frame.
+
+        Light/Flat use the step's filter. Dark/Bias go to the opaque
+        ``Dark`` slot: on a shutterless camera (Seestar) the wheel is the
+        only shutter — leaving it on a light filter turns darks into lights
+        (field bug 2026-07-11).
+        """
+        return self.filter_name if self.needs_filter else DARK_FILTER_NAME
 
 
 def _image_type_for(frame_type: str) -> str:

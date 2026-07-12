@@ -187,19 +187,22 @@ class SequenceWorker(QThread):
                 current_step = spec.step_index
                 self.step_started.emit(current_step, self._plan.steps[current_step])
 
-            # Filter change (Light/Flat only).
-            if (
-                spec.needs_filter
-                and self._filterwheel is not None
-                and spec.filter_name != current_filter
-            ):
-                self._set_filter(spec.filter_name)
-                if current_filter is not None and self._plan.autofocus_on_filter_change:
+            # Wheel move: Light/Flat go to the step's filter, Dark/Bias to the
+            # opaque slot (spec.wheel_filter). Autofocus-on-change only makes
+            # sense when the new slot passes light.
+            wanted = spec.wheel_filter
+            if self._filterwheel is not None and wanted != current_filter:
+                self._set_filter(wanted)
+                if (
+                    spec.needs_filter
+                    and current_filter is not None
+                    and self._plan.autofocus_on_filter_change
+                ):
                     self._await_autofocus()
                     frames_since_af = 0
                     if self._stop_flag:
                         return False
-                current_filter = spec.filter_name
+                current_filter = wanted
 
             # Periodic autofocus.
             if self._plan.autofocus_every_n > 0 and frames_since_af >= self._plan.autofocus_every_n:
@@ -342,7 +345,7 @@ class SequenceWorker(QThread):
         # P1 header truthfulness: read the achieved state back from the
         # devices — a header must never record a setting the hardware refused.
         gain_actual = self._read_back_gain(spec.gain)
-        filter_actual = self._read_back_filter(spec.filter_name)
+        filter_actual = self._read_back_filter(spec.wheel_filter)
         self._camera.start_exposure(spec.exposure_s, light=spec.is_light)
 
         deadline = time.monotonic() + spec.exposure_s + _DOWNLOAD_MARGIN_S
