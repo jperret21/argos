@@ -75,3 +75,35 @@ def test_lightcurve_export_csv(tmp_path, qapp) -> None:
         win.close()
         win.deleteLater()
         qapp.processEvents()  # flush the deferred delete now (pyqtgraph teardown)
+
+
+def test_variables_tab_lists_and_selects(qapp) -> None:
+    """W3: the Variables tab shows the field's variables (target marked ●,
+    suspected muted) and emits the row index on 'Set as target'."""
+    win = PhotometryWindow()
+    try:
+        rows = [
+            ("V0452 Vul", "EP+BY", "7.67 V – (0.03) V", 2.218573, 16.9, True, False),
+            ("NSV 24978", None, "6.52 Hp", None, 44.1, False, True),
+        ]
+        win.variables.set_variables(rows)
+        table = win.variables._table
+        assert table.rowCount() == 2
+        assert table.item(0, 0).text() == "●"  # already a target
+        assert table.item(0, 1).text() == "V0452 Vul"
+        assert table.item(1, 2).text() == "?"  # unknown type
+        assert table.item(0, 5).text() == "16.9"
+
+        picked: list[int] = []
+        win.variables.target_requested.connect(picked.append)
+        table.setCurrentCell(1, 1)
+        win.variables._select_btn.click()
+        assert picked == [1]
+
+        # Repopulating replaces rows (no stale duplicates).
+        win.variables.set_variables(rows[:1])
+        assert table.rowCount() == 1
+    finally:
+        win.close()
+        win.deleteLater()
+        qapp.processEvents()  # flush the deferred delete now (pyqtgraph teardown)

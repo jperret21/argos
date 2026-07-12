@@ -27,6 +27,7 @@ from argos.ui.widgets.comparison_table import ComparisonEnsembleTable
 from argos.ui.widgets.lightcurve_panel import LightCurvePanel
 from argos.ui.widgets.metrics_panel import MetricsPanel
 from argos.ui.widgets.target_table import TargetTable
+from argos.ui.widgets.variable_table import VariableTable
 
 
 class PhotometryWindow(QWidget):
@@ -49,11 +50,14 @@ class PhotometryWindow(QWidget):
         )
         root.addWidget(banner)
 
+        self.variables = VariableTable()
         self.lightcurve = LightCurvePanel()
         self.metrics = MetricsPanel()
         self.targets = TargetTable()
         self.comparisons = ComparisonEnsembleTable()
         tabs = QTabWidget()
+        # Variables first: picking the target there is the workflow's entry point.
+        tabs.addTab(self.variables, "Variables")
         tabs.addTab(self.lightcurve, "Light curve")
         tabs.addTab(self.metrics, "Metrics")
         tabs.addTab(self.targets, "Targets")

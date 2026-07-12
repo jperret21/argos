@@ -309,6 +309,16 @@ class CameraDock(design.Card):
         self._bin_spin.hide()
         self.set_temperature(None)
 
+    def set_object_name_if_empty(self, name: str) -> None:
+        """Prefill Object from a picked target while the field is still empty.
+
+        The object name keys the persistent target set and lands in the FITS
+        ``OBJECT`` header — left empty it becomes "Unknown", orphaning both.
+        A name the user already typed is never overwritten.
+        """
+        if name and not self._object_edit.text().strip():
+            self._object_edit.setText(name)
+
     def set_filter_options(self, names: list[str]) -> None:
         """Refresh the filter combo from the filter wheel slots."""
         current = self._filter_combo.currentText()

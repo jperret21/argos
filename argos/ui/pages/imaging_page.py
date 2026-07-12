@@ -68,8 +68,9 @@ from argos.core.session.types import (
     FocuserState,
     LiveFrame,
 )
+from argos.core.catalog.photometry import separation_arcmin
 from argos.core.catalog.targets import TargetStar
-from argos.core.imaging.astrometry_session import project_points
+from argos.core.imaging.astrometry_session import field_geometry, project_points
 from argos.core.imaging.debayer import VIEW_SUPERPIXEL
 from argos.core.imaging.metrics import (
     ARCSEC_PER_FULL_PX,
@@ -1033,6 +1034,7 @@ class ImagingPage(QWidget):
     def _on_catalog_ready(self, _result) -> None:
         """The engine fetched a fresh VSX/VSP catalog — project it onto the WCS."""
         self._project_catalog()
+        self._refresh_variable_table()
 
     def _project_catalog(self) -> None:
         """Re-project the engine's cached variables/comparisons/targets onto the WCS.
@@ -1072,14 +1074,18 @@ class ImagingPage(QWidget):
 
     @pyqtSlot(object)
     def _on_targets_changed(self, _tset) -> None:
-        """The engine's target set changed — refresh markers and the table."""
+        """The engine's target set changed — refresh markers and the tables."""
         self._project_targets()
         self._refresh_target_table()
+        self._refresh_variable_table()  # ● markers on the selected rows
 
     def _on_card_role(self, role: str) -> None:
         if self._pending_star is None:
             return
         star = TargetStar(role=role, **self._pending_star)
+        if role == "target":
+            # Before the save: the object name keys targets.json + FITS OBJECT.
+            self._camera_dock.set_object_name_if_empty(star.display_name)
         self._engine.set_target_role(star)  # → targets_changed refreshes the view
         self.log_message.emit("OK", f"{role.capitalize()}: {star.display_name}")
 
@@ -1103,6 +1109,9 @@ class ImagingPage(QWidget):
             )
             self._photometry_window.targets.remove_requested.connect(self._engine.remove_target)
             self._photometry_window.comparisons.remove_requested.connect(self._engine.remove_target)
+            self._photometry_window.variables.target_requested.connect(
+                self._on_variable_target_requested
+            )
         # Backfill the window with the curve so far (points accrue in the dock).
         self._photometry_window.load_curves(
             self._engine.lightcurves,
@@ -1113,12 +1122,53 @@ class ImagingPage(QWidget):
         # AAVSO/CSV export reflects points (and targets) added after this open.
         self._photometry_window.lightcurves = self._engine.lightcurves
         self._refresh_target_table()
+        self._refresh_variable_table()
         self._photometry_window.show()
         self._photometry_window.raise_()
 
     def _refresh_target_table(self) -> None:
         if self._photometry_window is not None:
             self._photometry_window.set_targets(self._engine.target_set().stars)
+
+    def _refresh_variable_table(self) -> None:
+        """Feed the Variables tab: one row per cached VSX variable, in order."""
+        if self._photometry_window is None:
+            return
+        centre = field_geometry(self._astrometry.wcs, self._green_shape)
+        saved = {s.key() for s in self._engine.target_set().stars}
+        rows = []
+        for v in self._engine.variables:
+            sep = (
+                separation_arcmin(centre[0], centre[1], v.ra_deg, v.dec_deg)
+                if centre is not None
+                else None
+            )
+            mag = " – ".join(m for m in (v.max_mag, v.min_mag) if m)
+            key = f"auid:{v.auid}" if v.auid else f"pos:{v.ra_deg:.5f},{v.dec_deg:.5f}"
+            rows.append(
+                (v.name, v.var_type, mag, v.period, sep, key in saved, v.is_suspected)
+            )
+        self._photometry_window.variables.set_variables(rows)
+
+    def _on_variable_target_requested(self, row: int) -> None:
+        """Variables-tab pick — the same action as the star-card Target button."""
+        variables = self._engine.variables
+        if not 0 <= row < len(variables):
+            return
+        v = variables[row]
+        star = TargetStar(
+            role="target",
+            ra_deg=v.ra_deg,
+            dec_deg=v.dec_deg,
+            auid=v.auid,
+            name=v.name,
+            source="vsx",
+            mags={},
+        )
+        # Before the save: the object name keys targets.json + FITS OBJECT.
+        self._camera_dock.set_object_name_if_empty(star.display_name)
+        self._engine.set_target_role(star)  # → targets_changed refreshes the view
+        self.log_message.emit("OK", f"Target: {star.display_name}")
 
     # ------------------------------------------------------------------
     # Batch re-run over saved subs (WS7 — off the UI thread)
