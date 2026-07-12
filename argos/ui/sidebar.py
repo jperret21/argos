@@ -36,7 +36,8 @@ logger = logging.getLogger(__name__)
 # The mode id "connect" is kept for config/back-compat; the label is Equipment.
 MODES: tuple[tuple[str, str, str], ...] = (
     ("connect", "Equipment", "Connect the Seestar devices and Stellarium"),
-    ("capture", "Capture", "The night screen — image, sequence, focus, photometry"),
+    ("capture", "Capture", "The night screen — image, focus, photometry"),
+    ("sequencer", "Sequencer", "Plan and run the night's capture sequence"),
     ("analyze", "Analyze", "Inspect the light curve and export AAVSO"),
     ("settings", "Settings", "Observer, site, paths, appearance"),
 )
@@ -59,6 +60,11 @@ _ICON_PATHS: dict[str, str] = {
     "capture": (
         '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>'
         '<circle cx="12" cy="13" r="4"/>'
+    ),
+    "sequencer": (  # Feather "list": the ordered plan of the night
+        '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/>'
+        '<line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/>'
+        '<line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>'
     ),
     "analyze": (
         '<polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>' '<polyline points="17 6 23 6 23 12"/>'

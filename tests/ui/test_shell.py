@@ -31,16 +31,17 @@ def test_shell_three_mode_walkthrough() -> None:
 
     shell = Shell(Config({}))
     try:
-        # ── Shell skeleton: 4 modes (NINA-style), default = connect ───────
+        # ── Shell skeleton: 5 modes (NINA-style), default = connect ───────
         assert set(shell._pages.keys()) == {
             "connect",
             "capture",
+            "sequencer",
             "analyze",
             "settings",
         }
         assert shell._stack.currentIndex() == shell._page_indices["connect"]
 
-        for mode in ("capture", "analyze", "settings", "connect"):
+        for mode in ("capture", "sequencer", "analyze", "settings", "connect"):
             shell.sidebar.select(mode)
             assert shell._stack.currentIndex() == shell._page_indices[mode], mode
 
@@ -84,10 +85,20 @@ def test_shell_three_mode_walkthrough() -> None:
         page._camera_dock._take_btn.click()
         assert shots == [True]
 
-        # Sequence tab builds a plan from its step table.
-        plan = page._sequence_panel.to_plan()
+        # The Sequencer mode owns the plan editor; it builds a plan offline
+        # and a run lights the strip + sidebar dot through the engine signals.
+        seq_page = shell._pages["sequencer"]
+        plan = seq_page.panel.to_plan()
         assert len(plan.steps) >= 1
         assert plan.steps[0].count > 0
+        shell._engine.sequence_running.emit(True)
+        assert shell._sequence_active is True and shell.status._seq_running is True
+        shell._engine.sequence_running.emit(False)
+        assert shell._sequence_active is False and shell.status._seq_running is False
+        # Starting without a camera is refused and the button snaps back.
+        seq_page.panel.set_running(True)
+        seq_page._on_start(plan)
+        assert seq_page.panel._running is False
 
         # Mount dock goto.
         goto: list[tuple[float, float]] = []

@@ -62,8 +62,12 @@ def _format_duration(seconds: float) -> str:
     return f"{h}h {m:02d}m" if h else f"{m}m {s:02d}s"
 
 
-class SequencePanel(design.Card):
-    """Editable multi-step sequence table + run controls (wide layout)."""
+class SequencePanel(QWidget):
+    """Editable multi-step sequence plan + run controls (full-page layout).
+
+    Pure UI — Steps / Plan / Presets / Run cards; the hosting SequencerPage
+    wires the signals to the engine and pushes device-derived limits in.
+    """
 
     start_requested = pyqtSignal(object)  # SequencePlan
     pause_requested = pyqtSignal()
@@ -71,7 +75,7 @@ class SequencePanel(design.Card):
     stop_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("Sequence", parent)
+        super().__init__(parent)
         self._filters = list(_DEFAULT_FILTERS)
         self._gain_range = _DEFAULT_GAIN_RANGE
         self._exposure_range = _DEFAULT_EXPOSURE_RANGE
@@ -87,13 +91,13 @@ class SequencePanel(design.Card):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        outer = design.card_layout(self)
-        body = QHBoxLayout()
+        body = QHBoxLayout(self)
+        body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(design.SPACING_LG)
-        outer.addLayout(body)
 
-        # ── Left: the step table + row editing ──────────────────────────
-        left = QVBoxLayout()
+        # ── Steps card: the table + row editing (takes the width) ───────
+        steps_card = design.Card("Steps")
+        left = design.card_layout(steps_card)
         left.setSpacing(design.SPACING_SM)
 
         self._table = QTableWidget(0, len(_COLUMNS))
@@ -132,12 +136,14 @@ class SequencePanel(design.Card):
         )
         edit_row.addWidget(self._estimate_lbl)
         left.addLayout(edit_row)
-        body.addLayout(left, 1)
+        body.addWidget(steps_card, 1)
 
-        # ── Right: plan options, presets, run controls ───────────────────
+        # ── Right rail: Plan / Presets / Run cards ───────────────────────
         right = QVBoxLayout()
-        right.setSpacing(design.SPACING_SM)
+        right.setSpacing(design.SPACING_LG)
 
+        plan_card = design.Card("Plan")
+        plan_l = design.card_layout(plan_card)
         opts = QGridLayout()
         opts.setHorizontalSpacing(design.SPACING_MD)
         opts.setVerticalSpacing(design.SPACING_SM)
@@ -165,8 +171,11 @@ class SequencePanel(design.Card):
             "Mount action after FULL completion only — never after a stop or error"
         )
         opts.addWidget(self._on_complete_combo, 4, 1)
-        right.addLayout(opts)
+        plan_l.addLayout(opts)
+        right.addWidget(plan_card)
 
+        presets_card = design.Card("Presets")
+        presets_l = design.card_layout(presets_card)
         preset_row = QHBoxLayout()
         preset_row.setSpacing(design.SPACING_SM)
         save_btn = design.SecondaryButton("Save preset…")
@@ -175,10 +184,11 @@ class SequencePanel(design.Card):
         load_btn.clicked.connect(self._on_load_preset)
         preset_row.addWidget(save_btn, 1)
         preset_row.addWidget(load_btn, 1)
-        right.addLayout(preset_row)
+        presets_l.addLayout(preset_row)
+        right.addWidget(presets_card)
 
-        right.addStretch()
-
+        run_card = design.Card("Run")
+        run_l = design.card_layout(run_card)
         self._start_btn = design.SuccessButton("▶  Start sequence")
         self._start_btn.clicked.connect(self._on_start)
         self._pause_btn = design.SecondaryButton("⏸  Pause")
@@ -188,19 +198,22 @@ class SequencePanel(design.Card):
         self._stop_btn = design.DangerButton("■  Stop")
         self._stop_btn.clicked.connect(self.stop_requested)
         self._stop_btn.setEnabled(False)
-        right.addLayout(design.button_row(self._start_btn))
-        right.addLayout(design.button_row(self._pause_btn, self._stop_btn))
+        run_l.addLayout(design.button_row(self._start_btn))
+        run_l.addLayout(design.button_row(self._pause_btn, self._stop_btn))
 
         self._progress = QProgressBar()
         self._progress.setVisible(False)
-        right.addWidget(self._progress)
+        run_l.addWidget(self._progress)
         self._status_lbl = design.MutedLabel("")
         self._status_lbl.setWordWrap(True)
-        right.addWidget(self._status_lbl)
+        run_l.addWidget(self._status_lbl)
+        right.addWidget(run_card)
+
+        right.addStretch()
 
         right_wrap = QWidget()
         right_wrap.setLayout(right)
-        right_wrap.setMinimumWidth(180)
+        right_wrap.setFixedWidth(320)
         body.addWidget(right_wrap, 0)
 
     # ------------------------------------------------------------------

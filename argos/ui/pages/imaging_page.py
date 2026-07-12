@@ -95,7 +95,6 @@ from argos.ui.widgets.lightcurve_panel import LightCurvePanel
 from argos.ui.widgets.mount_dock import MountDock
 from argos.ui.panels.photometry_window import PhotometryWindow
 from argos.ui.widgets.overlay_bar import OverlayBar
-from argos.ui.widgets.sequence_panel import SequencePanel
 from argos.ui.widgets.star_info_card import StarInfoCard
 from argos.ui.widgets.statistics_dock import StatisticsDock
 from argos.workers.camera_service import CameraState
@@ -138,8 +137,6 @@ class ImagingPage(QWidget):
     autofocus_best = pyqtSignal(int, object)  # best position, best hfd|None
     autofocus_state = pyqtSignal(bool)  # sweep running / stopped
     # Capture visibility for the Shell's persistent strip (WS4).
-    sequence_running = pyqtSignal(bool)
-    sequence_progress = pyqtSignal(str, int, int, float)  # object, done, total, eta_s
     camera_state_changed = pyqtSignal(object)  # CameraState ownership transitions
     hfd_updated = pyqtSignal(object)  # per-frame HFD, float | None
 
@@ -206,7 +203,6 @@ class ImagingPage(QWidget):
         self._info_card = StarInfoCard(self._viewer)
         self._camera_dock = CameraDock()
         self._lightcurve_panel = LightCurvePanel()  # live curve, as a dock (WS7)
-        self._sequence_panel = SequencePanel()
         self._mount_dock = MountDock()
         self._focuser_dock = FocuserDock()
         self._histogram_dock = HistogramDock()
@@ -252,10 +248,8 @@ class ImagingPage(QWidget):
             "hfd_history": make_dock(
                 "HFD History", self._hfd_history_dock, object_name="dock.hfd_history", scroll=False
             ),
-            # Sequence + Log are wide, self-scrolling panels.
-            "sequence": make_dock(
-                "Sequence", self._sequence_panel, object_name="dock.sequence", scroll=False
-            ),
+            # Log is a wide, self-scrolling panel. (The sequence planner lives
+            # in its own Sequencer mode now.)
             "log": make_dock("Log", self._log_panel, object_name="dock.log", scroll=False),
             # Live differential light curve — visible during capture without a
             # floating window (WS7). Owns its own plot layout (scroll=False).
@@ -263,7 +257,6 @@ class ImagingPage(QWidget):
                 "Light curve", self._lightcurve_panel, object_name="dock.lightcurve", scroll=False
             ),
         }
-        self._sequence_panel.setMinimumHeight(180)
 
         # Slim panel-toggle strip (NINA's top strip): one checkable chip per
         # dock, wired to the dock's toggleViewAction() — which keeps the check
@@ -290,7 +283,6 @@ class ImagingPage(QWidget):
         ("display", "Display"),
         ("statistics", "Statistics"),
         ("hfd_history", "HFD History"),
-        ("sequence", "Sequence"),
         ("log", "Log"),
         ("lightcurve", "Light curve"),
     )
@@ -364,13 +356,12 @@ class ImagingPage(QWidget):
             w.tabifyDockWidget(self._docks["camera"], self._docks[key])
         self._docks["camera"].raise_()
 
-        w.addDockWidget(bottom, self._docks["sequence"])
+        # Log anchors the bottom; the light curve tabs behind it (summoned on
+        # demand during a run). The sequence planner has its own mode now.
         w.addDockWidget(bottom, self._docks["log"])
-        w.tabifyDockWidget(self._docks["sequence"], self._docks["log"])
-        # Light curve joins the bottom stack (summoned on demand during a run).
         w.addDockWidget(bottom, self._docks["lightcurve"])
-        w.tabifyDockWidget(self._docks["sequence"], self._docks["lightcurve"])
-        self._docks["sequence"].raise_()
+        w.tabifyDockWidget(self._docks["log"], self._docks["lightcurve"])
+        self._docks["log"].raise_()
 
         # Display / Statistics / HFD History have right-area homes but start
         # hidden — docks the user summons on demand from the panel strip.
@@ -429,10 +420,7 @@ class ImagingPage(QWidget):
         e.log_message.connect(self.log_message)
         e.action_changed.connect(self.action_changed)
         e.frame_ready.connect(self._on_frame)
-        e.sequence_running.connect(self._on_sequence_running)
-        e.sequence_paused.connect(self._sequence_panel.set_paused)
-        e.sequence_progress.connect(self._on_sequence_progress)
-        e.sequence_step.connect(self._on_seq_step)
+        e.sequence_running.connect(self._on_sequence_running)  # auto-solve arming
         e.frame_saved.connect(self._on_seq_frame_saved)
         e.autofocus_state.connect(self._on_autofocus_state)
         e.autofocus_step.connect(self._on_af_step)
@@ -481,10 +469,6 @@ class ImagingPage(QWidget):
         self._camera_dock.offset_changed.connect(self._on_camera_offset)
         self._camera_dock.binning_changed.connect(self._on_camera_binning)
         self._camera_dock.filter_selected.connect(self._on_camera_dock_filter)
-        self._sequence_panel.start_requested.connect(self._on_sequence_start)
-        self._sequence_panel.pause_requested.connect(self._engine.pause_sequence)
-        self._sequence_panel.resume_requested.connect(self._engine.resume_sequence_run)
-        self._sequence_panel.stop_requested.connect(self._engine.stop_sequence)
 
         # Filter wheel dock
 
@@ -546,7 +530,6 @@ class ImagingPage(QWidget):
             self._camera_dock.set_enabled(enabled)
             if state == "disconnected":
                 self._camera_dock.reset_camera_limits()
-                self._sequence_panel.set_camera_limits()  # back to defaults
         elif device == "focuser":
             self._focuser_dock.set_enabled(enabled)
             if state == "disconnected":
@@ -559,9 +542,6 @@ class ImagingPage(QWidget):
         optional parameters (offset / binning) the driver proves it supports."""
         self._camera_dock.set_gain_range(caps.gain_min, caps.gain_max)
         self._camera_dock.set_exposure_range(caps.exposure_min, caps.exposure_max)
-        self._sequence_panel.set_camera_limits(
-            caps.gain_min, caps.gain_max, caps.exposure_min, caps.exposure_max
-        )
         if caps.offset is not None and caps.offset_min is not None and caps.offset_max is not None:
             self._camera_dock.set_offset_support(caps.offset_min, caps.offset_max, caps.offset)
         if caps.max_bin > 1:
@@ -570,11 +550,10 @@ class ImagingPage(QWidget):
     @pyqtSlot(object)
     def _on_filterwheel_state(self, fw: FilterWheelState) -> None:
         # The wheel's real slot names become THE filter vocabulary everywhere
-        # a filter is picked (camera dock, sequence rows) — one source, so a
-        # picked name always resolves to a wheel position.
+        # a filter is picked (camera form here, sequence rows on the Sequencer
+        # page) — one source, so a picked name always resolves to a position.
         names = list(fw.names)
         self._camera_dock.set_filter_options(names)
-        self._sequence_panel.set_filter_options(names)
         self._camera_dock.set_current_filter(fw.position_name)
 
     @pyqtSlot(object)
@@ -1381,19 +1360,12 @@ class ImagingPage(QWidget):
         self._session.set_camera_binning(value)
 
     # ------------------------------------------------------------------
-    # Sequence — view slots over the engine-owned SequenceWorker
+    # Sequence — the run is driven from the Sequencer page; Capture only
+    # reacts to it (auto-solve arming, per-frame log lines)
     # ------------------------------------------------------------------
-
-    def _on_sequence_start(self, plan) -> None:
-        if not self._engine.start_sequence(plan):
-            # Refused (no camera / already running / AF owns the camera) —
-            # the reason is logged; snap the panel button back.
-            self._sequence_panel.set_running(False)
 
     @pyqtSlot(bool)
     def _on_sequence_running(self, running: bool) -> None:
-        self._sequence_panel.set_running(running)
-        self.sequence_running.emit(running)  # → the Shell's capture strip
         # Arm the periodic re-solve for the run (and restore the user's choice
         # after): it re-bases the WCS + live tracker so rigid-fit error never
         # accumulates, keeping markers and apertures on the stars all night.
@@ -1404,17 +1376,6 @@ class ImagingPage(QWidget):
                 self.log_message.emit("INFO", "Sequence: auto-solve armed for the run.")
         elif not getattr(self, "_auto_solve_before_seq", True):
             self._toolbar.set_auto_solve(False)
-
-    @pyqtSlot(str, int, int, float)
-    def _on_sequence_progress(self, obj: str, done: int, total: int, eta_s: float) -> None:
-        self._sequence_panel.set_progress(done, total, eta_s)
-        self.sequence_progress.emit(obj, done, total, eta_s)
-
-    def _on_seq_step(self, index: int, step) -> None:
-        self._sequence_panel.set_active_step(index)
-        self._sequence_panel.set_status(
-            f"Step {index + 1}: {step.count}× {step.exposure_s:.1f}s {step.filter_name}"
-        )
 
     def _on_seq_frame_saved(self, path: str, record) -> None:
         name = Path(path).name

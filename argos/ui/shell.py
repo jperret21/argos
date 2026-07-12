@@ -39,6 +39,7 @@ from argos.ui.pages.configuration_page import ConfigurationPage
 from argos.ui.pages.connection_page import ConnectionPage
 from argos.ui.pages.imaging_page import ImagingPage
 from argos.ui.pages.analyze_page import AnalyzeScreen
+from argos.ui.pages.sequencer_page import SequencerPage
 from argos.ui.sidebar import MODES, Sidebar
 from argos.ui.statusbar import TopStatusBar
 from argos.workers.camera_service import CameraState
@@ -118,14 +119,17 @@ class Shell(QMainWindow):
 
         self._connection = ConnectionPage(self._config)
         self._acquisition = ImagingPage(self._config, self._session, self._engine)
+        self._sequencer = SequencerPage(self._config, self._session, self._engine)
         self._configuration = ConfigurationPage(self._config)
         self._analyze = AnalyzeScreen(self._config)
 
-        # NINA-style: the night happens in Capture; Equipment is setup,
+        # NINA-style: the night happens in Capture; Equipment is setup, the
+        # Sequencer plans/runs the night (usable offline for plan editing),
         # Analyze is post-prod. (Mode id "connect" kept for config back-compat.)
         self._pages: dict[str, QWidget] = {
             "connect": self._connection,
             "capture": self._acquisition,
+            "sequencer": self._sequencer,
             "analyze": self._analyze,
             "settings": self._configuration,
         }
@@ -183,9 +187,10 @@ class Shell(QMainWindow):
         self._acquisition.action_changed.connect(self._status.set_action)
 
         # Capture visibility on every screen: sequence progress + LIVE chip in
-        # the top strip, activity dots on the sidebar (WS4).
-        self._acquisition.sequence_running.connect(self._on_sequence_running)
-        self._acquisition.sequence_progress.connect(self._status.set_sequence_progress)
+        # the top strip, activity dots on the sidebar (WS4). The run lives on
+        # the Sequencer page now, so the strip listens to the engine directly.
+        self._engine.sequence_running.connect(self._on_sequence_running)
+        self._engine.sequence_progress.connect(self._status.set_sequence_progress)
         self._acquisition.hfd_updated.connect(self._status.set_hfd)
         self._acquisition.camera_state_changed.connect(self._on_camera_state)
         self._acquisition.autofocus_state.connect(self._on_autofocus_state)
@@ -251,10 +256,12 @@ class Shell(QMainWindow):
         always usable.
         """
         camera_up = self._conn_state["camera"] in ("connected", "busy")
-        if self._sequence_active or self._autofocus_active:
+        if self._autofocus_active:
             self._sidebar.set_mode_state("capture", "active")
         else:
             self._sidebar.set_mode_state("capture", "ready" if camera_up else "blocked")
+        # The run belongs to the Sequencer mode; one glowing dot, not two.
+        self._sidebar.set_mode_state("sequencer", "active" if self._sequence_active else "none")
 
     def _on_mode_changed(self, mode_id: str) -> None:
         index = self._page_indices.get(mode_id)
