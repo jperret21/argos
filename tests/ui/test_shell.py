@@ -49,6 +49,38 @@ def test_shell_three_mode_walkthrough() -> None:
         assert isinstance(shell._pages["capture"], ImagingPage)
         assert isinstance(shell._pages["settings"], ConfigurationPage)
 
+        # ── Menu bar: Astrometry menu opens the shared settings dialog ────
+        from argos.ui.widgets import astrometry_settings as _astro_mod
+
+        menus = {a.menu().title(): a.menu() for a in shell.menuBar().actions() if a.menu()}
+        assert "Astrometry" in menus
+        astro_labels = [act.text() for act in menus["Astrometry"].actions()]
+        assert "Plate solving…" in astro_labels and "Catalog…" in astro_labels
+
+        # Triggering "Catalog…" builds the dialog on its tab (exec() stubbed so
+        # the offscreen test never blocks on a modal loop).
+        opened: list = []
+        orig_exec = _astro_mod.AstrometrySettingsDialog.exec
+        _astro_mod.AstrometrySettingsDialog.exec = lambda self: (opened.append(self), 0)[1]
+        try:
+            menus["Astrometry"].actions()[1].trigger()  # "Catalog…"
+        finally:
+            _astro_mod.AstrometrySettingsDialog.exec = orig_exec
+        assert len(opened) == 1
+        catalog_dlg = opened[0]
+        assert catalog_dlg._tabs.currentIndex() == 1  # opened on the Catalog tab
+
+        # Saving the dialog drops the engine's per-field catalog cache so the new
+        # query parameters take effect on the live field (unsolved here → the
+        # refetch clears state and no-ops on the network side).
+        shell._engine._catalog_centre = (10.0, 20.0)
+        shell._engine._variables = [object()]
+        shell._engine._comparisons = [object()]
+        catalog_dlg.saved.emit()  # wired to engine.refetch_catalog in the Shell
+        assert shell._engine._catalog_centre is None
+        assert shell._engine._variables == [] and shell._engine._comparisons == []
+        catalog_dlg.deleteLater()
+
         # ── Status bar device states ─────────────────────────────────────
         shell.status.set_device_state("mount", "connected")
         shell.status.set_device_state("camera", "busy", info="exposing")
@@ -241,16 +273,22 @@ def test_shell_three_mode_walkthrough() -> None:
                     def save(self):
                         self.saved = True
 
+                from argos.ui.widgets.astrometry_settings import SECTION_CATALOG
+
                 fake = _FakeCfg({"astrometry.database": "D05", "catalog.mag_limit": 14.0})
-                dlg = AstrometrySettingsDialog(fake, awin)
+                dlg = AstrometrySettingsDialog(fake, awin, section=SECTION_CATALOG)
+                assert dlg._tabs.currentIndex() == 1  # opened on the Catalog tab
                 assert dlg._db_combo.currentText() == "D05"  # loaded from config
                 assert dlg._mag_spin.value() == 14.0
+                assert dlg._autocomp_spin.value() == 5  # default when unset in config
                 dlg._mag_spin.setValue(16.0)
                 dlg._db_combo.setCurrentText("D80")
-                dlg._on_save()  # persists + emits saved
+                dlg._autocomp_spin.setValue(8)
+                dlg._on_save()  # persists every key + emits saved
                 assert fake.saved
                 assert fake.d["catalog.mag_limit"] == 16.0
                 assert fake.d["astrometry.database"] == "D80"
+                assert fake.d["photometry.auto_comparisons"] == 8
             finally:
                 awin.close()
                 awin.deleteLater()

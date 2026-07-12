@@ -1,10 +1,19 @@
 """Astrometry + catalog settings — a popup to tune solving & catalog queries.
 
-A convenience dialog launched from the analysis window so the user can adjust the
-plate-solve and AAVSO-catalog parameters without leaving the frame. It reads and
-writes the **same config keys** as the main Configuration page, so the two stay
-in sync. On save it emits :attr:`saved` — the window re-queries the catalog when a
-solution already exists, so changes (e.g. a brighter magnitude limit) apply live.
+A convenience dialog launched from the Shell's **Astrometry** menu (and from the
+analysis window) so the user can adjust the plate-solve and AAVSO-catalog
+parameters without hunting through the Settings page. It reads and writes the
+**same config keys** as the main Configuration page, so the two stay in sync. On
+save it emits :attr:`saved` — the Shell asks the engine to re-query the catalog
+so changes (e.g. a brighter magnitude limit) apply on the live field immediately.
+
+Why two tabs, not two dialogs
+-----------------------------
+The owner's mental model is two menu entries — "Plate solving…" and "Catalog…".
+Rather than duplicate a form (and its load/save plumbing) across two dialogs, we
+keep one dialog with two tabs and let the caller pick which tab opens first via
+``section``. One save button writes every key at once, so the two related
+parameter sets can be tuned together without closing and reopening.
 """
 
 from __future__ import annotations
@@ -17,37 +26,52 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLineEdit,
     QPushButton,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
+    QWidget,
 )
 
 # Single source of truth for the DB list + downsample options (shared with the
 # main Configuration page).
 from argos.ui.pages.configuration_page import _ASTAP_DATABASES, _DOWNSAMPLE
 
+#: Selectable initial tab (also the config-namespace each tab writes into).
+SECTION_ASTROMETRY = "astrometry"
+SECTION_CATALOG = "catalog"
+
 
 class AstrometrySettingsDialog(QDialog):
     """Edit astrometry + catalog settings; persist to the shared config.
 
+    Args:
+        config: the shared :class:`~argos.core.config.Config` (or a duck-typed
+            stand-in with ``get``/``set``/``save`` — the tests use one).
+        parent: Qt parent widget.
+        section: which tab to open on — ``SECTION_ASTROMETRY`` (default) or
+            ``SECTION_CATALOG``. Lets the two menu entries land on their tab.
+
     Signals:
-        saved(): emitted after the settings are written, so callers can re-apply.
+        saved(): emitted after the settings are written, so callers can re-apply
+            (the Shell triggers a catalog refetch on the running engine).
     """
 
     saved = pyqtSignal()
 
-    def __init__(self, config, parent=None) -> None:
+    def __init__(self, config, parent=None, *, section: str = SECTION_ASTROMETRY) -> None:
         super().__init__(parent)
         self._config = config
         self.setWindowTitle("Astrometry & catalog settings")
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(440)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(self._build_astrometry_group())
-        layout.addWidget(self._build_catalog_group())
+        self._tabs = QTabWidget()
+        self._tabs.addTab(self._build_astrometry_tab(), "Plate solving")
+        self._tabs.addTab(self._build_catalog_tab(), "Catalog")
+        layout.addWidget(self._tabs)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
@@ -57,12 +81,14 @@ class AstrometrySettingsDialog(QDialog):
         layout.addWidget(buttons)
 
         self._load()
+        # Open on the tab the caller asked for (Catalog is index 1).
+        self._tabs.setCurrentIndex(1 if section == SECTION_CATALOG else 0)
 
     # ------------------------------------------------------------------
 
-    def _build_astrometry_group(self) -> QGroupBox:
-        box = QGroupBox("Plate solving (ASTAP)")
-        form = QFormLayout(box)
+    def _build_astrometry_tab(self) -> QWidget:
+        tab = QWidget()
+        form = QFormLayout(tab)
 
         self._astap_edit = QLineEdit()
         self._astap_edit.setPlaceholderText("auto-detect (astap_cli / astap on PATH)")
@@ -96,11 +122,11 @@ class AstrometrySettingsDialog(QDialog):
 
         self._scale_hint_chk = QCheckBox("Use the camera scale as a field-of-view hint")
         form.addRow("", self._scale_hint_chk)
-        return box
+        return tab
 
-    def _build_catalog_group(self) -> QGroupBox:
-        box = QGroupBox("AAVSO catalog (VSX / VSP)")
-        form = QFormLayout(box)
+    def _build_catalog_tab(self) -> QWidget:
+        tab = QWidget()
+        form = QFormLayout(tab)
 
         self._mag_spin = QDoubleSpinBox()
         self._mag_spin.setRange(5.0, 20.0)
@@ -117,7 +143,17 @@ class AstrometrySettingsDialog(QDialog):
 
         self._suspected_chk = QCheckBox("Include suspected variables")
         form.addRow("", self._suspected_chk)
-        return box
+
+        # Photometry knob that belongs with the catalog: when a target is picked
+        # the engine auto-fills the comparison ensemble from the field's VSP
+        # stars — this caps how many it grabs.
+        self._autocomp_spin = QSpinBox()
+        self._autocomp_spin.setRange(1, 20)
+        self._autocomp_spin.setToolTip(
+            "How many comparison stars are auto-picked when a target is chosen"
+        )
+        form.addRow("Auto comparison stars", self._autocomp_spin)
+        return tab
 
     # ------------------------------------------------------------------
 
@@ -136,6 +172,7 @@ class AstrometrySettingsDialog(QDialog):
         self._mag_spin.setValue(float(self._g("catalog.mag_limit", 15.0)))
         self._max_spin.setValue(int(self._g("catalog.max_results", 250)))
         self._suspected_chk.setChecked(bool(self._g("catalog.include_suspected", True)))
+        self._autocomp_spin.setValue(int(self._g("photometry.auto_comparisons", 5)))
 
     def _select_downsample(self, value: int) -> None:
         for i, (_label, v) in enumerate(_DOWNSAMPLE):
@@ -165,6 +202,7 @@ class AstrometrySettingsDialog(QDialog):
             self._config.set("catalog.mag_limit", float(self._mag_spin.value()))
             self._config.set("catalog.max_results", int(self._max_spin.value()))
             self._config.set("catalog.include_suspected", self._suspected_chk.isChecked())
+            self._config.set("photometry.auto_comparisons", int(self._autocomp_spin.value()))
             self._config.save()
         self.saved.emit()
         self.accept()

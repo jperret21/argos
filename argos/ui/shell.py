@@ -42,6 +42,11 @@ from argos.ui.pages.analyze_page import AnalyzeScreen
 from argos.ui.pages.sequencer_page import SequencerPage
 from argos.ui.sidebar import MODES, Sidebar
 from argos.ui.statusbar import TopStatusBar
+from argos.ui.widgets.astrometry_settings import (
+    SECTION_ASTROMETRY,
+    SECTION_CATALOG,
+    AstrometrySettingsDialog,
+)
 from argos.workers.camera_service import CameraState
 from argos.workers.network_monitor import NetworkMonitor
 
@@ -166,6 +171,18 @@ class Shell(QMainWindow):
         reset = QAction("Reset Window Layout", self)
         reset.triggered.connect(self._reset_layout)
         view.addAction(reset)
+
+        # Astrometry — tools that tune the solve + the AAVSO catalog query. Both
+        # entries open the one shared settings dialog on the relevant tab (the
+        # owner's mental model: "Plate solving…" / "Catalog…"). Kept to the two
+        # menus with real content today; no empty scaffolding categories.
+        astrometry = bar.addMenu("Astrometry")
+        plate = QAction("Plate solving…", self)
+        plate.triggered.connect(lambda: self._open_astrometry_settings(SECTION_ASTROMETRY))
+        astrometry.addAction(plate)
+        catalog = QAction("Catalog…", self)
+        catalog.triggered.connect(lambda: self._open_astrometry_settings(SECTION_CATALOG))
+        astrometry.addAction(catalog)
 
         help_menu = bar.addMenu("Help")
         about = QAction("About Argos", self)
@@ -320,6 +337,17 @@ class Shell(QMainWindow):
     # ------------------------------------------------------------------
     # Menu actions
     # ------------------------------------------------------------------
+
+    def _open_astrometry_settings(self, section: str) -> None:
+        """Open the shared astrometry/catalog settings dialog on *section*.
+
+        On save the engine drops its per-field catalog cache and re-queries with
+        the new parameters, so a magnitude-limit change (etc.) reaches the live
+        field on the spot rather than only on the next slew/solve.
+        """
+        dialog = AstrometrySettingsDialog(self._config, self, section=section)
+        dialog.saved.connect(self._engine.refetch_catalog)
+        dialog.exec()
 
     def _show_about(self) -> None:
         self.statusBar().showMessage(

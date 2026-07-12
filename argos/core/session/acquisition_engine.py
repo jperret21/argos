@@ -725,6 +725,22 @@ class AcquisitionEngine(QObject):
     # Catalog (VSX/VSP once per field)
     # ------------------------------------------------------------------
 
+    def refetch_catalog(self) -> None:
+        """Drop the field's catalog cache and re-query with the current settings.
+
+        Lighter than :meth:`invalidate_astrometry`: the WCS solution and the
+        live tracker are left untouched because the field hasn't moved — only
+        the catalog query parameters changed (e.g. the user lowered the
+        magnitude limit in the Astrometry ▸ Catalog dialog). ``maybe_fetch_catalog``
+        short-circuits while the cached field centre still matches, so we clear
+        that centre and fetch again straight away when a solution already exists
+        (a no-op when the field is unsolved — nothing to query around yet).
+        """
+        self._variables = []
+        self._comparisons = []
+        self._catalog_centre = None
+        self.maybe_fetch_catalog()
+
     def maybe_fetch_catalog(self) -> None:
         """Fetch VSX/VSP once per field (re-fetch only when the centre moves)."""
         if self._catalog_worker is not None and self._catalog_worker.isRunning():
