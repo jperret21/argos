@@ -23,6 +23,7 @@ from .aavso import (
 )
 from .photometry import (
     ScoredComparison,
+    auto_comparison_stars,
     comparisons_for_variable,
     rank_comparisons,
     separation_arcmin,
@@ -34,6 +35,7 @@ __all__ = [
     "ComparisonStar",
     "ScoredComparison",
     "VariableStar",
+    "auto_comparison_stars",
     "comparisons_for_variable",
     "rank_comparisons",
     "separation_arcmin",

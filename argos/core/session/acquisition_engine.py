@@ -32,6 +32,7 @@ from pathlib import Path
 import numpy as np
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal, pyqtSlot
 
+from argos.core.catalog.photometry import auto_comparison_stars
 from argos.core.catalog.targets import ROLE_CHECK, ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
 from argos.core.config import Config
 from argos.core.imaging.astrometry_session import field_geometry
@@ -784,9 +785,37 @@ class AcquisitionEngine(QObject):
     def set_target_role(self, star: TargetStar) -> None:
         tset = self.target_set()
         tset.set_role(star)
+        if star.role == ROLE_TARGET:
+            self._auto_select_comparisons(tset, star)
         self._save_target_set(tset)
         self._reset_tracker()  # the anchor constellation changed
         self.targets_changed.emit(tset)
+
+    def _auto_select_comparisons(self, tset: TargetSet, target: TargetStar) -> None:
+        """Fill an empty comparison set from the field's VSP stars (W2).
+
+        Only when the set has none yet — a manual selection is never
+        clobbered, and a second target reuses the same ensemble (it serves
+        the whole field). Off-frame stars are excluded via the current WCS.
+        """
+        if tset.by_role(ROLE_COMPARISON) or not self._comparisons:
+            return
+        picks = auto_comparison_stars(
+            target.ra_deg,
+            target.dec_deg,
+            self._comparisons,
+            wcs=self._astrometry.wcs,
+            green_shape=self._green_shape,
+            count=int(self._cfg("photometry.auto_comparisons", 5)),
+        )
+        for comp in picks:
+            tset.set_role(comp)
+        if picks:
+            self.log_message.emit(
+                "OK",
+                f"Photometry: {len(picks)} comparison(s) auto-selected "
+                f"for {target.display_name}",
+            )
 
     def remove_target(self, key: str) -> None:
         tset = self.target_set()

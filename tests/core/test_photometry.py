@@ -6,10 +6,12 @@ from argos.core.catalog import (
     Band,
     ComparisonStar,
     VariableStar,
+    auto_comparison_stars,
     comparisons_for_variable,
     rank_comparisons,
     separation_arcmin,
 )
+from argos.core.catalog.targets import ROLE_COMPARISON
 
 
 def _comp(auid: str, ra: float, dec: float, v: float | None) -> ComparisonStar:
@@ -62,3 +64,34 @@ def test_comparisons_for_variable_uses_brightest_mag() -> None:
     bad = _comp("BAD", 0.01, 0.0, 15.0)  # 3 mag off → dropped
     ranked = comparisons_for_variable(var, [good, bad], mag_tol=1.0)
     assert [s.star.auid for s in ranked] == ["GOOD"]
+
+
+class _GridWCS:
+    """world_to_pixel_deg that maps degrees to green px at 100 px/°."""
+
+    def world_to_pixel_deg(self, ra_deg: float, dec_deg: float):
+        return ra_deg * 100.0, dec_deg * 100.0
+
+
+def test_auto_comparison_stars_ranks_converts_and_caps() -> None:
+    comps = [_comp(f"C{i}", i / 100.0, 0.1, 12.0) for i in range(1, 8)]
+    picks = auto_comparison_stars(0.0, 0.1, comps, count=5)
+    assert len(picks) == 5
+    assert [p.auid for p in picks] == ["C1", "C2", "C3", "C4", "C5"]  # closest first
+    assert all(p.role == ROLE_COMPARISON and p.source == "vsp" for p in picks)
+    # Catalog magnitudes ride along for the differential ensemble.
+    assert picks[0].mags == {"V": 12.0}
+    assert picks[0].name == comps[0].label
+
+
+def test_auto_comparison_stars_drops_off_frame_stars() -> None:
+    # Target near the frame edge (100 px/° on a 100×100 frame): the closest
+    # comparison projects outside the frame and must be skipped — an
+    # off-frame star can't be measured — while farther in-frame ones make it.
+    off = _comp("OFF", 1.06, 0.1, 12.0)  # x = 106 px → outside (+2 px margin)
+    on1 = _comp("ON1", 0.85, 0.1, 12.1)
+    on2 = _comp("ON2", 0.75, 0.1, 12.2)
+    picks = auto_comparison_stars(
+        0.95, 0.1, [off, on1, on2], wcs=_GridWCS(), green_shape=(100, 100), count=5
+    )
+    assert [p.auid for p in picks] == ["ON1", "ON2"]

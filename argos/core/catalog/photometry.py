@@ -12,7 +12,10 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from argos.core.imaging.astrometry_session import project_points
+
 from .aavso import ComparisonStar, VariableStar
+from .targets import ROLE_COMPARISON, TargetStar
 
 
 def separation_arcmin(ra1_deg: float, dec1_deg: float, ra2_deg: float, dec2_deg: float) -> float:
@@ -63,6 +66,44 @@ def rank_comparisons(
     if max_results is not None:
         scored = scored[:max_results]
     return scored
+
+
+def auto_comparison_stars(
+    target_ra_deg: float,
+    target_dec_deg: float,
+    comparisons: list[ComparisonStar],
+    *,
+    wcs=None,
+    green_shape: tuple[int, int] | None = None,
+    count: int = 5,
+) -> list[TargetStar]:
+    """The ``count`` best comparisons for a target, as ready-to-save TargetStars.
+
+    Closest-first via :func:`rank_comparisons`. Stars outside the current
+    frame are dropped when ``wcs`` + ``green_shape`` are given — an off-frame
+    comparison can never be measured, and it would poison the aperture
+    tracker's anchor set.
+    """
+    picks: list[TargetStar] = []
+    for scored in rank_comparisons(target_ra_deg, target_dec_deg, comparisons):
+        c = scored.star
+        if wcs is not None and green_shape is not None:
+            if project_points(wcs, green_shape, [(c.ra_deg, c.dec_deg)])[0] is None:
+                continue
+        picks.append(
+            TargetStar(
+                role=ROLE_COMPARISON,
+                ra_deg=c.ra_deg,
+                dec_deg=c.dec_deg,
+                auid=c.auid,
+                name=c.label,
+                source="vsp",
+                mags={b.band: b.mag for b in c.bands},
+            )
+        )
+        if len(picks) >= count:
+            break
+    return picks
 
 
 def comparisons_for_variable(

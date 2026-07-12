@@ -82,6 +82,7 @@ _DEFAULTS: dict[str, Any] = {
         "read_noise_e": 1.5,
         "default_band": "TG",
         "min_comparisons": 2,
+        "auto_comparisons": 5,  # comps auto-picked when a target is chosen
     },
 }
 
