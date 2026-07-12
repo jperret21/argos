@@ -88,20 +88,103 @@ def _mtf(x: np.ndarray, m: float) -> np.ndarray:
     return ((m - 1.0) * x) / ((2.0 * m - 1.0) * x - m)
 
 
+def quantization_step(arr: np.ndarray, sample: int = 200_000, min_fraction: float = 0.9) -> int:
+    """Recover the ADU quantization step of a raw frame from the data itself.
+
+    The Seestar's IMX-series sensor has a 12-bit ADC but the driver delivers
+    frames *left-shifted* into 16-bit, so real pixel values land on a grid of
+    ``2**(16-12) = 16`` ADU (field frames: sky~1104, max=65520=4095<<4). If the
+    histogram bins are narrower than that grid, every other bin is empty and the
+    curve degenerates into a comb / "block of spikes" instead of a continuous
+    line — exactly the field report this fixes.
+
+    We derive the step *from the pixels* rather than hardcoding 16 (or blindly
+    trusting ``camera.adc_bits``) so the histogram stays correct if the driver
+    changes bit-depth or a different sensor is used. Because the quantization
+    comes from a bit **left-shift**, the grid step is always a power of two, so
+    we simply find the *largest* power-of-two grid that most pixels lie on:
+    ``mean(pixels % q == 0)`` is monotonically non-increasing in ``q`` (a
+    multiple of 32 is also a multiple of 16), so we climb ``q = 2, 4, 8, …`` and
+    stop at the first grid fewer than ``min_fraction`` of pixels satisfy.
+
+    Why this and not GCD / bit-mask / unique-value gaps: real frames carry ~0.1%
+    off-grid stray pixels (Seestar's own processing leaves a few non-multiples of
+    16). Those strays collapse GCD/OR-reduce to 1 and can drag a median-gap
+    estimate off the true step when the frame has few distinct levels. Counting
+    the *pixel* fraction on each grid is immune to a handful of strays, and the
+    ``min_fraction`` gate naturally returns 1 for genuinely *continuous* data
+    (random frames: only ~50% are even), so those bin normally.
+
+    Subsampled with a stride for speed (this runs per preview frame): a few ms on
+    a 3840x2160 frame.
+
+    Returns the step in ADU (a power of two), or 1 when no dominant grid exists.
+    """
+    flat = np.asarray(arr).ravel()
+    if flat.size > sample:
+        flat = flat[:: flat.size // sample]
+    if flat.size == 0:
+        return 1
+    step = 1
+    for bit in range(1, 16):  # candidate grids 2, 4, …, 32768 ADU
+        q = 1 << bit
+        if float(np.count_nonzero(flat % q == 0)) / flat.size >= min_fraction:
+            step = q
+        else:
+            break
+    return step
+
+
+def _histogram_edges(raw: np.ndarray, bins: int, lo: float, hi: float) -> np.ndarray:
+    """Bin edges snapped to the frame's ADU quantization grid (anti-comb).
+
+    For a genuinely quantized frame (step ``q >= 2``) we:
+
+    * widen the bin to a whole multiple of ``q`` — never narrower than the grid,
+      since sub-grid bins are what create the comb — while still aiming for
+      roughly ``bins`` bins (so a wide, bright frame keeps full resolution and a
+      narrow sky frame drops to ~range/q bins, which is all the real levels it
+      has);
+    * offset the edges by half a step so each quantization level sits at a bin
+      *centre*, never on an edge (a level landing on a float edge would beat
+      between the two neighbouring bins and reintroduce a comb).
+
+    This is honest, not cosmetic smoothing: bins that are empty because a level
+    is *truly* absent stay empty — we only remove the binning artefact, never
+    interpolate values into ADU levels the sensor never produced.
+
+    Continuous data (``q == 1``) keeps the original uniform ``bins`` edges.
+    """
+    q = quantization_step(raw)
+    if q < 2:
+        return np.linspace(lo, hi, bins + 1)
+    target_w = (hi - lo) / bins
+    width = max(1, int(round(target_w / q))) * q
+    # Start half a step below the lowest grid level at/under ``lo`` so levels
+    # fall at bin centres.
+    start = (np.floor(lo / q) - 0.5) * q
+    nbins = max(1, int(np.ceil((hi - start) / width)))
+    return start + width * np.arange(nbins + 1)
+
+
 def channel_histograms(
     raw: np.ndarray, bins: int = 128, lo: float = 0.0, hi: float = 65535.0
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Per-channel (R, G, B) histograms from the raw CFA, on real pixels.
 
     Binned over ``[lo, hi]`` (pass the frame's actual data range so the curves
-    fill the plot instead of collapsing to the left edge).
-    Returns ``(centers, r_counts, g_counts, b_counts)``.
+    fill the plot instead of collapsing to the left edge). Edges are snapped to
+    the sensor's ADU quantization grid (see :func:`_histogram_edges`) so quantized
+    frames render as a continuous curve rather than a comb of spikes. ``bins`` is
+    the *target* resolution; the effective count may be lower when the data has
+    fewer real ADU levels than that. Returns ``(centers, r_counts, g_counts,
+    b_counts)``.
     """
     r, g1, g2, b = split_cfa(raw)
     g = (g1.astype(np.uint32) + g2.astype(np.uint32)) >> 1
     if hi <= lo:
         hi = lo + 1.0
-    edges = np.linspace(lo, hi, bins + 1)
+    edges = _histogram_edges(raw, bins, lo, hi)
     rh, _ = np.histogram(r, bins=edges)
     gh, _ = np.histogram(g, bins=edges)
     bh, _ = np.histogram(b, bins=edges)
