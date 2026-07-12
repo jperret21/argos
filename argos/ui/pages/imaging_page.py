@@ -935,12 +935,32 @@ class ImagingPage(QWidget):
         return length * dw / gw if gw > 0 else None
 
     def _on_open_fits(self) -> None:
-        start = str(Path.home() / "Downloads")
+        """Load a saved FITS into the live pipeline (offline replay).
+
+        The frame lands exactly where a camera frame would, so Solve →
+        catalog → target selection → Re-run subs all work telescope-less.
+        (The Analyze mode keeps its own single-frame inspector.)
+        """
+        start = str(self._cfg("sessions_path", str(Path.home())) or Path.home())
         path, _ = QFileDialog.getOpenFileName(
             self, "Open FITS", start, "FITS (*.fits *.fit *.fts);;All files (*)"
         )
-        if path:
-            self.load_fits(path)
+        if not path:
+            return
+        try:
+            from astropy.io import fits as _fits
+
+            raw = _fits.getdata(path)
+            if raw is None or getattr(raw, "ndim", 0) != 2:
+                raise ValueError("expected a single 2-D image HDU")
+        except Exception as exc:
+            self.log_message.emit("ERROR", f"Open FITS: {exc}")
+            return
+        # The display/measure pipeline speaks the sensor's raw dtype.
+        self._engine.ingest_frame(np.ascontiguousarray(raw, dtype=np.uint16))
+        self.log_message.emit(
+            "OK", f"Loaded {Path(path).name} — solve to enable catalog & photometry."
+        )
 
     def load_fits(self, path: str) -> None:
         """Open a saved FITS for analysis (alias kept for external callers)."""

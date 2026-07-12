@@ -446,13 +446,22 @@ class AcquisitionEngine(QObject):
     def _on_seq_error(self, message: str) -> None:
         self.log_message.emit("ERROR", f"Sequence: {message}")
 
-    @pyqtSlot(object)
-    def _on_seq_frame_image(self, full_arr) -> None:
-        self._last_raw_decimated = False  # sequence frames are always full-res
+    def ingest_frame(self, full_arr) -> None:
+        """Feed a saved full-res raw into the live pipeline (offline replay).
+
+        The frame becomes the authoritative ``_last_raw`` — exactly like a
+        sequence sub — so Solve, the catalog fetch, target selection and a
+        batch re-run all work from a FITS opened without a telescope.
+        """
+        self._last_raw_decimated = False
         self._last_raw = full_arr
         self.frame_ready.emit(
             LiveFrame(preview=full_arr, full=full_arr, start=None, end=None, decimated=False)
         )
+
+    @pyqtSlot(object)
+    def _on_seq_frame_image(self, full_arr) -> None:
+        self.ingest_frame(full_arr)  # sequence frames are always full-res
 
     def _on_seq_frame_saved(self, path: str, record) -> None:
         # Track the last sequence directory for the photometry setup window.
