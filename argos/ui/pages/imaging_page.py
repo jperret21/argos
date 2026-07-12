@@ -462,7 +462,6 @@ class ImagingPage(QWidget):
         self._histogram_dock.saturation_toggled.connect(self._on_saturation_toggled)
         self._histogram_dock.roi_toggled.connect(self._viewer.set_roi_enabled)
         self._histogram_dock.crosshair_toggled.connect(self._viewer.set_crosshair_enabled)
-        self._histogram_dock.stars_overlay_toggled.connect(self._viewer.set_star_overlay_enabled)
         self._histogram_dock.loupe_toggled.connect(self._viewer.set_loupe_enabled)
         self._histogram_dock.astrometry_toggled.connect(self._viewer.set_astrometry_enabled)
         self._histogram_dock.star_radius_changed.connect(self._on_star_radius)
@@ -651,11 +650,10 @@ class ImagingPage(QWidget):
         # Histogram first: sets the slider/data range, then the viewer's
         # auto-stretch emits levels that the dock sliders sync to.
         self._histogram_dock.set_histogram(pf.centers, pf.r, pf.g, pf.b, pf.lo, pf.hi)
-        self._viewer.set_stars(pf.stars, pf.green_shape)
+        self._viewer.set_frame_geometry(pf.green_shape)
         self._viewer.display(pf.display)
         # Keep a clicked star's FWHM readout live as new frames arrive.
         self._remeasure_selection()
-        self._overlay_bar.set_available("stars", True)  # detected-star overlay always usable
         self._feed_metrics(pf)  # session metrics (when the photometry window is open)
         # WCS geometry guard: the grid + catalog markers are projected in the
         # *solved* frame's green px. If the displayed frame no longer matches
@@ -1010,7 +1008,6 @@ class ImagingPage(QWidget):
     def _on_overlay_toggled(self, name: str, on: bool) -> None:
         {
             "grid": self._viewer.set_astrometry_enabled,
-            "stars": self._viewer.set_star_overlay_enabled,
             "variables": self._viewer.set_catalog_enabled,
             "comparisons": self._viewer.set_comparison_enabled,
             "targets": self._viewer.set_target_enabled,

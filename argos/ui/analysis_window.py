@@ -215,7 +215,6 @@ class AnalysisWindow(QMainWindow):
         self._histogram.saturation_toggled.connect(self._on_saturation)
         self._histogram.roi_toggled.connect(self._viewer.set_roi_enabled)
         self._histogram.crosshair_toggled.connect(self._viewer.set_crosshair_enabled)
-        self._histogram.stars_overlay_toggled.connect(self._viewer.set_star_overlay_enabled)
         self._histogram.loupe_toggled.connect(self._viewer.set_loupe_enabled)
         self._histogram._astro_chk.hide()  # WCS grid is driven by our own Grid button
         self._histogram.star_radius_changed.connect(self._on_radius)
@@ -294,7 +293,7 @@ class AnalysisWindow(QMainWindow):
         self._green_shape = pf.green_shape
         self._disp_shape = pf.display.shape[:2]
         self._histogram.set_histogram(pf.centers, pf.r, pf.g, pf.b, pf.lo, pf.hi)
-        self._viewer.set_stars(pf.stars, pf.green_shape)
+        self._viewer.set_frame_geometry(pf.green_shape)
         self._viewer.display(pf.display)
         self._remeasure_selection()
 

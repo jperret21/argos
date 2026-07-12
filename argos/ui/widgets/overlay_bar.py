@@ -15,7 +15,6 @@ from argos.ui import theme
 #: chip name → human label
 _CHIPS = (
     ("grid", "Grid"),
-    ("stars", "Stars"),
     ("variables", "Variables"),
     ("comparisons", "Comparisons"),
     ("targets", "Targets"),

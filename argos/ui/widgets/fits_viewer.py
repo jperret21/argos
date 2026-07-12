@@ -76,10 +76,8 @@ class FitsViewer(QWidget):
         self._roi: pg.RectROI | None = None
         self._crosshair: bool = False  # off by default; when on, follows the cursor only
         self._disp_u8: np.ndarray | None = None  # last stretched display (for the loupe)
-        # §5 focus tools: star/FWHM overlay + 100% loupe.
-        self._stars: tuple = ()
+        # §5 focus tools: 100% loupe.
         self._green_shape: tuple[int, int] | None = None
-        self._star_overlay: bool = False
         self._loupe: bool = False
         # §6 astrometry overlay: RA/Dec grid + field-centre + target reticle.
         self._wcs_overlay = None  # platesolve.WCSOverlay (green-plane coords)
@@ -129,13 +127,6 @@ class FitsViewer(QWidget):
         self._readout.move(10, 10)
         self._readout.hide()
 
-        # §5 star/FWHM overlay — hollow rings on detected stars (size ∝ FWHM).
-        self._scatter = pg.ScatterPlotItem(
-            pen=pg.mkPen(theme.SUCCESS, width=1), brush=None, pxMode=True, size=14
-        )
-        self._scatter.setVisible(False)
-        self._view.getView().addItem(self._scatter, ignoreBounds=True)
-
         # §5 selected-star highlight: a ring drawn at the *actual* measurement
         # aperture (data-space, so it grows/shrinks with the radius) around a
         # small fixed centre dot — plus a readout pinned bottom-left.
@@ -165,8 +156,9 @@ class FitsViewer(QWidget):
         # §6 astrometry overlay — RA/Dec grid (one NaN-broken curve) and an
         # optional target reticle. The solved centre RA/Dec is shown as text (no
         # centre marker). All hidden until a solve provides a WCS and it's on.
+        # width=2: hairlines vanished on the field laptop (feedback 2026-07-11).
         self._grid_item = pg.PlotDataItem(
-            pen=pg.mkPen(theme.ACCENT, width=1, style=Qt.PenStyle.DotLine)
+            pen=pg.mkPen(theme.ACCENT, width=2, style=Qt.PenStyle.DotLine)
         )
         self._grid_item.setVisible(False)
         self._view.getView().addItem(self._grid_item, ignoreBounds=True)
@@ -259,7 +251,6 @@ class FitsViewer(QWidget):
             self._black, self._white, self._midtones = auto_stf(arr)
             self.levels_changed.emit(self._black, self._white, self._midtones)
         self._render()
-        self._refresh_overlay()
         self._refresh_astrometry()
         self._refresh_catalog()
         self._refresh_comparisons()
@@ -401,33 +392,9 @@ class FitsViewer(QWidget):
     # Focus tools (§5): star/FWHM overlay + 100% loupe
     # ------------------------------------------------------------------
 
-    def set_stars(self, starfield, green_shape: tuple[int, int]) -> None:
-        """Receive detected stars (green-plane coords) for the overlay."""
-        self._stars = tuple(getattr(starfield, "stars", ()) or ())
+    def set_frame_geometry(self, green_shape: tuple[int, int]) -> None:
+        """Per-frame green-plane geometry — every overlay scales through it."""
         self._green_shape = green_shape
-        self._refresh_overlay()
-
-    def set_star_overlay_enabled(self, enabled: bool) -> None:
-        self._star_overlay = bool(enabled)
-        self._refresh_overlay()
-
-    def _refresh_overlay(self) -> None:
-        """Redraw star rings, scaled from green-plane to the active view."""
-        if not (self._star_overlay and self._stars and self._last_arr is not None):
-            self._scatter.setVisible(False)
-            return
-        gh, gw = self._green_shape or (0, 0)
-        if gh <= 0 or gw <= 0:
-            self._scatter.setVisible(False)
-            return
-        dh, dw = self._arr0.shape[:2]
-        sx, sy = dw / gw, dh / gh  # green-plane → display px (×1 super-pixel, ×2 raw)
-        spots = []
-        for s in self._stars:
-            size = float(np.clip(10.0 + s.fwhm * 2.0, 10.0, 36.0))
-            spots.append({"pos": self._rot_pt(s.x * sx, s.y * sy), "size": size})
-        self._scatter.setData(spots)
-        self._scatter.setVisible(True)
 
     # ------------------------------------------------------------------
     # Astrometry overlay (§6): RA/Dec grid + field centre + target reticle
@@ -767,8 +734,6 @@ class FitsViewer(QWidget):
         self._last_arr = None
         self._arr0 = None
         self._disp_u8 = None
-        self._stars = ()
-        self._scatter.setVisible(False)
         self._loupe_label.hide()
         self._wcs_overlay = None
         self._refresh_astrometry()

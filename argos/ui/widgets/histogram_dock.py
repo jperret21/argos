@@ -46,7 +46,6 @@ class HistogramDock(design.Card):
     saturation_toggled = pyqtSignal(bool)
     roi_toggled = pyqtSignal(bool)
     crosshair_toggled = pyqtSignal(bool)
-    stars_overlay_toggled = pyqtSignal(bool)
     loupe_toggled = pyqtSignal(bool)
     star_radius_changed = pyqtSignal(int)
     astrometry_toggled = pyqtSignal(bool)
@@ -133,11 +132,7 @@ class HistogramDock(design.Card):
         self._roi_chk.toggled.connect(self.roi_toggled)
         outer.addWidget(self._roi_chk)
 
-        # Focus tools (§5): star/FWHM rings + a 1:1 magnifier that follows the cursor.
-        self._stars_chk = QCheckBox("Star FWHM overlay")
-        self._stars_chk.setToolTip("Ring each detected star; ring size grows with FWHM")
-        self._stars_chk.toggled.connect(self.stars_overlay_toggled)
-        outer.addWidget(self._stars_chk)
+        # Focus tools (§5): a 1:1 magnifier that follows the cursor.
         self._loupe_chk = QCheckBox("Loupe (100% zoom at cursor)")
         self._loupe_chk.setToolTip("Magnified 1:1 inset for fine manual focus")
         self._loupe_chk.toggled.connect(self.loupe_toggled)

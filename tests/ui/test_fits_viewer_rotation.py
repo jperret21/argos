@@ -109,19 +109,13 @@ def test_rot_pt_vectorized_for_grid_polylines(viewer):
     assert np.allclose(ry, xs)
 
 
-def test_star_overlay_lands_on_rotated_position(viewer):
-    class _Star:
-        x, y, fwhm = 5.0, 30.0, 3.0
-
-    class _Field:
-        stars = (_Star(),)
-        mean_fwhm = 3.0
-
+def test_target_marker_lands_on_rotated_position(viewer):
     viewer.set_rotation("90")
     viewer.display(_portrait())
-    viewer.set_star_overlay_enabled(True)
-    viewer.set_stars(_Field(), (40, 20))  # green shape == display shape here
-    pts = viewer._scatter.points()
+    viewer.set_target_enabled(True)
+    # green shape == display shape here
+    viewer.set_target_markers([(5.0, 30.0, "V1", "target")], (40, 20))
+    pts = viewer._targets_item.points()
     assert len(pts) == 1
     pos = pts[0].pos()
     assert pos.x() == pytest.approx((40 - 1) - 30.0)
