@@ -41,6 +41,18 @@ _ASTAP_PATHS = (
     "/usr/local/bin/astap_cli",
 )
 
+#: Common star-database locations checked when the config gives none.
+#: ``astap_cli`` only looks next to its own binary (useless under
+#: ``/opt/homebrew/bin``), so a detected directory is passed via ``-d``.
+_ASTAP_DB_PATHS = (
+    "/opt/homebrew/share/astap",
+    "/usr/local/share/astap",
+    "/Applications/ASTAP.app/Contents/MacOS",
+)
+#: File patterns identifying a star database (D05/D20/D50/D80 → .1476,
+#: V17/G17 → .290, W08 → .101).
+_ASTAP_DB_GLOBS = ("*.1476", "*.290", "*.101")
+
 
 @dataclass
 class SolveSettings:
@@ -91,7 +103,9 @@ def find_astap(explicit: str = "") -> str | None:
     """Locate the ASTAP binary: explicit path → PATH → common locations."""
     if explicit:
         p = Path(explicit)
-        if p.exists():
+        # A directory (e.g. the star-database folder) is not a binary; fall
+        # through to auto-detection instead of handing subprocess a folder.
+        if p.is_file():
             return str(p)
     for name in _ASTAP_NAMES:
         found = shutil.which(name)
@@ -100,6 +114,16 @@ def find_astap(explicit: str = "") -> str | None:
     for cand in _ASTAP_PATHS:
         if Path(cand).exists():
             return cand
+    return None
+
+
+def find_astap_db(astap: str = "") -> str | None:
+    """Locate a star-database directory: next to the binary → common locations."""
+    candidates = ([str(Path(astap).parent)] if astap else []) + list(_ASTAP_DB_PATHS)
+    for cand in candidates:
+        d = Path(cand)
+        if any(next(d.glob(pat), None) for pat in _ASTAP_DB_GLOBS):
+            return str(d)
     return None
 
 
@@ -246,16 +270,25 @@ def _build_command(astap: str, fits_path: Path, s: SolveSettings) -> list[str]:
         cmd += ["-fov", f"{s.fov_hint_deg:g}"]
     if s.ra_hint_hours is not None and s.dec_hint_deg is not None:
         cmd += ["-ra", f"{s.ra_hint_hours:g}", "-spd", f"{s.dec_hint_deg + 90.0:g}"]
-    if s.database:
-        # ASTAP distinguishes ``-D <abbreviation>`` (e.g. "D05") from
-        # ``-d <path>`` (a database directory). The config exposes
-        # abbreviations, so pick the matching flag: a path-looking value uses
-        # ``-d``, anything else is treated as an abbreviation via ``-D``.
-        if "/" in s.database or Path(s.database).is_dir():
-            cmd += ["-d", s.database]
-        else:
-            cmd += ["-D", s.database]
+    cmd += _database_args(astap, s.database)
     return cmd
+
+
+def _database_args(astap: str, database: str) -> list[str]:
+    """Star-database flags: ``-D <abbreviation>`` (e.g. "D05") vs ``-d <path>``.
+
+    The config exposes abbreviations, so a path-looking value uses ``-d``,
+    anything else ``-D``. With no explicit directory, auto-detect one:
+    ``astap_cli`` only searches next to its own binary, which is empty under
+    Homebrew's ``bin/``.
+    """
+    if database and ("/" in database or Path(database).is_dir()):
+        return ["-d", database]
+    args = ["-D", database] if database else []
+    db_dir = find_astap_db(astap)
+    if db_dir:
+        args += ["-d", db_dir]
+    return args
 
 
 # --------------------------------------------------------------------------- #

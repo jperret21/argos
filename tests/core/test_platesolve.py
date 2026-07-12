@@ -69,7 +69,8 @@ def test_parse_failed_ini() -> None:
     assert "No solution" in r.message
 
 
-def test_build_command_hinted() -> None:
+def test_build_command_hinted(monkeypatch) -> None:
+    monkeypatch.setattr(platesolve, "find_astap_db", lambda _a: None)
     s = SolveSettings(
         search_radius_deg=15,
         downsample=2,
@@ -95,6 +96,21 @@ def test_build_command_database_path_uses_lowercase_d() -> None:
     # A path-looking value goes through ``-d`` (directory), not ``-D``.
     assert "-d" in cmd and cmd[cmd.index("-d") + 1] == "/usr/local/opt/astap"
     assert "-D" not in cmd
+
+
+def test_build_command_auto_detects_database_dir(tmp_path, monkeypatch) -> None:
+    # astap_cli only searches next to its own binary (empty under Homebrew's
+    # bin/), so a detected database directory must be passed via ``-d`` even
+    # when the config gives none — the cause of "No star database found".
+    (tmp_path / "d50_0101.1476").write_bytes(b"")
+    monkeypatch.setattr(platesolve, "_ASTAP_DB_PATHS", (str(tmp_path),))
+    cmd = _build_command("/opt/homebrew/bin/astap_cli", Path("/tmp/x.fits"), SolveSettings())
+    assert "-d" in cmd and cmd[cmd.index("-d") + 1] == str(tmp_path)
+    # An abbreviation keeps its ``-D`` alongside the detected directory.
+    cmd = _build_command(
+        "/opt/homebrew/bin/astap_cli", Path("/tmp/x.fits"), SolveSettings(database="V17")
+    )
+    assert "-D" in cmd and "-d" in cmd
 
 
 def test_clamp_downsample_protects_small_frames() -> None:
@@ -133,6 +149,14 @@ def test_find_astap_explicit_path(tmp_path) -> None:
     fake = tmp_path / "astap_cli"
     fake.write_text("#!/bin/sh\n")
     assert find_astap(str(fake)) == str(fake)
+
+
+def test_find_astap_rejects_directory(tmp_path, monkeypatch) -> None:
+    # A directory (e.g. the star-database folder) must not be taken as the
+    # binary; with PATH and the common locations empty, detection fails clean.
+    monkeypatch.setattr(platesolve.shutil, "which", lambda _n: None)
+    monkeypatch.setattr(platesolve, "_ASTAP_PATHS", ())
+    assert find_astap(str(tmp_path)) is None
 
 
 def test_solve_array_reports_missing_astap(monkeypatch) -> None:
