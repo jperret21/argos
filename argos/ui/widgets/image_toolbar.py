@@ -133,6 +133,11 @@ class ImageToolbar(QWidget):
         )
         layout.addWidget(indicator)
 
+    def set_auto_solve(self, checked: bool) -> None:
+        """Programmatic arm/disarm — the button toggles, so the policy follows."""
+        if self._show_solve:
+            self._auto_solve_btn.setChecked(checked)
+
     def set_view(self, view: str) -> None:
         """Programmatically select a view without re-emitting ``channel_changed``."""
         idx = self._channel_combo.findText(view)

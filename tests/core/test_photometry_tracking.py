@@ -135,6 +135,25 @@ class _FakeRefWCS:
         return self._m[(ra_deg, dec_deg)]
 
 
+def test_project_points_through_tracked_wcs_follows_the_field() -> None:
+    """W1 (field bug 2026-07-11): catalog markers are projected with
+    ``project_points`` — through a TrackedWCS they must land on the rotated
+    star positions, not freeze at the reference-solve position."""
+    from argos.core.imaging.astrometry_session import project_points
+
+    tracker = ApertureTracker(_ANCHORS, _CENTER, search_r=6.0)
+    ang = 3.0
+    pos = [_rotate(x, y, *_CENTER, ang) for x, y in _ANCHORS]
+    assert tracker.update(_green_with_stars(pos)) == len(_ANCHORS)
+
+    ref = _FakeRefWCS({(1.0, 1.0): (95.0, 90.0), (2.0, 2.0): (30.0, 40.0)})
+    got = project_points(TrackedWCS(ref, tracker), (120, 120), [(1.0, 1.0), (2.0, 2.0)])
+    for g, (rx, ry) in zip(got, [(95.0, 90.0), (30.0, 40.0)]):
+        ex, ey = _rotate(rx, ry, *_CENTER, ang)
+        assert g is not None
+        assert abs(g[0] - ex) < 0.3 and abs(g[1] - ey) < 0.3
+
+
 def test_tracker_rejects_a_bad_anchor() -> None:
     """P8: one anchor locked on the wrong thing (hot pixel, neighbour) must
     not skew the transform when two clean anchors plus one more agree."""

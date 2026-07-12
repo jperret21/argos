@@ -32,7 +32,7 @@ from pathlib import Path
 import numpy as np
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal, pyqtSlot
 
-from argos.core.catalog.targets import ROLE_TARGET, TargetSet, TargetStar
+from argos.core.catalog.targets import ROLE_CHECK, ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
 from argos.core.config import Config
 from argos.core.imaging.astrometry_session import field_geometry
 from argos.core.imaging.fits_writer import FITSWriter, FrameContext
@@ -41,6 +41,7 @@ from argos.core.imaging.platesolve import angular_separation_deg
 from argos.core.photometry.airmass import airmass_from_altitude, bjd_tdb, julian_date
 from argos.core.photometry.lightcurve import LcPoint, LightCurve
 from argos.core.photometry.params import DEFAULT_FWHM, PhotometryParams, measure_frame
+from argos.core.photometry.tracking import ApertureTracker, TrackedWCS
 from argos.core.session.device_session import DeviceSession
 from argos.core.session.diagnostics import SessionDiagnostics
 from argos.core.session.types import LiveFrame, PhotometryPoint
@@ -83,6 +84,7 @@ class AcquisitionEngine(QObject):
     targets_changed = pyqtSignal(object)  # TargetSet
     photometry_measuring = pyqtSignal()  # a measurement pass starts (temp sample)
     photometry_point = pyqtSignal(object)  # PhotometryPoint
+    apertures_tracked = pyqtSignal()  # live tracker refit — re-project markers
 
     # Logging / status relays.
     log_message = pyqtSignal(str, str)  # level, message
@@ -133,6 +135,7 @@ class AcquisitionEngine(QObject):
         self._astrometry = AstrometryController(self._cfg, self)
         self._astrometry.failed.connect(self._on_solve_failed)
         self._astrometry.state.connect(self.action_changed)
+        self._astrometry.solved.connect(self._on_reference_solved)
 
         # §6 P1: live catalog (VSX/VSP) + persistent target set.
         self._catalog_worker: CatalogWorker | None = None
@@ -154,6 +157,11 @@ class AcquisitionEngine(QObject):
         # measured frame and only re-sampled after a refocus or object change,
         # so the aperture size doesn't inject correlated variance into the curve.
         self._phot_fwhm: float | None = None
+
+        # W1: live aperture tracker — rigid rotation/drift correction between
+        # solves, so apertures and catalog markers stay on the stars during an
+        # alt-az sequence. Rebuilt on a fresh solve or a target-set change.
+        self._tracker: ApertureTracker | None = None
 
         # Last sequence directory (for the photometry setup window).
         self._last_sequence_dir: Path | None = None
@@ -701,6 +709,7 @@ class AcquisitionEngine(QObject):
         self._variables = []
         self._comparisons = []
         self._catalog_centre = None
+        self._reset_tracker()
 
     # ------------------------------------------------------------------
     # Catalog (VSX/VSP once per field)
@@ -776,12 +785,14 @@ class AcquisitionEngine(QObject):
         tset = self.target_set()
         tset.set_role(star)
         self._save_target_set(tset)
+        self._reset_tracker()  # the anchor constellation changed
         self.targets_changed.emit(tset)
 
     def remove_target(self, key: str) -> None:
         tset = self.target_set()
         tset.remove(key)
         self._save_target_set(tset)
+        self._reset_tracker()  # the anchor constellation changed
         self.targets_changed.emit(tset)
 
     # ------------------------------------------------------------------
@@ -808,6 +819,62 @@ class AcquisitionEngine(QObject):
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in f"{obj}_{tag}")
         return self._sessions_base() / "targets" / f"{safe or 'photometry'}.csv"
 
+    def _wcs_for_frame(self, green, tset: TargetSet, params: PhotometryParams):
+        """Reference WCS, rigid-corrected by the live tracker when enabled.
+
+        Same recipe as the batch worker: the tracker is built lazily on the
+        first measured frame, anchors on the set's stable stars, and keeps its
+        last good transform when a frame has no usable anchor (clouds). Every
+        refit is signalled so the page re-projects the catalog markers — the
+        fix for the field bug where the variable-star diamonds froze at the
+        solve position while the alt-az field rotated under them.
+        """
+        wcs = self._astrometry.wcs
+        if not params.track_apertures:
+            return wcs
+        if self._tracker is None:
+            self._tracker = self._build_live_tracker(green.shape, wcs, tset, params)
+        self._tracker.update(green)
+        if not self._tracker.anchors_used:
+            self.log_message.emit("WARN", "Photometry: no anchor star found — apertures unguided")
+        self.apertures_tracked.emit()
+        return TrackedWCS(wcs, self._tracker)
+
+    @staticmethod
+    def _build_live_tracker(
+        shape: tuple[int, int], wcs, tset: TargetSet, params: PhotometryParams
+    ) -> ApertureTracker:
+        anchors = tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK)
+        if not anchors:  # a variable near minimum is a poor centroid
+            anchors = list(tset.stars)
+        xy = [wcs.world_to_pixel_deg(s.ra_deg, s.dec_deg) for s in anchors]
+        h, w = shape
+        return ApertureTracker(
+            [(float(x), float(y)) for x, y in xy],
+            frame_center=(w / 2.0, h / 2.0),
+            search_r=max(8.0, 2.0 * params.aperture_px(None)),
+        )
+
+    def tracked_wcs(self):
+        """The reference WCS with the live rigid correction applied.
+
+        What the page must project catalog markers / hit-tests through; falls
+        back to the raw reference solve before the first tracked measurement.
+        """
+        wcs = self._astrometry.wcs
+        if wcs is None or self._tracker is None:
+            return wcs
+        return TrackedWCS(wcs, self._tracker)
+
+    def _reset_tracker(self) -> None:
+        self._tracker = None
+
+    @pyqtSlot(object, object, str)
+    def _on_reference_solved(self, _wcs, _overlay, _summary: str) -> None:
+        # A fresh solve *is* the new reference — accumulated rigid error and
+        # the anchor geometry are stale relative to it.
+        self._reset_tracker()
+
     def _measure_photometry(self) -> None:
         """Aperture-measure the target set on the solved frame → light-curve point."""
         wcs = self._astrometry.wcs
@@ -823,9 +890,10 @@ class AcquisitionEngine(QObject):
         diag = self._diagnostics(tset)
         frame_no = self._diag_frame
         self._diag_frame += 1
+        green = green_plane(self._last_raw)
         results = measure_frame(
-            green_plane(self._last_raw),
-            wcs,
+            green,
+            self._wcs_for_frame(green, tset, params),
             tset,
             params,
             fwhm=fwhm,

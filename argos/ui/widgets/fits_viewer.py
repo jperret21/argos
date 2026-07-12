@@ -186,10 +186,10 @@ class FitsViewer(QWidget):
         )
         self._comparison_item.setVisible(False)
         self._view.getView().addItem(self._comparison_item, ignoreBounds=True)
-        # §6 P1 — saved targets as a bold amber ring (must stand out) + name label.
-        self._targets_item = pg.ScatterPlotItem(
-            pen=pg.mkPen(theme.WARNING, width=3), brush=None, pxMode=True, size=24, symbol="o"
-        )
+        # §6 P1 — the saved set, styled by role so a glance tells them apart:
+        # target = bold ring + name, comparison = bold square, check = thin ring.
+        # (Field feedback 2026-07-11: one style for every role was unreadable.)
+        self._targets_item = pg.ScatterPlotItem(brush=None, pxMode=True)
         self._targets_item.setVisible(False)
         self._view.getView().addItem(self._targets_item, ignoreBounds=True)
         self._astro_label = QLabel(self)
@@ -601,8 +601,16 @@ class FitsViewer(QWidget):
     # Target overlay (§6 P1): the night's selected stars (amber ring + name)
     # ------------------------------------------------------------------
 
+    #: Per-role marker styles: (theme colour attr, symbol, size, pen width,
+    #: labelled). The target must dominate; comps/checks stay quieter.
+    _ROLE_STYLES = {
+        "target": ("SUCCESS", "o", 26, 3, True),
+        "comparison": ("CYAN", "s", 18, 3, False),
+        "check": ("ACCENT", "o", 20, 2, True),
+    }
+
     def set_target_markers(self, points, green_shape: tuple[int, int] | None = None) -> None:
-        """Receive saved-target markers as ``(x_green, y_green, name)`` tuples."""
+        """Receive saved-set markers as ``(x_green, y_green, name, role)`` tuples."""
         self._targets = tuple(points or ())
         if green_shape is not None:
             self._green_shape = green_shape
@@ -627,11 +635,22 @@ class FitsViewer(QWidget):
         dh, dw = self._arr0.shape[:2]
         sx, sy = dw / gw, dh / gh
         spots = []
-        for x, y, name in self._targets:
+        for x, y, name, role in self._targets:
+            colour_attr, symbol, size, width, labelled = self._ROLE_STYLES.get(
+                role, self._ROLE_STYLES["target"]
+            )
+            colour = getattr(theme, colour_attr)
             px, py = self._rot_pt(x * sx, y * sy)
-            spots.append({"pos": (px, py)})
-            if name:
-                t = pg.TextItem(text=str(name), color=theme.WARNING, anchor=(0.0, 1.4))
+            spots.append(
+                {
+                    "pos": (px, py),
+                    "pen": pg.mkPen(colour, width=width),
+                    "symbol": symbol,
+                    "size": size,
+                }
+            )
+            if labelled and name:
+                t = pg.TextItem(text=str(name), color=colour, anchor=(0.0, 1.4))
                 t.setPos(px, py)
                 view.addItem(t, ignoreBounds=True)
                 self._target_labels.append(t)

@@ -445,6 +445,7 @@ class ImagingPage(QWidget):
         e.targets_changed.connect(self._on_targets_changed)
         e.photometry_measuring.connect(self._on_photometry_measuring)
         e.photometry_point.connect(self._on_photometry_point)
+        e.apertures_tracked.connect(self._project_catalog)  # markers follow the frame
         # Live plate-solve controller (engine-owned, shared pipeline).
         self._astrometry.solved.connect(self._on_astrometry_solved)
 
@@ -1034,10 +1035,15 @@ class ImagingPage(QWidget):
         self._project_catalog()
 
     def _project_catalog(self) -> None:
-        """Re-project the engine's cached variables/comparisons/targets onto the WCS."""
+        """Re-project the engine's cached variables/comparisons/targets onto the WCS.
+
+        Uses the engine's *tracked* WCS: during a sequence the live tracker
+        follows field rotation/drift between solves, so the markers stay on
+        the stars instead of freezing at the solve position.
+        """
         variables = self._engine.variables
         comparisons = self._engine.comparisons
-        wcs, gs = self._astrometry.wcs, self._green_shape
+        wcs, gs = self._engine.tracked_wcs(), self._green_shape
         self._var_green = project_points(wcs, gs, ((v.ra_deg, v.dec_deg) for v in variables))
         var_pts = [(p[0], p[1], v.is_suspected) for p, v in zip(self._var_green, variables) if p]
         self._viewer.set_catalog_markers(var_pts, gs)
@@ -1050,9 +1056,13 @@ class ImagingPage(QWidget):
 
     def _project_targets(self) -> None:
         tset = self._engine.target_set()
-        wcs, gs = self._astrometry.wcs, self._green_shape
+        wcs, gs = self._engine.tracked_wcs(), self._green_shape
         self._target_green = project_points(wcs, gs, ((s.ra_deg, s.dec_deg) for s in tset.stars))
-        pts = [(p[0], p[1], s.display_name) for p, s in zip(self._target_green, tset.stars) if p]
+        pts = [
+            (p[0], p[1], s.display_name, s.role)
+            for p, s in zip(self._target_green, tset.stars)
+            if p
+        ]
         self._viewer.set_target_markers(pts, gs)
         self._arm_overlay("targets", bool(pts), self._viewer.set_target_enabled)
 
@@ -1323,6 +1333,16 @@ class ImagingPage(QWidget):
     def _on_sequence_running(self, running: bool) -> None:
         self._sequence_panel.set_running(running)
         self.sequence_running.emit(running)  # → the Shell's capture strip
+        # Arm the periodic re-solve for the run (and restore the user's choice
+        # after): it re-bases the WCS + live tracker so rigid-fit error never
+        # accumulates, keeping markers and apertures on the stars all night.
+        if running:
+            self._auto_solve_before_seq = self._astrometry.auto
+            if self._astrometry.wcs is not None and not self._astrometry.auto:
+                self._toolbar.set_auto_solve(True)  # button → set_auto via toggled
+                self.log_message.emit("INFO", "Sequence: auto-solve armed for the run.")
+        elif not getattr(self, "_auto_solve_before_seq", True):
+            self._toolbar.set_auto_solve(False)
 
     @pyqtSlot(str, int, int, float)
     def _on_sequence_progress(self, obj: str, done: int, total: int, eta_s: float) -> None:
