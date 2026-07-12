@@ -51,7 +51,7 @@ _PROFILES: tuple[tuple[str, str], ...] = (
 _DEVICES: tuple[tuple[str, str, str], ...] = (
     ("mount", "Telescope", "Mount control via ASCOM Alpaca"),
     ("camera", "Camera", "Telephoto IMX585 sensor"),
-    ("filterwheel", "Filter Wheel", "IR-cut / LP / Dark slots"),
+    ("filterwheel", "Filter Wheel", "Dark / IR / LP slots"),
     ("focuser", "Focuser", "Telephoto focuser"),
 )
 

@@ -55,7 +55,10 @@ logger = logging.getLogger(__name__)
 
 
 _FRAME_TYPES = ("Light Frame", "Dark Frame", "Flat Frame", "Bias Frame")
-_DEFAULT_FILTERS = ("LP", "IR-cut", "Dark")
+# Seestar wheel slot names (see alpaca.filterwheel.POSITION_NAMES), light
+# filters first so the pre-connect default is shootable. "IR-cut" was wrong:
+# no wheel position matched it, so picking it silently never moved the wheel.
+_DEFAULT_FILTERS = ("IR", "LP", "Dark")
 
 #: Fallback limits when no camera is connected (the historical hardcodes).
 DEFAULT_GAIN_RANGE = (0, 600)
@@ -336,6 +339,10 @@ class CameraDock(design.Card):
         idx = self._filter_combo.findText(name)
         if idx >= 0:
             self._filter_combo.setCurrentIndex(idx)
+
+    def set_filter_moving(self, moving: bool) -> None:
+        """Grey the filter combo while the wheel turns (quiet busy cue)."""
+        self._filter_combo.setEnabled(not moving)
 
     def set_hfd(self, value: float | None) -> None:
         if value is None:

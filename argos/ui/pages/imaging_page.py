@@ -86,7 +86,6 @@ from argos.ui.panels.log_panel import LogPanel
 from argos.ui.panels.manual_control_dialog import ManualControlDialog
 from argos.ui.widgets.camera_dock import CameraDock
 from argos.ui.widgets.dock_host import make_dock, style_toggle_action
-from argos.ui.widgets.filterwheel_dock import FilterWheelDock
 from argos.ui.widgets.fits_viewer import FitsViewer
 from argos.ui.widgets.focuser_dock import FocuserDock
 from argos.ui.widgets.hfd_history_dock import HfdHistoryDock
@@ -210,7 +209,6 @@ class ImagingPage(QWidget):
         self._sequence_panel = SequencePanel()
         self._mount_dock = MountDock()
         self._focuser_dock = FocuserDock()
-        self._filterwheel_dock = FilterWheelDock()
         self._histogram_dock = HistogramDock()
         self._statistics_dock = StatisticsDock()
         self._hfd_history_dock = HfdHistoryDock()
@@ -244,9 +242,6 @@ class ImagingPage(QWidget):
             "camera": make_dock("Camera", self._camera_dock, object_name="dock.camera"),
             "mount": make_dock("Mount", self._mount_dock, object_name="dock.mount"),
             "focuser": make_dock("Focuser", self._focuser_dock, object_name="dock.focuser"),
-            "filterwheel": make_dock(
-                "Filter wheel", self._filterwheel_dock, object_name="dock.filterwheel"
-            ),
             "display": make_dock("Display", self._histogram_dock, object_name="dock.display"),
             # Statistics is a compact key/value card (scrolls if the dock is
             # short); HFD History owns an expanding trend plot, so it manages its
@@ -292,7 +287,6 @@ class ImagingPage(QWidget):
         ("camera", "Camera"),
         ("mount", "Mount"),
         ("focuser", "Focuser"),
-        ("filterwheel", "Filters"),
         ("display", "Display"),
         ("statistics", "Statistics"),
         ("hfd_history", "HFD History"),
@@ -363,9 +357,10 @@ class ImagingPage(QWidget):
         w.addDockWidget(right, self._docks["camera"])
         w.addDockWidget(right, self._docks["mount"])
         w.addDockWidget(right, self._docks["focuser"])
-        w.addDockWidget(right, self._docks["filterwheel"])
-        # Mount / Focuser / Filter wheel share Camera's stack, tabbed behind it.
-        for key in ("mount", "focuser", "filterwheel"):
+        # Mount / Focuser share Camera's stack, tabbed behind it. (The filter
+        # wheel has no dock: its slots are driven from the Camera form and the
+        # sequence rows — the wheel is capture state, not a device to babysit.)
+        for key in ("mount", "focuser"):
             w.tabifyDockWidget(self._docks["camera"], self._docks[key])
         self._docks["camera"].raise_()
 
@@ -493,7 +488,6 @@ class ImagingPage(QWidget):
         self._sequence_panel.stop_requested.connect(self._engine.stop_sequence)
 
         # Filter wheel dock
-        self._filterwheel_dock.move_requested.connect(self._on_filter_move)
 
         # Mount dock — command intents go straight to the device session.
         self._mount_dock.goto_clicked.connect(self._on_goto)
@@ -554,8 +548,6 @@ class ImagingPage(QWidget):
             if state == "disconnected":
                 self._camera_dock.reset_camera_limits()
                 self._sequence_panel.set_camera_limits()  # back to defaults
-        elif device == "filterwheel":
-            self._filterwheel_dock.set_enabled(enabled)
         elif device == "focuser":
             self._focuser_dock.set_enabled(enabled)
             if state == "disconnected":
@@ -578,11 +570,13 @@ class ImagingPage(QWidget):
 
     @pyqtSlot(object)
     def _on_filterwheel_state(self, fw: FilterWheelState) -> None:
+        # The wheel's real slot names become THE filter vocabulary everywhere
+        # a filter is picked (camera dock, sequence rows) — one source, so a
+        # picked name always resolves to a wheel position.
         names = list(fw.names)
-        self._filterwheel_dock.set_filters(names)
         self._camera_dock.set_filter_options(names)
         self._sequence_panel.set_filter_options(names)
-        self._filterwheel_dock.set_position(fw.position, fw.position_name)
+        self._camera_dock.set_current_filter(fw.position_name)
 
     @pyqtSlot(object)
     def _on_focuser_state(self, foc: FocuserState) -> None:
@@ -591,7 +585,7 @@ class ImagingPage(QWidget):
     def _on_filter_move(self, position: int) -> None:
         if not self._session.filterwheel:
             return
-        self._filterwheel_dock.set_position(-1, "")  # show "Moving…"
+        self._camera_dock.set_filter_moving(True)
         self._session.move_filter(position)
 
     def _on_camera_dock_filter(self, name: str) -> None:
@@ -609,9 +603,9 @@ class ImagingPage(QWidget):
         self._on_filter_move(position)
 
     @pyqtSlot(int, str)
-    def _on_filter_moved(self, position: int, name: str) -> None:
-        self._filterwheel_dock.set_position(position, name)
+    def _on_filter_moved(self, _position: int, name: str) -> None:
         # Keep the CameraDock combo (single-shot metadata) on the real position.
+        self._camera_dock.set_filter_moving(False)
         self._camera_dock.set_current_filter(name)
 
     # ------------------------------------------------------------------

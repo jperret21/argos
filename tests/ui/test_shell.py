@@ -26,7 +26,6 @@ def test_shell_three_mode_walkthrough() -> None:
     from argos.ui.panels.stellarium_card import StellariumCard
     from argos.ui.shell import Shell
     from argos.ui.widgets.camera_dock import CameraDock, CaptureParams
-    from argos.ui.widgets.filterwheel_dock import FilterWheelDock
     from argos.ui.widgets.histogram_dock import HistogramDock
     from argos.ui.widgets.mount_dock import MountDock
 
@@ -98,15 +97,19 @@ def test_shell_three_mode_walkthrough() -> None:
         page._mount_dock._slew_btn.click()
         assert goto == [(7.5, -12.5)]
 
-        # Filter wheel dock: populate + manual move emits the target slot.
-        assert isinstance(page._filterwheel_dock, FilterWheelDock)
-        page._filterwheel_dock.set_filters(["Dark", "IR", "LP"])
-        page._filterwheel_dock.set_enabled(True)
-        moves: list[int] = []
-        page._filterwheel_dock.move_requested.connect(moves.append)
-        page._filterwheel_dock._combo.setCurrentIndex(2)  # LP
-        page._filterwheel_dock._move_btn.click()
-        assert moves == [2]
+        # Filter control lives in the Camera dock (no separate wheel dock):
+        # a user pick emits filter_selected, and the moving cue greys the combo.
+        filters: list[str] = []
+        page._camera_dock.filter_selected.connect(filters.append)
+        page._camera_dock.set_filter_options(["Dark", "IR", "LP"])
+        page._camera_dock._filter_combo.setCurrentIndex(2)  # LP
+        page._camera_dock._filter_combo.activated.emit(2)  # user pick
+        assert filters == ["LP"]
+        page._camera_dock.set_filter_moving(True)
+        assert not page._camera_dock._filter_combo.isEnabled()
+        page._camera_dock.set_filter_moving(False)
+        assert page._camera_dock._filter_combo.isEnabled()
+        assert "filterwheel" not in page._docks
 
         # Analyze is a first-class mode.
         from argos.ui.pages.analyze_page import AnalyzeScreen

@@ -100,7 +100,8 @@ IMAGE_TYPE_MAP = {
     "bias": "Bias Frame",
 }
 
-# Filter name → file-safe abbreviation
+# Filter name → file-safe abbreviation ("IR-cut" kept for old presets; the
+# Seestar wheel's real slot names — Dark / IR / LP — pass through unchanged).
 FILTER_ABBREV = {
     "LRGB": "LRGB",
     "Ha": "Ha",
