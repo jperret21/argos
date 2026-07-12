@@ -136,6 +136,7 @@ class ImagingPage(QWidget):
     autofocus_step = pyqtSignal(int, int, int, object)  # step, total, pos, hfd|None
     autofocus_best = pyqtSignal(int, object)  # best position, best hfd|None
     autofocus_state = pyqtSignal(bool)  # sweep running / stopped
+    auto_solve_armed = pyqtSignal(bool)  # → the Shell's checkable menu action
     # Capture visibility for the Shell's persistent strip (WS4).
     camera_state_changed = pyqtSignal(object)  # CameraState ownership transitions
     hfd_updated = pyqtSignal(object)  # per-frame HFD, float | None
@@ -433,13 +434,10 @@ class ImagingPage(QWidget):
         # Live plate-solve controller (engine-owned, shared pipeline).
         self._astrometry.solved.connect(self._on_astrometry_solved)
 
-        # Toolbar
+        # Toolbar (view + Open FITS only — solve/photometry actions live in
+        # the Shell's Astrometry / Photometry menus).
         self._toolbar.channel_changed.connect(self._on_channel_changed)
         self._toolbar.open_requested.connect(self._on_open_fits)
-        self._toolbar.solve_requested.connect(self._engine.solve_now)
-        self._toolbar.auto_solve_toggled.connect(self._astrometry.set_auto)
-        self._toolbar.photometry_requested.connect(self._open_photometry)
-        self._toolbar.rerun_requested.connect(self._on_rerun_subs)
         # Overlay chips + the on-image star-info card.
         self._overlay_bar.toggled.connect(self._on_overlay_toggled)
         self._info_card.role_selected.connect(self._on_card_role)
@@ -1088,6 +1086,14 @@ class ImagingPage(QWidget):
     # Live photometry preview (§6 P4)
     # ------------------------------------------------------------------
 
+    def open_photometry(self) -> None:
+        """Shell menu entry point (Photometry ▸ Light curve…)."""
+        self._open_photometry()
+
+    def rerun_subs(self) -> None:
+        """Shell menu entry point (Photometry ▸ Re-run subs…)."""
+        self._on_rerun_subs()
+
     def _open_photometry(self) -> None:
         if self._photometry_window is None:
             self._photometry_window = PhotometryWindow(self)
@@ -1372,10 +1378,10 @@ class ImagingPage(QWidget):
         if running:
             self._auto_solve_before_seq = self._astrometry.auto
             if self._astrometry.wcs is not None and not self._astrometry.auto:
-                self._toolbar.set_auto_solve(True)  # button → set_auto via toggled
+                self.auto_solve_armed.emit(True)  # menu action → set_auto via toggled
                 self.log_message.emit("INFO", "Sequence: auto-solve armed for the run.")
         elif not getattr(self, "_auto_solve_before_seq", True):
-            self._toolbar.set_auto_solve(False)
+            self.auto_solve_armed.emit(False)
 
     def _on_seq_frame_saved(self, path: str, record) -> None:
         name = Path(path).name

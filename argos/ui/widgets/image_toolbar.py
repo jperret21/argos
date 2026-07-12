@@ -10,15 +10,7 @@ from __future__ import annotations
 import logging
 
 from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import (
-    QComboBox,
-    QHBoxLayout,
-    QLabel,
-    QMenu,
-    QPushButton,
-    QToolButton,
-    QWidget,
-)
+from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPushButton, QWidget
 
 from argos.core.imaging import debayer
 from argos.ui import theme
@@ -35,26 +27,19 @@ def _lbl(text: str) -> QLabel:
 class ImageToolbar(QWidget):
     """Horizontal toolbar with the view (debayer mode / channel) selector.
 
+    Solve / auto-solve / photometry actions live in the Shell's menu bar
+    (Astrometry / Photometry menus) — field feedback: no dropdown buttons here.
+
     Signals:
         channel_changed(str): the selected view (see ``debayer.VIEWS``).
         open_requested():     the user wants to open a FITS file from disk.
-        solve_requested():    plate-solve the current live frame (§6).
-        auto_solve_toggled(bool): arm/disarm per-frame auto plate-solving (§6).
-        photometry_requested(): open the live photometry window (§6 P4).
-        rerun_requested(): re-run differential photometry over a folder of saved
-            subs, off the UI thread (WS7 batch worker).
     """
 
     channel_changed = pyqtSignal(str)
     open_requested = pyqtSignal()
-    solve_requested = pyqtSignal()
-    auto_solve_toggled = pyqtSignal(bool)
-    photometry_requested = pyqtSignal()
-    rerun_requested = pyqtSignal()
 
-    def __init__(self, parent: QWidget | None = None, *, show_solve: bool = True) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._show_solve = show_solve  # the live page owns solving; Open-FITS has its own bar
         self.setMinimumHeight(38)
         self.setMaximumHeight(48)
         self.setStyleSheet(
@@ -90,54 +75,6 @@ class ImageToolbar(QWidget):
         self._open_btn.clicked.connect(self.open_requested)
         layout.addWidget(self._open_btn)
 
-        if self._show_solve:
-            # Two menu-buttons instead of a row of four (field feedback): the
-            # frequent gesture stays one click (button face = Solve / open the
-            # photometry window), the occasional ones fold into the dropdown.
-            self._solve_btn = QToolButton()
-            self._solve_btn.setText("Solve")
-            self._solve_btn.setStyleSheet("font-size: 11px;")
-            self._solve_btn.setToolTip(
-                "Plate-solve the current live frame via ASTAP (uses the mount as a\n"
-                "position hint). Shows centre RA/Dec + an RA/Dec grid overlay.\n"
-                "The arrow holds Auto-solve."
-            )
-            self._solve_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
-            self._solve_btn.clicked.connect(self.solve_requested)
-            solve_menu = QMenu(self._solve_btn)
-            self._auto_solve_action = solve_menu.addAction("Auto-solve")
-            self._auto_solve_action.setCheckable(True)
-            self._auto_solve_action.setToolTip(
-                "Re-solve the live frame automatically as the sequence runs, so the\n"
-                "RA/Dec grid tracks the field instead of going stale. Re-solves only\n"
-                "when due (mount moved or a few seconds elapsed); keeps the last grid\n"
-                "if a solve misses."
-            )
-            self._auto_solve_action.toggled.connect(self.auto_solve_toggled)
-            self._solve_btn.setMenu(solve_menu)
-            layout.addWidget(self._solve_btn)
-
-            self._phot_btn = QToolButton()
-            self._phot_btn.setText("Photometry")
-            self._phot_btn.setStyleSheet("font-size: 11px;")
-            self._phot_btn.setToolTip(
-                "Open the live differential light-curve preview + session metrics\n"
-                "(temperature / airmass / FWHM vs time) for the saved target set.\n"
-                "The arrow holds the batch re-run."
-            )
-            self._phot_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
-            self._phot_btn.clicked.connect(self.photometry_requested)
-            phot_menu = QMenu(self._phot_btn)
-            rerun = phot_menu.addAction("Re-run subs…")
-            rerun.setToolTip(
-                "Re-run differential photometry over a folder of saved subs against\n"
-                "the current target set, off the UI thread (needs a solve + targets).\n"
-                "Writes the canonical light-curve CSVs for Analyze / AAVSO export."
-            )
-            rerun.triggered.connect(self.rerun_requested)
-            self._phot_btn.setMenu(phot_menu)
-            layout.addWidget(self._phot_btn)
-
         layout.addStretch()
 
         # Persistent reminder: the on-screen image is stretched/debayered while
@@ -147,11 +84,6 @@ class ImageToolbar(QWidget):
             f"color: {theme.WARNING}; font-size: 10px; background: transparent;"
         )
         layout.addWidget(indicator)
-
-    def set_auto_solve(self, checked: bool) -> None:
-        """Programmatic arm/disarm — the action toggles, so the policy follows."""
-        if self._show_solve:
-            self._auto_solve_action.setChecked(checked)
 
     def set_view(self, view: str) -> None:
         """Programmatically select a view without re-emitting ``channel_changed``."""

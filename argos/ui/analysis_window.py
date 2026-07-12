@@ -134,7 +134,7 @@ class AnalysisWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        self._toolbar = ImageToolbar(show_solve=False)
+        self._toolbar = ImageToolbar()
         root.addWidget(self._toolbar)
 
         self._viewer = FitsViewer()

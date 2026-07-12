@@ -172,17 +172,42 @@ class Shell(QMainWindow):
         reset.triggered.connect(self._reset_layout)
         view.addAction(reset)
 
-        # Astrometry — tools that tune the solve + the AAVSO catalog query. Both
-        # entries open the one shared settings dialog on the relevant tab (the
-        # owner's mental model: "Plate solving…" / "Catalog…"). Kept to the two
-        # menus with real content today; no empty scaffolding categories.
+        # Astrometry — the solve actions first (field feedback: they belong in
+        # a top menu, not toolbar dropdown buttons), then the tuning dialogs.
         astrometry = bar.addMenu("Astrometry")
+        solve = QAction("Solve frame", self)
+        solve.setToolTip("Plate-solve the current frame via ASTAP (mount hint + grid overlay)")
+        solve.triggered.connect(lambda: self._engine.solve_now())
+        astrometry.addAction(solve)
+        self._auto_solve_action = QAction("Auto-solve", self)
+        self._auto_solve_action.setCheckable(True)
+        self._auto_solve_action.setToolTip(
+            "Re-solve the live frame automatically (when due) so the grid and\n"
+            "markers track the field; armed by itself while a sequence runs"
+        )
+        self._auto_solve_action.toggled.connect(self._engine.astrometry.set_auto)
+        # Sequence start arms the auto-solve; this checkable action is the
+        # single UI for it, so the arming routes through it (→ set_auto).
+        self._acquisition.auto_solve_armed.connect(self._auto_solve_action.setChecked)
+        astrometry.addAction(self._auto_solve_action)
+        astrometry.addSeparator()
         plate = QAction("Plate solving…", self)
         plate.triggered.connect(lambda: self._open_astrometry_settings(SECTION_ASTROMETRY))
         astrometry.addAction(plate)
         catalog = QAction("Catalog…", self)
         catalog.triggered.connect(lambda: self._open_astrometry_settings(SECTION_CATALOG))
         astrometry.addAction(catalog)
+
+        # Photometry — the live window + the batch re-run over saved subs.
+        photometry = bar.addMenu("Photometry")
+        curve = QAction("Light curve…", self)
+        curve.setToolTip("Open the live differential light-curve window (targets + metrics)")
+        curve.triggered.connect(lambda: self._acquisition.open_photometry())
+        photometry.addAction(curve)
+        rerun = QAction("Re-run subs…", self)
+        rerun.setToolTip("Re-run differential photometry over a folder of saved subs")
+        rerun.triggered.connect(lambda: self._acquisition.rerun_subs())
+        photometry.addAction(rerun)
 
         help_menu = bar.addMenu("Help")
         about = QAction("About Argos", self)

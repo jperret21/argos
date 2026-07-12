@@ -53,9 +53,19 @@ def test_shell_three_mode_walkthrough() -> None:
         from argos.ui.widgets import astrometry_settings as _astro_mod
 
         menus = {a.menu().title(): a.menu() for a in shell.menuBar().actions() if a.menu()}
-        assert "Astrometry" in menus
-        astro_labels = [act.text() for act in menus["Astrometry"].actions()]
-        assert "Plate solving…" in astro_labels and "Catalog…" in astro_labels
+        assert "Astrometry" in menus and "Photometry" in menus
+        astro_actions = {act.text(): act for act in menus["Astrometry"].actions()}
+        assert {"Solve frame", "Auto-solve", "Plate solving…", "Catalog…"} <= set(astro_actions)
+        phot_labels = [act.text() for act in menus["Photometry"].actions()]
+        assert "Light curve…" in phot_labels and "Re-run subs…" in phot_labels
+
+        # The checkable Auto-solve action is the single UI for the policy: the
+        # page's sequence-arming signal routes through it into the controller.
+        shell._pages["capture"].auto_solve_armed.emit(True)
+        assert shell._auto_solve_action.isChecked()
+        assert shell._engine.astrometry.auto is True
+        shell._pages["capture"].auto_solve_armed.emit(False)
+        assert shell._engine.astrometry.auto is False
 
         # Triggering "Catalog…" builds the dialog on its tab (exec() stubbed so
         # the offscreen test never blocks on a modal loop).
@@ -63,7 +73,7 @@ def test_shell_three_mode_walkthrough() -> None:
         orig_exec = _astro_mod.AstrometrySettingsDialog.exec
         _astro_mod.AstrometrySettingsDialog.exec = lambda self: (opened.append(self), 0)[1]
         try:
-            menus["Astrometry"].actions()[1].trigger()  # "Catalog…"
+            astro_actions["Catalog…"].trigger()
         finally:
             _astro_mod.AstrometrySettingsDialog.exec = orig_exec
         assert len(opened) == 1
