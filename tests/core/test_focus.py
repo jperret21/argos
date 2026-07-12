@@ -81,6 +81,55 @@ def test_empty_is_method_none() -> None:
     assert result.samples == ()
 
 
+def test_plateau_with_single_dip_uses_raw_minimum() -> None:
+    # Field data (Seestar S30 Pro, 2026-07-11): compute_hfd saturates ~30-45 in
+    # far defocus, leaving one informative dip. The unguarded parabola fit put
+    # its vertex at 1055 "HFD 32.9" — worse than the measured 13.2 at 1300 —
+    # and defocused a perfectly focused scope. The vertex-vs-raw guard must
+    # reject that fit and fall back to the measured minimum.
+    samples = [
+        (0, 34.7), (325, 34.0), (650, 45.0), (975, 30.8), (1300, 13.2),
+        (1625, 41.2), (1950, 44.2), (2275, 37.9), (2600, 37.5),
+    ]
+    result = fit_v_curve(samples, 0, 2600)
+
+    assert result.method == "raw"
+    assert result.best_position == 1300
+    assert result.best_hfd == 13.2
+
+
+def test_vertex_slightly_below_raw_is_still_trusted() -> None:
+    # The guard must not reject a healthy fit whose vertex dips a little
+    # below the lowest sample — that is precisely what fitting is for.
+    result = fit_v_curve(_parabola(range(3600, 4600, 100), vertex=4150))
+    assert result.method == "parabola"
+    assert abs(result.best_position - 4150) <= 1
+
+
+# ── refine_positions ────────────────────────────────────────────────────────
+
+
+def test_refine_positions_bracket_center() -> None:
+    from argos.core.imaging.focus import refine_positions
+
+    pos = refine_positions(center=1300, spacing=325, low=0, high=2600, count=4)
+    assert pos == sorted(pos)
+    assert 1300 not in pos
+    assert len(pos) == 4
+    # Strictly inside ±spacing: the coarse sweep already measured ±325.
+    assert all(0 < abs(p - 1300) < 325 for p in pos)
+    # Symmetric around the center.
+    assert sorted(1300 - p for p in pos if p < 1300) == sorted(p - 1300 for p in pos if p > 1300)
+
+
+def test_refine_positions_clipped_to_travel() -> None:
+    from argos.core.imaging.focus import refine_positions
+
+    pos = refine_positions(center=100, spacing=325, low=0, high=2600, count=4)
+    assert all(0 <= p <= 2600 for p in pos)
+    assert len(pos) < 4  # the below-zero brackets are dropped, not clamped
+
+
 # ── sweep_is_degenerate (P6) ────────────────────────────────────────────────
 
 

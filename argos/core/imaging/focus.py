@@ -71,6 +71,13 @@ class FocusResult:
 #: decoupled focuser — and any "best" is a fit to noise (P6).
 MIN_RELATIVE_SPAN = 0.15
 
+#: A parabola vertex may sit slightly below the lowest sample (that is the
+#: point of fitting), but never meaningfully *above* it: a vertex worse than
+#: a measured HFD means the samples are not a parabola (e.g. the far-defocus
+#: plateau where ``compute_hfd`` saturates) and the fit landed on noise.
+#: Tolerance for measurement scatter before the fit is rejected.
+MAX_VERTEX_OVER_RAW = 1.2
+
 
 def sweep_is_degenerate(samples: tuple[tuple[int, float], ...]) -> Optional[str]:
     """None when the sweep looks like a V-curve, else why it doesn't (P6).
@@ -91,6 +98,22 @@ def sweep_is_degenerate(samples: tuple[tuple[int, float], ...]) -> Optional[str]
     if hfds.index(mn) in (0, len(hfds) - 1):
         return "HFD minimum at the sweep edge — best focus outside the scanned range"
     return None
+
+
+def refine_positions(center: int, spacing: int, low: int, high: int, count: int = 4) -> list[int]:
+    """Fine-scan focuser positions bracketing ``center``, inside ``[low, high]``.
+
+    ``count`` evenly split offsets strictly inside ±``spacing`` (the coarse
+    interval): the coarse sweep already measured ``center`` and its ±spacing
+    neighbours, so the fine pass samples the V where ``compute_hfd`` is
+    actually informative. Sorted, deduplicated, ``center`` excluded.
+    """
+    half = max(1, count // 2)
+    fractions = [i / (half + 1) for i in range(1, half + 1)]
+    offsets = [round(f * spacing) for f in fractions]
+    positions = {center - o for o in offsets} | {center + o for o in offsets}
+    positions.discard(center)
+    return sorted(p for p in positions if low <= p <= high)
 
 
 def fit_v_curve(
@@ -130,20 +153,43 @@ def fit_v_curve(
         high = int(pos_arr.max())
 
     if len(valid) >= 3:
-        try:
-            a, b, c = (float(v) for v in np.polyfit(pos_arr, hfd_arr, 2))
-            if a > 0:
-                vertex = -b / (2.0 * a)
-                if low <= vertex <= high:
-                    fitted_hfd = a * vertex * vertex + b * vertex + c
-                    return FocusResult(
-                        int(round(vertex)),
-                        round(float(fitted_hfd), 2),
-                        "parabola",
-                        (a, b, c),
-                        samples,
-                    )
-        except Exception as exc:  # numpy can raise on ill-conditioned input
-            logger.debug("Parabola fit failed: %s", exc)
+        result = _try_parabola(pos_arr, hfd_arr, low, high, best_raw, samples)
+        if result is not None:
+            return result
 
     return FocusResult(int(best_raw[0]), round(float(best_raw[1]), 2), "raw", None, samples)
+
+
+def _try_parabola(
+    pos_arr: np.ndarray,
+    hfd_arr: np.ndarray,
+    low: int,
+    high: int,
+    best_raw: tuple[int, float],
+    samples: tuple[tuple[int, float], ...],
+) -> Optional[FocusResult]:
+    """Vertex of the fitted parabola, or ``None`` when the fit can't be trusted."""
+    try:
+        a, b, c = (float(v) for v in np.polyfit(pos_arr, hfd_arr, 2))
+    except Exception as exc:  # numpy can raise on ill-conditioned input
+        logger.debug("Parabola fit failed: %s", exc)
+        return None
+    if a <= 0:
+        return None
+    vertex = -b / (2.0 * a)
+    if not low <= vertex <= high:
+        return None
+    fitted_hfd = a * vertex * vertex + b * vertex + c
+    if fitted_hfd > best_raw[1] * MAX_VERTEX_OVER_RAW:
+        # The "best" the parabola offers is worse than a point we actually
+        # measured — the samples are not a V (far-defocus plateau + a single
+        # dip). Trust the data.
+        logger.warning(
+            "Parabola vertex HFD %.1f worse than measured %.1f at %d "
+            "— falling back to the raw minimum",
+            fitted_hfd,
+            best_raw[1],
+            best_raw[0],
+        )
+        return None
+    return FocusResult(int(round(vertex)), round(float(fitted_hfd), 2), "parabola", (a, b, c), samples)
