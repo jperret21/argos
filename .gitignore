@@ -42,6 +42,8 @@ simulator.log.*
 
 # Private dev docs (not for public)
 CLAUDE.md
+AGENTS.md
+.claude/
 handoff.md
 docs/plan_*.md
 docs/redesign_*.md
