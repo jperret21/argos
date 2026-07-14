@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Argos — photometry for the Seestar S30 Pro</title>
-    <meta name="description" content="Desktop astrophotography and differential photometry for the ZWO Seestar S30 Pro. From raw frames to light curves, on your laptop. Alpha coming soon." />
+    <meta name="description" content="Desktop astrophotography and differential photometry for the ZWO Seestar S30 Pro. From raw frames to light curves, on your laptop. Alpha now available." />
     <link rel="stylesheet" href="css/style.css" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -27,7 +27,9 @@
             </a>
             <ul class="nav-links">
                 <li><a href="#about">About</a></li>
-                <li><a href="#capabilities">Specs</a></li>
+                <li><a href="#preview">Preview</a></li>
+                <li><a href="#capabilities">Pipeline</a></li>
+                <li><a href="#siril">Siril</a></li>
                 <li><a href="#start">Start</a></li>
                 <li><a href="#contribute">Contribute</a></li>
                 <li><a href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub</a></li>
@@ -41,7 +43,7 @@
         <div class="hero-curve" aria-hidden="true"><svg id="curve" xmlns="http://www.w3.org/2000/svg"></svg></div>
 
         <div class="container hero-content">
-            <div class="hero-badge">Open source &middot; Alpha version for tester coming soon</div>
+            <div class="hero-badge">Open source &middot; Alpha now available for testers</div>
             <h1>Argos</h1>
             <p class="hero-myth">the hundred-eyed watcher</p>
             <p class="hero-sub">Desktop astrophotography &amp; differential photometry<br />for the ZWO Seestar S30 Pro.</p>
@@ -74,110 +76,119 @@
         </div>
     </section>
 
+    <section class="section showcase" id="preview">
+        <div class="container container-wide">
+            <div class="section-header">
+                <h2>See it run</h2>
+                <p>Live differential photometry of RR&nbsp;Lyrae &mdash; the light curve building frame by frame, as the subs land.</p>
+            </div>
+            <figure class="app-window">
+                <div class="app-bar">
+                    <span class="app-dot"></span><span class="app-dot"></span><span class="app-dot"></span>
+                    <span class="app-title">Argos v0.3.1</span>
+                </div>
+                <picture>
+                    <source srcset="img/screenshot-photometry.webp" type="image/webp" />
+                    <img src="img/screenshot-photometry.png" width="2868" height="1638" loading="lazy" decoding="async"
+                         alt="Argos capturing RR Lyrae: a live view with the variable and its comparison stars marked, next to a differential light-curve panel filling in over 205 subs." />
+                </picture>
+                <figcaption class="showcase-cap">RR&nbsp;Lyrae &middot; 105/205 subs &middot; variable &amp; comparisons auto-matched from the AAVSO chart &middot; plate-solved live at 3.67&Prime;/px</figcaption>
+            </figure>
+        </div>
+    </section>
+
     <section class="section" id="capabilities">
         <div class="container">
             <div class="section-header">
-                <h2>Specs</h2>
-                <p>From raw photons to a calibrated light curve &mdash; the whole chain runs on your laptop, frame by frame.</p>
+                <h2>The pipeline</h2>
+                <p>One signal path, from raw photons to a calibrated light curve &mdash; every stage running on your laptop, frame by frame.</p>
             </div>
 
-            <div class="spec-group">
-                <div class="spec-label"><span>01</span> Acquisition &amp; control</div>
-                <div class="spec-grid">
-                    <div class="spec-card">
-                        <i class="cap-dot on"></i>
-                        <strong>Mount &amp; camera</strong>
-                        <p>ASCOM Alpaca GoTo, tracking and park &mdash; with the native Seestar jog API for the moves the firmware won&rsquo;t expose over Alpaca.</p>
-                    </div>
-                    <div class="spec-card">
-                        <i class="cap-dot on"></i>
-                        <strong>Live view</strong>
-                        <p>Continuous exposure loop with linear / log / asinh auto-stretch. Display only &mdash; the linear frame written to disk is never touched.</p>
-                    </div>
-                    <div class="spec-card">
-                        <i class="cap-dot on"></i>
-                        <strong>Sequencer</strong>
-                        <p>Multi-step Light / Dark / Flat / Bias plans, flattened into one ordered, repeatable shot list.</p>
-                    </div>
-                    <div class="spec-card">
-                        <i class="cap-dot on"></i>
-                        <strong>Stellarium link</strong>
-                        <p>Slew the mount straight from Stellarium over Telescope Protocol v1.0; live pointing is reported back at ~1&nbsp;Hz.</p>
-                    </div>
-                    <div class="spec-card">
-                        <i class="cap-dot pending"></i>
-                        <strong>Autofocus</strong>
-                        <p>HFD V-curve sweep across focuser positions with a parabola-fit minimum. Focuser control is wired; the routine is landing next.</p>
-                    </div>
-                </div>
+            <div class="flow" aria-hidden="true">
+                <span class="flow-step"><i class="flow-node"></i>Photons</span>
+                <span class="flow-step"><i class="flow-node"></i>Science FITS</span>
+                <span class="flow-step"><i class="flow-node"></i>Astrometry</span>
+                <span class="flow-step"><i class="flow-node"></i>Photometry</span>
+                <span class="flow-step"><i class="flow-node end"></i>Light curve</span>
             </div>
 
-            <div class="spec-group">
-                <div class="spec-label"><span>02</span> Frames &amp; data</div>
-                <div class="spec-grid">
-                    <div class="spec-card">
-                        <i class="cap-dot on"></i>
-                        <strong>Science-grade FITS</strong>
-                        <p>Fills in the headers the Seestar leaves out &mdash; exposure mid-times, gain, airmass, Moon separation &mdash; so a frame is ready for Siril, PixInsight or AstroImageJ.</p>
+            <div class="pipe">
+                <article class="stage">
+                    <div class="stage-rail"><span class="stage-num">01</span></div>
+                    <div class="stage-body">
+                        <h3 class="stage-name">Capture</h3>
+                        <p class="stage-lead">Point, track and shoot &mdash; live view, sequences and full telescope control, from your laptop.</p>
                     </div>
-                    <div class="spec-card">
-                        <i class="cap-dot on"></i>
-                        <strong>Green-plane measurement</strong>
-                        <p>Photometry and astrometry work on the raw green pixels directly &mdash; no demosaic, no interpolation, so every measurement is signal the camera actually recorded.</p>
-                    </div>
-                </div>
-            </div>
+                </article>
 
-            <div class="spec-group">
-                <div class="spec-label"><span>03</span> Astrometry</div>
-                <div class="spec-grid">
-                    <div class="spec-card">
-                        <i class="cap-dot on"></i>
-                        <strong>Star detection &amp; QA</strong>
-                        <p>Sources at 5&sigma; over a robust sky estimate, with HFD, Gaussian FWHM and eccentricity for up to 120 stars per frame.</p>
+                <article class="stage">
+                    <div class="stage-rail"><span class="stage-num">02</span></div>
+                    <div class="stage-body">
+                        <h3 class="stage-name">Frame</h3>
+                        <p class="stage-lead">Every frame saved as a proper science file, with the details the Seestar leaves out &mdash; ready for Siril or PixInsight.</p>
                     </div>
-                    <div class="spec-card">
-                        <i class="cap-dot on"></i>
-                        <strong>Plate solving</strong>
-                        <p>ASTAP solves every sub against the sky and writes back a full WCS &mdash; so any pixel maps to real sky coordinates, even on short live frames.</p>
-                    </div>
-                </div>
-            </div>
+                </article>
 
-            <div class="spec-group">
-                <div class="spec-label"><span>04</span> Photometry</div>
-                <div class="spec-grid">
-                    <div class="spec-card">
-                        <i class="cap-dot on"></i>
-                        <strong>Aperture photometry</strong>
-                        <p>Circular aperture + median sky annulus &rarr; background-subtracted flux, instrumental magnitude and a CCD-equation error in electrons, with a saturation flag.</p>
+                <article class="stage">
+                    <div class="stage-rail"><span class="stage-num">03</span></div>
+                    <div class="stage-body">
+                        <h3 class="stage-name">Astrometry</h3>
+                        <p class="stage-lead">Each frame is matched to the sky, so every pixel knows exactly where it points.</p>
                     </div>
-                    <div class="spec-card">
-                        <i class="cap-dot on"></i>
-                        <strong>Ensemble differential</strong>
-                        <p>Zero-point from a comparison ensemble (mean of catalog &minus; instrumental); the error folds the target&rsquo;s photon noise into the ensemble scatter (Honeycutt 1992).</p>
-                    </div>
-                    <div class="spec-card">
-                        <i class="cap-dot on"></i>
-                        <strong>AAVSO catalog</strong>
-                        <p>VSX variables and VSP comparison stars by cone search on the solved centre; comparisons auto-ranked by proximity and matched brightness.</p>
-                    </div>
-                    <div class="spec-card">
-                        <i class="cap-dot on"></i>
-                        <strong>Light-curve export</strong>
-                        <p>Per-target CSV: JD_UTC and BJD_TDB, magnitude and error, airmass (Kasten&ndash;Young), FWHM, sky and comparisons used.</p>
-                    </div>
-                </div>
-            </div>
+                </article>
 
-            <div class="cap-legend">
-                <span><i class="cap-dot on"></i> shipped</span>
-                <span><i class="cap-dot pending"></i> on the way</span>
+                <article class="stage">
+                    <div class="stage-rail"><span class="stage-num">04</span></div>
+                    <div class="stage-body">
+                        <h3 class="stage-name">Photometry</h3>
+                        <p class="stage-lead">Each star measured and calibrated against reference stars from the AAVSO catalog.</p>
+                    </div>
+                </article>
+
+                <article class="stage">
+                    <div class="stage-rail"><span class="stage-num end">05</span></div>
+                    <div class="stage-body">
+                        <h3 class="stage-name">Light curve</h3>
+                        <p class="stage-lead">Brightness over time, building live as the light lands &mdash; and exported when you&rsquo;re done.</p>
+                    </div>
+                </article>
             </div>
         </div>
     </section>
 
-    <section class="section section-dark" id="start">
+    <section class="section section-dark" id="siril">
+        <div class="container container-wide">
+            <div class="section-header">
+                <h2>Take it further in Siril</h2>
+                <p>Argos stops where honesty ends &mdash; real subs, real headers, a live quick-look. For the publishable curve, its frames drop straight into Siril.</p>
+            </div>
+
+            <div class="handoff">
+                <div class="handoff-step"><b>Argos</b><small>capture &middot; science FITS &middot; quick-look</small></div>
+                <i class="handoff-arrow">&rarr;</i>
+                <div class="handoff-step mid"><b>star_var_script</b><small>in Siril</small></div>
+                <i class="handoff-arrow">&rarr;</i>
+                <div class="handoff-step"><b>AAVSO</b><small>publishable light curve</small></div>
+            </div>
+
+            <figure class="chart-figure">
+                <div class="chart-card">
+                    <picture>
+                        <source srcset="img/rrlyrae-sesar-fit-dark.webp" type="image/webp" />
+                        <img src="img/rrlyrae-sesar-fit-dark.png" width="1680" height="1000" loading="lazy" decoding="async"
+                             alt="RR Lyrae phase-folded light curve from one Argos + Siril session, laid over the published Sesar 2010 r-band template; the observed points fall on the model through the rising branch." />
+                    </picture>
+                </div>
+                <figcaption class="chart-cap">One Seestar night on RR&nbsp;Lyrae, reduced in Siril with <code>star_var_script</code> &mdash; phase-folded at P&nbsp;=&nbsp;0.5667&nbsp;d and laid over the published <strong>Sesar&nbsp;2010</strong> template. The observed segment falls right on the model.</figcaption>
+            </figure>
+
+            <div class="start-links">
+                <a href="https://github.com/jperret21/star_var_script" class="btn btn-ghost" target="_blank" rel="noopener">star_var_script on GitHub &rarr;</a>
+            </div>
+        </div>
+    </section>
+
+    <section class="section" id="start">
         <div class="container">
             <div class="section-header">
                 <h2>How to start</h2>
@@ -244,7 +255,7 @@ uv run --extra dev pytest</code></pre>
                 Argos
             </div>
             <div class="footer-links">
-                <a href="#capabilities">Specs</a>
+                <a href="#capabilities">Pipeline</a>
                 <a href="#start">Start</a>
                 <a href="#contribute">Contribute</a>
                 <a href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub</a>
