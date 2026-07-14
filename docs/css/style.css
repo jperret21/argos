@@ -471,7 +471,9 @@ a.hero-badge-link:hover {
     letter-spacing: 0.1em; text-transform: uppercase; color: var(--gold);
 }
 .start-col-label span { color: var(--muted); opacity: 0.7; }
-.start-col .code-wrap { max-width: none; margin: 0; height: 100%; }
+.start-col { display: flex; flex-direction: column; }
+.start-col .code-wrap { max-width: none; margin: 0; flex: 1; }
+.start-col-link { align-self: center; margin-top: 12px; }
 @media (max-width: 520px) { .start-split { grid-template-columns: 1fr; } }
 
 /* ─── Contribute ─── */
