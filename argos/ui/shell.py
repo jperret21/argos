@@ -65,7 +65,7 @@ _HARDWARE_MODES = frozenset({"capture"})
 class Shell(QMainWindow):
     """Three-mode workspace shell."""
 
-    APP_VERSION = "0.3.1"
+    APP_VERSION = "0.4.0"
 
     def __init__(self, config: Config) -> None:
         super().__init__()
