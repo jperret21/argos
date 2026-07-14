@@ -43,7 +43,7 @@
         <div class="hero-curve" aria-hidden="true"><svg id="curve" xmlns="http://www.w3.org/2000/svg"></svg></div>
 
         <div class="container hero-content">
-            <div class="hero-badge">Open source &middot; Alpha now available for testers</div>
+            <a href="#start" class="hero-badge hero-badge-link">Alpha v0.4.0 is here &middot; how to run it &rarr;</a>
             <h1>Argos</h1>
             <p class="hero-myth">the hundred-eyed watcher</p>
             <p class="hero-sub">Desktop astrophotography &amp; differential photometry<br />for the ZWO Seestar S30 Pro.</p>
@@ -189,29 +189,56 @@
     </section>
 
     <section class="section" id="start">
-        <div class="container">
+        <div class="container container-wide">
             <div class="section-header">
                 <h2>How to start</h2>
-                <p>No telescope needed &mdash; Argos runs against the ASCOM Alpaca simulator.</p>
+                <p>Alpha <strong>v0.4.0</strong> is out. Run it on your Seestar &mdash; or against the ASCOM Alpaca simulator, no telescope needed.</p>
             </div>
+
             <div class="code-wrap">
                 <div class="code-bar">
                     <span class="code-dot"></span><span class="code-dot"></span><span class="code-dot"></span>
-                    <span class="code-label">terminal</span>
+                    <span class="code-label">install</span>
                 </div>
                 <pre><code><span class="hl">brew</span> install uv
 <span class="hl">git clone</span> https://github.com/jperret21/argos.git
 <span class="hl">cd</span> argos
-uv sync --extra dev
-
-<span class="cm"># Terminal 1 &mdash; mock server</span>
-uv run python scripts/mock_alpaca_server.py
-
-<span class="cm"># Terminal 2 &mdash; Argos</span>
-uv run python main.py</code></pre>
+uv sync --extra dev</code></pre>
             </div>
+
+            <div class="start-split">
+                <div class="start-col">
+                    <div class="start-col-label"><span>01</span> With your Seestar</div>
+                    <div class="code-wrap">
+                        <div class="code-bar">
+                            <span class="code-dot"></span><span class="code-dot"></span><span class="code-dot"></span>
+                            <span class="code-label">default</span>
+                        </div>
+                        <pre><code><span class="cm"># power on the Seestar, join its Wi-Fi</span>
+uv run python main.py
+<span class="cm"># Connection &rarr; host &lt;seestar-ip&gt;, port 32323</span></code></pre>
+                    </div>
+                </div>
+
+                <div class="start-col">
+                    <div class="start-col-label"><span>02</span> No telescope &mdash; simulator (Docker)</div>
+                    <div class="code-wrap">
+                        <div class="code-bar">
+                            <span class="code-dot"></span><span class="code-dot"></span><span class="code-dot"></span>
+                            <span class="code-label">simulator</span>
+                        </div>
+                        <pre><code><span class="cm"># ASCOM Alpaca simulator (OmniSim) in Docker</span>
+<span class="hl">docker</span> run -d --name omnisim \
+  -p 32323:32323 -p 32227:32227/udp omnisim
+uv run python main.py
+<span class="cm"># Connection &rarr; host localhost, port 32323</span></code></pre>
+                    </div>
+                </div>
+            </div>
+
             <div class="start-links">
-                <a href="https://github.com/jperret21/argos/blob/main/docs/simulator_testing.md" class="btn btn-ghost" target="_blank" rel="noopener">Simulator guide &rarr;</a>
+                <a href="https://github.com/jperret21/argos/releases/tag/v0.4.0" class="btn btn-ghost" target="_blank" rel="noopener">v0.4.0 release notes &rarr;</a>
+                <a href="https://github.com/jperret21/argos/blob/main/docs/simulator_testing.md" class="btn btn-ghost" target="_blank" rel="noopener">Build the simulator image &rarr;</a>
             </div>
         </div>
     </section>
