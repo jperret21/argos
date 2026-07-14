@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Argos — générateur de logo</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: #0f1115;
+    color: #e6e8ec;
+    min-height: 100vh;
+  }
+  header {
+    padding: 24px 28px;
+    border-bottom: 1px solid #262a33;
+  }
+  header h1 { margin: 0; font-size: 18px; font-weight: 700; }
+  header p { margin: 6px 0 0; font-size: 13px; color: #9aa1ac; }
+  .wrap {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 0;
+    min-height: calc(100vh - 74px);
+  }
+  .panel {
+    padding: 24px 28px;
+    border-right: 1px solid #262a33;
+  }
+  .stage {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    padding: 40px;
+  }
+  .field { margin-bottom: 18px; }
+  .field label {
+    display: block;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: #9aa1ac;
+    margin-bottom: 7px;
+  }
+  .field input[type="text"],
+  .field input[type="number"],
+  .field select {
+    width: 100%;
+    padding: 8px 10px;
+    background: #1a1d24;
+    border: 1px solid #333844;
+    border-radius: 7px;
+    color: #e6e8ec;
+    font-size: 14px;
+  }
+  .row { display: flex; gap: 10px; align-items: center; }
+  .row input[type="color"] {
+    width: 42px; height: 34px; padding: 0;
+    border: 1px solid #333844; border-radius: 7px; background: none;
+  }
+  .row input[type="range"] { flex: 1; }
+  .val { font-size: 13px; color: #9aa1ac; min-width: 44px; text-align: right; font-variant-numeric: tabular-nums; }
+  .preview-box {
+    border-radius: 14px;
+    padding: 30px;
+    display: inline-flex;
+    background-image:
+      linear-gradient(45deg, #2a2e37 25%, transparent 25%),
+      linear-gradient(-45deg, #2a2e37 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #2a2e37 75%),
+      linear-gradient(-45deg, transparent 75%, #2a2e37 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+  }
+  .buttons { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  button {
+    padding: 10px 18px;
+    border: 1px solid #3a4150;
+    border-radius: 8px;
+    background: #1f6feb;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.ghost { background: #1a1d24; color: #e6e8ec; }
+  button:hover { filter: brightness(1.1); }
+  .hint { font-size: 12px; color: #6c7480; margin-top: 4px; }
+  .checkbox-row { display: flex; align-items: center; gap: 8px; }
+  .checkbox-row input { width: auto; }
+  @media (max-width: 720px) {
+    .wrap { grid-template-columns: 1fr; }
+    .panel { border-right: none; border-bottom: 1px solid #262a33; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Argos — générateur de logo</h1>
+  <p>Ajuste, prévisualise et exporte en SVG, PNG ou JPG.</p>
+</header>
+
+<div class="wrap">
+  <div class="panel">
+    <div class="field">
+      <label>Presets</label>
+      <div id="presets" style="display:flex;flex-wrap:wrap;gap:8px"></div>
+      <div class="hint">Un clic applique couleurs + taille + marge.</div>
+    </div>
+
+    <div class="field">
+      <label>Couleur du trait</label>
+      <div class="row">
+        <input type="color" id="stroke" value="#c49a3c" />
+        <input type="text" id="strokeText" value="#c49a3c" />
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Fond</label>
+      <select id="bgMode">
+        <option value="transparent">Transparent (PNG/SVG)</option>
+        <option value="color">Couleur unie</option>
+      </select>
+      <div class="row" style="margin-top:8px">
+        <input type="color" id="bg" value="#08080a" />
+        <input type="text" id="bgText" value="#08080a" />
+      </div>
+      <div class="hint">Le JPG n'a pas de transparence : le fond transparent devient blanc.</div>
+    </div>
+
+    <div class="field">
+      <label>Épaisseur du trait</label>
+      <div class="row">
+        <input type="range" id="sw" min="1" max="10" step="0.5" value="4" />
+        <span class="val" id="swVal">4</span>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Opacité des rayons</label>
+      <div class="row">
+        <input type="range" id="rays" min="0" max="1" step="0.05" value="1" />
+        <span class="val" id="raysVal">1.00</span>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Rentrée des bras</label>
+      <div class="row">
+        <input type="range" id="inset" min="0.70" max="1.10" step="0.01" value="0.95" />
+        <span class="val" id="insetVal">0.95</span>
+      </div>
+      <div class="hint">&lt;1 : bras rentrés dans l'anneau · 1 : dessin d'origine.</div>
+    </div>
+
+    <div class="field">
+      <label>Taille d'export (px)</label>
+      <div class="row">
+        <input type="number" id="size" value="1024" min="16" max="4096" step="16" />
+      </div>
+      <div class="hint">Le SVG reste vectoriel ; taille = résolution du PNG/JPG.</div>
+    </div>
+
+    <div class="field">
+      <label>Marge intérieure (%)</label>
+      <div class="row">
+        <input type="range" id="pad" min="0" max="30" step="1" value="0" />
+        <span class="val" id="padVal">0</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="preview-box" id="previewBox">
+      <div id="preview"></div>
+    </div>
+    <div class="buttons">
+      <button onclick="downloadSVG()">⬇ SVG</button>
+      <button onclick="downloadRaster('png')">⬇ PNG</button>
+      <button onclick="downloadRaster('jpg')">⬇ JPG</button>
+      <button class="ghost" onclick="copySVG()">Copier le SVG</button>
+    </div>
+    <div class="hint" id="status"></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// --- Presets --------------------------------------------------------------
+// Brand colours: gold #c49a3c on near-black #08080a (from docs/css/style.css).
+const GOLD = '#c49a3c', DARK = '#08080a';
+const PRESETS = [
+  { name: 'Argos or',        stroke: GOLD, bgMode: 'transparent',            sw: 4, rays: 1, inset: 0.95, size: 1024, pad: 0 },
+  { name: 'Or sur sombre',   stroke: GOLD, bgMode: 'color', bg: DARK,        sw: 4, rays: 1, inset: 0.95, size: 1024, pad: 0 },
+  { name: 'Monochrome noir', stroke: '#000000', bgMode: 'transparent',       sw: 4, rays: 1, inset: 0.95, size: 1024, pad: 0 },
+  { name: 'Monochrome blanc',stroke: '#ffffff', bgMode: 'color', bg: DARK,   sw: 4, rays: 1, inset: 0.95, size: 1024, pad: 0 },
+  { name: 'Favicon 32',      stroke: GOLD, bgMode: 'transparent',            sw: 4, rays: 1, inset: 0.95, size: 32,   pad: 0 },
+  { name: 'Favicon 64',      stroke: GOLD, bgMode: 'transparent',            sw: 4, rays: 1, inset: 0.95, size: 64,   pad: 0 },
+  { name: 'Icône app 512',   stroke: DARK, bgMode: 'color', bg: GOLD,        sw: 4, rays: 1, inset: 0.95, size: 512,  pad: 0 },
+  { name: 'Réseaux 1024',    stroke: GOLD, bgMode: 'color', bg: DARK,        sw: 4, rays: 1, inset: 0.95, size: 1024, pad: 0 },
+];
+
+function applyPreset(p) {
+  $('stroke').value = p.stroke;
+  $('bgMode').value = p.bgMode;
+  if (p.bg) $('bg').value = p.bg;
+  $('sw').value = p.sw;
+  $('rays').value = p.rays;
+  $('inset').value = p.inset;
+  $('size').value = p.size;
+  $('pad').value = p.pad;
+  render();
+  status(`Preset « ${p.name} » appliqué.`);
+}
+
+function buildPresets() {
+  const host = document.getElementById('presets');
+  PRESETS.forEach(p => {
+    const b = document.createElement('button');
+    b.className = 'ghost';
+    b.style.cssText = 'padding:6px 11px;font-size:12px;font-weight:500';
+    b.textContent = p.name;
+    b.onclick = () => applyPreset(p);
+    host.appendChild(b);
+  });
+}
+
+function opts() {
+  return {
+    stroke: $('stroke').value,
+    bgMode: $('bgMode').value,
+    bg: $('bg').value,
+    sw: parseFloat($('sw').value),
+    rays: parseFloat($('rays').value),
+    inset: parseFloat($('inset').value),
+    size: parseInt($('size').value, 10) || 1024,
+    pad: parseInt($('pad').value, 10),
+  };
+}
+
+// The four swirl arms (original artwork). `inset` scales them about the
+// centre (50,50): <1 tucks them inside the ring so they no longer overrun it.
+const ARMS = [
+  "M50 6 Q70 24 82 24 Q88 24 86 32 Q82 42 74 44",
+  "M50 94 Q30 76 18 76 Q12 76 14 68 Q18 58 26 56",
+  "M6 50 Q24 36 22 20 Q21 14 30 16 Q40 18 44 28",
+  "M94 50 Q76 64 78 80 Q79 86 70 84 Q60 82 56 72",
+];
+
+// Builds the logo SVG string. viewBox is 100x100; `pad` shrinks the artwork inward.
+function buildSVG(o, { forExport = false } = {}) {
+  const p = o.pad;                 // padding in viewBox units
+  const inner = 100 - 2 * p;       // artwork box side
+  const bg = (o.bgMode === 'color')
+    ? `<rect width="100" height="100" fill="${o.bg}"/>`
+    : '';
+  const dims = forExport
+    ? `width="${o.size}" height="${o.size}"`
+    : `width="180" height="180"`;
+  const armInset = `translate(50 50) scale(${o.inset}) translate(-50 -50)`;
+  const arms = ARMS.map(d => `        <path d="${d}"/>`).join('\n');
+  return `<svg xmlns="http://www.w3.org/2000/svg" ${dims} viewBox="0 0 100 100">
+  ${bg}
+  <g transform="translate(${p} ${p}) scale(${inner/100})">
+    <g fill="none" stroke="${o.stroke}" stroke-width="${o.sw}" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="50" cy="50" r="42"/>
+      <circle cx="50" cy="50" r="5" fill="${o.stroke}" stroke="none"/>
+      <g opacity="${o.rays}" transform="${armInset}">
+${arms}
+      </g>
+    </g>
+  </g>
+</svg>`;
+}
+
+function render() {
+  const o = opts();
+  // keep text/color pickers in sync
+  $('strokeText').value = o.stroke;
+  $('bgText').value = o.bg;
+  $('swVal').textContent = o.sw;
+  $('raysVal').textContent = o.rays.toFixed(2);
+  $('insetVal').textContent = o.inset.toFixed(2);
+  $('padVal').textContent = o.pad;
+  $('previewBox').style.background = (o.bgMode === 'color') ? o.bg : '';
+  if (o.bgMode === 'color') $('previewBox').style.backgroundImage = 'none';
+  else $('previewBox').style.background = '';
+  $('preview').innerHTML = buildSVG(o);
+}
+
+function svgBlobURL(svg) {
+  return URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+}
+
+function triggerDownload(url, name) {
+  const a = document.createElement('a');
+  a.href = url; a.download = name; a.click();
+}
+
+function downloadSVG() {
+  const svg = buildSVG(opts(), { forExport: true });
+  const url = svgBlobURL(svg);
+  triggerDownload(url, 'argos-logo.svg');
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  status('SVG exporté.');
+}
+
+function downloadRaster(fmt) {
+  const o = opts();
+  const svg = buildSVG(o, { forExport: true });
+  const img = new Image();
+  const url = svgBlobURL(svg);
+  img.onload = () => {
+    const c = document.createElement('canvas');
+    c.width = o.size; c.height = o.size;
+    const ctx = c.getContext('2d');
+    if (fmt === 'jpg') {                        // JPG = pas de transparence
+      ctx.fillStyle = (o.bgMode === 'color') ? o.bg : '#ffffff';
+      ctx.fillRect(0, 0, o.size, o.size);
+    }
+    ctx.drawImage(img, 0, 0, o.size, o.size);
+    URL.revokeObjectURL(url);
+    const mime = fmt === 'jpg' ? 'image/jpeg' : 'image/png';
+    c.toBlob(b => {
+      const durl = URL.createObjectURL(b);
+      triggerDownload(durl, `argos-logo.${fmt}`);
+      setTimeout(() => URL.revokeObjectURL(durl), 2000);
+      status(`${fmt.toUpperCase()} ${o.size}×${o.size} exporté.`);
+    }, mime, 0.95);
+  };
+  img.onerror = () => status('Erreur de rendu.');
+  img.src = url;
+}
+
+async function copySVG() {
+  const svg = buildSVG(opts(), { forExport: true });
+  try {
+    await navigator.clipboard.writeText(svg);
+    status('SVG copié dans le presse-papier.');
+  } catch (e) {
+    status('Copie impossible (droits navigateur).');
+  }
+}
+
+function status(msg) {
+  $('status').textContent = msg;
+  clearTimeout(status._t);
+  status._t = setTimeout(() => $('status').textContent = '', 3000);
+}
+
+// wire up
+['stroke','bg','sw','rays','inset','size','pad','bgMode'].forEach(id =>
+  $(id).addEventListener('input', render));
+$('strokeText').addEventListener('input', e => { $('stroke').value = e.target.value; render(); });
+$('bgText').addEventListener('input', e => { $('bg').value = e.target.value; render(); });
+
+buildPresets();
+render();
+</script>
+</body>
+</html>

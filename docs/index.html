@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Argos — photometry for the Seestar S30 Pro</title>
     <meta name="description" content="Desktop astrophotography and differential photometry for the ZWO Seestar S30 Pro. From raw frames to light curves, on your laptop. Alpha now available." />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
     <link rel="stylesheet" href="css/style.css" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -15,13 +17,15 @@
     <nav class="navbar" id="navbar">
         <div class="container nav-container">
             <a href="#" class="nav-logo">
-                <svg width="16" height="16" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round">
+                <svg width="16" height="16" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="50" cy="50" r="42"/>
                     <circle cx="50" cy="50" r="5" fill="currentColor" stroke="none"/>
-                    <path d="M50 6 Q70 24 82 24 Q88 24 86 32 Q82 42 74 44" opacity="0.4"/>
-                    <path d="M50 94 Q30 76 18 76 Q12 76 14 68 Q18 58 26 56" opacity="0.4"/>
-                    <path d="M6 50 Q24 36 22 20 Q21 14 30 16 Q40 18 44 28" opacity="0.4"/>
-                    <path d="M94 50 Q76 64 78 80 Q79 86 70 84 Q60 82 56 72" opacity="0.4"/>
+                    <g transform="translate(50 50) scale(0.95) translate(-50 -50)">
+                        <path d="M50 6 Q70 24 82 24 Q88 24 86 32 Q82 42 74 44"/>
+                        <path d="M50 94 Q30 76 18 76 Q12 76 14 68 Q18 58 26 56"/>
+                        <path d="M6 50 Q24 36 22 20 Q21 14 30 16 Q40 18 44 28"/>
+                        <path d="M94 50 Q76 64 78 80 Q79 86 70 84 Q60 82 56 72"/>
+                    </g>
                 </svg>
                 Argos
             </a>
@@ -270,11 +274,15 @@ uv run --extra dev pytest</code></pre>
     <footer class="footer">
         <div class="container footer-content">
             <div class="footer-brand">
-                <svg width="14" height="14" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round">
+                <svg width="14" height="14" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="50" cy="50" r="42"/>
                     <circle cx="50" cy="50" r="5" fill="currentColor" stroke="none"/>
-                    <path d="M50 6 Q70 24 82 24 Q88 24 86 32 Q82 42 74 44" opacity="0.4"/>
-                    <path d="M50 94 Q30 76 18 76 Q12 76 14 68 Q18 58 26 56" opacity="0.4"/>
+                    <g transform="translate(50 50) scale(0.95) translate(-50 -50)">
+                        <path d="M50 6 Q70 24 82 24 Q88 24 86 32 Q82 42 74 44"/>
+                        <path d="M50 94 Q30 76 18 76 Q12 76 14 68 Q18 58 26 56"/>
+                        <path d="M6 50 Q24 36 22 20 Q21 14 30 16 Q40 18 44 28"/>
+                        <path d="M94 50 Q76 64 78 80 Q79 86 70 84 Q60 82 56 72"/>
+                    </g>
                 </svg>
                 Argos
             </div>
