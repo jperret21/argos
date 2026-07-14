@@ -67,6 +67,12 @@ def measure_targets(
     Check stars (P2) are calibrated exactly like targets — against the
     comparison ensemble, never as part of it — so a flat check curve can
     certify the night and a wandering one condemn it.
+
+    Comparisons get a **leave-one-out** result (each calibrated against the
+    ensemble *minus itself*, needs ≥2 usable comps) — the standard way to vet
+    an ensemble member: a comp whose leave-one-out curve wanders is variable
+    or blended and should be pruned. Purely a display/vetting aid; the target
+    ensemble is untouched.
     """
     measured: list[tuple[TargetStar, AperturePhot | None]] = []
     for s in target_set.stars:
@@ -86,8 +92,10 @@ def measure_targets(
             on_star(s, phot, float(x), float(y))
         measured.append((s, phot))
 
-    comps = [
-        (phot.inst_mag, _cat_mag(s, band))
+    # Usable ensemble members, keyed so a comp can be excluded from its own
+    # calibration (leave-one-out) without re-filtering per star.
+    comp_pairs: list[tuple[str, tuple[float, float]]] = [
+        (s.key(), (phot.inst_mag, _cat_mag(s, band)))
         for s, phot in measured
         if s.role == ROLE_COMPARISON
         and phot is not None
@@ -95,14 +103,33 @@ def measure_targets(
         and _cat_mag(s, band) is not None
         and not phot.saturated
     ]
+    comps = [pair for _key, pair in comp_pairs]
 
     out: list[TargetResult] = []
     for s, phot in measured:
-        if s.role not in (ROLE_TARGET, ROLE_CHECK):
-            continue
-        if phot is None or phot.inst_mag is None:
-            out.append(TargetResult(s, None, phot))
-            continue
-        diff = differential_mag(phot.inst_mag, phot.inst_mag_err, comps, min_comps=min_comps)
-        out.append(TargetResult(s, diff, phot))
+        result = _calibrate_star(s, phot, comp_pairs, comps, min_comps)
+        if result is not None:
+            out.append(result)
     return out
+
+
+def _calibrate_star(
+    s: TargetStar,
+    phot: AperturePhot | None,
+    comp_pairs: list[tuple[str, tuple[float, float]]],
+    comps: list[tuple[float, float]],
+    min_comps: int,
+) -> TargetResult | None:
+    """One star's calibrated result: full ensemble for targets/checks,
+    leave-one-out for comparisons, ``None`` when there is nothing to report."""
+    science = s.role in (ROLE_TARGET, ROLE_CHECK)
+    if phot is None or phot.inst_mag is None:
+        return TargetResult(s, None, phot) if science else None
+    if science:
+        ensemble = comps
+    else:  # comparison: vet against the ensemble minus itself
+        ensemble = [pair for key, pair in comp_pairs if key != s.key()]
+        if not ensemble or len(comp_pairs) < 2:
+            return None  # a lone comp has nothing to be vetted against
+    diff = differential_mag(phot.inst_mag, phot.inst_mag_err, ensemble, min_comps=min_comps)
+    return TargetResult(s, diff, phot)

@@ -73,7 +73,7 @@ class LiveFrame:
 
 @dataclass(frozen=True)
 class PhotometryPoint:
-    """One differential-photometry light-curve point for a target star."""
+    """One differential-photometry light-curve point for a measured star."""
 
     key: str  # AUID or display name — the light-curve dict key
     name: str  # display name for the plot legend
@@ -81,3 +81,4 @@ class PhotometryPoint:
     mag: float
     mag_err: float
     saturated: bool
+    role: str = "target"  # target / check / comparison — display grouping

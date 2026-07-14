@@ -85,6 +85,7 @@ class AcquisitionEngine(QObject):
     targets_changed = pyqtSignal(object)  # TargetSet
     photometry_measuring = pyqtSignal()  # a measurement pass starts (temp sample)
     photometry_point = pyqtSignal(object)  # PhotometryPoint
+    curves_changed = pyqtSignal()  # the curve STORE was replaced/cleared — re-render
     apertures_tracked = pyqtSignal()  # live tracker refit — re-project markers
 
     # Logging / status relays.
@@ -208,6 +209,22 @@ class AcquisitionEngine(QObject):
     @property
     def lightcurves(self) -> dict[str, LightCurve]:
         return self._lightcurves
+
+    def adopt_curves(self, curves: dict[str, LightCurve]) -> None:
+        """Fold externally measured curves (the batch re-run) into THE store.
+
+        Matching keys are replaced — a batch re-measurement of a star is
+        canonical over its live preview points — and every display surface
+        re-renders off the one dict via ``curves_changed``, so the dock and
+        the window can never disagree again.
+        """
+        self._lightcurves.update(curves)
+        self.curves_changed.emit()
+
+    def clear_lightcurves(self) -> None:
+        """Drop the session's curve store (object change). CSVs stay on disk."""
+        self._lightcurves.clear()
+        self.curves_changed.emit()
 
     @property
     def last_sequence_dir(self) -> Path | None:
@@ -567,13 +584,13 @@ class AcquisitionEngine(QObject):
         One jsonl per object next to the light-curve CSVs; a change of object
         closes the previous file and starts a fresh frame counter.
         """
-        obj = tset.object_name or "untitled"
+        obj = tset.object_name or "Unknown"
         if self._diag is None or self._diag_object != obj:
             if self._diag is not None:
                 self._diag.close()
             safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in obj)
             self._diag = SessionDiagnostics(
-                self._sessions_base() / "targets" / f"{safe or 'untitled'}_live_diagnostics.jsonl",
+                self._sessions_base() / "targets" / f"{safe or 'Unknown'}_live_diagnostics.jsonl",
                 enabled=bool(self._cfg("diagnostics.enabled", True)),
             )
             self._diag_object = obj
@@ -799,12 +816,12 @@ class AcquisitionEngine(QObject):
 
     def _object_name(self) -> str:
         params = self._params() if self._params is not None else None
-        name = (params.object_name if params else "") or "untitled"
-        return name.strip() or "untitled"
+        name = (params.object_name if params else "") or "Unknown"
+        return name.strip() or "Unknown"
 
     def _target_path(self, obj: str) -> Path:
-        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in (obj or "untitled"))
-        return self._sessions_base() / "targets" / f"{safe or 'untitled'}.json"
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in (obj or "Unknown"))
+        return self._sessions_base() / "targets" / f"{safe or 'Unknown'}.json"
 
     def target_set(self) -> TargetSet:
         """The persistent target set for the current object name."""
@@ -819,6 +836,20 @@ class AcquisitionEngine(QObject):
             tset.save(self._target_path(tset.object_name))
         except OSError as exc:
             self.log_message.emit("ERROR", f"Save targets: {exc}")
+
+    def on_object_changed(self) -> None:
+        """The Object name changed — re-key and re-sync every dependent view.
+
+        The target set is keyed by object name, so an edit silently swapped
+        the set under the views (markers/tables kept showing the old stars
+        while measurements ran on the new, usually empty, set). Reload under
+        the new key and broadcast, and start the curve display fresh — the
+        old object's curves live on in its CSVs.
+        """
+        tset = self.target_set()  # detects the key change and reloads
+        self.clear_lightcurves()
+        self._reset_tracker()
+        self.targets_changed.emit(tset)
 
     def set_target_role(self, star: TargetStar) -> None:
         tset = self.target_set()
@@ -881,7 +912,7 @@ class AcquisitionEngine(QObject):
         return 1.0
 
     def _photometry_csv_path(self, star) -> Path:
-        obj = self.target_set().object_name or "untitled"
+        obj = self.target_set().object_name or "Unknown"
         tag = star.auid or star.display_name
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in f"{obj}_{tag}")
         return self._sessions_base() / "targets" / f"{safe or 'photometry'}.csv"
@@ -1009,7 +1040,8 @@ class AcquisitionEngine(QObject):
         )
         key = res.star.auid or res.star.display_name
         lc = self._lightcurves.setdefault(
-            key, LightCurve(auid=res.star.auid or "", name=res.star.display_name)
+            key,
+            LightCurve(auid=res.star.auid or "", name=res.star.display_name, role=res.star.role),
         )
         lc.append(point)
         self.photometry_point.emit(
@@ -1020,6 +1052,7 @@ class AcquisitionEngine(QObject):
                 mag=res.diff.mag,
                 mag_err=res.diff.mag_err or 0.0,
                 saturated=point.saturated,
+                role=res.star.role,
             )
         )
         try:

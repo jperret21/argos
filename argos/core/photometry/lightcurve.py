@@ -45,11 +45,17 @@ class LcPoint:
 
 @dataclass
 class LightCurve:
-    """A target's differential light curve (preview)."""
+    """A star's differential light curve (preview).
+
+    ``role`` mirrors the TargetStar role ("target" / "check" / "comparison")
+    so display surfaces can group series; reloaded CSVs default to "target"
+    (the historical behaviour — role is a display hint, not science data).
+    """
 
     auid: str = ""
     name: str = ""
     points: list[LcPoint] = field(default_factory=list)
+    role: str = "target"
 
     def append(self, point: LcPoint) -> None:
         self.points.append(point)

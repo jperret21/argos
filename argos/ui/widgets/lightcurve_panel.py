@@ -1,20 +1,29 @@
 """Live differential light-curve plot (docs/photometry_plan.md §6 C5).
 
-One series per target: points + error bars, magnitude axis inverted (brighter at
-top), X = JD (UTC). Fed a point at a time from the page as solved frames arrive.
-Saturated points are ringed distinctly (× marker) so a busted sub is obvious;
-this same panel class backs the live dock and the detachable window.
+One series per measured star: points + error bars, magnitude axis inverted
+(brighter at top), X = JD (UTC). Fed a point at a time from the page as solved
+frames arrive, or all at once via :meth:`set_curves`; this same panel class
+backs the live dock and the detachable window, so both always render the same
+store the same way.
+
+A "Show" selector filters the plot: **All targets** (default — the science
+curves only) or any single star, including check stars (``K ·``) and the
+leave-one-out comparison vetting curves (``C ·``).
 """
 
 from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtWidgets import QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from argos.ui import theme
 
 _PALETTE = (theme.SUCCESS, theme.CYAN, theme.WARNING, theme.VARIABLE, theme.ACCENT, theme.DANGER)
+
+_ALL_TARGETS = "All targets"
+#: Quiet role prefixes for the selector (targets stay unprefixed).
+_ROLE_PREFIX = {"check": "K · ", "comparison": "C · "}
 
 
 class LightCurvePanel(QWidget):
@@ -24,6 +33,23 @@ class LightCurvePanel(QWidget):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        selector_row = QHBoxLayout()
+        selector_row.setContentsMargins(4, 2, 4, 0)
+        show_lbl = QLabel("Show:")
+        show_lbl.setStyleSheet(
+            f"color: {theme.FG_MUTED}; font-size: 11px; background: transparent;"
+        )
+        selector_row.addWidget(show_lbl)
+        self._selector = QComboBox()
+        self._selector.setStyleSheet("font-size: 11px;")
+        self._selector.addItem(_ALL_TARGETS, None)
+        self._selector.currentIndexChanged.connect(lambda _i: self._apply_visibility())
+        selector_row.addWidget(self._selector)
+        selector_row.addStretch()
+        layout.addLayout(selector_row)
+
         self._plot = pg.PlotWidget()
         self._plot.setMenuEnabled(False)  # no link-axis menu (avoids pg global state)
         self._plot.setBackground(theme.BG2)
@@ -35,8 +61,18 @@ class LightCurvePanel(QWidget):
         layout.addWidget(self._plot)
         self._series: dict[str, dict] = {}
 
+    # ------------------------------------------------------------------
+    # Feeding
+    # ------------------------------------------------------------------
+
     def add_point(
-        self, name: str, jd: float, mag: float, err: float, saturated: bool = False
+        self,
+        name: str,
+        jd: float,
+        mag: float,
+        err: float,
+        saturated: bool = False,
+        role: str = "target",
     ) -> None:
         s = self._series.get(name)
         if s is None:
@@ -75,8 +111,11 @@ class LightCurvePanel(QWidget):
                 "curve": curve,
                 "errbar": errbar,
                 "sat": sat,
+                "role": role,
             }
             self._series[name] = s
+            self._selector_add(name, role)
+            self._apply_series_visibility(name)
         s["jd"].append(float(jd))
         s["mag"].append(float(mag))
         s["err"].append(float(err or 0.0))
@@ -88,6 +127,26 @@ class LightCurvePanel(QWidget):
         s["errbar"].setData(x=x, y=y, top=e, bottom=e, beam=0.0)
         s["sat"].setData(np.array(s["sat_jd"]), np.array(s["sat_mag"]))
 
+    def set_curves(self, curves: dict) -> None:
+        """Replace the plot with ``key → LightCurve`` (the engine's store).
+
+        The one rendering path shared by the dock and the window: clear, then
+        replay every point. Keeps the current Show selection when the star
+        still exists (a store refresh must not yank the user's focus).
+        """
+        selected = self._selector.currentText()
+        self.clear()
+        for lc in curves.values():
+            label = lc.name or lc.auid or "TARGET"
+            role = getattr(lc, "role", "target")
+            for p in lc.points:
+                self.add_point(
+                    label, p.jd_utc, p.mag, p.mag_err, saturated=p.saturated, role=role
+                )
+        idx = self._selector.findText(selected)
+        if idx >= 0:
+            self._selector.setCurrentIndex(idx)
+
     def has_data(self) -> bool:
         return any(s["jd"] for s in self._series.values())
 
@@ -97,3 +156,33 @@ class LightCurvePanel(QWidget):
             self._plot.removeItem(s["curve"])
             self._plot.removeItem(s["sat"])
         self._series = {}
+        self._selector.blockSignals(True)
+        self._selector.clear()
+        self._selector.addItem(_ALL_TARGETS, None)
+        self._selector.setCurrentIndex(0)
+        self._selector.blockSignals(False)
+
+    # ------------------------------------------------------------------
+    # Show selector
+    # ------------------------------------------------------------------
+
+    def _selector_add(self, name: str, role: str) -> None:
+        label = _ROLE_PREFIX.get(role, "") + name
+        self._selector.blockSignals(True)
+        self._selector.addItem(label, name)
+        self._selector.blockSignals(False)
+
+    def _selected_name(self) -> str | None:
+        """The chosen series name, or ``None`` for the All-targets view."""
+        return self._selector.currentData()
+
+    def _apply_visibility(self) -> None:
+        for name in self._series:
+            self._apply_series_visibility(name)
+
+    def _apply_series_visibility(self, name: str) -> None:
+        s = self._series[name]
+        chosen = self._selected_name()
+        visible = (name == chosen) if chosen else (s["role"] == "target")
+        for item_key in ("curve", "errbar", "sat"):
+            s[item_key].setVisible(visible)

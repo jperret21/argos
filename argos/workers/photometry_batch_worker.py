@@ -250,8 +250,9 @@ class PhotometryBatchWorker(QThread):
     def _emit_points(self, results, jd: float | None, curves: dict[str, LightCurve]) -> None:
         """Convert one frame's measurements into curve points + point signals.
 
-        ``results`` carry targets and check stars (P2); checks flow into their
-        own curves/CSVs and their keys are remembered for the K-RMS summary.
+        ``results`` carry targets, check stars (P2) and leave-one-out
+        comparison vetting curves; checks flow into their own curves/CSVs and
+        their keys are remembered for the K-RMS summary (comps are not).
         """
         for res in results:
             if res.diff is None or res.diff.mag is None:
@@ -272,7 +273,10 @@ class PhotometryBatchWorker(QThread):
             )
             key = res.star.auid or res.star.display_name
             lc = curves.setdefault(
-                key, LightCurve(auid=res.star.auid or "", name=res.star.display_name)
+                key,
+                LightCurve(
+                    auid=res.star.auid or "", name=res.star.display_name, role=res.star.role
+                ),
             )
             lc.append(pt)
             self.point.emit(
@@ -283,6 +287,7 @@ class PhotometryBatchWorker(QThread):
                     mag=pt.mag,
                     mag_err=pt.mag_err,
                     saturated=pt.saturated,
+                    role=res.star.role,
                 )
             )
 

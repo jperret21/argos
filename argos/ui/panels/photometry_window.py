@@ -93,7 +93,8 @@ class PhotometryWindow(QWidget):
     def feed_point(self, point) -> None:
         """Render one differential point (a typed ``PhotometryPoint``)."""
         self.lightcurve.add_point(
-            point.name, point.jd, point.mag, point.mag_err, saturated=point.saturated
+            point.name, point.jd, point.mag, point.mag_err,
+            saturated=point.saturated, role=point.role,
         )
 
     def set_targets(self, stars) -> None:
@@ -110,11 +111,7 @@ class PhotometryWindow(QWidget):
         self.lightcurves = dict(curves)
         self.obscode = obscode or "XXX"
         self.filt = filt or "TG"
-        self.lightcurve.clear()
-        for lc in self.lightcurves.values():
-            label = lc.name or lc.auid or "TARGET"
-            for p in lc.points:
-                self.lightcurve.add_point(label, p.jd_utc, p.mag, p.mag_err, p.saturated)
+        self.lightcurve.set_curves(self.lightcurves)  # same path as the dock
 
     def _export_csv(self) -> None:
         curves = [lc for lc in self.lightcurves.values() if lc.points]

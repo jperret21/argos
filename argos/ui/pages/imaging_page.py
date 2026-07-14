@@ -184,6 +184,10 @@ class ImagingPage(QWidget):
         self._wire_signals()
         self._processor.ready.connect(self._on_processed)
         self._processor.start()
+        # A persisted target set / pre-existing curves must be visible from
+        # the first frame, not only after the next selection or solve.
+        self._on_targets_changed(self._engine.target_set())
+        self._render_curves()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -430,6 +434,7 @@ class ImagingPage(QWidget):
         e.targets_changed.connect(self._on_targets_changed)
         e.photometry_measuring.connect(self._on_photometry_measuring)
         e.photometry_point.connect(self._on_photometry_point)
+        e.curves_changed.connect(self._render_curves)  # dock + window, one store
         e.apertures_tracked.connect(self._project_catalog)  # markers follow the frame
         # Live plate-solve controller (engine-owned, shared pipeline).
         self._astrometry.solved.connect(self._on_astrometry_solved)
@@ -441,6 +446,7 @@ class ImagingPage(QWidget):
         # Overlay chips + the on-image star-info card.
         self._overlay_bar.toggled.connect(self._on_overlay_toggled)
         self._info_card.role_selected.connect(self._on_card_role)
+        self._info_card.remove_selected.connect(self._on_card_remove)
         self._info_card.cleared.connect(self._on_card_cleared)
         # Display pipeline: the Display tab (histogram/stretch) ↔ the viewer.
         self._histogram_dock.stretch_changed.connect(self._viewer.set_stretch)
@@ -467,6 +473,8 @@ class ImagingPage(QWidget):
         self._camera_dock.offset_changed.connect(self._on_camera_offset)
         self._camera_dock.binning_changed.connect(self._on_camera_binning)
         self._camera_dock.filter_selected.connect(self._on_camera_dock_filter)
+        # Object edits re-key the target set + curves: every view must follow.
+        self._camera_dock.object_changed.connect(self._engine.on_object_changed)
 
         # Filter wheel dock
 
@@ -774,7 +782,11 @@ class ImagingPage(QWidget):
         dp = self._green_to_disp(green_pos[0], green_pos[1])
         if dp is not None:
             self._viewer.mark_selection(dp[0], dp[1], "", show_label=False)
-        self._info_card.show_star(title, body, roles_enabled=True)
+        # Remove is offered iff the clicked star is already in the target set —
+        # symmetric with adding it from the image.
+        key = TargetStar(role="target", **pending).key()
+        saved = {s.key() for s in self._engine.target_set().stars}
+        self._info_card.show_star(title, body, roles_enabled=True, removable=key in saved)
         self._info_card.reposition()
 
     def _present_field_card(self, meas) -> None:
@@ -1071,11 +1083,22 @@ class ImagingPage(QWidget):
         if self._pending_star is None:
             return
         star = TargetStar(role=role, **self._pending_star)
-        if role == "target":
-            # Before the save: the object name keys targets.json + FITS OBJECT.
-            self._camera_dock.set_object_name_if_empty(star.display_name)
+        # Before the save, whatever the role: the object name keys targets.json
+        # + FITS OBJECT — a first-pick comparison must not orphan the set under
+        # the default name.
+        self._camera_dock.set_object_name_if_empty(star.display_name)
         self._engine.set_target_role(star)  # → targets_changed refreshes the view
         self.log_message.emit("OK", f"{role.capitalize()}: {star.display_name}")
+
+    def _on_card_remove(self) -> None:
+        """Remove the shown star from the target set (image-side pruning)."""
+        if self._pending_star is None:
+            return
+        star = TargetStar(role="target", **self._pending_star)
+        self._engine.remove_target(star.key())  # → targets_changed refreshes all
+        self.log_message.emit("OK", f"Removed from target set: {star.display_name}")
+        self._info_card.hide()
+        self._on_card_cleared()
 
     def _on_card_cleared(self) -> None:
         self._viewer.clear_selection()
@@ -1279,12 +1302,11 @@ class ImagingPage(QWidget):
                 f"Apertures tracked the field: {result.rotation_deg:+.2f}° rotation, "
                 f"{result.shift_px:.1f} px drift vs the reference solve.",
             )
+        # Batch curves land in THE store; curves_changed re-renders the dock
+        # and (via the open below) the window from the same dict — the old
+        # window-only feed left the Light-curve dock empty after a re-run.
+        self._engine.adopt_curves(result.curves)
         self._open_photometry()
-        self._photometry_window.load_curves(
-            result.curves,
-            obscode=str(self._cfg("observer.obscode", "XXX") or "XXX"),
-            filt=str(self._cfg("photometry.default_band", "TG") or "TG"),
-        )
 
     @pyqtSlot()
     def _on_photometry_measuring(self) -> None:
@@ -1293,6 +1315,20 @@ class ImagingPage(QWidget):
         if win is not None and win.isVisible():
             win.metrics.add_sample(self._elapsed(), temp=self._ccd_temp())
 
+    def _render_curves(self) -> None:
+        """Re-render every curve surface from the engine's store (the ONLY
+        rendering path for whole-store changes: batch adopt, object change)."""
+        self._lightcurve_panel.set_curves(self._engine.lightcurves)
+        win = self._photometry_window
+        if win is not None:
+            win.load_curves(
+                self._engine.lightcurves,
+                obscode=str(self._cfg("observer.obscode", "XXX") or "XXX"),
+                filt=str(self._cfg("photometry.default_band", "TG") or "TG"),
+            )
+            # load_curves snapshots into a copy; keep exports on the live store.
+            win.lightcurves = self._engine.lightcurves
+
     @pyqtSlot(object)
     def _on_photometry_point(self, point) -> None:
         """Render one differential point (typed PhotometryPoint) on the curve.
@@ -1300,7 +1336,8 @@ class ImagingPage(QWidget):
         The live dock always gets the point (it may be hidden but stays in sync);
         the floating window mirrors it only while shown."""
         self._lightcurve_panel.add_point(
-            point.name, point.jd, point.mag, point.mag_err, saturated=point.saturated
+            point.name, point.jd, point.mag, point.mag_err,
+            saturated=point.saturated, role=point.role,
         )
         win = self._photometry_window
         if win is not None and win.isVisible():

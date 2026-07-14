@@ -114,17 +114,22 @@ def test_batch_measures_and_writes_9col_csv(_scene) -> None:
     result = result_box[0]
     assert result.ok
     assert result.frames_done == 3
-    # One target curve (comps aren't emitted as targets), 3 points.
-    assert len(result.curves) == 1
-    curve = next(iter(result.curves.values()))
-    assert len(curve.points) == 3
-    assert len(seen) == 3  # a point signal per frame for the one target
+    # One target curve + one leave-one-out vetting curve per comparison.
+    assert len(result.curves) == 3
+    assert {lc.role for lc in result.curves.values()} == {"target", "comparison"}
+    curve = result.curves["T"]
+    assert curve.role == "target" and len(curve.points) == 3
+    assert len(seen) == 9  # a point signal per star per frame
     # The target is brighter than the V=11 comps → calibrated mag < 11.
     assert curve.points[0].mag < 11.0
+    # Each comp vetted against the other one recovers its own catalog mag.
+    comp_curve = result.curves["C1"]
+    assert comp_curve.role == "comparison"
+    assert abs(comp_curve.points[0].mag - 11.0) < 0.1
 
-    # Canonical 9-column CSV written and reloadable.
+    # Canonical 9-column CSVs written (target + comps) and reloadable.
     csvs = list(out_dir.glob("*.csv"))
-    assert len(csvs) == 1
+    assert len(csvs) == 3
     header = csvs[0].read_text().splitlines()[0]
     assert header == "jd_utc,bjd_tdb,mag,mag_err,airmass,fwhm,sky_adu,comps_used,saturated"
     reloaded = LightCurve.from_csv(csvs[0])
@@ -273,9 +278,11 @@ def test_batch_writes_diagnostics_jsonl(tmp_path) -> None:
     assert len(comp_records) == 2 * 10
     assert all("inst_mag" in d and "x" in d and "y" in d for d in comp_records)
 
-    # Ensemble health per frame, tracker state per frame, frame + events.
-    assert len(by_kind["ensemble"]) == 10
-    assert all(d["comps_used"] == 2 for d in by_kind["ensemble"])
+    # Ensemble health per calibrated star per frame — the target against the
+    # full ensemble (2 comps) + each comp leave-one-out (1 comp).
+    assert len(by_kind["ensemble"]) == 3 * 10
+    target_records = [d for d in by_kind["ensemble"] if d["comps_used"] == 2]
+    assert len(target_records) == 10
     assert len(by_kind["tracking"]) == 10
     final_rot = by_kind["tracking"][-1]["rotation_deg"]
     assert abs(final_rot - result_box[0].rotation_deg) < 1.5  # last-frame vs final

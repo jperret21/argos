@@ -49,8 +49,10 @@ def test_measure_targets_calibrates_against_comps() -> None:
     )
 
     results = measure_targets(green, wcs, ts, r_ap=6, r_in=8, r_out=12)
-    assert len(results) == 1  # one target
-    r = results[0]
+    by_auid = {r.star.auid: r for r in results}
+    # One target + one leave-one-out vetting result per comparison.
+    assert set(by_auid) == {"T", "C1", "C2"}
+    r = by_auid["T"]
     assert r.diff is not None and r.diff.mag is not None
     assert r.diff.comps_used == 2 and r.diff.note == ""
     # The target is brighter than the comps (V=11) → it should read brighter.
@@ -96,7 +98,8 @@ def test_check_star_is_calibrated_but_not_in_the_ensemble() -> None:
 
     results = measure_targets(green, wcs, ts, r_ap=6, r_in=8, r_out=12)
     by_auid = {r.star.auid: r for r in results}
-    assert set(by_auid) == {"T", "K"}  # target AND check, comps stay internal
+    # Target AND check, plus the comps' leave-one-out vetting results.
+    assert set(by_auid) == {"T", "K", "C1", "C2"}
 
     k = by_auid["K"]
     assert k.diff is not None and k.diff.mag is not None
@@ -105,3 +108,35 @@ def test_check_star_is_calibrated_but_not_in_the_ensemble() -> None:
     # 12000 ADU vs the comps' 8000 at V=11 → K reads brighter than 11 but
     # fainter than the 20000-ADU target.
     assert by_auid["T"].diff.mag < k.diff.mag < 11.0
+
+
+def test_comparisons_get_leave_one_out_vetting_curves() -> None:
+    """Each comp is calibrated against the ensemble MINUS itself — the
+    standard vetting curve; a lone comp has nothing to be vetted against."""
+    c1 = ((10.0, 10.0), 8000.0)
+    c2 = ((50.0, 50.0), 8000.0)
+    green = _green_with_stars([c1, c2])
+    wcs = _FakeWCS({(2.0, 2.0): (10.0, 10.0), (3.0, 3.0): (50.0, 50.0)})
+    ts = TargetSet(object_name="X")
+    ts.set_role(
+        TargetStar(role=ROLE_COMPARISON, ra_deg=2.0, dec_deg=2.0, auid="C1", mags={"V": 11.0})
+    )
+    ts.set_role(
+        TargetStar(role=ROLE_COMPARISON, ra_deg=3.0, dec_deg=3.0, auid="C2", mags={"V": 11.5})
+    )
+
+    results = measure_targets(green, wcs, ts, r_ap=6, r_in=8, r_out=12)
+    by_auid = {r.star.auid: r for r in results}
+    assert set(by_auid) == {"C1", "C2"}
+    # C1 vetted against C2 only: equal flux but C2 is claimed 0.5 mag fainter,
+    # so C1 comes out ~11.5 — the vetting curve exposes the inconsistency.
+    c1r = by_auid["C1"]
+    assert c1r.diff is not None and c1r.diff.comps_used == 1
+    assert abs(c1r.diff.mag - 11.5) < 0.05
+    # And C2 against C1's claimed 11.0 → ~11.0.
+    assert abs(by_auid["C2"].diff.mag - 11.0) < 0.05
+
+    # A lone comp yields no vetting result at all.
+    ts.remove("auid:C2")
+    lone = measure_targets(green, wcs, ts, r_ap=6, r_in=8, r_out=12)
+    assert lone == []

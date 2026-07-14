@@ -86,6 +86,7 @@ class CameraDock(design.Card):
     live_start_requested = pyqtSignal()
     live_stop_requested = pyqtSignal()
     filter_selected = pyqtSignal(str)  # user picked a filter in the combo
+    object_changed = pyqtSignal()  # the Object field was edited (focus-out/return)
     offset_changed = pyqtSignal(int)
     binning_changed = pyqtSignal(int)
     preview_scale_changed = pyqtSignal(int)  # 1 = full res, 2 = half res
@@ -119,6 +120,10 @@ class CameraDock(design.Card):
         grid.addWidget(design.MutedLabel("Object"), row, 0)
         self._object_edit = QLineEdit()
         self._object_edit.setPlaceholderText("M42, T CrB…")
+        # The object name keys the target set / curves / FITS OBJECT — an edit
+        # must re-sync every view, or they keep showing the previous object's
+        # stars while the engine measures the new (empty) set.
+        self._object_edit.editingFinished.connect(self.object_changed)
         grid.addWidget(self._object_edit, row, 1)
 
         row += 1

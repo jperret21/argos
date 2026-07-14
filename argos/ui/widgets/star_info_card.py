@@ -15,12 +15,15 @@ from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayou
 from argos.core.catalog.targets import ROLE_CHECK, ROLE_COMPARISON, ROLE_TARGET
 from argos.ui import theme
 
+_BTN_STYLE = "font-size: 11px; padding: 2px 8px;"
+
 
 class StarInfoCard(QFrame):
     """Floating info card with role-assignment buttons."""
 
     role_selected = pyqtSignal(str)  # ROLE_TARGET | ROLE_COMPARISON | ROLE_CHECK
-    cleared = pyqtSignal()
+    remove_selected = pyqtSignal()  # drop the shown star from the target set
+    cleared = pyqtSignal()  # dismiss the card (never touches the set)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -63,25 +66,37 @@ class StarInfoCard(QFrame):
             (ROLE_CHECK, "Check"),
         ):
             b = QPushButton(text)
-            b.setStyleSheet("font-size: 11px; padding: 2px 8px;")
+            b.setStyleSheet(_BTN_STYLE)
             b.clicked.connect(lambda _c, r=role: self.role_selected.emit(r))
             self._role_btns[role] = b
             btn_row.addWidget(b)
-        self._clear_btn = QPushButton("Clear")
-        self._clear_btn.setStyleSheet("font-size: 11px; padding: 2px 8px;")
+        # Remove: symmetric with the role buttons — a star added from the
+        # image must be removable from the image (only shown for saved stars).
+        self._remove_btn = QPushButton("Remove")
+        self._remove_btn.setStyleSheet(_BTN_STYLE)
+        self._remove_btn.setToolTip("Drop this star from the target set")
+        self._remove_btn.clicked.connect(self.remove_selected)
+        btn_row.addWidget(self._remove_btn)
+        self._clear_btn = QPushButton("Dismiss")
+        self._clear_btn.setStyleSheet(_BTN_STYLE)
+        self._clear_btn.setToolTip("Close this card (keeps the target set as is)")
         self._clear_btn.clicked.connect(self.cleared)
         btn_row.addWidget(self._clear_btn)
         btn_row.addStretch()
         root.addLayout(btn_row)
         self.hide()
 
-    def show_star(self, title: str, body: str, *, roles_enabled: bool) -> None:
+    def show_star(
+        self, title: str, body: str, *, roles_enabled: bool, removable: bool = False
+    ) -> None:
         """Populate + show the card. ``roles_enabled`` gates the role buttons
-        (off until a plate-solve gives the star a real RA/Dec)."""
+        (off until a plate-solve gives the star a real RA/Dec); ``removable``
+        shows Remove when the clicked star is already in the target set."""
         self._title.setText(title)
         self._body.setText(body)
         for b in self._role_btns.values():
             b.setEnabled(roles_enabled)
+        self._remove_btn.setVisible(removable)
         self.adjustSize()
         self.show()
         self.raise_()

@@ -104,6 +104,7 @@ def test_shell_three_mode_walkthrough() -> None:
         with _tempfile.TemporaryDirectory() as _td:
             shell._config.set("sessions_path", str(_Path(_td) / "sessions"))
             engine = shell._engine
+            engine._target_set = None  # repointed sessions_path → drop the cached set
             engine.set_target_role(
                 TargetStar(role=ROLE_TARGET, ra_deg=300.0, dec_deg=22.5, name="Var X")
             )
