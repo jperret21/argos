@@ -4,6 +4,9 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Argos — générateur de logo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@800&display=swap" rel="stylesheet" />
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
@@ -174,6 +177,15 @@
         <span class="val" id="padVal">0</span>
       </div>
     </div>
+
+    <div class="field">
+      <label for="composition">Composition du logo</label>
+      <select id="composition">
+        <option value="symbol">Symbole seul</option>
+        <option value="wordmark">Symbole + nom Argos</option>
+      </select>
+      <div class="hint">Utilise Inter ExtraBold, comme la page d’accueil web.</div>
+    </div>
   </div>
 
   <div class="stage">
@@ -198,6 +210,7 @@ const $ = id => document.getElementById(id);
 const GOLD = '#c49a3c', DARK = '#08080a';
 const PRESETS = [
   { name: 'Argos or',        stroke: GOLD, bgMode: 'transparent',            sw: 4, rays: 1, inset: 0.95, size: 1024, pad: 0 },
+  { name: 'Argos + nom',     stroke: GOLD, bgMode: 'transparent',            sw: 4, rays: 1, inset: 0.95, size: 1024, pad: 0, wordmark: true },
   { name: 'Or sur sombre',   stroke: GOLD, bgMode: 'color', bg: DARK,        sw: 4, rays: 1, inset: 0.95, size: 1024, pad: 0 },
   { name: 'Monochrome noir', stroke: '#000000', bgMode: 'transparent',       sw: 4, rays: 1, inset: 0.95, size: 1024, pad: 0 },
   { name: 'Monochrome blanc',stroke: '#ffffff', bgMode: 'color', bg: DARK,   sw: 4, rays: 1, inset: 0.95, size: 1024, pad: 0 },
@@ -216,6 +229,7 @@ function applyPreset(p) {
   $('inset').value = p.inset;
   $('size').value = p.size;
   $('pad').value = p.pad;
+  $('composition').value = p.wordmark ? 'wordmark' : 'symbol';
   render();
   status(`Preset « ${p.name} » appliqué.`);
 }
@@ -242,6 +256,7 @@ function opts() {
     inset: parseFloat($('inset').value),
     size: parseInt($('size').value, 10) || 1024,
     pad: parseInt($('pad').value, 10),
+    wordmark: $('composition').value === 'wordmark',
   };
 }
 
@@ -254,19 +269,24 @@ const ARMS = [
   "M94 50 Q76 64 78 80 Q79 86 70 84 Q60 82 56 72",
 ];
 
-// Builds the logo SVG string. viewBox is 100x100; `pad` shrinks the artwork inward.
-function buildSVG(o, { forExport = false } = {}) {
+// Builds the logo SVG string; `pad` shrinks the symbol inside its 100x100 area.
+function buildSVG(o, { forExport = false, renderWordmark = true } = {}) {
+  const viewHeight = o.wordmark ? 125 : 100;
+  const exportHeight = Math.round(o.size * viewHeight / 100);
   const p = o.pad;                 // padding in viewBox units
   const inner = 100 - 2 * p;       // artwork box side
   const bg = (o.bgMode === 'color')
-    ? `<rect width="100" height="100" fill="${o.bg}"/>`
+    ? `<rect width="100" height="${viewHeight}" fill="${o.bg}"/>`
     : '';
   const dims = forExport
-    ? `width="${o.size}" height="${o.size}"`
-    : `width="180" height="180"`;
+    ? `width="${o.size}" height="${exportHeight}"`
+    : `width="180" height="${Math.round(180 * viewHeight / 100)}"`;
   const armInset = `translate(50 50) scale(${o.inset}) translate(-50 -50)`;
   const arms = ARMS.map(d => `        <path d="${d}"/>`).join('\n');
-  return `<svg xmlns="http://www.w3.org/2000/svg" ${dims} viewBox="0 0 100 100">
+  const wordmark = o.wordmark && renderWordmark
+    ? `\n  <text x="50" y="120" fill="${o.stroke}" text-anchor="middle" font-family="Inter, -apple-system, BlinkMacSystemFont, sans-serif" font-size="18" font-weight="800" letter-spacing="-0.36">Argos</text>`
+    : '';
+  return `<svg xmlns="http://www.w3.org/2000/svg" ${dims} viewBox="0 0 100 ${viewHeight}">
   ${bg}
   <g transform="translate(${p} ${p}) scale(${inner/100})">
     <g fill="none" stroke="${o.stroke}" stroke-width="${o.sw}" stroke-linecap="round" stroke-linejoin="round">
@@ -277,6 +297,7 @@ ${arms}
       </g>
     </g>
   </g>
+  ${wordmark}
 </svg>`;
 }
 
@@ -312,27 +333,38 @@ function downloadSVG() {
   status('SVG exporté.');
 }
 
-function downloadRaster(fmt) {
+async function downloadRaster(fmt) {
   const o = opts();
-  const svg = buildSVG(o, { forExport: true });
+  // Draw the label on the canvas itself so the loaded Inter webfont is also
+  // honoured by PNG/JPG exports (fonts inside blob-backed SVG images are isolated).
+  if (o.wordmark && document.fonts) await document.fonts.ready;
+  const svg = buildSVG(o, { forExport: true, renderWordmark: false });
   const img = new Image();
   const url = svgBlobURL(svg);
   img.onload = () => {
     const c = document.createElement('canvas');
-    c.width = o.size; c.height = o.size;
+    const exportHeight = o.wordmark ? Math.round(o.size * 1.25) : o.size;
+    c.width = o.size; c.height = exportHeight;
     const ctx = c.getContext('2d');
     if (fmt === 'jpg') {                        // JPG = pas de transparence
       ctx.fillStyle = (o.bgMode === 'color') ? o.bg : '#ffffff';
-      ctx.fillRect(0, 0, o.size, o.size);
+      ctx.fillRect(0, 0, o.size, exportHeight);
     }
-    ctx.drawImage(img, 0, 0, o.size, o.size);
+    ctx.drawImage(img, 0, 0, o.size, exportHeight);
+    if (o.wordmark) {
+      ctx.fillStyle = o.stroke;
+      ctx.font = `800 ${o.size * 0.18}px Inter, -apple-system, BlinkMacSystemFont, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillText('Argos', o.size / 2, o.size * 1.2);
+    }
     URL.revokeObjectURL(url);
     const mime = fmt === 'jpg' ? 'image/jpeg' : 'image/png';
     c.toBlob(b => {
       const durl = URL.createObjectURL(b);
       triggerDownload(durl, `argos-logo.${fmt}`);
       setTimeout(() => URL.revokeObjectURL(durl), 2000);
-      status(`${fmt.toUpperCase()} ${o.size}×${o.size} exporté.`);
+      status(`${fmt.toUpperCase()} ${o.size}×${exportHeight} exporté.`);
     }, mime, 0.95);
   };
   img.onerror = () => status('Erreur de rendu.');
@@ -356,7 +388,7 @@ function status(msg) {
 }
 
 // wire up
-['stroke','bg','sw','rays','inset','size','pad','bgMode'].forEach(id =>
+['stroke','bg','sw','rays','inset','size','pad','bgMode','composition'].forEach(id =>
   $(id).addEventListener('input', render));
 $('strokeText').addEventListener('input', e => { $('stroke').value = e.target.value; render(); });
 $('bgText').addEventListener('input', e => { $('bg').value = e.target.value; render(); });
