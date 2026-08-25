@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "release/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # macOS is the only platform Argos is validated on today. A Linux job
+    # lands with the .deb work (see docs/release_0_4_1.md), not before —
+    # a green CI on an unported platform would be a false signal.
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # pyproject sets python-preference = "only-system", so uv resolves
+      # against the interpreter this step puts on PATH.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Lint (ruff)
+        run: uv run --extra dev ruff check argos/ tests/
+
+      - name: Format check (black)
+        run: uv run --extra dev black --check argos/ tests/
+
+      # The Qt tests need a platform plugin; offscreen is the headless one.
+      # test_photometry_window.py runs in its own process: the whole suite in
+      # a single process can abort on the simulator fixtures (see
+      # docs/CONTRIBUTING.md). Simulator-gated tests self-skip when no
+      # ASCOM Alpaca simulator is listening — that is expected here.
+      - name: Tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          uv run --extra dev pytest -q --deselect tests/ui/test_photometry_window.py
+          uv run --extra dev pytest -q tests/ui/test_photometry_window.py
