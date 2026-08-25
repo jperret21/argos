@@ -103,6 +103,17 @@ def _load_palette(config: Config) -> None:
     theme.apply_palette(palette)
 
 
+def _preload_heavy_modules() -> None:
+    """Import the scientific stack up front, while the splash is visible.
+
+    numpy, astropy, pyqtgraph and alpyca all arrive through this one import.
+    Doing it explicitly is what lets the splash claim the stage is finished
+    when it actually is, rather than reporting progress for work that has not
+    started yet.
+    """
+    import argos.ui.shell  # noqa: F401
+
+
 def _build_window(config: Config):
     """Return the top-level window (the 3-mode Shell)."""
     from argos.ui.shell import Shell
@@ -110,30 +121,74 @@ def _build_window(config: Config):
     return Shell(config)
 
 
+def _make_splash():
+    """The startup splash, or ``None`` when suppressed.
+
+    ``ARGOS_NO_SPLASH=1`` skips it — useful when a startup crash would
+    otherwise be hidden behind a frameless always-on-top window.
+    """
+    if os.environ.get("ARGOS_NO_SPLASH"):
+        return None
+    from argos.ui.splash import Splash
+
+    splash = Splash()
+    splash.show()
+    return splash
+
+
 def main() -> None:
+    # The QApplication must exist before any widget, including the splash.
+    app = QApplication(sys.argv)
+    app.setApplicationName("Argos")
+    app.setOrganizationName("Argos")
+
     config = Config.load()
     _setup_logging(config.get("ui.log_level", "INFO"))
 
     logger = logging.getLogger(__name__)
     logger.info("Argos starting")
 
-    # Resolve which telescope we are driving before anything reads a spec.
-    # Unlike the palette below, nothing binds this at import time — consumers
-    # call hardware.profile() at the point of use — so the ordering here is
-    # for tidy logs, not correctness.
-    hardware.load_from_config(config)
+    splash = _make_splash()
 
-    # Apply the saved palette *before* any widgets are constructed so that all
-    # module-level constants are correct at widget construction time.
-    _load_palette(config)
+    def stage(key: str) -> None:
+        if splash is not None:
+            splash.stage(key)
 
-    app = QApplication(sys.argv)
-    app.setApplicationName("Argos")
-    app.setOrganizationName("Argos")
-    app.setStyleSheet(theme.get_stylesheet())
+    try:
+        stage("config")
 
-    window = _build_window(config)
-    window.show()
+        stage("imports")
+        _preload_heavy_modules()
+
+        # Resolve which telescope we are driving before anything reads a spec.
+        # Unlike the palette below, nothing binds this at import time —
+        # consumers call hardware.profile() at the point of use — so the
+        # ordering here is for tidy logs, not correctness.
+        stage("profile")
+        scope = hardware.load_from_config(config)
+        logger.info("Driving %s", scope.describe())
+
+        # Apply the saved palette *before* any widgets are constructed so that
+        # all module-level constants are correct at widget construction time.
+        # The splash deliberately does not read `theme`, so it is exempt.
+        stage("theme")
+        _load_palette(config)
+        app.setStyleSheet(theme.get_stylesheet())
+
+        stage("shell")
+        window = _build_window(config)
+
+        stage("layout")
+        window.show()
+    except BaseException as exc:
+        # A splash left on screen after a crash hides the traceback behind a
+        # frameless, always-on-top, undismissable window.
+        if splash is not None:
+            splash.fail(str(exc))
+        raise
+
+    if splash is not None:
+        splash.finish(window)
 
     logger.info("UI ready")
     sys.exit(app.exec())
