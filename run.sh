@@ -24,14 +24,32 @@ fi
 # Sync production dependencies only (dev extras like pytest/simulator not needed to run).
 "$UV" sync --quiet
 
-# macOS sometimes creates duplicate framework dirs with " 2" / " 3" suffixes inside the
-# PyQt6 wheel, which confuses the dynamic linker. Remove them — safe and idempotent.
-find .venv/lib/python3.11/site-packages/PyQt6 -type d \( -name "* 2" -o -name "* 3" \) \
-    -exec rm -rf {} + 2>/dev/null || true
-find .venv/lib/python3.11/site-packages/PyQt6 \( -name "* 2.*" -o -name "* 3.*" \) \
-    -type f -delete 2>/dev/null || true
-
-# Remove quarantine flags — safe and idempotent.
-xattr -dr com.apple.quarantine .venv/ 2>/dev/null || true
+# Prepare the venv for Qt — once per environment build, not once per launch.
+#
+# Two macOS problems need fixing: freshly-downloaded dylibs carry a quarantine
+# flag that SIP refuses to load, and the wheel sometimes ends up with duplicate
+# framework dirs (" 2" / " 3" suffixes) that confuse the dynamic linker.
+#
+# Both fixes are idempotent, but the recursive xattr sweep walks ~6700 files and
+# costs ~26 s — it was the single largest chunk of Argos' startup time, and on a
+# healthy venv it clears exactly zero flags. The stamp below is invalidated by
+# anything that could have rebuilt the environment, so a fresh sync still gets
+# swept.
+STAMP=".venv/.argos-venv-prepared"
+PYQT_DIR=".venv/lib/python3.11/site-packages/PyQt6"
+if [ ! -f "$STAMP" ] \
+   || [ "uv.lock" -nt "$STAMP" ] \
+   || [ "pyproject.toml" -nt "$STAMP" ] \
+   || [ "$PYQT_DIR" -nt "$STAMP" ]; then
+    find "$PYQT_DIR" -type d \( -name "* 2" -o -name "* 3" \) \
+        -exec rm -rf {} + 2>/dev/null || true
+    find "$PYQT_DIR" \( -name "* 2.*" -o -name "* 3.*" \) \
+        -type f -delete 2>/dev/null || true
+    # Only stamp a sweep that actually succeeded — otherwise a transient
+    # failure would silently disable it forever.
+    if xattr -dr com.apple.quarantine .venv/ 2>/dev/null; then
+        touch "$STAMP"
+    fi
+fi
 
 exec "$UV" run python main.py "$@"

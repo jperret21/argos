@@ -9,6 +9,24 @@ import sys
 import logging
 from pathlib import Path
 
+#: Marker written next to the PyQt6 tree once its quarantine sweep has run.
+#: Named for the app so a stray file in site-packages is self-explanatory.
+_QT_STAMP_NAME = ".argos-qt-prepared"
+
+
+def _needs_quarantine_sweep(qt6_root: Path, stamp: Path) -> bool:
+    """True when the PyQt6 tree may hold quarantine flags we haven't cleared.
+
+    The sweep is skipped when the stamp exists and is at least as new as the
+    PyQt6 directory — a reinstall (uv sync) bumps that mtime and invalidates it.
+    """
+    if not stamp.exists():
+        return True
+    try:
+        return qt6_root.stat().st_mtime > stamp.stat().st_mtime
+    except OSError:
+        return True
+
 
 def _fix_qt_plugin_path() -> None:
     """Fix Qt cocoa plugin loading on macOS uv venvs.
@@ -21,6 +39,11 @@ def _fix_qt_plugin_path() -> None:
     run.sh handles both via xattr + env var. This function is the fallback for
     direct invocations (uv run python main.py, IDE launchers).
     Must be called before any QApplication is created.
+
+    The quarantine sweep walks ~2600 files and costs ~11 s, so it runs **once
+    per PyQt6 install**, not once per launch — that sweep was the bulk of the
+    startup time users saw. A stamp file records that it has been done; a
+    reinstall bumps the directory mtime and the sweep runs again.
     """
     if sys.platform != "darwin":
         return
@@ -28,6 +51,7 @@ def _fix_qt_plugin_path() -> None:
     try:
         import sysconfig
         import subprocess
+
         site = Path(sysconfig.get_path("purelib"))
         plugin_path = site / "PyQt6" / "Qt6" / "plugins" / "platforms"
 
@@ -36,12 +60,18 @@ def _fix_qt_plugin_path() -> None:
             if not os.environ.get("QT_QPA_PLATFORM_PLUGIN_PATH"):
                 os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = str(plugin_path)
 
-            # 2. Remove macOS quarantine from the entire PyQt6 tree (idempotent)
+            # 2. Remove macOS quarantine from the entire PyQt6 tree, once.
             qt6_root = site / "PyQt6"
-            subprocess.run(
-                ["xattr", "-dr", "com.apple.quarantine", str(qt6_root)],
-                capture_output=True,
-            )
+            stamp = site / _QT_STAMP_NAME
+            if _needs_quarantine_sweep(qt6_root, stamp):
+                result = subprocess.run(
+                    ["xattr", "-dr", "com.apple.quarantine", str(qt6_root)],
+                    capture_output=True,
+                )
+                # Only stamp a sweep that actually succeeded — otherwise a
+                # transient failure would silently disable it forever.
+                if result.returncode == 0:
+                    stamp.touch()
     except Exception:
         pass  # best-effort
 
