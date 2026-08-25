@@ -33,7 +33,7 @@ from argos.core.alpaca.filterwheel import FilterWheel, position_names
 from argos.core.alpaca.focuser import Focuser
 from argos.core.alpaca.telescope import MountPosition, Telescope
 from argos.core.config import Config
-from argos.core.hardware import active as hardware
+from argos.core.hardware import active as hardware, detect
 from argos.core.session.types import CameraCapabilities, FilterWheelState, FocuserState
 from argos.workers.discovery_worker import DiscoveryWorker
 from argos.workers.polling_worker import MountPollingWorker, TemperaturePollingWorker
@@ -324,6 +324,7 @@ class DeviceSession(QObject):
             cam = Camera(host=host, port=port)
             name = cam.connect()
             self._camera = cam
+            self._check_profile_against(cam, name)
             self._publish_camera_capabilities(cam)
             self._start_camera_temp_poll(cam)
             self.log_message.emit("OK", f"Camera connected: {name}")
@@ -331,6 +332,30 @@ class DeviceSession(QObject):
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Camera: {exc}")
             self.device_state_changed.emit("camera", "error", str(exc)[:48])
+
+    def _check_profile_against(self, cam: Camera, camera_name: str) -> None:
+        """Warn when the connected camera contradicts the active profile.
+
+        Advisory only — the profile is never switched here. Changing the plate
+        scale under a running session would be a worse surprise than the
+        mismatch, so the observer is told and decides in Settings.
+        """
+        scope = hardware.profile()
+        found = detect.mismatches(
+            scope, camera_name=camera_name, width=cam.width, height=cam.height
+        )
+        if not found:
+            return
+
+        for note in found:
+            logger.warning("Telescope profile mismatch: %s", note)
+            self.log_message.emit("WARN", f"Profile mismatch — {note}")
+
+        better = detect.suggest(camera_name=camera_name, width=cam.width, height=cam.height)
+        if better is not None and better.key != scope.key:
+            self.log_message.emit(
+                "WARN", f"This looks like a {better.name} — change it in Settings → Telescope."
+            )
 
     def _publish_camera_capabilities(self, cam: Camera) -> None:
         """Read the driver-derived limits + optional parameters (offset /

@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
 
 from argos import __version__
 from argos.core.config import Config
+from argos.core.hardware import active, catalog
 from argos.core.imaging.platesolve import find_astap
 from argos.ui import design, theme
 from argos.ui.palettes import EQUILUX, PALETTES
@@ -74,6 +75,7 @@ class ConfigurationPage(QWidget):
         left.addWidget(self._build_observer_card())
         left.addWidget(self._build_astrometry_card())
         left.addStretch()
+        right.addWidget(self._build_telescope_card())
         right.addWidget(self._build_paths_card())
         right.addWidget(self._build_camera_card())
         right.addWidget(self._build_appearance_card())
@@ -149,6 +151,80 @@ class ConfigurationPage(QWidget):
         row.addWidget(browse)
         layout.addLayout(row)
         return card
+
+    def _build_telescope_card(self) -> "design.Card":
+        """Which instrument Argos is driving — the source of every hardware spec."""
+        card = design.Card("Telescope")
+        layout = design.card_layout(card)
+
+        self._scope_combo = QComboBox()
+        for key in catalog.keys():
+            entry = catalog.PROFILES[key]
+            label = entry.name if entry.validated else f"{entry.name}  (unvalidated)"
+            self._scope_combo.addItem(label, key)
+        self._scope_combo.currentIndexChanged.connect(self._save_telescope)
+
+        form = QFormLayout()
+        form.setHorizontalSpacing(design.SPACING_MD)
+        form.setVerticalSpacing(design.SPACING_SM)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form.addRow(design.MutedLabel("Model"), self._scope_combo)
+        layout.addLayout(form)
+
+        # Specs are derived, so this line is the profile telling the truth
+        # about itself rather than a second copy of the numbers.
+        self._scope_specs = design.MutedLabel("")
+        layout.addWidget(self._scope_specs)
+
+        self._scope_warning = design.MutedLabel("")
+        self._scope_warning.setWordWrap(True)
+        self._scope_warning.setStyleSheet(f"color:{theme.WARNING};")
+        layout.addWidget(self._scope_warning)
+
+        layout.addWidget(
+            design.MutedLabel(
+                "Applies immediately — every spec below comes from this choice. "
+                "Do not change it mid-series: the plate scale would move under "
+                "a running light curve."
+            )
+        )
+        return card
+
+    def _refresh_telescope_card(self) -> None:
+        """Show the active profile's derived specs and any caveats it carries."""
+        scope = active.profile()
+        idx = self._scope_combo.findData(scope.key)
+        if idx >= 0:
+            self._scope_combo.blockSignals(True)
+            self._scope_combo.setCurrentIndex(idx)
+            self._scope_combo.blockSignals(False)
+
+        w, h = scope.fov_deg
+        self._scope_specs.setText(
+            f"{scope.aperture_mm:g} mm f/{scope.focal_ratio:.1f} · {scope.sensor} · "
+            f"{scope.pixel_size_um:g} µm · {scope.arcsec_per_full_px:.2f}″/px · "
+            f"{w:.2f}° × {h:.2f}° · {scope.bayer_pattern}"
+        )
+
+        if scope.validated:
+            self._scope_warning.setText("")
+            self._scope_warning.setVisible(False)
+        else:
+            self._scope_warning.setVisible(True)
+            self._scope_warning.setText(
+                "Unvalidated profile — never run on this hardware. " + " · ".join(scope.caveats)
+            )
+
+    def _save_telescope(self) -> None:
+        key = self._scope_combo.currentData()
+        if not key:
+            return
+        self._config.set(active.CFG_PROFILE, key)
+        entry = catalog.get(key)
+        if entry is not None:
+            overrides = self._config.get(active.CFG_OVERRIDES, {})
+            active.set_profile(active.apply_overrides(entry, overrides))
+        self._refresh_telescope_card()
 
     def _build_camera_card(self) -> "design.Card":
         card = design.Card("Camera")
@@ -313,6 +389,7 @@ class ConfigurationPage(QWidget):
         self._lon_spin.setValue(float(self._config.get("site.longitude", 0.0) or 0.0))
         self._elev_spin.setValue(float(self._config.get("site.elevation", 0.0) or 0.0))
         self._sessions_edit.setText(str(self._config.sessions_path))
+        self._refresh_telescope_card()
         preset_name: str = self._config.get("ui.theme.preset", EQUILUX.name)  # type: ignore[assignment]
         idx = self._palette_combo.findText(preset_name)
         if idx >= 0:
