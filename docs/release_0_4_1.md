@@ -116,14 +116,27 @@ become *overrides* on top of the profile, not a parallel source.
 
 ## Order
 
-1. CI + `LICENSE` — the safety net *(done: `6b2a94f`, `ba35f02`)*
-2. The 26 seconds — conditional `xattr`
-3. Workstream A — profiles, in three commits: structure, migration of the
-   eight sites, guard rails
-4. The f/3.2 bug — falls out of A, plus a per-profile focal-ratio test
-5. B2 — splash, after A so the active profile appears on it
+1. **[done]** CI + `LICENSE` — the safety net (`6b2a94f`, `ba35f02`, `b00f960`)
+2. **[done]** The 26 seconds — conditional `xattr` (`1290ca3`).
+   Measured: `import main` went from 9.54 s cold to 0.11 s warm.
+3. **[done]** Workstream A — profiles, in three commits: structure
+   (`571c138`), migration of the eight sites (`a224528`), guard rails
+   (`90d590d`).
+4. **[done]** The f/3.2 bug — fell out of A. Witnessed on a written frame:
+   `FOCRATIO` 3.2 → 5.3, `APTDIA` added, every other header byte-identical.
+5. B2 — splash, now that the active profile can appear on it
 6. C — `.dmg`
 7. Deferred to 0.4.2 — Linux port then `.deb`
+
+### Still open in workstream A
+
+- `imx585.py` is still keyed to one sensor. The profile carries a `sensor`
+  name; moving the EGAIN and read-noise curves behind a registry keyed by
+  that name is the remaining step. Until it lands, an unvalidated profile
+  inherits the IMX585 curve — which is exactly why those profiles must not
+  be trusted for photometry.
+- `green.py` and `debayer.py` still assume the GRBG tile geometry. Correct
+  for every profile shipped; it needs revisiting the day a model differs.
 
 **Method note.** Workstream A touches science code. Every step ends with a
 green `pytest` *and* a before/after FITS header comparison on a test frame:
