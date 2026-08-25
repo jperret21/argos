@@ -46,7 +46,7 @@ from argos.ui import design, theme
 logger = logging.getLogger(__name__)
 
 _FRAME_TYPES = ("Light", "Dark", "Flat", "Bias")
-# Seestar wheel slot names (see alpaca.filterwheel.POSITION_NAMES) — "IR-cut"
+# Seestar wheel slot names (see alpaca.filterwheel.position_names) — "IR-cut"
 # never matched a wheel position, so those steps silently kept the old filter.
 _DEFAULT_FILTERS = ("IR", "LP", "Dark")
 _COLUMNS = ("✓", "Type", "Filter", "Exp (s)", "Gain", "Count", "Interval (s)", "Dither every")

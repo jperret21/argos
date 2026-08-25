@@ -4,8 +4,9 @@ Pure numpy, Qt-free, unit-tested. Computed on the green CFA plane (densest
 sampling, best SNR for stars). These are *analysis* outputs — they never modify
 the raw frame.
 
-Seestar context: 2.9 µm @ 160 mm ≈ 3.74″/px (undersampled), so HFD/FWHM are
-coarse — treat the trend, not the absolute value.
+Seestar context: every model is undersampled (the S30 Pro runs 3.74″/px), so
+HFD/FWHM are coarse — treat the trend, not the absolute value. The plate scale
+comes from the active telescope profile; see :func:`arcsec_per_full_px`.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from argos.core.hardware import active as hardware
 from argos.core.imaging.debayer import compute_hfd
 from argos.core.imaging.green import green_plane
 
@@ -42,10 +44,21 @@ _SNAP_SEARCH = 6
 #: change): tight, so the centre stays put and only tracks small drift.
 TRACK_SNAP_SEARCH = 2
 
-#: Plate scale (IMX585 @ 160 mm): 206.265·2.9/160 ≈ 3.74″ per full-res px. The
-#: green plane is subsampled ×2, so one green-plane px spans twice that on sky.
-ARCSEC_PER_FULL_PX = 206.265 * 2.9 / 160.0
-ARCSEC_PER_GREEN_PX = ARCSEC_PER_FULL_PX * 2.0
+
+def arcsec_per_full_px() -> float:
+    """Plate scale in ″ per full-resolution pixel, for the active telescope.
+
+    Call this; do not bind it. It was a module constant baked at import time
+    (``206.265 × 2.9 / 160``, the S30 Pro's 3.74″/px) and imported straight
+    into two UI modules, which is precisely what made the plate scale
+    impossible to change without an import-order hazard.
+    """
+    return hardware.profile().arcsec_per_full_px
+
+
+def arcsec_per_green_px() -> float:
+    """Plate scale per green-plane pixel — the plane is subsampled ×2."""
+    return hardware.profile().arcsec_per_green_px
 
 
 @dataclass(frozen=True)

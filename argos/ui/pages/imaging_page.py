@@ -73,8 +73,8 @@ from argos.core.catalog.targets import TargetStar
 from argos.core.imaging.astrometry_session import field_geometry, project_points
 from argos.core.imaging.debayer import VIEW_SUPERPIXEL
 from argos.core.imaging.metrics import (
-    ARCSEC_PER_FULL_PX,
-    ARCSEC_PER_GREEN_PX,
+    arcsec_per_full_px,
+    arcsec_per_green_px,
     DEFAULT_STAR_RADIUS,
     TRACK_SNAP_SEARCH,
     measure_star_at,
@@ -874,9 +874,9 @@ class ImagingPage(QWidget):
     def _format_star_text(self, meas) -> str:
         parts = ["Selected star"]
         if meas.fwhm is not None:
-            parts.append(f"FWHM {meas.fwhm * ARCSEC_PER_GREEN_PX:.1f}″")
+            parts.append(f"FWHM {meas.fwhm * arcsec_per_green_px():.1f}″")
         if meas.hfd is not None:
-            parts.append(f"HFD {meas.hfd * ARCSEC_PER_GREEN_PX:.1f}″")
+            parts.append(f"HFD {meas.hfd * arcsec_per_green_px():.1f}″")
         if meas.eccentricity is not None:
             parts.append(f"ecc {meas.eccentricity:.2f}")
         parts.append(f"SNR {meas.snr:.0f}")
@@ -886,10 +886,10 @@ class ImagingPage(QWidget):
         pos = self._session.last_position
         if pos is not None:
             line2 = (
-                f"field  RA {pos.ra:.3f}h  Dec {pos.dec:+.2f}°   ·   {ARCSEC_PER_FULL_PX:.2f}″/px"
+                f"field  RA {pos.ra:.3f}h  Dec {pos.dec:+.2f}°   ·   {arcsec_per_full_px():.2f}″/px"
             )
         else:
-            line2 = f"scale  {ARCSEC_PER_FULL_PX:.2f}″/px   (mount not connected)"
+            line2 = f"scale  {arcsec_per_full_px():.2f}″/px   (mount not connected)"
         text = f"{line1}\n{line2}"
         wcs = self._astrometry.wcs
         if wcs is not None:  # plate-solved → the star's true celestial position

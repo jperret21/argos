@@ -29,11 +29,11 @@ from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal, py
 
 from argos.core.alpaca.camera import Camera
 from argos.core.alpaca.client import AlpacaError
-from argos.core.alpaca.discovery import SEESTAR_AP_HOST
-from argos.core.alpaca.filterwheel import POSITION_NAMES, FilterWheel
+from argos.core.alpaca.filterwheel import FilterWheel, position_names
 from argos.core.alpaca.focuser import Focuser
 from argos.core.alpaca.telescope import MountPosition, Telescope
 from argos.core.config import Config
+from argos.core.hardware import active as hardware
 from argos.core.session.types import CameraCapabilities, FilterWheelState, FocuserState
 from argos.workers.discovery_worker import DiscoveryWorker
 from argos.workers.polling_worker import MountPollingWorker, TemperaturePollingWorker
@@ -202,7 +202,7 @@ class DeviceSession(QObject):
         self.log_message.emit("INFO", "Starting Alpaca discovery…")
         # Fallback candidates when the UDP broadcast is silent (hotspots
         # block it): the last-used host, then the Seestar's AP-mode address.
-        candidates = (self._config.alpaca_host, SEESTAR_AP_HOST)
+        candidates = (self._config.alpaca_host, hardware.profile().ap_host)
         self._discovery = DiscoveryWorker(
             port=self._config.alpaca_port, candidates=candidates, timeout=8.0, parent=self
         )
@@ -378,7 +378,8 @@ class DeviceSession(QObject):
             fw = FilterWheel(host=host, port=port)
             fw.connect()
             self._filterwheel = fw
-            names = tuple(POSITION_NAMES[i] for i in sorted(POSITION_NAMES))
+            slots = position_names()
+            names = tuple(slots[i] for i in sorted(slots))
             pos = fw.get_position()
             self.filterwheel_state.emit(
                 FilterWheelState(names=names, position=pos, position_name=fw.position_name())
@@ -598,7 +599,8 @@ class DeviceSession(QObject):
     @staticmethod
     def filter_position_for(name: str) -> int | None:
         """Wheel position whose slot name matches ``name`` (case-insensitive)."""
-        return next((i for i, n in POSITION_NAMES.items() if str(n).lower() == name.lower()), None)
+        slots = position_names()
+        return next((i for i, n in slots.items() if str(n).lower() == name.lower()), None)
 
     @pyqtSlot(int, str)
     def _on_filter_settled(self, position: int, name: str) -> None:

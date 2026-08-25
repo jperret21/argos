@@ -29,10 +29,6 @@ DISCOVERY_PORT = 32227
 DISCOVERY_MESSAGE = b"alpacadiscovery1"
 DISCOVERY_TIMEOUT = 8.0  # seconds
 
-#: The Seestar's own address when it runs its access point (AP mode) —
-#: the out-of-the-box field configuration, no home router involved.
-SEESTAR_AP_HOST = "10.0.0.1"
-
 PROBE_TIMEOUT = 2.0  # seconds, per direct HTTP probe
 SCAN_CONNECT_TIMEOUT = 0.4  # seconds, per host during the subnet sweep
 SCAN_WORKERS = 64
@@ -179,7 +175,7 @@ def discover_all(
         port: Alpaca HTTP port for the probe/scan fallbacks (the broadcast
               reply carries its own port).
         candidates: Hosts worth probing directly when the broadcast fails —
-                    typically the last-used host and ``SEESTAR_AP_HOST``.
+                    typically the last-used host and the profile's AP-mode address.
         broadcast_timeout: How long to wait for broadcast replies.
 
     Returns:

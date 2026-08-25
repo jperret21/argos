@@ -21,14 +21,12 @@ import numpy as np
 from astropy.io import fits
 from astropy.time import Time
 
+from argos.core.hardware import active as hardware
 from argos.core.imaging import imx585, sky_geometry
 
-# IMX585 physical characteristics (Seestar S30 Pro)
-_PIXEL_SIZE_UM = 2.9
-_FOCAL_LENGTH_MM = 160
-_BAYER_PATTERN = "GRBG"
-_TELESCOPE_NAME = "ZWO Seestar S30 Pro"
-_INSTRUMENT = "IMX585"
+# Optics and sensor geometry come from the active telescope profile — see
+# argos.core.hardware. They used to be five constants here, duplicating five
+# more in core/alpaca/camera.py.
 
 # ISO 8601 datetime format with millisecond precision (FITS convention).
 _DATETIME_FMT = "%Y-%m-%dT%H:%M:%S.%f"
@@ -390,13 +388,22 @@ def _add_sensor_headers(
 
 
 def _add_instrument_headers(hdr: fits.Header) -> None:
-    hdr["TELESCOP"] = (_TELESCOPE_NAME, "telescope name")
-    hdr["INSTRUME"] = (_INSTRUMENT, "sensor / instrument name")
-    hdr["FOCALLEN"] = (_FOCAL_LENGTH_MM, "[mm] telescope focal length")
-    hdr["FOCRATIO"] = (round(_FOCAL_LENGTH_MM / 50.0, 1), "focal ratio (f/number)")
-    hdr["XPIXSZ"] = (_PIXEL_SIZE_UM, "[um] pixel size X (unbinned)")
-    hdr["YPIXSZ"] = (_PIXEL_SIZE_UM, "[um] pixel size Y (unbinned)")
-    hdr["BAYERPAT"] = (_BAYER_PATTERN, "Bayer color filter pattern")
+    """Stamp the instrument's physical description from the active profile.
+
+    FOCRATIO used to be ``FOCALLEN / 50.0`` — 50 mm being the S50's aperture,
+    left behind in code that had moved to a 30 mm telescope. Every frame Argos
+    wrote reported f/3.2 for an f/5.3 instrument. The profile derives it from
+    the aperture, so the two can no longer disagree.
+    """
+    scope = hardware.profile()
+    hdr["TELESCOP"] = (scope.name, "telescope name")
+    hdr["INSTRUME"] = (scope.sensor, "sensor / instrument name")
+    hdr["APTDIA"] = (scope.aperture_mm, "[mm] telescope aperture diameter")
+    hdr["FOCALLEN"] = (scope.focal_length_mm, "[mm] telescope focal length")
+    hdr["FOCRATIO"] = (round(scope.focal_ratio, 1), "focal ratio (f/number)")
+    hdr["XPIXSZ"] = (scope.pixel_size_um, "[um] pixel size X (unbinned)")
+    hdr["YPIXSZ"] = (scope.pixel_size_um, "[um] pixel size Y (unbinned)")
+    hdr["BAYERPAT"] = (scope.bayer_pattern, "Bayer color filter pattern")
     hdr["XBAYROFF"] = (0, "Bayer X offset")
     hdr["YBAYROFF"] = (0, "Bayer Y offset")
     hdr["EQUINOX"] = (2000.0, "equinox of celestial coordinate system")

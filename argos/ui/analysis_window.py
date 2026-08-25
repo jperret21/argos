@@ -25,8 +25,8 @@ from PyQt6.QtWidgets import (
 
 from argos.core.imaging.debayer import VIEW_G, VIEW_RAW, extract_plane
 from argos.core.imaging.metrics import (
-    ARCSEC_PER_FULL_PX,
-    ARCSEC_PER_GREEN_PX,
+    arcsec_per_full_px,
+    arcsec_per_green_px,
     DEFAULT_STAR_RADIUS,
     TRACK_SNAP_SEARCH,
     measure_star_at,
@@ -409,14 +409,14 @@ class AnalysisWindow(QMainWindow):
     def _format_star_text(self, meas) -> str:
         parts = ["Selected star"]
         if meas.fwhm is not None:
-            parts.append(f"FWHM {meas.fwhm * ARCSEC_PER_GREEN_PX:.1f}″")
+            parts.append(f"FWHM {meas.fwhm * arcsec_per_green_px():.1f}″")
         if meas.hfd is not None:
-            parts.append(f"HFD {meas.hfd * ARCSEC_PER_GREEN_PX:.1f}″")
+            parts.append(f"HFD {meas.hfd * arcsec_per_green_px():.1f}″")
         if meas.eccentricity is not None:
             parts.append(f"ecc {meas.eccentricity:.2f}")
         parts.append(f"SNR {meas.snr:.0f}")
         parts.append(f"peak {meas.peak_adu} ADU")
-        text = "   ".join(parts) + f"\nscale  {ARCSEC_PER_FULL_PX:.2f}″/px"
+        text = "   ".join(parts) + f"\nscale  {arcsec_per_full_px():.2f}″/px"
         if self._wcs is not None:
             ra_h, dec_d = self._wcs.pixel_to_radec(meas.x, meas.y)
             text += f"\nRA {format_ra_hms(ra_h)}  Dec {format_dec_dms(dec_d)}"

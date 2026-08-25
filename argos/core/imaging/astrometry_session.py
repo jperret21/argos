@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 
-from argos.core.imaging.metrics import ARCSEC_PER_GREEN_PX
+from argos.core.imaging.metrics import arcsec_per_green_px
 from argos.core.imaging.platesolve import (
     FrameWCS,
     SolveResult,
@@ -64,7 +64,7 @@ def build_solve_settings(
         database=str(cfg_get("astrometry.database", "")),
         search_radius_deg=radius,
         downsample=int(cfg_get("astrometry.downsample", 2)),
-        fov_hint_deg=(gh * ARCSEC_PER_GREEN_PX / 3600.0) if use_hint else None,
+        fov_hint_deg=(gh * arcsec_per_green_px() / 3600.0) if use_hint else None,
         ra_hint_hours=ra_hint,
         dec_hint_deg=dec_hint,
         timeout_s=timeout,

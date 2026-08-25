@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 from astropy.io import fits
 
+from argos.core.hardware import active, catalog
 from argos.core.imaging.fits_writer import FITSWriter, FrameContext
 
 # --------------------------------------------------------------------------- #
@@ -81,7 +82,47 @@ def test_astrometry_frame_headers(tmp_path: Path) -> None:
     hdr = _write_frame(tmp_path)
     assert hdr["EQUINOX"] == 2000.0
     assert hdr["RADESYS"] == "ICRS"
-    assert hdr["BAYERPAT"] == "GRBG"
+    assert hdr["BAYERPAT"] == catalog.S30_PRO.bayer_pattern
+
+
+# --------------------------------------------------------------------------- #
+# Instrument headers — sourced from the active telescope profile               #
+# --------------------------------------------------------------------------- #
+
+
+def test_focal_ratio_is_derived_from_the_aperture(tmp_path: Path) -> None:
+    """Regression: FOCRATIO was FOCALLEN / 50.0, so every frame said f/3.2.
+
+    50 mm is the S50's aperture, left behind in code driving a 30 mm scope.
+    The S30 Pro is f/5.3 and the header must say so.
+    """
+    hdr = _write_frame(tmp_path)
+    assert hdr["FOCRATIO"] == pytest.approx(5.3, abs=0.05)
+    assert hdr["APTDIA"] == pytest.approx(30.0)
+
+
+def test_instrument_headers_follow_the_active_profile(tmp_path: Path) -> None:
+    """Switch telescope, and the frame describes the telescope it came from."""
+    active.set_profile(catalog.S50)
+    try:
+        hdr = _write_frame(tmp_path)
+    finally:
+        active.set_profile(catalog.S30_PRO)
+
+    assert hdr["TELESCOP"] == "ZWO Seestar S50"
+    assert hdr["INSTRUME"] == "IMX462"
+    assert hdr["FOCALLEN"] == pytest.approx(250.0)
+    assert hdr["APTDIA"] == pytest.approx(50.0)
+    assert hdr["FOCRATIO"] == pytest.approx(5.0, abs=0.05)
+
+
+def test_default_profile_headers_are_the_s30_pro(tmp_path: Path) -> None:
+    hdr = _write_frame(tmp_path)
+    assert hdr["TELESCOP"] == "ZWO Seestar S30 Pro"
+    assert hdr["INSTRUME"] == "IMX585"
+    assert hdr["FOCALLEN"] == pytest.approx(160.0)
+    assert hdr["XPIXSZ"] == pytest.approx(2.9)
+    assert hdr["YPIXSZ"] == pytest.approx(2.9)
 
 
 # --------------------------------------------------------------------------- #

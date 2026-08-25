@@ -16,11 +16,24 @@ from alpaca.exceptions import DriverException
 from alpaca.filterwheel import FilterWheel as _AlpacaFilterWheel
 
 from argos.core.alpaca.client import AlpacaError
+from argos.core.hardware import active as hardware
 
 logger = logging.getLogger(__name__)
 
-POSITION_NAMES = {0: "Dark", 1: "IR", 2: "LP"}
-POSITION_COUNT = 3
+
+def position_names() -> dict[int, str]:
+    """Slot index → filter name, for the active telescope profile.
+
+    Was a module constant fixed to the S30 Pro's Dark/IR/LP wheel. Call it
+    rather than binding it: a model with a different wheel — or none — must be
+    able to change the answer.
+    """
+    return dict(enumerate(hardware.profile().filter_names))
+
+
+def position_count() -> int:
+    """Number of slots on the active profile's internal wheel (0 = no wheel)."""
+    return len(hardware.profile().filter_names)
 
 
 def _wrap(exc: Exception) -> AlpacaError:
@@ -54,7 +67,7 @@ class FilterWheel:
             logger.info(
                 "FilterWheel connected  current position=%d (%s)",
                 pos,
-                POSITION_NAMES.get(pos, "?"),
+                position_names().get(pos, "?"),
             )
         except AlpacaError:
             raise
@@ -99,13 +112,15 @@ class FilterWheel:
         Raises:
             AlpacaError: Invalid position or device error.
         """
-        if position not in POSITION_NAMES:
-            raise AlpacaError(0, f"Invalid filter position {position} — must be 0, 1, or 2")
+        names = position_names()
+        if position not in names:
+            valid = ", ".join(str(i) for i in names) or "none — this model has no wheel"
+            raise AlpacaError(0, f"Invalid filter position {position} — must be {valid}")
         try:
             logger.info(
                 "FilterWheel moving to position %d (%s)",
                 position,
-                POSITION_NAMES[position],
+                names[position],
             )
             self._fw.Position = position
         except Exception as exc:
@@ -116,4 +131,4 @@ class FilterWheel:
         pos = self.get_position()
         if pos == -1:
             return "Moving…"
-        return POSITION_NAMES.get(pos, f"Pos {pos}")
+        return position_names().get(pos, f"Pos {pos}")

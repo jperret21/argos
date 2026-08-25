@@ -41,7 +41,6 @@ OVERRIDABLE = frozenset(
         "adc_bits",
         "full_well_adu",
         "linearity_max_adu",
-        "alpaca_port",
         "ap_host",
     }
 )

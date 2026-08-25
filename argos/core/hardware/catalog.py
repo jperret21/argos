@@ -49,7 +49,6 @@ S30_PRO = TelescopeProfile(
     full_well_adu=60000,
     linearity_max_adu=50000,
     filter_names=("Dark", "IR", "LP"),
-    alpaca_port=32323,
     ap_host="10.0.0.1",
 )
 
@@ -69,7 +68,6 @@ S30 = TelescopeProfile(
     full_well_adu=60000,
     linearity_max_adu=50000,
     filter_names=("Dark", "IR", "LP"),
-    alpaca_port=32323,
     ap_host="10.0.0.1",
 )
 
@@ -89,7 +87,6 @@ S50 = TelescopeProfile(
     full_well_adu=60000,
     linearity_max_adu=50000,
     filter_names=("Dark", "IR", "LP"),
-    alpaca_port=32323,
     ap_host="10.0.0.1",
 )
 

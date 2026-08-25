@@ -19,7 +19,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from argos.core.alpaca.camera import Camera
 from argos.core.alpaca.client import AlpacaError
-from argos.core.alpaca.filterwheel import POSITION_NAMES, FilterWheel
+from argos.core.alpaca.filterwheel import FilterWheel, position_names
 from argos.core.alpaca.telescope import Telescope
 from argos.core.imaging.fits_writer import FITSWriter, FrameContext
 from argos.core.imaging.metrics import detect_stars, frame_metrics
@@ -61,18 +61,14 @@ FrameContextProvider = Callable[..., FrameContext]
 def _resolve_filter_position(filter_name: str) -> int | None:
     """Best-effort map of a filter name to a wheel position index.
 
-    ``POSITION_NAMES`` may be a list (index → name) or a dict (index → name);
-    both are handled. Returns ``None`` when no match is found.
+    Slots come from the active telescope profile, so a model with a different
+    wheel resolves against its own names. Returns ``None`` when no match is
+    found — including for a model with no internal wheel at all.
     """
     try:
-        if isinstance(POSITION_NAMES, dict):
-            for idx, name in POSITION_NAMES.items():
-                if str(name).lower() == filter_name.lower():
-                    return int(idx)
-        else:
-            for idx, name in enumerate(POSITION_NAMES):
-                if str(name).lower() == filter_name.lower():
-                    return idx
+        for idx, name in position_names().items():
+            if str(name).lower() == filter_name.lower():
+                return int(idx)
     except Exception:  # pragma: no cover - defensive against unexpected shapes
         return None
     return None

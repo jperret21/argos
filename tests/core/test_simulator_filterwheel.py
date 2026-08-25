@@ -1,7 +1,7 @@
 """Filter wheel wrapper validation against the ASCOM Alpaca simulator.
 
 The Seestar S30 Pro has an internal filter wheel — Dark / IR-cut / LP
-(light-pollution), see ``POSITION_NAMES``. The sequencer drives it on filter
+(light-pollution), see ``position_names()``. The sequencer drives it on filter
 changes. The simulator exposes a wheel, so we validate connect + position
 change here. Auto-skipped when the simulator is down.
 """

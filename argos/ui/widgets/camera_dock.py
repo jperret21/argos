@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 
 _FRAME_TYPES = ("Light Frame", "Dark Frame", "Flat Frame", "Bias Frame")
-# Seestar wheel slot names (see alpaca.filterwheel.POSITION_NAMES), light
+# Seestar wheel slot names (see alpaca.filterwheel.position_names), light
 # filters first so the pre-connect default is shootable. "IR-cut" was wrong:
 # no wheel position matched it, so picking it silently never moved the wheel.
 _DEFAULT_FILTERS = ("IR", "LP", "Dark")

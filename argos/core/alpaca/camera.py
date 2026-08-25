@@ -7,9 +7,10 @@ Uses alpyca which automatically handles:
 
 All methods are synchronous — run inside a QThread worker only.
 
-Seestar S30 Pro constraints:
+Seestar constraints:
   - Do NOT use ROI/subframing (firmware bug in Alpaca driver)
-  - Sensor: IMX585, Bayer GRBG, pixel size 2.9 µm, focal length 160 mm
+  - Sensor geometry comes from the active telescope profile; the driver's
+    CameraXSize/CameraYSize win over it at connect.
 """
 
 from __future__ import annotations
@@ -22,15 +23,14 @@ from alpaca.camera import Camera as _AlpacaCamera
 from alpaca.exceptions import DriverException, InvalidValueException, NotImplementedException
 
 from argos.core.alpaca.client import AlpacaError
+from argos.core.hardware import active as hardware
 
 logger = logging.getLogger(__name__)
 
-# IMX585 physical characteristics (Seestar S30 Pro)
-PIXEL_SIZE_UM = 2.9
-FOCAL_LENGTH = 160
-BAYER_PATTERN = "GRBG"
-INSTRUMENT = "IMX585"
-TELESCOPE_NAME = "ZWO Seestar S30 Pro"
+# Physical characteristics used to be five module constants here, duplicating
+# five more in core/imaging/fits_writer.py. They now come from the active
+# telescope profile (argos.core.hardware) — nothing outside this file ever
+# imported them anyway.
 
 
 def _wrap(exc: Exception) -> AlpacaError:
@@ -50,8 +50,10 @@ class Camera:
     def __init__(self, host: str, port: int) -> None:
         self._cam = _AlpacaCamera(f"{host}:{port}", 0)
         self._connected = False
-        self.width: int = 3840
-        self.height: int = 2160
+        # Fallback geometry until connect() reads the driver's real values.
+        scope = hardware.profile()
+        self.width: int = scope.sensor_width_px
+        self.height: int = scope.sensor_height_px
         self.gain_min: int = 0
         self.gain_max: int = 100
         self.exposure_min: float = 0.01

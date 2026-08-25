@@ -40,8 +40,9 @@ class TelescopeProfile:
             the only source of the focal ratio.
         focal_length_mm: Written to FITS ``FOCALLEN``, and the denominator of
             the plate scale.
-        sensor: Key into :mod:`argos.core.hardware.sensors`, written to FITS
-            ``INSTRUME``.
+        sensor: Sensor model name, written to FITS ``INSTRUME``. The EGAIN and
+            read-noise curves are still keyed off the IMX585 module; moving
+            them behind this name is the remaining step of the migration.
         pixel_size_um: Unbinned physical pixel pitch, FITS ``XPIXSZ``/``YPIXSZ``.
         sensor_width_px: Full-frame width. A *fallback* only — the Alpaca
             driver's ``CameraXSize`` wins at connect.
@@ -55,9 +56,10 @@ class TelescopeProfile:
             saturation flag in aperture photometry uses this, not full well.
         filter_names: Internal filter-wheel slots in position order. Empty
             when the model has no internal wheel.
-        alpaca_port: Default ASCOM Alpaca HTTP port.
         ap_host: Fixed address the telescope serves on when running its own
-            access point in the field.
+            access point in the field. The connection port is not a profile
+            field: every model uses 32323 and the user's actual port lives
+            in the per-network connection profiles under ``alpaca``.
     """
 
     key: str
@@ -83,7 +85,6 @@ class TelescopeProfile:
     filter_names: tuple[str, ...] = field(default=())
 
     # Network
-    alpaca_port: int = 32323
     ap_host: str = "10.0.0.1"
 
     # -- derived ---------------------------------------------------------
