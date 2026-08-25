@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from argos import __version__
 from argos.core.config import Config
 from argos.core.session.acquisition_engine import AcquisitionEngine
 from argos.core.session.device_session import DeviceSession
@@ -65,7 +66,7 @@ _HARDWARE_MODES = frozenset({"capture"})
 class Shell(QMainWindow):
     """Three-mode workspace shell."""
 
-    APP_VERSION = "0.4.0"
+    APP_VERSION = __version__
 
     def __init__(self, config: Config) -> None:
         super().__init__()
@@ -376,7 +377,7 @@ class Shell(QMainWindow):
 
     def _show_about(self) -> None:
         self.statusBar().showMessage(
-            f"Argos v{self.APP_VERSION} — Seestar S30 Pro controller",
+            f"Argos v{self.APP_VERSION} — ZWO Seestar controller (GPL v3)",
             4000,
         )
 

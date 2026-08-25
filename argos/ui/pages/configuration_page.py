@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from argos import __version__
 from argos.core.config import Config
 from argos.core.imaging.platesolve import find_astap
 from argos.ui import design, theme
@@ -36,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 _LANGUAGES = (("English", "en"), ("Français", "fr"))
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
-_APP_VERSION = "0.2.0-redesign"
+_APP_VERSION = __version__
 #: ASTAP star databases (FOV-dependent). "" = let ASTAP auto-pick.
 _ASTAP_DATABASES = ("Auto", "D05", "D20", "D50", "D80", "G17", "H17", "H18", "V17", "W08")
 #: Downsample options (label → ASTAP -z value; 0 = auto).
@@ -294,9 +295,10 @@ class ConfigurationPage(QWidget):
     def _build_about_card(self) -> "design.Card":
         card = design.Card("About")
         layout = design.card_layout(card)
-        layout.addWidget(design.MutedLabel("Argos — ZWO Seestar S30 Pro controller"))
+        layout.addWidget(design.MutedLabel("Argos — ZWO Seestar controller"))
         layout.addWidget(design.MutedLabel(f"Version {_APP_VERSION}"))
         layout.addWidget(design.MutedLabel("Science-grade acquisition · ASCOM Alpaca · FITS"))
+        layout.addWidget(design.MutedLabel("GNU GPL v3 · linked against PyQt6 (GPL v3)"))
         return card
 
     # ------------------------------------------------------------------

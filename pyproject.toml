@@ -1,8 +1,14 @@
 [project]
 name = "argos"
-version = "0.4.0"
-description = "Astrophotography control for ZWO Seestar S30 Pro via ASCOM Alpaca"
+version = "0.4.1"
+description = "Astrophotography control and differential photometry for ZWO Seestar telescopes via ASCOM Alpaca"
 requires-python = ">=3.11,<3.12"
+license = { file = "LICENSE" }
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Astronomy",
+]
 
 dependencies = [
     "PyQt6==6.7.1",

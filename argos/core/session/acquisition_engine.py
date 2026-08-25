@@ -32,6 +32,7 @@ from pathlib import Path
 import numpy as np
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal, pyqtSlot
 
+from argos import SOFTWARE_ID
 from argos.core.catalog.photometry import auto_comparison_stars
 from argos.core.catalog.targets import ROLE_CHECK, ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
 from argos.core.config import Config
@@ -55,7 +56,7 @@ from argos.workers.sequence_worker import SequenceWorker
 
 logger = logging.getLogger(__name__)
 
-_SOFTWARE = "Argos v0.2.0-redesign"
+_SOFTWARE = SOFTWARE_ID
 
 
 def _is_light_frame(frame_type: str) -> bool:

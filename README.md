@@ -95,4 +95,11 @@ See [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) to get started.
 
 ## License
 
-MIT.
+**GNU General Public License v3.0** — see [`LICENSE`](LICENSE).
+
+Argos links against PyQt6, which is GPL v3 (Riverbank also sells a commercial
+licence). Distributing Argos as a binary means redistributing PyQt6, so the
+project as a whole is GPL v3 — the same licence Siril and INDI use.
+
+Argos does not bundle ASTAP: it is an external solver you install separately,
+under its own licence.
