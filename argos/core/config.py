@@ -44,9 +44,22 @@ _DEFAULTS: dict[str, Any] = {
         "window_state": None,  # base64 QMainWindow.saveState()
         "window_geometry": None,
     },
+    # Which telescope Argos is driving. "profile" names an entry in
+    # argos.core.hardware.catalog; "overrides" carries the few values an
+    # observer may correct for their own unit (see hardware.active.OVERRIDABLE).
+    # Optics and CFA layout are deliberately not overridable — if those are
+    # wrong the profile is wrong, and it needs fixing at the source.
+    "hardware": {
+        "profile": "s30pro",
+        "overrides": {},
+    },
     # Sensor characteristics — confirm against hardware (see docs/capture_panel.md §8).
     # IMX585 Starvis 2: 12-bit ADC scaled to 16-bit; "full_well_adu" is the
     # saturation/linearity threshold used by the display clipping indicator.
+    #
+    # DEPRECATED: adc_bits / full_well_adu / linearity_max_adu now live on the
+    # telescope profile. They are migrated into hardware.overrides on first
+    # load and kept here only so an older Argos can still read the file.
     "camera": {
         "adc_bits": 12,
         "full_well_adu": 60000,
@@ -118,6 +131,7 @@ class Config:
             with _CONFIG_FILE.open("r", encoding="utf-8") as f:
                 on_disk = json.load(f)
             data = _deep_merge(_DEFAULTS, on_disk)
+            _migrate_camera_keys(data)
             logger.debug("Config loaded from %s", _CONFIG_FILE)
             return cls(data)
         except Exception as exc:
@@ -198,3 +212,34 @@ def _deep_merge(base: dict, override: dict) -> dict:
         else:
             result[key] = value
     return result
+
+
+#: Legacy ``camera.*`` keys that moved onto the telescope profile.
+_MIGRATED_CAMERA_KEYS = ("adc_bits", "full_well_adu", "linearity_max_adu")
+
+
+def _migrate_camera_keys(data: dict) -> None:
+    """Carry hand-tuned ``camera.*`` values over to ``hardware.overrides``.
+
+    Only values that actually differ from the shipped default are moved — an
+    untouched config should not acquire overrides — and only when no overrides
+    exist yet, so this runs once and never fights a later edit. The legacy keys
+    are left in place: an older Argos reading the same file still works.
+
+    Mutates *data* in place.
+    """
+    hardware = data.setdefault("hardware", {})
+    existing = hardware.setdefault("overrides", {})
+    if existing:
+        return  # already migrated, or the user set their own
+
+    camera = data.get("camera") or {}
+    defaults = _DEFAULTS["camera"]
+    moved = {
+        key: camera[key]
+        for key in _MIGRATED_CAMERA_KEYS
+        if key in camera and camera[key] != defaults[key]
+    }
+    if moved:
+        hardware["overrides"] = moved
+        logger.info("Migrated tuned camera settings to hardware.overrides: %s", sorted(moved))
