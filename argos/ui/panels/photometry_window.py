@@ -93,8 +93,12 @@ class PhotometryWindow(QWidget):
     def feed_point(self, point) -> None:
         """Render one differential point (a typed ``PhotometryPoint``)."""
         self.lightcurve.add_point(
-            point.name, point.jd, point.mag, point.mag_err,
-            saturated=point.saturated, role=point.role,
+            point.name,
+            point.jd,
+            point.mag,
+            point.mag_err,
+            saturated=point.saturated,
+            role=point.role,
         )
 
     def set_targets(self, stars) -> None:

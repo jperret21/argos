@@ -1164,9 +1164,7 @@ class ImagingPage(QWidget):
             )
             mag = " – ".join(m for m in (v.max_mag, v.min_mag) if m)
             key = f"auid:{v.auid}" if v.auid else f"pos:{v.ra_deg:.5f},{v.dec_deg:.5f}"
-            rows.append(
-                (v.name, v.var_type, mag, v.period, sep, key in saved, v.is_suspected)
-            )
+            rows.append((v.name, v.var_type, mag, v.period, sep, key in saved, v.is_suspected))
         self._photometry_window.variables.set_variables(rows)
 
     def _on_variable_target_requested(self, row: int) -> None:
@@ -1336,8 +1334,12 @@ class ImagingPage(QWidget):
         The live dock always gets the point (it may be hidden but stays in sync);
         the floating window mirrors it only while shown."""
         self._lightcurve_panel.add_point(
-            point.name, point.jd, point.mag, point.mag_err,
-            saturated=point.saturated, role=point.role,
+            point.name,
+            point.jd,
+            point.mag,
+            point.mag_err,
+            saturated=point.saturated,
+            role=point.role,
         )
         win = self._photometry_window
         if win is not None and win.isVisible():

@@ -88,8 +88,15 @@ def test_plateau_with_single_dip_uses_raw_minimum() -> None:
     # and defocused a perfectly focused scope. The vertex-vs-raw guard must
     # reject that fit and fall back to the measured minimum.
     samples = [
-        (0, 34.7), (325, 34.0), (650, 45.0), (975, 30.8), (1300, 13.2),
-        (1625, 41.2), (1950, 44.2), (2275, 37.9), (2600, 37.5),
+        (0, 34.7),
+        (325, 34.0),
+        (650, 45.0),
+        (975, 30.8),
+        (1300, 13.2),
+        (1625, 41.2),
+        (1950, 44.2),
+        (2275, 37.9),
+        (2600, 37.5),
     ]
     result = fit_v_curve(samples, 0, 2600)
 

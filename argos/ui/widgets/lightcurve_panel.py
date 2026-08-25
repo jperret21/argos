@@ -140,9 +140,7 @@ class LightCurvePanel(QWidget):
             label = lc.name or lc.auid or "TARGET"
             role = getattr(lc, "role", "target")
             for p in lc.points:
-                self.add_point(
-                    label, p.jd_utc, p.mag, p.mag_err, saturated=p.saturated, role=role
-                )
+                self.add_point(label, p.jd_utc, p.mag, p.mag_err, saturated=p.saturated, role=role)
         idx = self._selector.findText(selected)
         if idx >= 0:
             self._selector.setCurrentIndex(idx)

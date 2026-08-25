@@ -34,7 +34,13 @@ from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal, pyqtSlot
 
 from argos import SOFTWARE_ID
 from argos.core.catalog.photometry import auto_comparison_stars
-from argos.core.catalog.targets import ROLE_CHECK, ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+from argos.core.catalog.targets import (
+    ROLE_CHECK,
+    ROLE_COMPARISON,
+    ROLE_TARGET,
+    TargetSet,
+    TargetStar,
+)
 from argos.core.config import Config
 from argos.core.imaging.astrometry_session import field_geometry
 from argos.core.imaging.fits_writer import FITSWriter, FrameContext

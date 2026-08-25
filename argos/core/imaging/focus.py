@@ -192,4 +192,6 @@ def _try_parabola(
             best_raw[0],
         )
         return None
-    return FocusResult(int(round(vertex)), round(float(fitted_hfd), 2), "parabola", (a, b, c), samples)
+    return FocusResult(
+        int(round(vertex)), round(float(fitted_hfd), 2), "parabola", (a, b, c), samples
+    )
