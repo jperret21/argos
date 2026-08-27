@@ -44,10 +44,22 @@ _ASTAP_PATHS = (
 #: Common star-database locations checked when the config gives none.
 #: ``astap_cli`` only looks next to its own binary (useless under
 #: ``/opt/homebrew/bin``), so a detected directory is passed via ``-d``.
+#:
+#: Homebrew installs the databases under the formula's ``opt`` prefix, NOT
+#: under ``share/`` — a real install had them in ``/usr/local/opt/astap`` while
+#: every path listed here was absent, so ASTAP ran with no database at all and
+#: every solve failed. The failure is silent from the user's side: ASTAP simply
+#: reports it could not solve the field.
 _ASTAP_DB_PATHS = (
     "/opt/homebrew/share/astap",
+    "/opt/homebrew/opt/astap",
+    "/opt/homebrew/var/astap",
     "/usr/local/share/astap",
+    "/usr/local/opt/astap",
+    "/usr/local/var/astap",
     "/Applications/ASTAP.app/Contents/MacOS",
+    str(Path.home() / ".local" / "share" / "astap"),
+    str(Path.home() / "astap"),
 )
 #: File patterns identifying a star database (D05/D20/D50/D80 → .1476,
 #: V17/G17 → .290, W08 → .101).

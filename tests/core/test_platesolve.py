@@ -113,6 +113,19 @@ def test_build_command_auto_detects_database_dir(tmp_path, monkeypatch) -> None:
     assert "-D" in cmd and "-d" in cmd
 
 
+def test_homebrew_opt_prefixes_are_searched_for_databases() -> None:
+    """Regression: a real install had its databases in /usr/local/opt/astap.
+
+    Homebrew puts a formula's files under its ``opt`` prefix, not under
+    ``share/``. None of the originally-listed directories existed on that
+    machine, so ASTAP was invoked with no ``-d`` at all and every solve
+    failed — silently, since ASTAP just reports it could not solve the field.
+    """
+    searched = set(platesolve._ASTAP_DB_PATHS)
+    assert "/usr/local/opt/astap" in searched
+    assert "/opt/homebrew/opt/astap" in searched
+
+
 def test_clamp_downsample_protects_small_frames() -> None:
     # A large (Seestar) frame keeps its configured factor.
     assert _clamp_downsample(960, 2) == 2
