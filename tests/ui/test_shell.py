@@ -48,18 +48,50 @@ def test_shell_three_mode_walkthrough() -> None:
         assert isinstance(shell._pages["connect"], ConnectionPage)
         assert isinstance(shell._pages["capture"], ImagingPage)
         assert isinstance(shell._pages["settings"], ConfigurationPage)
+        connection = shell._pages["connect"]
+        assert connection._telescope_combo.count() >= 3
+        assert connection._telescope_combo.currentData() == "s30pro"
+        assert "f/5.3" in connection._telescope_specs.text()
 
-        # ── Menu bar: Astrometry menu opens the shared settings dialog ────
+        # The planner remains usable at laptop sizes: the table and the
+        # control rail are independently resizable, and the run card explains
+        # the next required action instead of failing mysteriously on Start.
+        sequence_panel = shell._pages["sequencer"].panel
+        assert sequence_panel._splitter.count() == 2
+        assert "connect the camera" in sequence_panel._readiness_lbl.text().lower()
+        sequence_panel.set_device_state("camera", "connected")
+        assert "object name" in sequence_panel._readiness_lbl.text().lower()
+        sequence_panel.set_object_name("M42")
+        assert "ready to start" in sequence_panel._readiness_lbl.text().lower()
+
+        # Capture is a true dockable cockpit: panels can still be floated to a
+        # second screen and returned to the workspace, independent of their
+        # default right/bottom arrangement.
+        capture = shell._pages["capture"]
+        log_dock = capture._docks["log"]
+        capture._toggle_dock_floating(log_dock)
+        assert log_dock.isFloating()
+        capture._toggle_dock_floating(log_dock)
+        assert not log_dock.isFloating()
+
+        # ── Menu bar: Field menu opens the shared settings dialog ─────────
         from argos.ui.widgets import astrometry_settings as _astro_mod
 
         menus = {a.menu().title(): a.menu() for a in shell.menuBar().actions() if a.menu()}
-        assert "Astrometry" in menus and "Photometry" in menus
-        astro_actions = {act.text(): act for act in menus["Astrometry"].actions()}
-        assert {"Solve frame", "Auto-solve", "Plate solving…", "Catalog…"} <= set(astro_actions)
+        assert "File" in menus and "Field" in menus and "Photometry" in menus
+        file_actions = {act.text() for act in menus["File"].actions()}
+        assert {"Open FITS image…", "Open session photometry…", "Quit Argos"} <= file_actions
+        astro_actions = {act.text(): act for act in menus["Field"].actions()}
+        assert {
+            "Identify field",
+            "Keep field identified automatically",
+            "Configure field identification…",
+            "Configure catalogues…",
+        } <= set(astro_actions)
         phot_labels = [act.text() for act in menus["Photometry"].actions()]
         assert "Light curve…" in phot_labels and "Re-run subs…" in phot_labels
 
-        # The checkable Auto-solve action is the single UI for the policy: the
+        # The checkable automatic-identification action is the single UI for the policy: the
         # page's sequence-arming signal routes through it into the controller.
         shell._pages["capture"].auto_solve_armed.emit(True)
         assert shell._auto_solve_action.isChecked()
@@ -67,13 +99,13 @@ def test_shell_three_mode_walkthrough() -> None:
         shell._pages["capture"].auto_solve_armed.emit(False)
         assert shell._engine.astrometry.auto is False
 
-        # Triggering "Catalog…" builds the dialog on its tab (exec() stubbed so
+        # Triggering "Configure catalogues…" builds the dialog on its tab (exec() stubbed so
         # the offscreen test never blocks on a modal loop).
         opened: list = []
         orig_exec = _astro_mod.AstrometrySettingsDialog.exec
         _astro_mod.AstrometrySettingsDialog.exec = lambda self: (opened.append(self), 0)[1]
         try:
-            astro_actions["Catalog…"].trigger()
+            astro_actions["Configure catalogues…"].trigger()
         finally:
             _astro_mod.AstrometrySettingsDialog.exec = orig_exec
         assert len(opened) == 1
@@ -164,6 +196,10 @@ def test_shell_three_mode_walkthrough() -> None:
         # The Sequencer mode owns the plan editor; it builds a plan offline
         # and a run lights the strip + sidebar dot through the engine signals.
         seq_page = shell._pages["sequencer"]
+        page._camera_dock.set_object_name("T CrB", emit=True)
+        assert seq_page.panel.to_plan().object_name == "T CrB"
+        seq_page.panel.set_object_name("RR Lyr", emit=True)
+        assert page._camera_dock.params().object_name == "RR Lyr"
         plan = seq_page.panel.to_plan()
         assert len(plan.steps) >= 1
         assert plan.steps[0].count > 0
@@ -341,8 +377,18 @@ def test_shell_three_mode_walkthrough() -> None:
         # setup window). It is registered, hidden by default, and survives the
         # default layout so photometry_point can render into it during capture.
         assert "lightcurve" in page._docks
-        assert ("lightcurve", "Light curve") in page._PANEL_ORDER
+        assert ("lightcurve", "Differential photometry") in page._PANEL_ORDER
+        assert page._PRIMARY_PANEL_KEYS == (
+            "camera",
+            "mount",
+            "focuser",
+            "display",
+            "lightcurve",
+        )
         assert not page._docks["lightcurve"].isVisible()  # hidden by default
+        assert page._frame_context_lbl.text() == "No FITS frame loaded"
+        page._on_sequence_progress("M42", 2, 100, 382.0)
+        assert "2/100" in page._sequence_context_lbl.text()
         from argos.core.session.types import PhotometryPoint
 
         page._on_photometry_point(

@@ -123,9 +123,9 @@ def expand_plan(plan: SequencePlan) -> Iterator[FrameSpec]:
     """Flatten a plan into the ordered sequence of frames to shoot.
 
     Honors ``enabled``, ``count`` and ``repeat``. The frame index restarts per
-    ``(image_type, filter_name)`` bucket and increases monotonically across
-    repeats, matching the Siril folder layout (one numbered series per
-    type/filter sub-folder).
+    physically homogeneous ``(type, filter, exposure, gain)`` series and
+    increases monotonically across repeats, matching Siril's fixed-basename
+    sequence convention.
 
     Args:
         plan: The sequence plan to expand.
@@ -133,7 +133,7 @@ def expand_plan(plan: SequencePlan) -> Iterator[FrameSpec]:
     Yields:
         One :class:`FrameSpec` per frame, in shooting order.
     """
-    counters: dict[tuple[str, str], int] = {}
+    counters: dict[tuple[str, str, float, int], int] = {}
     for _pass in range(max(1, plan.repeat)):
         for step_index, step in enumerate(plan.steps):
             if not step.enabled or step.count <= 0:
@@ -143,7 +143,7 @@ def expand_plan(plan: SequencePlan) -> Iterator[FrameSpec]:
             # a flat shot with light=False IS a dark on a shuttered camera (P10).
             is_light = step.frame_type in ("Light", "Flat")
             for _ in range(step.count):
-                key = (image_type, step.filter_name)
+                key = (image_type, step.filter_name, step.exposure_s, step.gain)
                 counters[key] = counters.get(key, 0) + 1
                 yield FrameSpec(
                     frame_type=step.frame_type,

@@ -46,6 +46,23 @@ def test_minimal_write_still_carries_electron_gain(tmp_path: Path) -> None:
     assert 0.05 < float(hdr["EGAIN"]) < 30
 
 
+def test_siril_filename_has_a_fixed_ascii_basename_and_final_index() -> None:
+    start = datetime(2026, 5, 29, 22, 30, 0, tzinfo=timezone.utc)
+    first = FITSWriter.build_filename("M 42 é", "Light Frame", start, 10.0, "IR", 1, gain=80)
+    second = FITSWriter.build_filename("M 42 é", "Light Frame", start, 10.0, "IR", 2, gain=80)
+    assert first.endswith("_00001.fit") and second.endswith("_00002.fit")
+    assert first.rsplit("_", 1)[0] == second.rsplit("_", 1)[0]
+    assert first.isascii()
+
+
+def test_siril_folder_uses_the_exact_sessions_path_and_lowercase_types(tmp_path: Path) -> None:
+    start = datetime(2026, 5, 29, 22, 30, 0, tzinfo=timezone.utc)
+    folder = FITSWriter.session_folder(
+        tmp_path / "my_sessions", "M42", start, "Light Frame", "IR", run_id="run-01"
+    )
+    assert folder == tmp_path / "my_sessions" / "run-01_M42" / "lights"
+
+
 def test_quality_headers_written_when_metrics_present(tmp_path: Path) -> None:
     """Per-frame QA metrics (§7) land in the FITS header when provided."""
     ctx = FrameContext(hfd=3.4, star_count=42, sky_adu=812.5)

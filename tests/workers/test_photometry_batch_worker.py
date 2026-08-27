@@ -101,7 +101,7 @@ def _scene(tmp_path):
     return req, out_dir
 
 
-def test_batch_measures_and_writes_9col_csv(_scene) -> None:
+def test_batch_measures_and_writes_uncertainty_aware_csv(_scene) -> None:
     req, out_dir = _scene
     seen = []
     worker = PhotometryBatchWorker(req)
@@ -127,11 +127,14 @@ def test_batch_measures_and_writes_9col_csv(_scene) -> None:
     assert comp_curve.role == "comparison"
     assert abs(comp_curve.points[0].mag - 11.0) < 0.1
 
-    # Canonical 9-column CSVs written (target + comps) and reloadable.
+    # Canonical uncertainty-aware CSVs written (target + comps) and reloadable.
     csvs = list(out_dir.glob("*.csv"))
     assert len(csvs) == 3
     header = csvs[0].read_text().splitlines()[0]
-    assert header == "jd_utc,bjd_tdb,mag,mag_err,airmass,fwhm,sky_adu,comps_used,saturated"
+    assert header == (
+        "jd_utc,bjd_tdb,mag,mag_err,formal_mag_err,sigma_syst,airmass,fwhm,sky_adu,"
+        "comps_used,saturated"
+    )
     reloaded = LightCurve.from_csv(csvs[0])
     assert len(reloaded.points) == 3
 

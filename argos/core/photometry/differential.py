@@ -22,6 +22,7 @@ class DiffResult:
     comps_used: int
     note: str = ""  # "" when fully calibrated; else why it's provisional
     zp_rms: float | None = None  # ensemble scatter about the zero-point
+    formal_mag_err: float | None = None  # before the run-level systematic floor
 
 
 #: Outlier threshold for the ensemble clip, in robust sigmas (P3).
@@ -101,7 +102,15 @@ def differential_mag(
     mag = target_inst_mag + zp
     terr = target_inst_err or 0.0
     ens = (rms / math.sqrt(n)) if (rms and n) else 0.0
-    mag_err = math.sqrt(terr * terr + ens * ens)
+    formal_mag_err = math.sqrt(terr * terr + ens * ens)
     low = f"only {n} comparison(s)" if n < min_comps else ""
     note = "; ".join(x for x in (low, clip_note) if x)
-    return DiffResult(round(mag, 4), round(mag_err, 4), round(zp, 4), n, note, zp_rms=zp_rms)
+    return DiffResult(
+        round(mag, 4),
+        round(formal_mag_err, 4),
+        round(zp, 4),
+        n,
+        note,
+        zp_rms=zp_rms,
+        formal_mag_err=round(formal_mag_err, 4),
+    )

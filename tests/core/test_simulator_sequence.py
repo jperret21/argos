@@ -73,8 +73,8 @@ def test_sequence_writes_fits_and_session_json(tmp_path) -> None:
     assert finished == [True]
     assert len(saved) == 2
 
-    # FITS subs exist under the Siril session tree.
-    fits_files = list(tmp_path.glob("sessions/**/*.fits"))
+    # FITS subs exist under the Siril-ready session tree.
+    fits_files = list(tmp_path.glob("**/*.fit"))
     assert len(fits_files) == 2
 
     # Per-frame QA headers are present.
@@ -85,7 +85,7 @@ def test_sequence_writes_fits_and_session_json(tmp_path) -> None:
         assert hdr["IMAGETYP"] == "Light Frame"
 
     # session.json is valid and rolls up both frames.
-    session_files = list(tmp_path.glob("sessions/**/" + SESSION_FILENAME))
+    session_files = list(tmp_path.glob("**/" + SESSION_FILENAME))
     assert len(session_files) == 1
     doc = json.loads(session_files[0].read_text())
     assert doc["object"] == "SimTarget"
@@ -166,7 +166,7 @@ def test_sequence_drives_filter_wheel(tmp_path) -> None:
         fw.disconnect()
 
     assert finished == [True]
-    assert len(list(tmp_path.glob("sessions/**/*.fits"))) == 2
+    assert len(list(tmp_path.glob("**/*.fit"))) == 2
     # The wheel ended on the last requested filter (LP = position 2).
     assert final_pos == 2
 
@@ -204,13 +204,13 @@ def test_headers_record_the_actual_wheel_position(tmp_path) -> None:
         cam.disconnect()
         fw.disconnect()
 
-    (fits_path,) = list(tmp_path.glob("sessions/**/*.fits"))
+    (fits_path,) = list(tmp_path.glob("**/*.fit"))
     with fits.open(fits_path) as hdul:
         assert hdul[0].header["FILTER"] == actual_name
         assert hdul[0].header["FILTER"] != "LRGB"
 
     # session.json tells the same truth.
-    (session_path,) = list(tmp_path.glob("sessions/**/" + SESSION_FILENAME))
+    (session_path,) = list(tmp_path.glob("**/" + SESSION_FILENAME))
     doc = json.loads(session_path.read_text())
     assert doc["frames"][0]["filter_name"] == actual_name
 
@@ -253,20 +253,20 @@ def test_calibration_frames_land_typed_and_foldered(tmp_path) -> None:
         fw.disconnect()
 
     assert finished == [True]
-    root = next((tmp_path / "sessions").iterdir())
+    root = next(tmp_path.iterdir())
     by_type = {
-        "Lights": "Light Frame",
-        "Darks": "Dark Frame",
-        "Flats": "Flat Frame",
-        "Biases": "Bias Frame",
+        "lights": "Light Frame",
+        "darks": "Dark Frame",
+        "flats": "Flat Frame",
+        "biases": "Bias Frame",
     }
     for folder, imagetyp in by_type.items():
-        matches = list(root.glob(f"{folder}/**/*.fits"))
+        matches = list(root.glob(f"{folder}/*.fit"))
         assert len(matches) == 1, f"expected one frame under {folder}/"
         with fits.open(matches[0]) as hdul:
             assert hdul[0].header["IMAGETYP"] == imagetyp
 
     # The flat records the wheel's real position (P1 read-back), i.e. LP.
-    (flat,) = list(root.glob("Flats/**/*.fits"))
+    (flat,) = list(root.glob("flats/*.fit"))
     with fits.open(flat) as hdul:
         assert hdul[0].header["FILTER"] == "LP"

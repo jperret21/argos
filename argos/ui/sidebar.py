@@ -33,12 +33,13 @@ logger = logging.getLogger(__name__)
 # sequencer, mount goto, focuser + V-curve, photometry overlays and the live
 # curve all live there). Equipment is a 2-minute setup stop, Analyze is
 # post-prod. Settings is pushed to the bottom (a destination, not a phase).
-# The mode id "connect" is kept for config/back-compat; the label is Equipment.
+# The mode id "connect" is kept for config/back-compat; the label describes
+# the observer's task rather than the underlying device protocol.
 MODES: tuple[tuple[str, str, str], ...] = (
-    ("connect", "Equipment", "Connect the Seestar devices and Stellarium"),
-    ("capture", "Capture", "The night screen — image, focus, photometry"),
-    ("sequencer", "Sequencer", "Plan and run the night's capture sequence"),
-    ("analyze", "Analyze", "Inspect the light curve and export AAVSO"),
+    ("connect", "Connection", "Connect the telescope equipment"),
+    ("capture", "Observe", "Frame, focus and monitor the observation"),
+    ("sequencer", "Plan", "Plan and run the night's capture sequence"),
+    ("analyze", "Review", "Inspect the light curve and export AAVSO"),
     ("settings", "Settings", "Observer, site, paths, appearance"),
 )
 

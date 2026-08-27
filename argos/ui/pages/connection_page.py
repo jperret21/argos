@@ -25,12 +25,14 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPushButton,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
 from argos.core.config import Config
+from argos.core.hardware import active, catalog
 from argos.ui import design, theme
 from argos.ui.panels.stellarium_card import StellariumCard
 
@@ -86,19 +88,88 @@ class ConnectionPage(QWidget):
         root.addWidget(scroll)
 
         body.addWidget(design.HeadingLabel("Connection"))
-        body.addWidget(self._build_address_card())
+        intro = QLabel(
+            "Connect the saved equipment profile, then move on to framing and observing. "
+            "Connection details stay available when you need to troubleshoot."
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet(
+            f"color:{theme.FG_MUTED}; font-size:{design.FONT_SIZE_BODY}px; background:transparent;"
+        )
+        body.addWidget(intro)
+        body.addWidget(self._build_start_card())
 
-        body.addWidget(design.SectionLabel("Devices"))
-        body.addLayout(self._build_devices_grid())
-        body.addLayout(self._build_bulk_row())
+        self._advanced_toggle = QPushButton("Show connection and device details")
+        self._advanced_toggle.setProperty("class", "secondary")
+        self._advanced_toggle.clicked.connect(self._toggle_advanced)
+        body.addWidget(self._advanced_toggle)
 
-        body.addWidget(design.SectionLabel("Planetarium"))
+        self._advanced = QWidget()
+        advanced = QVBoxLayout(self._advanced)
+        advanced.setContentsMargins(0, design.SPACING_SM, 0, 0)
+        advanced.setSpacing(design.SPACING_MD)
+        advanced.addWidget(design.SectionLabel("Connection details"))
+        advanced.addWidget(self._build_address_card())
+        advanced.addWidget(design.SectionLabel("Individual devices"))
+        advanced.addLayout(self._build_devices_grid())
+        advanced.addLayout(self._build_bulk_row())
+        advanced.addWidget(design.SectionLabel("Planetarium"))
         host = str(self._config.get("stellarium.host", "127.0.0.1"))
         port = int(self._config.get("stellarium.port", 10001))
         self._stellarium_card = StellariumCard(host=host, tcp_port=port)
-        body.addWidget(self._stellarium_card)
+        advanced.addWidget(self._stellarium_card)
+        self._advanced.hide()
+        body.addWidget(self._advanced)
 
         body.addStretch()
+
+    def _build_start_card(self) -> "design.Card":
+        """Build the normal observer-facing equipment entry point."""
+        card = design.Card("Telescope & equipment")
+        layout = design.card_layout(card)
+
+        # This is deliberately part of Connection, not hidden under Settings:
+        # the model sets plate scale, sensor geometry and FITS identity before
+        # the first device call. A wrong profile is a science error, not merely
+        # a cosmetic preference.
+        scope_row = QHBoxLayout()
+        scope_row.setSpacing(design.SPACING_MD)
+        scope_row.addWidget(design.MutedLabel("Telescope"))
+        self._telescope_combo = QComboBox()
+        for key in catalog.keys():
+            profile = catalog.PROFILES[key]
+            suffix = " (unvalidated)" if not profile.validated else ""
+            self._telescope_combo.addItem(f"{profile.name}{suffix}", key)
+        current = self._telescope_combo.findData(active.profile().key)
+        self._telescope_combo.setCurrentIndex(max(0, current))
+        self._telescope_combo.currentIndexChanged.connect(self._on_telescope_changed)
+        scope_row.addWidget(self._telescope_combo, 1)
+        layout.addLayout(scope_row)
+        self._telescope_specs = design.MutedLabel("")
+        self._telescope_specs.setWordWrap(True)
+        layout.addWidget(self._telescope_specs)
+        self._telescope_warning = design.MutedLabel("")
+        self._telescope_warning.setWordWrap(True)
+        self._telescope_warning.setStyleSheet(f"color:{theme.WARNING};")
+        layout.addWidget(self._telescope_warning)
+        self._refresh_telescope_summary()
+
+        layout.addWidget(design.horizontal_divider())
+        self._summary_labels: dict[str, QLabel] = {}
+        for device_id, label, _hint in _DEVICES:
+            status = QLabel()
+            status.setStyleSheet(
+                f"color:{theme.FG_MUTED}; font-size:{design.FONT_SIZE_BODY}px; "
+                "background:transparent;"
+            )
+            self._summary_labels[device_id] = status
+            layout.addWidget(status)
+        self._start_connect_btn = design.SuccessButton("Connect equipment")
+        self._start_connect_btn.setToolTip("Connect telescope, camera, filter wheel and focuser")
+        self._start_connect_btn.clicked.connect(self._on_connect_all)
+        layout.addWidget(self._start_connect_btn)
+        self._refresh_summary()
+        return card
 
     def _build_address_card(self) -> "design.Card":
         card = design.Card("Address")
@@ -167,11 +238,89 @@ class ConnectionPage(QWidget):
         card = self._cards.get(device_id)
         if card is not None:
             card.set_state(state, info)
+        self._refresh_summary()
 
     def set_discovered_address(self, host: str, port: int) -> None:
         """Fill in the form when a discovery worker returns an address."""
         self._host_edit.setText(host)
         self._port_spin.setValue(port)
+
+    def _toggle_advanced(self) -> None:
+        visible = not self._advanced.isVisible()
+        self._advanced.setVisible(visible)
+        self._advanced_toggle.setText(
+            "Hide connection and device details"
+            if visible
+            else "Show connection and device details"
+        )
+
+    def _refresh_summary(self) -> None:
+        """Mirror detailed device state into the compact nightly checklist."""
+        states = {device_id: card._state for device_id, card in self._cards.items()}
+        for device_id, label, _hint in _DEVICES:
+            status = self._summary_labels.get(device_id)
+            if status is None:
+                continue
+            state = states.get(device_id, "disconnected")
+            connected = state in {"connected", "busy"}
+            icon = "●" if connected else "○"
+            text = "Ready" if state == "connected" else state.capitalize()
+            color = {
+                "connected": theme.SUCCESS,
+                "busy": theme.WARNING,
+                "error": theme.DANGER,
+            }.get(state, theme.FG_MUTED)
+            status.setText(f"{icon}  {label} — {text}")
+            status.setStyleSheet(
+                f"color:{color}; font-size:{design.FONT_SIZE_BODY}px; background:transparent;"
+            )
+        all_ready = len(states) == len(_DEVICES) and all(
+            state == "connected" for state in states.values()
+        )
+        if hasattr(self, "_start_connect_btn"):
+            self._start_connect_btn.setText("Equipment ready" if all_ready else "Connect equipment")
+            self._start_connect_btn.setEnabled(not all_ready)
+        if hasattr(self, "_telescope_combo"):
+            any_connected = any(state in {"connected", "busy"} for state in states.values())
+            self._telescope_combo.setEnabled(not any_connected)
+            self._telescope_combo.setToolTip(
+                "Disconnect equipment before changing telescope model. The model controls "
+                "plate scale, sensor geometry and FITS metadata."
+                if any_connected
+                else "Select the physical telescope before connecting equipment."
+            )
+
+    def _on_telescope_changed(self) -> None:
+        """Persist and activate the physical instrument selected before connection."""
+        if self._loading:
+            return
+        key = self._telescope_combo.currentData()
+        profile = catalog.get(key)
+        if profile is None:
+            return
+        self._config.set(active.CFG_PROFILE, key)
+        overrides = self._config.get(active.CFG_OVERRIDES, {})
+        active.set_profile(active.apply_overrides(profile, overrides))
+        self._config.save()
+        self._refresh_telescope_summary()
+
+    def _refresh_telescope_summary(self) -> None:
+        """Show the scientific consequences of the selected instrument."""
+        profile = active.profile()
+        width, height = profile.fov_deg
+        self._telescope_specs.setText(
+            f"{profile.aperture_mm:g} mm  ·  f/{profile.focal_ratio:.1f}  ·  "
+            f"{profile.sensor}  ·  {profile.arcsec_per_full_px:.2f}″/px  ·  "
+            f"{width:.2f}° × {height:.2f}°"
+        )
+        if profile.validated:
+            self._telescope_warning.hide()
+        else:
+            self._telescope_warning.setText(
+                "Unvalidated profile — do not use it for scientific photometry: "
+                + " · ".join(profile.caveats)
+            )
+            self._telescope_warning.show()
 
     # ------------------------------------------------------------------
     # Config + internals

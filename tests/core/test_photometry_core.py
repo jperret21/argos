@@ -10,7 +10,7 @@ import numpy as np
 from argos.core.photometry.airmass import airmass_from_altitude, bjd_tdb, julian_date
 from argos.core.photometry.aperture import measure_aperture
 from argos.core.photometry.differential import differential_mag, ensemble_zero_point
-from argos.core.photometry.lightcurve import LcPoint, LightCurve
+from argos.core.photometry.lightcurve import LcPoint, LightCurve, read_curves_csv, write_curves_csv
 
 
 def _star(cx, cy, peak=10000.0, sky=200.0, sigma=1.5, shape=(40, 40)) -> np.ndarray:
@@ -93,6 +93,7 @@ def test_differential_mag_calibrates_target() -> None:
     assert abs(r.mag - 9.0) < 1e-9
     assert r.comps_used == 2 and r.note == ""
     assert r.mag_err is not None and r.mag_err >= 0.01
+    assert r.formal_mag_err == r.mag_err
 
 
 def test_differential_mag_flags_too_few_comps() -> None:
@@ -142,7 +143,17 @@ def test_lightcurve_csv_round_trip(tmp_path) -> None:
 
 def test_lightcurve_from_csv_round_trips(tmp_path) -> None:
     lc = LightCurve(auid="000-BBB-001", name="NU Ori")
-    lc.append(LcPoint(jd_utc=2451545.0, mag=9.0, mag_err=0.02, airmass=1.2, comps_used=3))
+    lc.append(
+        LcPoint(
+            jd_utc=2451545.0,
+            mag=9.0,
+            mag_err=0.02,
+            formal_mag_err=0.015,
+            sigma_syst=0.01,
+            airmass=1.2,
+            comps_used=3,
+        )
+    )
     lc.append(LcPoint(jd_utc=2451545.1, mag=9.1, mag_err=0.03, saturated=True))
     path = tmp_path / "photometry.csv"
     lc.to_csv(path)
@@ -152,6 +163,7 @@ def test_lightcurve_from_csv_round_trips(tmp_path) -> None:
     p0, p1 = back.points
     assert p0.jd_utc == 2451545.0 and p0.mag == 9.0 and p0.mag_err == 0.02
     assert p0.airmass == 1.2 and p0.comps_used == 3
+    assert p0.formal_mag_err == 0.015 and p0.sigma_syst == 0.01
     assert p0.bjd_tdb is None and p0.fwhm is None  # blank optionals → None
     assert p1.saturated is True
     # Reloaded curve re-exports to the same AAVSO data as the original.
@@ -174,6 +186,19 @@ def test_lightcurve_from_csv_skips_bad_rows(tmp_path) -> None:
     assert [p.jd_utc for p in lc.points] == [2451545.0, 2451545.2]
 
 
+def test_multi_curve_csv_preserves_star_identity_and_roles(tmp_path) -> None:
+    target = LightCurve(auid="T", name="NU Ori", role="target")
+    target.append(LcPoint(jd_utc=2451545.0, mag=9.0, mag_err=0.02))
+    comparison = LightCurve(auid="C1", name="Comp 1", role="comparison")
+    comparison.append(LcPoint(jd_utc=2451545.0, mag=11.0, mag_err=0.03))
+    path = tmp_path / "measurements.csv"
+    write_curves_csv(path, [target, comparison])
+    restored = read_curves_csv(path)
+    assert set(restored) == {"T", "C1"}
+    assert restored["T"].role == "target"
+    assert restored["C1"].role == "comparison"
+
+
 def test_lightcurve_aavso_export(tmp_path) -> None:
     lc = LightCurve(name="NU Ori")
     lc.append(LcPoint(jd_utc=2451545.0, mag=9.0, mag_err=0.02, airmass=1.2))
@@ -184,6 +209,20 @@ def test_lightcurve_aavso_export(tmp_path) -> None:
     data = [ln for ln in text if not ln.startswith("#")]
     assert data and data[0].startswith("NU ORI,2451545.0")
     assert ",TG,NO,STD,ENSEMBLE," in data[0]
+
+
+def test_aavso_export_ignores_comparison_diagnostics(tmp_path) -> None:
+    target = LightCurve(name="NU Ori", role="target")
+    target.append(LcPoint(jd_utc=2451545.0, mag=9.0, mag_err=0.02))
+    comparison = LightCurve(name="C1", role="comparison")
+    comparison.append(LcPoint(jd_utc=2451545.0, mag=11.0, mag_err=0.03))
+    path = tmp_path / "aavso.txt"
+    from argos.core.photometry.lightcurve import write_aavso
+
+    write_aavso(path, [target, comparison], obscode="ABC", filt="TG")
+    data = [ln for ln in path.read_text().splitlines() if not ln.startswith("#")]
+    assert len(data) == 1
+    assert data[0].startswith("NU ORI,")
 
 
 def test_bjd_tdb_close_to_jd() -> None:

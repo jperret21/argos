@@ -49,17 +49,17 @@ from argos.ui import theme
 
 SPACING_XS = 4
 SPACING_SM = 6
-SPACING_MD = 10
-SPACING_LG = 16
-SPACING_XL = 24
+SPACING_MD = 8
+SPACING_LG = 12
+SPACING_XL = 18
 
 # Card padding (left, top, right, bottom) — leaves room above the title.
-CARD_PADDING: tuple[int, int, int, int] = (14, 18, 14, 14)
+CARD_PADDING: tuple[int, int, int, int] = (12, 14, 12, 10)
 
 # Standard widget heights — kept consistent so forms line up across pages.
-INPUT_HEIGHT = 30
-BUTTON_HEIGHT = 34
-BUTTON_PRIMARY_HEIGHT = 40
+INPUT_HEIGHT = 28
+BUTTON_HEIGHT = 30
+BUTTON_PRIMARY_HEIGHT = 34
 
 # Right-rail width range used by the Imaging page (and any future page that
 # pins controls to the side of an image). Generous enough that long button
@@ -69,12 +69,12 @@ RIGHT_RAIL_MAX_WIDTH = 580
 
 # Typography sizes (pixel values, no rem/em in Qt stylesheets).
 FONT_SIZE_BODY = 13
-FONT_SIZE_LABEL = 13
-FONT_SIZE_METRIC = 16
+FONT_SIZE_LABEL = 12
+FONT_SIZE_METRIC = 17
 FONT_SIZE_HEADING = 22
-FONT_SIZE_SECTION = 13
-FONT_SIZE_SMALL = 11  # status bar, chips
-FONT_SIZE_TINY = 10  # sidebar labels
+FONT_SIZE_SECTION = 14
+FONT_SIZE_SMALL = 12  # status bar, chips
+FONT_SIZE_TINY = 11  # sidebar labels
 
 # Default max content width for sparse, form-style pages so they don't stretch
 # edge-to-edge on wide windows. Dense workspaces (Imaging) ignore this.

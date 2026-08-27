@@ -42,6 +42,7 @@ from argos.core.catalog.targets import (
     TargetStar,
 )
 from argos.core.config import Config
+from argos.core.imaging import imx585
 from argos.core.imaging.astrometry_session import field_geometry
 from argos.core.imaging.fits_writer import FITSWriter, FrameContext
 from argos.core.imaging.green import green_plane
@@ -50,6 +51,7 @@ from argos.core.photometry.airmass import airmass_from_altitude, bjd_tdb, julian
 from argos.core.photometry.lightcurve import LcPoint, LightCurve
 from argos.core.photometry.params import DEFAULT_FWHM, PhotometryParams, measure_frame
 from argos.core.photometry.tracking import ApertureTracker, TrackedWCS
+from argos.core.photometry.uncertainty import apply_systematic_floor, estimate_systematic_floor
 from argos.core.session.device_session import DeviceSession
 from argos.core.session.diagnostics import SessionDiagnostics
 from argos.core.session.types import LiveFrame, PhotometryPoint
@@ -174,6 +176,7 @@ class AcquisitionEngine(QObject):
 
         # Last sequence directory (for the photometry setup window).
         self._last_sequence_dir: Path | None = None
+        self._active_run_root: Path | None = None
 
         # Stop using a device *before* the session drops its handle.
         session.camera_will_disconnect.connect(self._on_camera_will_disconnect)
@@ -414,13 +417,15 @@ class AcquisitionEngine(QObject):
             return False  # refused (autofocus owns the camera) — reason logged
 
         self._seq_object = (plan.object_name or "").strip()
+        self._active_run_root = None
+        self.clear_lightcurves()
         self._sequence = SequenceWorker(
             camera=self._session.camera,
             telescope=self._session.telescope,
             filterwheel=self._session.filterwheel,
             plan=plan,
             frame_context_provider=self._sequence_frame_context,
-            base_dir=self._sessions_base(),
+            base_dir=Path(plan.base_dir) if plan.base_dir is not None else self._sessions_base(),
             parent=self,
         )
         self._sequence.step_started.connect(self.sequence_step)
@@ -488,8 +493,19 @@ class AcquisitionEngine(QObject):
         self.ingest_frame(full_arr)  # sequence frames are always full-res
 
     def _on_seq_frame_saved(self, path: str, record) -> None:
-        # Track the last sequence directory for the photometry setup window.
+        # Keep all science products beside the run that produced the FITS.
         self._last_sequence_dir = Path(path).parent
+        run_root = self._last_sequence_dir.parent
+        if run_root != self._active_run_root:
+            self._active_run_root = run_root
+            if self._diag is not None:
+                self._diag.close()
+            self._diag = None
+            self._diag_object = None
+            try:
+                self.target_set().save(run_root / "targets.json")
+            except OSError as exc:
+                self.log_message.emit("WARN", f"Save run targets: {exc}")
         if record is not None and getattr(record, "timestamp", None):
             try:
                 start = datetime.fromisoformat(str(record.timestamp).replace("Z", "+00:00"))
@@ -581,9 +597,9 @@ class AcquisitionEngine(QObject):
 
     def _sessions_base(self) -> Path:
         try:
-            return self._config.sessions_path.parent
+            return self._config.sessions_path
         except AttributeError:
-            return Path.home() / "Argos"
+            return Path.home() / "Argos" / "sessions"
 
     def _diagnostics(self, tset) -> SessionDiagnostics:
         """The live flight recorder for the current object (P11).
@@ -596,8 +612,13 @@ class AcquisitionEngine(QObject):
             if self._diag is not None:
                 self._diag.close()
             safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in obj)
+            root = (
+                self._active_run_root / "diagnostics"
+                if self._active_run_root is not None
+                else self._sessions_base() / "targets"
+            )
             self._diag = SessionDiagnostics(
-                self._sessions_base() / "targets" / f"{safe or 'Unknown'}_live_diagnostics.jsonl",
+                root / f"{safe or 'Unknown'}_live_diagnostics.jsonl",
                 enabled=bool(self._cfg("diagnostics.enabled", True)),
             )
             self._diag_object = obj
@@ -905,7 +926,7 @@ class AcquisitionEngine(QObject):
     # ------------------------------------------------------------------
 
     def _egain(self) -> float:
-        """e-/ADU for the photometric error: config egain_table[gain] → driver → 1."""
+        """e-/ADU for photometric errors: config → driver → IMX585 profile."""
         table = self._cfg("camera.egain_table", {}) or {}
         gain = str(self._params().gain)
         if isinstance(table, dict) and gain in table:
@@ -916,12 +937,17 @@ class AcquisitionEngine(QObject):
         value = self._session.egain_driver()
         if value:
             return float(value)
-        return 1.0
+        return float(imx585.lookup_egain(self._params().gain))
 
     def _photometry_csv_path(self, star) -> Path:
         obj = self.target_set().object_name or "Unknown"
         tag = star.auid or star.display_name
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in f"{obj}_{tag}")
+        if self._active_run_root is not None:
+            role = getattr(star, "role", "target") or "target"
+            return self._active_run_root / "photometry" / f"{role}_{safe or 'photometry'}.csv"
+        # A single preview frame has no run yet; retain a recoverable legacy
+        # destination until it is promoted into an ObservationSession.
         return self._sessions_base() / "targets" / f"{safe or 'photometry'}.csv"
 
     def _wcs_for_frame(self, green, tset: TargetSet, params: PhotometryParams):
@@ -1044,6 +1070,7 @@ class AcquisitionEngine(QObject):
             sky_adu=res.phot.sky_adu if res.phot else None,
             comps_used=res.diff.comps_used,
             saturated=bool(res.phot and res.phot.saturated),
+            formal_mag_err=res.diff.formal_mag_err or res.diff.mag_err or 0.0,
         )
         key = res.star.auid or res.star.display_name
         lc = self._lightcurves.setdefault(
@@ -1051,21 +1078,50 @@ class AcquisitionEngine(QObject):
             LightCurve(auid=res.star.auid or "", name=res.star.display_name, role=res.star.role),
         )
         lc.append(point)
-        self.photometry_point.emit(
-            PhotometryPoint(
-                key=key,
-                name=res.star.display_name,
-                jd=jd,
-                mag=res.diff.mag,
-                mag_err=res.diff.mag_err or 0.0,
-                saturated=point.saturated,
-                role=res.star.role,
+        floor_changed = self._apply_systematic_floor(lc)
+        if floor_changed:
+            # All prior values may have gained the shared systematic floor,
+            # so replay the authoritative store rather than leaving stale bars
+            # in the live panel.
+            self.curves_changed.emit()
+        else:
+            self.photometry_point.emit(
+                PhotometryPoint(
+                    key=key,
+                    name=res.star.display_name,
+                    jd=jd,
+                    mag=res.diff.mag,
+                    mag_err=point.mag_err,
+                    saturated=point.saturated,
+                    role=res.star.role,
+                )
             )
-        )
         try:
             lc.to_csv(self._photometry_csv_path(res.star))
         except OSError as exc:
             self.log_message.emit("WARN", f"photometry.csv: {exc}")
+
+    def _apply_systematic_floor(self, curve: LightCurve) -> bool:
+        """Apply the star_var_script-compatible run-level uncertainty floor."""
+        manual = self._cfg("photometry.systematic_floor_mag", None)
+        floor = estimate_systematic_floor(
+            [
+                (point.jd_utc, point.mag, point.formal_mag_err or point.mag_err)
+                for point in curve.points
+            ],
+            manual_floor=manual,
+        )
+        if floor is None:
+            return False
+        changed = False
+        for point in curve.points:
+            formal = point.formal_mag_err if point.formal_mag_err is not None else point.mag_err
+            final = apply_systematic_floor(formal, floor)
+            if point.mag_err != final or point.sigma_syst != floor.sigma_systematic:
+                point.mag_err = final
+                point.sigma_syst = floor.sigma_systematic
+                changed = True
+        return changed
 
     # ------------------------------------------------------------------
     # FITS save
@@ -1073,7 +1129,6 @@ class AcquisitionEngine(QObject):
 
     def _save_fits_async(self, arr: np.ndarray, start_dt: datetime, end_dt: datetime) -> None:
         params = self._params()
-        frame_idx = 1
 
         pos = self._session.last_position
         target = self._session.target_radec
@@ -1105,15 +1160,21 @@ class AcquisitionEngine(QObject):
             params.frame_type,
             params.filter_name,
         )
-        filename = FITSWriter.build_filename(
-            params.object_name,
-            params.frame_type,
-            start_dt,
-            params.exposure_s,
-            params.filter_name,
-            frame_idx,
-        )
-        path = folder / filename
+        frame_idx = 1
+        while True:
+            filename = FITSWriter.build_filename(
+                params.object_name,
+                params.frame_type,
+                start_dt,
+                params.exposure_s,
+                params.filter_name,
+                frame_idx,
+                params.gain,
+            )
+            path = folder / filename
+            if not path.exists():
+                break
+            frame_idx += 1
         # Capture the engine's signal (long-lived) — never a page method.
         log_emit = self.log_message.emit
 
@@ -1145,6 +1206,7 @@ class AcquisitionEngine(QObject):
                         gain=gain,
                         image_type=frame_type,
                         context=ctx,
+                        overwrite=False,
                     )
                     log_emit("OK", f"Saved {path.name}")
                 except Exception as exc:

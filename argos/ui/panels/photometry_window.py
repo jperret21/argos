@@ -66,10 +66,12 @@ class PhotometryWindow(QWidget):
 
         footer = QHBoxLayout()
         footer.addStretch()
-        self._csv_btn = QPushButton("Export CSV…")
+        self._csv_btn = QPushButton("Export measurements…")
+        self._csv_btn.setToolTip("Export target, check-star and comparison measurements")
         self._csv_btn.clicked.connect(self._export_csv)
         footer.addWidget(self._csv_btn)
-        self._aavso_btn = QPushButton("Export AAVSO…")
+        self._aavso_btn = QPushButton("Export target (AAVSO)…")
+        self._aavso_btn.setToolTip("Export science targets only; comparison curves are diagnostics")
         self._aavso_btn.clicked.connect(self._export_aavso)
         footer.addWidget(self._aavso_btn)
         root.addLayout(footer)
@@ -128,7 +130,7 @@ class PhotometryWindow(QWidget):
             write_curves_csv(path, curves)  # canonical 9-column schema (+ target)
 
     def _export_aavso(self) -> None:
-        curves = [lc for lc in self.lightcurves.values() if lc.points]
+        curves = [lc for lc in self.lightcurves.values() if lc.points and lc.role == "target"]
         if not curves:
             return
         path, _ = QFileDialog.getSaveFileName(

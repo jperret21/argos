@@ -87,6 +87,7 @@ class CameraDock(design.Card):
     live_stop_requested = pyqtSignal()
     filter_selected = pyqtSignal(str)  # user picked a filter in the combo
     object_changed = pyqtSignal()  # the Object field was edited (focus-out/return)
+    object_name_changed = pyqtSignal(str)  # shared observation identity changed
     offset_changed = pyqtSignal(int)
     binning_changed = pyqtSignal(int)
     preview_scale_changed = pyqtSignal(int)  # 1 = full res, 2 = half res
@@ -123,7 +124,7 @@ class CameraDock(design.Card):
         # The object name keys the target set / curves / FITS OBJECT — an edit
         # must re-sync every view, or they keep showing the previous object's
         # stars while the engine measures the new (empty) set.
-        self._object_edit.editingFinished.connect(self.object_changed)
+        self._object_edit.editingFinished.connect(self._on_object_edited)
         grid.addWidget(self._object_edit, row, 1)
 
         row += 1
@@ -325,7 +326,20 @@ class CameraDock(design.Card):
         A name the user already typed is never overwritten.
         """
         if name and not self._object_edit.text().strip():
-            self._object_edit.setText(name)
+            self.set_object_name(name, emit=True)
+
+    def set_object_name(self, name: str, *, emit: bool = False) -> None:
+        """Set the shared observation object without creating a signal loop."""
+        value = (name or "").strip()
+        if self._object_edit.text() == value:
+            return
+        self._object_edit.setText(value)
+        if emit:
+            self._on_object_edited()
+
+    def _on_object_edited(self) -> None:
+        self.object_changed.emit()
+        self.object_name_changed.emit(self._object_edit.text().strip())
 
     def set_filter_options(self, names: list[str]) -> None:
         """Refresh the filter combo from the filter wheel slots."""

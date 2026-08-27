@@ -120,6 +120,7 @@ class SequenceWorker(QThread):
         # Pause gate: set = run, cleared = hold at the next frame boundary.
         self._pause_gate = threading.Event()
         self._pause_gate.set()
+        self._run_id = ""
 
     # ------------------------------------------------------------------ #
     # Control
@@ -172,6 +173,7 @@ class SequenceWorker(QThread):
         frames_since_af = 0
         self._session_log: SessionLog | None = None
         self._session_root: Path | None = None
+        self._run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
         logger.info("Sequence start: %d frame(s) → %s", total, self._base_dir)
 
@@ -380,19 +382,33 @@ class SequenceWorker(QThread):
             ctx.eccentricity = ecc
 
         folder = FITSWriter.session_folder(
-            self._base_dir, self._plan.object_name, start_dt, spec.image_type, spec.filter_name
+            self._base_dir,
+            self._plan.object_name,
+            start_dt,
+            spec.image_type,
+            filter_actual,
+            run_id=self._run_id,
         )
         filename = FITSWriter.build_filename(
             self._plan.object_name,
             spec.image_type,
             start_dt,
             spec.exposure_s,
-            spec.filter_name,
+            filter_actual,
             spec.frame_index,
+            gain_actual,
         )
         path = folder / filename
         FITSWriter.write(
-            arr, path, start_dt, end_dt, spec.exposure_s, gain_actual, spec.image_type, context=ctx
+            arr,
+            path,
+            start_dt,
+            end_dt,
+            spec.exposure_s,
+            gain_actual,
+            spec.image_type,
+            context=ctx,
+            overwrite=False,
         )
 
         record = FrameRecord(
@@ -416,7 +432,7 @@ class SequenceWorker(QThread):
         """Add a frame to the session log and rewrite ``session.json`` atomically."""
         if self._session_log is None:
             self._session_root = FITSWriter.session_root(
-                self._base_dir, self._plan.object_name, start_dt
+                self._base_dir, self._plan.object_name, start_dt, run_id=self._run_id
             )
             self._session_log = SessionLog(
                 object_name=self._plan.object_name,

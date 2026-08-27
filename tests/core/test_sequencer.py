@@ -133,6 +133,20 @@ def test_preset_round_trip_without_base_dir() -> None:
     assert total_frames(restored) == 1
 
 
+def test_expand_plan_keeps_calibration_series_homogeneous() -> None:
+    """Different gain/exposure settings must never reuse a Siril index series."""
+    plan = SequencePlan(
+        object_name="M42",
+        steps=[
+            SequenceStep(frame_type="Dark", filter_name="Dark", exposure_s=10.0, gain=80, count=1),
+            SequenceStep(frame_type="Dark", filter_name="Dark", exposure_s=20.0, gain=80, count=1),
+            SequenceStep(frame_type="Dark", filter_name="Dark", exposure_s=10.0, gain=100, count=1),
+        ],
+    )
+    frames = list(expand_plan(plan))
+    assert [frame.frame_index for frame in frames] == [1, 1, 1]
+
+
 def test_on_complete_round_trip_and_default() -> None:
     from argos.core.imaging.sequencer import ON_COMPLETE_CHOICES
 

@@ -2,7 +2,8 @@
 
 Checks:
 1. Every Palette preset has all required fields set (non-empty strings).
-2. Equilux constants match the historical hard-coded values byte-for-byte.
+2. Observatory (the default palette) retains its deliberately restrained
+   graphite/steel colour tokens.
 3. Night (Red) contains no green-dominant or blue-dominant colours — every hex
    triplet (R, G, B) must have R >= G and R >= B (i.e. red channel dominates
    or ties with both others).
@@ -59,35 +60,36 @@ def test_palette_complete(palette: Palette) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 2 — Equilux matches historical byte-identical defaults
+# Test 2 — Observatory default tokens
 # ---------------------------------------------------------------------------
 
-_HISTORICAL = {
-    "bg": "#2d2d2d",
-    "bg2": "#1f1f1f",
-    "surface": "#3c3c3c",
-    "border": "#484848",
-    "border_soft": "#3a3a3a",
-    "fg": "#dedede",
-    "fg_muted": "#9a9a9a",
-    "fg_disabled": "#5a5a5a",
-    "accent": "#5294e2",
-    "accent_hover": "#6aa3ea",
-    "accent_deep": "#3a7bd5",
-    "cyan": "#4eb3c9",
-    "success": "#7ab648",
-    "warning": "#c89030",
-    "danger": "#d45c6e",
-    "variable": "#c678dd",
+_OBSERVATORY = {
+    "bg": "#1c2026",
+    "bg2": "#15191e",
+    "surface": "#252b33",
+    "border": "#343c47",
+    "border_soft": "#282f38",
+    "fg": "#e2e6ea",
+    "fg_muted": "#9da8b5",
+    "fg_disabled": "#626d78",
+    "accent": "#7d9bb8",
+    "accent_hover": "#91aec9",
+    "accent_deep": "#5e7d9b",
+    "cyan": "#7f9ead",
+    "success": "#85a58a",
+    "warning": "#b79a6a",
+    "danger": "#b97979",
+    "variable": "#a895bc",
 }
 
 
-@pytest.mark.parametrize("field,expected", list(_HISTORICAL.items()))
-def test_equilux_matches_historical(field: str, expected: str) -> None:
+@pytest.mark.parametrize("field,expected", list(_OBSERVATORY.items()))
+def test_observatory_default_tokens(field: str, expected: str) -> None:
+    assert EQUILUX.name == "Observatory"
     actual = getattr(EQUILUX, field)
     assert (
         actual.lower() == expected.lower()
-    ), f"EQUILUX.{field}: expected {expected!r}, got {actual!r}"
+    ), f"Observatory.{field}: expected {expected!r}, got {actual!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +127,7 @@ def test_apply_palette_rebinds_constants() -> None:
         assert theme.TEXT_MUTED == CHARCOAL.fg_muted
         assert theme.SURFACE_3 == CHARCOAL.bg2
     finally:
-        # Restore equilux so other tests are unaffected
+        # Restore the default palette so other tests are unaffected.
         theme.apply_palette(EQUILUX)
         assert theme.ACCENT == original_accent
 
@@ -143,7 +145,7 @@ def test_get_stylesheet_reflects_palette() -> None:
         qss = theme.get_stylesheet()
         assert HIGH_CONTRAST.bg in qss, "QSS should contain the new bg color"
         assert HIGH_CONTRAST.accent in qss, "QSS should contain the new accent color"
-        # The old equilux accent should NOT appear (they differ)
+        # The default Observatory accent should NOT appear (they differ).
         assert EQUILUX.accent not in qss
     finally:
         theme.apply_palette(EQUILUX)

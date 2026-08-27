@@ -114,14 +114,14 @@ class FocuserDock(design.Card):
 
         outer.addWidget(design.horizontal_divider())
 
-        # Halt + autofocus
+        # Focus actions share a row: autofocus is the ordinary operation;
+        # Halt is visible beside it as the emergency interruption, without
+        # creating two equally heavy full-width button rows.
         self._halt_btn = design.DangerButton("■  Halt")
         self._halt_btn.clicked.connect(self.halt_requested)
-        outer.addLayout(design.button_row(self._halt_btn))
-
         self._af_btn = design.SuccessButton("⚡  Autofocus")
         self._af_btn.clicked.connect(self._on_autofocus)
-        outer.addLayout(design.button_row(self._af_btn))
+        outer.addLayout(design.button_row(self._af_btn, self._halt_btn))
 
         # Autofocus status label (hidden when idle)
         self._af_status = QLabel("")

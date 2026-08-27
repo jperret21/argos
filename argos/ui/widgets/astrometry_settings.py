@@ -64,13 +64,13 @@ class AstrometrySettingsDialog(QDialog):
     def __init__(self, config, parent=None, *, section: str = SECTION_ASTROMETRY) -> None:
         super().__init__(parent)
         self._config = config
-        self.setWindowTitle("Astrometry & catalog settings")
+        self.setWindowTitle("Field identification & catalogue settings")
         self.setMinimumWidth(440)
 
         layout = QVBoxLayout(self)
         self._tabs = QTabWidget()
-        self._tabs.addTab(self._build_astrometry_tab(), "Plate solving")
-        self._tabs.addTab(self._build_catalog_tab(), "Catalog")
+        self._tabs.addTab(self._build_astrometry_tab(), "Field identification")
+        self._tabs.addTab(self._build_catalog_tab(), "Catalogues")
         layout.addWidget(self._tabs)
 
         buttons = QDialogButtonBox(

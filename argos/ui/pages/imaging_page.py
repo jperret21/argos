@@ -45,15 +45,18 @@ from pathlib import Path
 
 import numpy as np
 from PyQt6.QtCore import QByteArray, Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QDockWidget,
     QFileDialog,
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressDialog,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -102,9 +105,6 @@ from argos.workers.preview_processor import PreviewProcessor
 
 logger = logging.getLogger(__name__)
 
-#: Live frame stats shown in the always-visible bar under the image.
-_STAT_KEYS = ("HFD", "Stars", "Sky", "Min", "Max", "Mean")
-
 #: Config key for the base64-encoded inner QMainWindow.saveState() blob (WS9a).
 _CFG_LAYOUT = "ui.imaging.layout"
 
@@ -118,12 +118,6 @@ _STATE_ACTION = {
     CameraState.SEQUENCE: "Sequence running",
     CameraState.AUTOFOCUS: "Autofocus running",
 }
-
-
-def _stat_key(text: str) -> QLabel:
-    lbl = QLabel(text)
-    lbl.setStyleSheet(f"color:{theme.FG_MUTED}; font-size:11px; background:transparent;")
-    return lbl
 
 
 class ImagingPage(QWidget):
@@ -223,43 +217,52 @@ class ImagingPage(QWidget):
         self._workspace.setWindowFlags(Qt.WindowType.Widget)
         self._workspace.setDockNestingEnabled(True)
         self._workspace.setDockOptions(
-            QMainWindow.DockOption.AllowTabbedDocks | QMainWindow.DockOption.AllowNestedDocks
+            QMainWindow.DockOption.AnimatedDocks
+            | QMainWindow.DockOption.AllowTabbedDocks
+            | QMainWindow.DockOption.AllowNestedDocks
+            | QMainWindow.DockOption.GroupedDragging
         )
 
-        # Central widget: the viewer (hero) + a thin always-visible stats strip
-        # (HFD / Stars / Sky / Min / Max / Mean) — what an astrophotographer
-        # glances at constantly while framing and focusing.
+        # Central widget: the viewer plus a quiet context strip. Detailed image
+        # statistics belong in their optional panel; the always-visible space is
+        # reserved for the file and sequence state the observer acts on.
         image_col = QWidget()
         col = QVBoxLayout(image_col)
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(0)
         col.addWidget(self._viewer, 1)
-        col.addWidget(self._build_stats_bar())
+        col.addWidget(self._build_context_bar())
         self._workspace.setCentralWidget(image_col)
 
         # Every former panel becomes a real dock. Object names are stable —
         # QMainWindow.saveState()/restoreState() key on them.
         self._docks: dict[str, QDockWidget] = {
-            "camera": make_dock("Camera", self._camera_dock, object_name="dock.camera"),
-            "mount": make_dock("Mount", self._mount_dock, object_name="dock.mount"),
-            "focuser": make_dock("Focuser", self._focuser_dock, object_name="dock.focuser"),
-            "display": make_dock("Display", self._histogram_dock, object_name="dock.display"),
+            "camera": make_dock("Acquisition", self._camera_dock, object_name="dock.camera"),
+            "mount": make_dock("Telescope", self._mount_dock, object_name="dock.mount"),
+            "focuser": make_dock("Focusing", self._focuser_dock, object_name="dock.focuser"),
+            "display": make_dock("Image display", self._histogram_dock, object_name="dock.display"),
             # Statistics is a compact key/value card (scrolls if the dock is
             # short); HFD History owns an expanding trend plot, so it manages its
             # own layout (scroll=False) and grows with the dock (WS9b).
             "statistics": make_dock(
-                "Statistics", self._statistics_dock, object_name="dock.statistics"
+                "Image statistics", self._statistics_dock, object_name="dock.statistics"
             ),
             "hfd_history": make_dock(
-                "HFD History", self._hfd_history_dock, object_name="dock.hfd_history", scroll=False
+                "Focus diagnostics (HFD/FWHM)",
+                self._hfd_history_dock,
+                object_name="dock.hfd_history",
+                scroll=False,
             ),
             # Log is a wide, self-scrolling panel. (The sequence planner lives
             # in its own Sequencer mode now.)
-            "log": make_dock("Log", self._log_panel, object_name="dock.log", scroll=False),
+            "log": make_dock("Activity log", self._log_panel, object_name="dock.log", scroll=False),
             # Live differential light curve — visible during capture without a
             # floating window (WS7). Owns its own plot layout (scroll=False).
             "lightcurve": make_dock(
-                "Light curve", self._lightcurve_panel, object_name="dock.lightcurve", scroll=False
+                "Differential photometry",
+                self._lightcurve_panel,
+                object_name="dock.lightcurve",
+                scroll=False,
             ),
         }
 
@@ -280,17 +283,23 @@ class ImagingPage(QWidget):
         self._apply_default_layout()
         self._restore_layout()
 
-    #: dock key → (chip label, default-visible). Ordering drives the strip.
+    #: Dock key → scientific observer-facing name.  These names deliberately
+    #: describe a task or measurement, never a Qt widget or implementation.
     _PANEL_ORDER = (
-        ("camera", "Camera"),
-        ("mount", "Mount"),
-        ("focuser", "Focuser"),
-        ("display", "Display"),
-        ("statistics", "Statistics"),
-        ("hfd_history", "HFD History"),
-        ("log", "Log"),
-        ("lightcurve", "Light curve"),
+        ("camera", "Acquisition"),
+        ("mount", "Telescope"),
+        ("focuser", "Focusing"),
+        ("display", "Image display"),
+        ("statistics", "Image statistics"),
+        ("hfd_history", "Focus diagnostics (HFD/FWHM)"),
+        ("log", "Activity log"),
+        ("lightcurve", "Differential photometry"),
     )
+
+    #: Panels used while framing a target.  Secondary diagnostics remain one
+    #: click away in the Panels menu instead of turning the cockpit into a row
+    #: of jargon before the observer has an image.
+    _PRIMARY_PANEL_KEYS = ("camera", "mount", "focuser", "display", "lightcurve")
 
     def _build_panel_bar(self) -> QToolBar:
         """A slim strip of checkable dock-toggle chips + a Reset-layout action."""
@@ -303,30 +312,89 @@ class ImagingPage(QWidget):
             f" padding: 1px 8px; }}"
             f" QToolBar QToolButton:checked {{ color: {theme.FG}; }}"
         )
+        self._panel_actions: dict[str, QAction] = {}
         for key, label in self._PANEL_ORDER:
             action = style_toggle_action(self._docks[key].toggleViewAction(), label)
+            action.setToolTip(
+                f"Show/hide {label}. Drag its title bar to arrange it; double-click the title "
+                "to detach it."
+            )
+            self._panel_actions[key] = action
+
+        for key in self._PRIMARY_PANEL_KEYS:
+            action = self._panel_actions[key]
             bar.addAction(action)
-        # Reset-layout lives in the strip's overflow / at its end (also on the
-        # workspace context menu).
+
+        panels = QToolButton()
+        panels.setText("Panels")
+        panels.setToolTip("Show optional diagnostics and the activity log")
+        panels.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._panels_menu = QMenu(panels)
+        for key, _label in self._PANEL_ORDER:
+            if key not in self._PRIMARY_PANEL_KEYS:
+                self._panels_menu.addAction(self._panel_actions[key])
+        panels.setMenu(self._panels_menu)
+        bar.addWidget(panels)
+        # An explicit layout menu makes the docking model discoverable. Native
+        # title-bar dragging remains the fastest path, but the menu gives
+        # trackpad users a reliable way to detach panels to a second screen.
         bar.addSeparator()
+        arrange = QToolButton()
+        arrange.setText("Arrange panels")
+        arrange.setToolTip("Float, re-dock or reset any panel")
+        arrange.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._arrange_menu = QMenu(arrange)
+        self._arrange_menu.aboutToShow.connect(self._refresh_arrange_menu)
+        arrange.setMenu(self._arrange_menu)
+        bar.addWidget(arrange)
         reset = bar.addAction("Reset layout")
         reset.setToolTip("Restore the default panel arrangement")
         reset.triggered.connect(self.reset_layout)
         return bar
 
-    def _build_stats_bar(self) -> QWidget:
-        """Thin always-visible strip of live frame stats under the image."""
+    def _refresh_arrange_menu(self) -> None:
+        """Build the menu from live dock state, so its verbs stay accurate."""
+        self._arrange_menu.clear()
+        reset = self._arrange_menu.addAction("Restore default layout")
+        reset.triggered.connect(self.reset_layout)
+        self._arrange_menu.addSeparator()
+        for key, label in self._PANEL_ORDER:
+            dock = self._docks[key]
+            verb = "Dock" if dock.isFloating() else "Float"
+            action = self._arrange_menu.addAction(f"{verb} {label}")
+            action.triggered.connect(lambda _checked=False, d=dock: self._toggle_dock_floating(d))
+
+    @staticmethod
+    def _toggle_dock_floating(dock: QDockWidget) -> None:
+        """Float or return a dock while ensuring a hidden dock becomes visible."""
+        dock.setFloating(not dock.isFloating())
+        dock.show()
+        dock.raise_()
+
+    def _build_context_bar(self) -> QWidget:
+        """Thin, actionable context below the image rather than raw statistics."""
         bar = QWidget()
         bar.setStyleSheet(f"background:{theme.SURFACE_3}; border-top:1px solid {theme.SURFACE_4};")
         row = QHBoxLayout(bar)
         row.setContentsMargins(10, 3, 10, 3)
-        row.setSpacing(design.SPACING_LG)
-        self._sb: dict[str, QLabel] = {}
-        for key in _STAT_KEYS:
-            row.addWidget(_stat_key(key))
-            value = design.MetricLabel("—")
-            self._sb[key] = value
-            row.addWidget(value)
+        row.setSpacing(design.SPACING_SM)
+        frame_key = design.MutedLabel("Frame")
+        frame_key.setMinimumWidth(0)
+        row.addWidget(frame_key)
+        self._frame_context_lbl = QLabel("No FITS frame loaded")
+        self._frame_context_lbl.setStyleSheet(
+            f"color:{theme.FG_MUTED}; font-size:{design.FONT_SIZE_SMALL}px;"
+            f" background:transparent; font-family:{theme.FONT_MONO};"
+        )
+        self._frame_context_lbl.setToolTip("Most recently opened or saved FITS image")
+        row.addWidget(self._frame_context_lbl, 1)
+        self._sequence_context_lbl = QLabel("")
+        self._sequence_context_lbl.setStyleSheet(
+            f"color:{theme.FG}; font-size:{design.FONT_SIZE_SMALL}px;"
+            f" background:transparent; font-family:{theme.FONT_MONO};"
+        )
+        self._sequence_context_lbl.setToolTip("Progress of the active acquisition sequence")
+        row.addWidget(self._sequence_context_lbl)
         row.addStretch()
         return bar
 
@@ -426,6 +494,7 @@ class ImagingPage(QWidget):
         e.action_changed.connect(self.action_changed)
         e.frame_ready.connect(self._on_frame)
         e.sequence_running.connect(self._on_sequence_running)  # auto-solve arming
+        e.sequence_progress.connect(self._on_sequence_progress)
         e.frame_saved.connect(self._on_seq_frame_saved)
         e.autofocus_state.connect(self._on_autofocus_state)
         e.autofocus_step.connect(self._on_af_step)
@@ -631,7 +700,6 @@ class ImagingPage(QWidget):
         self._hfd_history_dock.push_metrics(pf.metrics)  # trend panel (WS9b)
         self._statistics_dock.set_frame(pf)  # full stats grid (WS9b)
         self.hfd_updated.emit(pf.metrics.hfd)  # Shell capture strip
-        self._update_stats(pf)
         # Histogram first: sets the slider/data range, then the viewer's
         # auto-stretch emits levels that the dock sliders sync to.
         self._histogram_dock.set_histogram(pf.centers, pf.r, pf.g, pf.b, pf.lo, pf.hi)
@@ -658,16 +726,6 @@ class ImagingPage(QWidget):
         # skips half-quality previews — their plate scale would poison a solve).
         self._engine.on_processed(pf.green_shape, pf.metrics, pf.stars.mean_fwhm)
 
-    def _update_stats(self, pf) -> None:
-        """Refresh the live stats strip under the image."""
-        m = pf.metrics
-        self._sb["HFD"].setText(f"{m.hfd:.1f} px" if m.hfd is not None else "—")
-        self._sb["Stars"].setText(str(m.star_count))
-        self._sb["Sky"].setText(f"{m.sky_adu:.0f}")
-        self._sb["Min"].setText(f"{int(pf.vmin)}")
-        self._sb["Max"].setText(f"{int(pf.vmax)}")
-        self._sb["Mean"].setText(f"{pf.vmean:.0f}")
-
     # ------------------------------------------------------------------
     # Star measurement on click (§5)
     # ------------------------------------------------------------------
@@ -686,12 +744,9 @@ class ImagingPage(QWidget):
         if gp is None or self._last_raw is None:
             return
         gx, gy = gp
-        # 1) a saved target (only if its markers are showing)
-        i = (
-            self._nearest(self._target_green, gx, gy)
-            if self._overlay_bar.is_checked("targets")
-            else None
-        )
+        # 1) a saved target. Identification must not depend on an overlay
+        # being visible: hiding markers changes presentation, never data.
+        i = self._nearest(self._target_green, gx, gy)
         if i is not None:
             s = self._engine.target_set().stars[i]
             self._present_card(
@@ -726,12 +781,8 @@ class ImagingPage(QWidget):
                 ),
             )
             return
-        # 3) a VSP comparison (only if its markers are showing)
-        i = (
-            self._nearest(self._comp_green, gx, gy)
-            if self._overlay_bar.is_checked("comparisons")
-            else None
-        )
+        # 3) an AAVSO VSP comparison (again, independent of marker visibility).
+        i = self._nearest(self._comp_green, gx, gy)
         if i is not None:
             c = self._engine.comparisons[i]
             self._present_card(
@@ -804,8 +855,9 @@ class ImagingPage(QWidget):
             self._viewer.mark_selection(
                 dp[0], dp[1], "", self._green_len_to_disp(meas.radius), show_label=False
             )
+        title = "Unidentified field star" if wcs is not None else "Field star"
         self._info_card.show_star(
-            "Field star", self._format_star_text(meas), roles_enabled=pending is not None
+            title, self._format_star_text(meas), roles_enabled=pending is not None
         )
         self._info_card.reposition()
 
@@ -895,6 +947,9 @@ class ImagingPage(QWidget):
         if wcs is not None:  # plate-solved → the star's true celestial position
             ra_h, dec_d = wcs.pixel_to_radec(meas.x, meas.y)
             text += f"\nstar   RA {format_ra_hms(ra_h)}  Dec {format_dec_dms(dec_d)}"
+            text += "\ncatalogue identifier   no VSX/VSP match"
+        else:
+            text += "\ncatalogue identifier   identify the field first"
         return text
 
     def _disp_to_green(self, x_disp: float, y_disp: float) -> tuple[float, float] | None:
@@ -947,9 +1002,14 @@ class ImagingPage(QWidget):
             return
         # The display/measure pipeline speaks the sensor's raw dtype.
         self._engine.ingest_frame(np.ascontiguousarray(raw, dtype=np.uint16))
+        self._frame_context_lbl.setText(f"Opened  {Path(path).name}")
         self.log_message.emit(
             "OK", f"Loaded {Path(path).name} — solve to enable catalog & photometry."
         )
+
+    def open_fits(self) -> None:
+        """Open a FITS image into Capture from the application File menu."""
+        self._on_open_fits()
 
     def load_fits(self, path: str) -> None:
         """Open a saved FITS for analysis (alias kept for external callers)."""
@@ -1438,9 +1498,23 @@ class ImagingPage(QWidget):
                 self.log_message.emit("INFO", "Sequence: auto-solve armed for the run.")
         elif not getattr(self, "_auto_solve_before_seq", True):
             self.auto_solve_armed.emit(False)
+        if not running:
+            self._sequence_context_lbl.clear()
+
+    @pyqtSlot(str, int, int, float)
+    def _on_sequence_progress(self, _object_name: str, done: int, total: int, eta_s: float) -> None:
+        """Keep the image context bar focused on the only live count users need."""
+        if total <= 0:
+            self._sequence_context_lbl.clear()
+            return
+        minutes, seconds = divmod(max(0, int(eta_s)), 60)
+        self._sequence_context_lbl.setText(
+            f"Sequence  {done}/{total}  ·  ETA {minutes}m {seconds:02d}s"
+        )
 
     def _on_seq_frame_saved(self, path: str, record) -> None:
         name = Path(path).name
+        self._frame_context_lbl.setText(f"Saved  {name}")
         if record is not None and record.hfd is not None:
             fwhm = f" FWHM={record.fwhm:.1f}" if record.fwhm is not None else ""
             self.log_message.emit(

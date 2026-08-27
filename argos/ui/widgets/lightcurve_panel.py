@@ -1,33 +1,26 @@
-"""Live differential light-curve plot (docs/photometry_plan.md §6 C5).
+"""Live differential-photometry plots.
 
-One series per measured star: points + error bars, magnitude axis inverted
-(brighter at top), X = JD (UTC). Fed a point at a time from the page as solved
-frames arrive, or all at once via :meth:`set_curves`; this same panel class
-backs the live dock and the detachable window, so both always render the same
-store the same way.
-
-A "Show" selector filters the plot: **All targets** (default — the science
-curves only) or any single star, including check stars (``K ·``) and the
-leave-one-out comparison vetting curves (``C ·``).
+The scientific target/check light curves and the comparison-star diagnostics
+serve different jobs. They deliberately live in separate, X-linked plots:
+the target keeps its calibrated magnitude scale while each comparison is
+shown as a residual about its own median. This prevents an ensemble spanning
+several magnitudes from making the science curve unreadable.
 """
 
 from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QCheckBox, QLabel, QSplitter, QVBoxLayout, QWidget
 
 from argos.ui import theme
 
 _PALETTE = (theme.SUCCESS, theme.CYAN, theme.WARNING, theme.VARIABLE, theme.ACCENT, theme.DANGER)
 
-_ALL_TARGETS = "All targets"
-#: Quiet role prefixes for the selector (targets stay unprefixed).
-_ROLE_PREFIX = {"check": "K · ", "comparison": "C · "}
-
 
 class LightCurvePanel(QWidget):
-    """A pyqtgraph plot of differential magnitude vs JD, with error bars."""
+    """Two X-linked plots for science curves and comparison diagnostics."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -35,31 +28,42 @@ class LightCurvePanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
 
-        selector_row = QHBoxLayout()
-        selector_row.setContentsMargins(4, 2, 4, 0)
-        show_lbl = QLabel("Show:")
-        show_lbl.setStyleSheet(
-            f"color: {theme.FG_MUTED}; font-size: 11px; background: transparent;"
+        header = QLabel("Target and check star")
+        header.setStyleSheet(
+            f"color:{theme.FG_MUTED}; font-size:12px; font-weight:600; "
+            "background:transparent; padding:2px 4px;"
         )
-        selector_row.addWidget(show_lbl)
-        self._selector = QComboBox()
-        self._selector.setStyleSheet("font-size: 11px;")
-        self._selector.addItem(_ALL_TARGETS, None)
-        self._selector.currentIndexChanged.connect(lambda _i: self._apply_visibility())
-        selector_row.addWidget(self._selector)
-        selector_row.addStretch()
-        layout.addLayout(selector_row)
+        layout.addWidget(header)
 
-        self._plot = pg.PlotWidget()
-        self._plot.setMenuEnabled(False)  # no link-axis menu (avoids pg global state)
-        self._plot.setBackground(theme.BG2)
-        self._plot.setLabel("left", "mag (differential)")
-        self._plot.setLabel("bottom", "JD (UTC)")
-        self._plot.showGrid(x=True, y=True, alpha=0.2)
-        self._plot.getViewBox().invertY(True)  # brighter magnitudes at the top
-        self._plot.addLegend()
-        layout.addWidget(self._plot)
+        self._target_plot = self._make_plot("Differential mag", "Time (JD UTC)")
+        self._comparison_plot = self._make_plot("Δmag from own median", "Time (JD UTC)")
+        self._comparison_plot.setXLink(self._target_plot)
+
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.addWidget(self._target_plot)
+        splitter.addWidget(self._comparison_plot)
+        splitter.setSizes([260, 150])
+        layout.addWidget(splitter, 1)
+
+        self._errors = QCheckBox("Show uncertainties")
+        self._errors.setChecked(True)
+        self._errors.setToolTip("Show the per-image photometric uncertainty")
+        self._errors.toggled.connect(self._apply_error_visibility)
+        layout.addWidget(self._errors, 0, Qt.AlignmentFlag.AlignRight)
+
         self._series: dict[str, dict] = {}
+
+    @staticmethod
+    def _make_plot(left_label: str, bottom_label: str) -> pg.PlotWidget:
+        plot = pg.PlotWidget()
+        plot.setMenuEnabled(False)
+        plot.setBackground(theme.BG2)
+        plot.setLabel("left", left_label)
+        plot.setLabel("bottom", bottom_label)
+        plot.showGrid(x=True, y=True, alpha=0.2)
+        plot.getViewBox().invertY(True)
+        plot.addLegend()
+        return plot
 
     # ------------------------------------------------------------------
     # Feeding
@@ -74,10 +78,15 @@ class LightCurvePanel(QWidget):
         saturated: bool = False,
         role: str = "target",
     ) -> None:
+        """Append a point to its scientific or comparison-diagnostic plot."""
+        if not (np.isfinite(jd) and np.isfinite(mag)):
+            return
         s = self._series.get(name)
         if s is None:
             color = _PALETTE[len(self._series) % len(_PALETTE)]
-            curve = self._plot.plot(
+            comparison = role == "comparison"
+            plot = self._comparison_plot if comparison else self._target_plot
+            curve = plot.plot(
                 [],
                 [],
                 pen=None,
@@ -88,11 +97,10 @@ class LightCurvePanel(QWidget):
                 name=name,
             )
             errbar = pg.ErrorBarItem(
-                x=np.array([]), y=np.array([]), pen=pg.mkPen(color, width=1), beam=0.0
+                x=np.array([]), y=np.array([]), pen=pg.mkPen(color, width=1), beam=3.0
             )
-            self._plot.addItem(errbar)
-            # Saturated overlay: red ×, drawn on top so a bad sub stands out.
-            sat = self._plot.plot(
+            plot.addItem(errbar)
+            sat = plot.plot(
                 [],
                 [],
                 pen=None,
@@ -107,80 +115,73 @@ class LightCurvePanel(QWidget):
                 "err": [],
                 "sat_jd": [],
                 "sat_mag": [],
-                "color": color,
                 "curve": curve,
                 "errbar": errbar,
                 "sat": sat,
                 "role": role,
+                "plot": plot,
             }
             self._series[name] = s
-            self._selector_add(name, role)
-            self._apply_series_visibility(name)
+
+        safe_err = float(err or 0.0)
+        if not np.isfinite(safe_err) or safe_err < 0:
+            safe_err = 0.0
         s["jd"].append(float(jd))
         s["mag"].append(float(mag))
-        s["err"].append(float(err or 0.0))
+        s["err"].append(safe_err)
         if saturated:
             s["sat_jd"].append(float(jd))
             s["sat_mag"].append(float(mag))
-        x, y, e = np.array(s["jd"]), np.array(s["mag"]), np.array(s["err"])
+        self._refresh_series(name)
+
+    def _refresh_series(self, name: str) -> None:
+        """Refresh one series and restore its error-bar visibility.
+
+        ``ErrorBarItem.setData`` makes the item visible in pyqtgraph 0.13,
+        so visibility must be applied *after* it. This used to leak hidden
+        comparison error bars into the target plot's auto-range.
+        """
+        s = self._series[name]
+        x = np.asarray(s["jd"], dtype=float)
+        y = np.asarray(s["mag"], dtype=float)
+        sat_y = np.asarray(s["sat_mag"], dtype=float)
+        if s["role"] == "comparison" and y.size:
+            baseline = float(np.median(y))
+            y = y - baseline
+            sat_y = sat_y - baseline
+        e = np.asarray(s["err"], dtype=float)
         s["curve"].setData(x, y)
-        s["errbar"].setData(x=x, y=y, top=e, bottom=e, beam=0.0)
-        s["sat"].setData(np.array(s["sat_jd"]), np.array(s["sat_mag"]))
+        s["errbar"].setData(x=x, y=y, top=e, bottom=e, beam=3.0)
+        s["sat"].setData(np.asarray(s["sat_jd"], dtype=float), sat_y)
+        s["errbar"].setVisible(self._errors.isChecked())
 
     def set_curves(self, curves: dict) -> None:
-        """Replace the plot with ``key → LightCurve`` (the engine's store).
-
-        The one rendering path shared by the dock and the window: clear, then
-        replay every point. Keeps the current Show selection when the star
-        still exists (a store refresh must not yank the user's focus).
-        """
-        selected = self._selector.currentText()
+        """Replace the plots with ``key → LightCurve`` from the engine store."""
         self.clear()
         for lc in curves.values():
             label = lc.name or lc.auid or "TARGET"
             role = getattr(lc, "role", "target")
             for p in lc.points:
                 self.add_point(label, p.jd_utc, p.mag, p.mag_err, saturated=p.saturated, role=role)
-        idx = self._selector.findText(selected)
-        if idx >= 0:
-            self._selector.setCurrentIndex(idx)
+        self._auto_range()
 
     def has_data(self) -> bool:
         return any(s["jd"] for s in self._series.values())
 
     def clear(self) -> None:
         for s in self._series.values():
-            self._plot.removeItem(s["errbar"])
-            self._plot.removeItem(s["curve"])
-            self._plot.removeItem(s["sat"])
+            for item_key in ("errbar", "curve", "sat"):
+                s["plot"].removeItem(s[item_key])
         self._series = {}
-        self._selector.blockSignals(True)
-        self._selector.clear()
-        self._selector.addItem(_ALL_TARGETS, None)
-        self._selector.setCurrentIndex(0)
-        self._selector.blockSignals(False)
 
     # ------------------------------------------------------------------
-    # Show selector
+    # View state
     # ------------------------------------------------------------------
 
-    def _selector_add(self, name: str, role: str) -> None:
-        label = _ROLE_PREFIX.get(role, "") + name
-        self._selector.blockSignals(True)
-        self._selector.addItem(label, name)
-        self._selector.blockSignals(False)
+    def _apply_error_visibility(self, visible: bool) -> None:
+        for s in self._series.values():
+            s["errbar"].setVisible(bool(visible))
 
-    def _selected_name(self) -> str | None:
-        """The chosen series name, or ``None`` for the All-targets view."""
-        return self._selector.currentData()
-
-    def _apply_visibility(self) -> None:
-        for name in self._series:
-            self._apply_series_visibility(name)
-
-    def _apply_series_visibility(self, name: str) -> None:
-        s = self._series[name]
-        chosen = self._selected_name()
-        visible = (name == chosen) if chosen else (s["role"] == "target")
-        for item_key in ("curve", "errbar", "sat"):
-            s[item_key].setVisible(visible)
+    def _auto_range(self) -> None:
+        for plot in (self._target_plot, self._comparison_plot):
+            plot.getViewBox().autoRange()

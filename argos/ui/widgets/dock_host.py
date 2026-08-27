@@ -25,8 +25,6 @@ _DOCK_QSS = f"""
 QDockWidget {{
     color: {theme.FG};
     font-size: {design.FONT_SIZE_SMALL}px;
-    titlebar-close-icon: none;
-    titlebar-normal-icon: none;
 }}
 QDockWidget::title {{
     background-color: {theme.SURFACE_3};

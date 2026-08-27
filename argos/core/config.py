@@ -96,6 +96,10 @@ _DEFAULTS: dict[str, Any] = {
         "default_band": "TG",
         "min_comparisons": 2,
         "auto_comparisons": 5,  # comps auto-picked when a target is chosen
+        # ``star_var_script``-compatible run-level error floor. ``None``
+        # derives it from the light curve after ten valid points; a numeric
+        # value is an observer-approved systematic floor in magnitudes.
+        "systematic_floor_mag": None,
     },
 }
 

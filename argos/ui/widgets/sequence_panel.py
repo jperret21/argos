@@ -27,7 +27,9 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QLineEdit,
     QProgressBar,
+    QScrollArea,
     QSpinBox,
+    QSplitter,
     QTableWidget,
     QVBoxLayout,
     QWidget,
@@ -70,6 +72,7 @@ class SequencePanel(QWidget):
     """
 
     start_requested = pyqtSignal(object)  # SequencePlan
+    object_name_changed = pyqtSignal(str)
     pause_requested = pyqtSignal()
     resume_requested = pyqtSignal()
     stop_requested = pyqtSignal()
@@ -82,6 +85,7 @@ class SequencePanel(QWidget):
         self._running = False
         self._paused = False
         self._active_row = -1
+        self._device_states: dict[str, str] = {}
         self._build_ui()
         self._add_row()  # start with one editable row
         self._refresh_estimate()
@@ -93,7 +97,15 @@ class SequencePanel(QWidget):
     def _build_ui(self) -> None:
         body = QHBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(design.SPACING_LG)
+        body.setSpacing(0)
+
+        # The planner is intentionally a splitter rather than a fixed two-column
+        # layout: at a laptop width the observer can give the step table the
+        # room it needs; at a tall/narrow window the control rail scrolls instead
+        # of clipping the Start/Stop controls.
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter.setChildrenCollapsible(False)
+        body.addWidget(self._splitter)
 
         # ── Steps card: the table + row editing (takes the width) ───────
         steps_card = design.Card("Steps")
@@ -136,7 +148,7 @@ class SequencePanel(QWidget):
         )
         edit_row.addWidget(self._estimate_lbl)
         left.addLayout(edit_row)
-        body.addWidget(steps_card, 1)
+        self._splitter.addWidget(steps_card)
 
         # ── Right rail: Plan / Presets / Run cards ───────────────────────
         right = QVBoxLayout()
@@ -151,6 +163,7 @@ class SequencePanel(QWidget):
         opts.addWidget(design.MutedLabel("Object"), 0, 0)
         self._object_edit = QLineEdit()
         self._object_edit.setPlaceholderText("M42, T CrB…")
+        self._object_edit.editingFinished.connect(self._on_object_edited)
         opts.addWidget(self._object_edit, 0, 1)
         opts.addWidget(design.MutedLabel("Repeat ×"), 1, 0)
         self._repeat_spin = QSpinBox()
@@ -207,14 +220,29 @@ class SequencePanel(QWidget):
         self._status_lbl = design.MutedLabel("")
         self._status_lbl.setWordWrap(True)
         run_l.addWidget(self._status_lbl)
+        self._readiness_lbl = design.MutedLabel()
+        self._readiness_lbl.setWordWrap(True)
+        self._readiness_lbl.setToolTip(
+            "A compact pre-flight check. Argos still validates the hardware when you start."
+        )
+        run_l.addWidget(self._readiness_lbl)
         right.addWidget(run_card)
 
         right.addStretch()
 
         right_wrap = QWidget()
         right_wrap.setLayout(right)
-        right_wrap.setFixedWidth(320)
-        body.addWidget(right_wrap, 0)
+        rail = QScrollArea()
+        rail.setWidgetResizable(True)
+        rail.setFrameShape(QScrollArea.Shape.NoFrame)
+        rail.setMinimumWidth(280)
+        rail.setMaximumWidth(380)
+        rail.setWidget(right_wrap)
+        self._splitter.addWidget(rail)
+        self._splitter.setStretchFactor(0, 1)
+        self._splitter.setStretchFactor(1, 0)
+        self._splitter.setSizes([760, 320])
+        self._refresh_readiness()
 
     # ------------------------------------------------------------------
     # Row management
@@ -360,13 +388,27 @@ class SequencePanel(QWidget):
         self._table.setRowCount(0)
         for step in plan.steps or [SequenceStep()]:
             self._add_row(step)
-        self._object_edit.setText(plan.object_name)
+        self.set_object_name(plan.object_name, emit=True)
         self._repeat_spin.setValue(max(1, plan.repeat))
         self._af_spin.setValue(max(0, plan.autofocus_every_n))
         self._af_filter_chk.setChecked(plan.autofocus_on_filter_change)
         idx = self._on_complete_combo.findText(plan.on_complete)
         self._on_complete_combo.setCurrentIndex(max(0, idx))
         self._refresh_estimate()
+
+    def set_object_name(self, name: str, *, emit: bool = False) -> None:
+        """Set the shared observation object without feeding a signal loop."""
+        value = (name or "").strip()
+        if self._object_edit.text() == value:
+            return
+        self._object_edit.setText(value)
+        self._refresh_readiness()
+        if emit:
+            self._on_object_edited()
+
+    def _on_object_edited(self) -> None:
+        self._refresh_readiness()
+        self.object_name_changed.emit(self._object_edit.text().strip())
 
     # ------------------------------------------------------------------
     # Presets (JSON on disk)
@@ -459,6 +501,16 @@ class SequencePanel(QWidget):
             self.set_paused(False)
             self.set_active_step(-1)
 
+    def set_device_state(self, device: str, state: str) -> None:
+        """Update the observer-facing pre-flight summary.
+
+        The start action remains available for offline plan editing and for
+        calibration-only runs; the engine stays the authority that accepts or
+        refuses a run.  This is deliberately guidance, not a second validator.
+        """
+        self._device_states[device] = state
+        self._refresh_readiness()
+
     def set_paused(self, paused: bool) -> None:
         """Reflect the worker's pause state on the button."""
         self._paused = paused
@@ -494,6 +546,26 @@ class SequencePanel(QWidget):
         except (AttributeError, RuntimeError):
             return  # a row is mid-construction
         self._estimate_lbl.setText(f"≈ {_format_duration(est)} total" if est > 0 else "")
+
+    def _refresh_readiness(self) -> None:
+        """Explain the next useful action without turning the Run card into a log."""
+        camera_state = self._device_states.get("camera")
+        object_name = self._object_edit.text().strip()
+        if camera_state != "connected":
+            message = "Pre-flight: connect the camera before starting."
+            color = theme.WARNING
+        elif not object_name:
+            message = "Pre-flight: add an object name to organise this run."
+            color = theme.WARNING
+        else:
+            mount_state = self._device_states.get("mount")
+            suffix = " Telescope is not connected." if mount_state != "connected" else ""
+            message = f"Pre-flight: ready to start.{suffix}"
+            color = theme.SUCCESS if not suffix else theme.WARNING
+        self._readiness_lbl.setText(message)
+        self._readiness_lbl.setStyleSheet(
+            f"color:{color}; font-size:{design.FONT_SIZE_SMALL}px; background:transparent;"
+        )
 
     def _on_pause_clicked(self) -> None:
         if self._paused:

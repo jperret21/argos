@@ -128,6 +128,7 @@ class Shell(QMainWindow):
         self._sequencer = SequencerPage(self._config, self._session, self._engine)
         self._configuration = ConfigurationPage(self._config)
         self._analyze = AnalyzeScreen(self._config)
+        self._wire_observation_identity()
 
         # NINA-style: the night happens in Capture; Equipment is setup, the
         # Sequencer plans/runs the night (usable offline for plan editing),
@@ -139,6 +140,7 @@ class Shell(QMainWindow):
             "analyze": self._analyze,
             "settings": self._configuration,
         }
+
         self._page_indices: dict[str, int] = {
             mode_id: self._stack.addWidget(page) for mode_id, page in self._pages.items()
         }
@@ -152,12 +154,44 @@ class Shell(QMainWindow):
 
         self._wire_pages()
 
+    def _wire_observation_identity(self) -> None:
+        """Keep Capture and Plan on one observation object source of truth."""
+        camera = self._acquisition._camera_dock
+        plan = self._sequencer.panel
+        camera.object_name_changed.connect(plan.set_object_name)
+        plan.object_name_changed.connect(self._on_sequence_object_changed)
+
+    def _on_sequence_object_changed(self, object_name: str) -> None:
+        camera = self._acquisition._camera_dock
+        camera.set_object_name(object_name)
+        self._engine.on_object_changed()
+
     # ------------------------------------------------------------------
     # Menus
     # ------------------------------------------------------------------
 
     def _build_menu(self) -> None:
         bar = self.menuBar()
+
+        # Desktop convention: saved data is always reachable from the first
+        # menu, whether the observer is currently connecting equipment,
+        # reviewing a prior run, or looking at a live frame.
+        file_menu = bar.addMenu("File")
+        open_fits = QAction("Open FITS image…", self)
+        open_fits.setShortcut(QKeySequence.StandardKey.Open)
+        open_fits.setToolTip("Open a saved FITS image in Capture; then use Field → Identify field.")
+        open_fits.triggered.connect(self._open_fits_from_menu)
+        file_menu.addAction(open_fits)
+        open_session = QAction("Open session photometry…", self)
+        open_session.setShortcut(QKeySequence("Ctrl+Shift+O"))
+        open_session.setToolTip("Open the saved differential-photometry measurements of a session")
+        open_session.triggered.connect(self._open_session_photometry_from_menu)
+        file_menu.addAction(open_session)
+        file_menu.addSeparator()
+        quit_action = QAction("Quit Argos", self)
+        quit_action.setShortcut(QKeySequence.StandardKey.Quit)
+        quit_action.triggered.connect(self.close)
+        file_menu.addAction(quit_action)
 
         view = bar.addMenu("View")
         # Derived from the sidebar's MODES tuple — one source of truth, so a
@@ -173,18 +207,18 @@ class Shell(QMainWindow):
         reset.triggered.connect(self._reset_layout)
         view.addAction(reset)
 
-        # Astrometry — the solve actions first (field feedback: they belong in
-        # a top menu, not toolbar dropdown buttons), then the tuning dialogs.
-        astrometry = bar.addMenu("Astrometry")
-        solve = QAction("Solve frame", self)
-        solve.setToolTip("Plate-solve the current frame via ASTAP (mount hint + grid overlay)")
+        # Field identification actions describe the observer's outcome. The
+        # ASTAP/plate-solving implementation remains visible in the tooltip.
+        astrometry = bar.addMenu("Field")
+        solve = QAction("Identify field", self)
+        solve.setToolTip("Find coordinates and scale for the current image (ASTAP)")
         solve.triggered.connect(lambda: self._engine.solve_now())
         astrometry.addAction(solve)
-        self._auto_solve_action = QAction("Auto-solve", self)
+        self._auto_solve_action = QAction("Keep field identified automatically", self)
         self._auto_solve_action.setCheckable(True)
         self._auto_solve_action.setToolTip(
-            "Re-solve the live frame automatically (when due) so the grid and\n"
-            "markers track the field; armed by itself while a sequence runs"
+            "Refresh field coordinates when needed so the grid and markers follow the field.\n"
+            "It is enabled automatically during a sequence."
         )
         self._auto_solve_action.toggled.connect(self._engine.astrometry.set_auto)
         # Sequence start arms the auto-solve; this checkable action is the
@@ -192,10 +226,10 @@ class Shell(QMainWindow):
         self._acquisition.auto_solve_armed.connect(self._auto_solve_action.setChecked)
         astrometry.addAction(self._auto_solve_action)
         astrometry.addSeparator()
-        plate = QAction("Plate solving…", self)
+        plate = QAction("Configure field identification…", self)
         plate.triggered.connect(lambda: self._open_astrometry_settings(SECTION_ASTROMETRY))
         astrometry.addAction(plate)
-        catalog = QAction("Catalog…", self)
+        catalog = QAction("Configure catalogues…", self)
         catalog.triggered.connect(lambda: self._open_astrometry_settings(SECTION_CATALOG))
         astrometry.addAction(catalog)
 
@@ -214,6 +248,14 @@ class Shell(QMainWindow):
         about = QAction("About Argos", self)
         about.triggered.connect(self._show_about)
         help_menu.addAction(about)
+
+    def _open_fits_from_menu(self) -> None:
+        self._sidebar.select("capture")
+        self._acquisition.open_fits()
+
+    def _open_session_photometry_from_menu(self) -> None:
+        self._sidebar.select("analyze")
+        self._analyze.open_session_photometry()
 
     # ------------------------------------------------------------------
     # Signals

@@ -62,29 +62,33 @@ class Palette:
 
 
 # ---------------------------------------------------------------------------
-# Equilux — the historical default (byte-identical to the pre-WS9c constants)
+# Observatory — restrained neutral default for a scientific instrument.
+#
+# The previous blue/green/purple combination made every state compete for
+# attention.  This palette reserves chroma for the active action and real
+# warnings, while the everyday workspace stays in neutral graphite.
 # ---------------------------------------------------------------------------
 
 EQUILUX = Palette(
-    name="Equilux",
-    bg="#2d2d2d",
-    bg2="#1f1f1f",
-    surface="#3c3c3c",
-    border="#484848",
-    border_soft="#3a3a3a",
-    fg="#dedede",
-    fg_muted="#9a9a9a",
-    fg_disabled="#5a5a5a",
-    accent="#5294e2",
-    accent_hover="#6aa3ea",
-    accent_deep="#3a7bd5",
-    cyan="#4eb3c9",
-    success="#7ab648",
-    warning="#c89030",
-    danger="#d45c6e",
-    variable="#c678dd",
-    font_ui='"SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif',
-    font_mono='"SF Mono", "Menlo", "JetBrains Mono", "Consolas", monospace',
+    name="Observatory",
+    bg="#1c2026",
+    bg2="#15191e",
+    surface="#252b33",
+    border="#343c47",
+    border_soft="#282f38",
+    fg="#e2e6ea",
+    fg_muted="#9da8b5",
+    fg_disabled="#626d78",
+    accent="#7d9bb8",
+    accent_hover="#91aec9",
+    accent_deep="#5e7d9b",
+    cyan="#7f9ead",
+    success="#85a58a",
+    warning="#b79a6a",
+    danger="#b97979",
+    variable="#a895bc",
+    font_ui='"Avenir Next", "SF Pro Text", "Segoe UI Variable", "Noto Sans", "Helvetica Neue", sans-serif',
+    font_mono='"SF Mono", "Cascadia Mono", "Noto Sans Mono", "Menlo", "Consolas", monospace',
 )
 
 # ---------------------------------------------------------------------------
@@ -109,8 +113,8 @@ CHARCOAL = Palette(
     warning="#c4933a",
     danger="#d45c6e",
     variable="#b07cd4",
-    font_ui='"SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif',
-    font_mono='"SF Mono", "Menlo", "JetBrains Mono", "Consolas", monospace',
+    font_ui='"Avenir Next", "SF Pro Text", "Segoe UI Variable", "Noto Sans", "Helvetica Neue", sans-serif',
+    font_mono='"SF Mono", "Cascadia Mono", "Noto Sans Mono", "Menlo", "Consolas", monospace',
 )
 
 # ---------------------------------------------------------------------------
@@ -135,8 +139,8 @@ HIGH_CONTRAST = Palette(
     warning="#ffcc00",
     danger="#ff4444",
     variable="#dd88ff",
-    font_ui='"SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif',
-    font_mono='"SF Mono", "Menlo", "JetBrains Mono", "Consolas", monospace',
+    font_ui='"Avenir Next", "SF Pro Text", "Segoe UI Variable", "Noto Sans", "Helvetica Neue", sans-serif',
+    font_mono='"SF Mono", "Cascadia Mono", "Noto Sans Mono", "Menlo", "Consolas", monospace',
 )
 
 # ---------------------------------------------------------------------------
@@ -171,8 +175,8 @@ NIGHT_RED = Palette(
     warning="#c44040",  # mid-bright red — caution
     danger="#ff5050",  # maximum brightness — error / alarm
     variable="#a03838",  # VSX markers — mid-dark red variant
-    font_ui='"SF Pro Text", "Helvetica Neue", "Helvetica", "Arial", sans-serif',
-    font_mono='"SF Mono", "Menlo", "JetBrains Mono", "Consolas", monospace',
+    font_ui='"Avenir Next", "SF Pro Text", "Segoe UI Variable", "Noto Sans", "Helvetica Neue", sans-serif',
+    font_mono='"SF Mono", "Cascadia Mono", "Noto Sans Mono", "Menlo", "Consolas", monospace',
 )
 
 # ---------------------------------------------------------------------------

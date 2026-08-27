@@ -185,8 +185,8 @@ class AnalysisWindow(QMainWindow):
         brow.setContentsMargins(10, 4, 10, 4)
         brow.setSpacing(10)
 
-        self._solve_btn = QPushButton("Solve (ASTAP)")
-        self._solve_btn.setToolTip("Plate-solve the green channel via ASTAP")
+        self._solve_btn = QPushButton("Identify field")
+        self._solve_btn.setToolTip("Find coordinates and scale for this image via ASTAP")
         self._solve_btn.clicked.connect(self._on_solve)
         brow.addWidget(self._solve_btn)
 
@@ -197,7 +197,7 @@ class AnalysisWindow(QMainWindow):
         self._grid_btn.toggled.connect(self._viewer.set_astrometry_enabled)
         brow.addWidget(self._grid_btn)
 
-        self._solve_lbl = QLabel("not solved")
+        self._solve_lbl = QLabel("field not identified")
         self._solve_lbl.setStyleSheet(
             f"color:{theme.FG_MUTED}; font-family:{theme.FONT_MONO};"
             f" font-size:11px; background:transparent;"
@@ -248,7 +248,7 @@ class AnalysisWindow(QMainWindow):
         self._viewer.set_astrometry_overlay(None)
         self._grid_btn.setChecked(False)
         self._grid_btn.setEnabled(False)
-        self._set_solve_text("not solved", theme.FG_MUTED)
+        self._set_solve_text("field not identified", theme.FG_MUTED)
         self._channel = VIEW_RAW
         self._toolbar.set_view(VIEW_RAW)
         name = Path(path).name
@@ -337,7 +337,7 @@ class AnalysisWindow(QMainWindow):
 
         settings = build_solve_settings(self._cfg, self._green_shape, live=False)
         self._solve_btn.setEnabled(False)
-        self._set_solve_text("solving… (ASTAP)", theme.WARNING)
+        self._set_solve_text("identifying field… (ASTAP)", theme.WARNING)
         self._solver = SolveWorker(green, settings, parent=self)
         self._solver.solved.connect(self._on_solved)
         self._solver.start()
@@ -345,7 +345,7 @@ class AnalysisWindow(QMainWindow):
     def _on_solved(self, result) -> None:
         self._solve_btn.setEnabled(True)
         if not result.solved:
-            self._set_solve_text(f"not solved — {result.message}", theme.DANGER)
+            self._set_solve_text(f"field not identified — {result.message}", theme.DANGER)
             return
         from argos.core.imaging.astrometry_session import (
             full_res_scale,
@@ -359,7 +359,7 @@ class AnalysisWindow(QMainWindow):
             bits.append(f"{scale:.2f}″/px")
         if result.rotation_deg is not None:
             bits.append(f"rot {result.rotation_deg:.1f}°")
-        self._set_solve_text("Solved — " + "   ".join(bits), theme.SUCCESS)
+        self._set_solve_text("Field identified — " + "   ".join(bits), theme.SUCCESS)
 
         self._wcs = wcs_from_result(result, self._green_shape)
         if self._wcs is not None:

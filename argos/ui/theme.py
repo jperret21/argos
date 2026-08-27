@@ -187,14 +187,12 @@ QMainWindow::separator {{
 QDockWidget {{
     background-color: {BG};
     color: {FG};
-    titlebar-close-icon: none;
-    titlebar-normal-icon: none;
 }}
 
 QDockWidget::title {{
     background-color: {BG};
-    color: {ACCENT};
-    padding: 6px 10px;
+    color: {FG_MUTED};
+    padding: 4px 8px;
     font-size: 11px;
     font-family: {FONT_UI};
     font-weight: bold;
@@ -213,7 +211,7 @@ QMenuBar {{
     color: {FG};
     border-bottom: 1px solid {BORDER};
     padding: 2px 4px;
-    font-size: 12px;
+    font-size: 13px;
 }}
 
 QMenuBar::item {{
@@ -254,7 +252,7 @@ QStatusBar {{
     background-color: {BG};
     color: {FG_MUTED};
     border-top: 1px solid {BORDER};
-    font-size: 11px;
+    font-size: 12px;
 }}
 
 QStatusBar::item {{
@@ -263,18 +261,18 @@ QStatusBar::item {{
 
 /* ── Buttons — flat Siril-like ─────────────────────────────────────────── */
 QPushButton {{
-    background-color: {SURFACE};
+    background-color: transparent;
     color: {FG};
     border: 1px solid {BORDER};
-    border-radius: 3px;
-    padding: 7px 14px;
-    min-height: 26px;
+    border-radius: 2px;
+    padding: 4px 10px;
+    min-height: 24px;
     font-size: 13px;
     font-family: {FONT_UI};
 }}
 
 QPushButton:hover {{
-    background-color: {BORDER};
+    background-color: {SURFACE};
     color: {FG};
     border-color: {BORDER};
 }}
@@ -293,7 +291,7 @@ QPushButton[class="primary"] {{
     background-color: {ACCENT_DEEP};
     color: white;
     border-color: {ACCENT_DEEP};
-    font-weight: bold;
+    font-weight: 600;
 }}
 
 QPushButton[class="primary"]:hover {{
@@ -319,14 +317,15 @@ QPushButton[class="danger"]:hover {{
 }}
 
 QPushButton[class="success"] {{
-    color: {SUCCESS};
-    border-color: {SUCCESS};
-    background-color: {SURFACE};
+    color: white;
+    border-color: {ACCENT_DEEP};
+    background-color: {ACCENT_DEEP};
+    font-weight: 600;
 }}
 
 QPushButton[class="success"]:hover {{
-    background-color: {SUCCESS};
-    color: white;
+    background-color: {ACCENT};
+    border-color: {ACCENT};
 }}
 
 /* ── Inputs ─────────────────────────────────────────────────────────────── */
@@ -334,9 +333,9 @@ QLineEdit, QSpinBox, QDoubleSpinBox {{
     background-color: {BG2};
     color: {FG};
     border: 1px solid {BORDER};
-    border-radius: 3px;
-    padding: 6px 8px;
-    min-height: 26px;
+    border-radius: 2px;
+    padding: 4px 7px;
+    min-height: 24px;
     font-family: {FONT_UI};
     font-size: 13px;
     selection-background-color: {ACCENT};
@@ -370,9 +369,9 @@ QComboBox {{
     background-color: {BG2};
     color: {FG};
     border: 1px solid {BORDER};
-    border-radius: 3px;
-    padding: 6px 8px;
-    min-height: 26px;
+    border-radius: 2px;
+    padding: 4px 7px;
+    min-height: 24px;
     font-size: 13px;
 }}
 
@@ -417,7 +416,7 @@ QSlider::sub-page:horizontal {{
 /* ── CheckBox ───────────────────────────────────────────────────────────── */
 QCheckBox {{
     spacing: 8px;
-    font-size: 11px;
+    font-size: 12px;
     color: {FG};
 }}
 
@@ -446,59 +445,59 @@ QLabel {{
 
 QLabel[class="muted"] {{
     color: {FG_MUTED};
-    font-size: 11px;
+    font-size: 12px;
 }}
 
 QLabel[class="value"] {{
     font-family: {FONT_MONO};
-    font-size: 14px;
+    font-size: 17px;
     font-weight: bold;
     color: {ACCENT};
 }}
 
 QLabel[class="section"] {{
-    color: {ACCENT};
-    font-size: 12px;
+    color: {FG};
+    font-size: 14px;
     font-weight: bold;
 }}
 
 QLabel[class="field"] {{
     color: {WARNING};
-    font-size: 11px;
+    font-size: 12px;
 }}
 
 QLabel[class="title"] {{
-    color: {ACCENT};
-    font-size: 15px;
+    color: {FG};
+    font-size: 22px;
     font-weight: bold;
 }}
 
 QLabel[class="target"] {{
     color: {DANGER};
-    font-size: 15px;
+    font-size: 18px;
     font-weight: bold;
 }}
 
-/* ── GroupBox — Siril-style card (thin border, blue title) ─────────────── */
+/* ── GroupBox — restrained instrument panel ────────────────────────────── */
 QGroupBox {{
     background-color: {BG};
     border: 1px solid {BORDER};
-    border-radius: 3px;
-    margin-top: 14px;
-    padding-top: 10px;
+    border-radius: 2px;
+    margin-top: 11px;
+    padding-top: 7px;
     font-size: 13px;
     font-family: {FONT_UI};
     font-weight: bold;
-    color: {ACCENT};
+    color: {FG};
 }}
 
 QGroupBox::title {{
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    left: 10px;
-    padding: 0 6px;
+    left: 8px;
+    padding: 0 4px;
     background-color: {BG};
-    color: {ACCENT};
+    color: {FG_MUTED};
 }}
 
 /* ── Dialogs ────────────────────────────────────────────────────────────── */
@@ -577,7 +576,7 @@ QTabBar::tab {{
     color: {FG_MUTED};
     border: 1px solid {BORDER};
     padding: 5px 14px;
-    font-size: 11px;
+    font-size: 12px;
 }}
 
 QTabBar::tab:selected {{
@@ -598,7 +597,7 @@ QProgressBar {{
     border-radius: 2px;
     text-align: center;
     color: {FG};
-    font-size: 10px;
+    font-size: 11px;
     height: 14px;
 }}
 
@@ -614,7 +613,7 @@ QToolTip {{
     border: 1px solid {BORDER};
     border-radius: 2px;
     padding: 4px 8px;
-    font-size: 11px;
+    font-size: 12px;
 }}
 
 /* ── Text edit (log panel) ──────────────────────────────────────────────── */
@@ -624,7 +623,7 @@ QTextEdit, QPlainTextEdit {{
     border: 1px solid {BORDER};
     border-radius: 2px;
     font-family: {FONT_MONO};
-    font-size: 11px;
+    font-size: 12px;
     selection-background-color: {ACCENT};
     selection-color: white;
 }}
@@ -633,13 +632,13 @@ QTextEdit, QPlainTextEdit {{
 QToolBar {{
     background-color: {BG};
     border-bottom: 1px solid {BORDER};
-    spacing: 6px;
-    padding: 4px 8px;
+    spacing: 4px;
+    padding: 3px 6px;
 }}
 
 QToolBar QLabel {{
     color: {FG_MUTED};
-    font-size: 11px;
+    font-size: 12px;
 }}
 
 QToolBar::separator {{

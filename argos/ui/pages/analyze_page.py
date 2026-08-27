@@ -3,8 +3,8 @@
 Two companion windows do the work (second-monitor friendly, so a finished night
 can be vetted while a new run continues on Capture):
 
-* **Light curve** — reload a session's ``photometry.csv`` (the pure, tested
-  ``LightCurve.from_csv``) into the :class:`PhotometryWindow`, then export AAVSO
+* **Light curve** — reload a session's measurements into the
+  :class:`PhotometryWindow`, then export target-only AAVSO
   Extended Format stamped with the observer code + band from Settings.
 * **Frame inspector** — open any FITS in the :class:`AnalysisWindow`.
 
@@ -15,7 +15,6 @@ and warns when it is unset (AAVSO submissions need a real code).
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QShowEvent
@@ -28,7 +27,7 @@ from PyQt6.QtWidgets import (
 )
 
 from argos.core.config import Config
-from argos.core.photometry.lightcurve import LightCurve
+from argos.core.photometry.lightcurve import read_curves_csv
 from argos.ui import design, theme
 
 logger = logging.getLogger(__name__)
@@ -138,6 +137,10 @@ class AnalyzeScreen(QWidget):
     # Companion windows
     # ------------------------------------------------------------------
 
+    def open_session_photometry(self) -> None:
+        """Open saved measurements from the application File menu."""
+        self._open_lightcurve()
+
     def _open_lightcurve(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
@@ -147,13 +150,16 @@ class AnalyzeScreen(QWidget):
         )
         if not path:
             return
-        curve = LightCurve.from_csv(path, name=Path(path).parent.name or Path(path).stem)
+        curves = read_curves_csv(path)
+        if not curves:
+            logger.warning("No valid photometry rows in %s", path)
+            return
         from argos.ui.panels.photometry_window import PhotometryWindow
 
         window = PhotometryWindow()
         window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         window.load_curves(
-            {curve.name or "target": curve},
+            curves,
             obscode=self._obscode() or "XXX",
             filt=self._band(),
         )

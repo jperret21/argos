@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -136,6 +137,8 @@ class FITSWriter:
         gain: int,
         image_type: str = "Light Frame",
         context: FrameContext | None = None,
+        *,
+        overwrite: bool = True,
     ) -> None:
         """Write a single FITS frame to disk.
 
@@ -150,6 +153,7 @@ class FITSWriter:
             context:        Mount/sky/camera/site state. Defaults to an empty
                             FrameContext if not provided (frame still writes,
                             just with fewer headers).
+            overwrite:      Whether a caller deliberately permits replacement.
 
         Raises:
             ValueError: If ``arr`` is not 2-D.
@@ -189,7 +193,7 @@ class FITSWriter:
 
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        fits.PrimaryHDU(data=arr, header=hdr).writeto(str(path), overwrite=True)
+        fits.PrimaryHDU(data=arr, header=hdr).writeto(str(path), overwrite=overwrite)
         logger.info(
             "FITS saved: %s  (%dx%d  %.1fs  gain=%d  EGAIN=%.3f e-/ADU [%s])",
             path.name,
@@ -209,10 +213,13 @@ class FITSWriter:
         exposure_time: float,
         filter_name: str,
         frame_index: int,
+        gain: int | None = None,
     ) -> str:
-        """Build a filename following the project naming convention.
+        """Build a Siril-recognisable filename for one homogeneous series.
 
-        Format: ``{OBJECT}_{IMAGETYP}_{DATE}_{TIME}_{EXPTIME}s_{FILTER}_{FRAME:04d}.fits``
+        Format: ``{OBJECT}_{FILTER}_{TYPE}_e{EXPOSURE_MS}ms_g{GAIN}_{INDEX}.fit``.
+        The prefix is fixed for one physical frame series; only the final
+        positive index changes, as required by Siril sequence discovery.
 
         Args:
             object_name:    Target name (e.g. "M42"). Sanitized for filesystem.
@@ -225,18 +232,13 @@ class FITSWriter:
         Returns:
             Filename string (no directory component).
         """
-        obj = _sanitize(object_name) or "Unknown"
-        typ = _sanitize(image_type.replace(" Frame", ""))
-        date = exposure_start.strftime("%Y%m%d")
-        tstr = exposure_start.strftime("%H%M%S")
-        filt = _sanitize(FILTER_ABBREV.get(filter_name, filter_name))
-        # Use integer seconds when whole number, else one decimal with "p" instead of "."
-        if exposure_time == int(exposure_time):
-            exp = str(int(exposure_time))
-        else:
-            exp = f"{exposure_time:.1f}".replace(".", "p")
-
-        return f"{obj}_{typ}_{date}_{tstr}_{exp}s_{filt}_{frame_index:04d}.fits"
+        del exposure_start  # precise time belongs in DATE-OBS, not the basename
+        obj = _sanitize(object_name) or "unknown"
+        typ = _sanitize(image_type.replace(" Frame", "")).lower() or "light"
+        filt = _sanitize(FILTER_ABBREV.get(filter_name, filter_name)).lower() or "clear"
+        exposure_ms = max(0, round(float(exposure_time) * 1000.0))
+        gain_tag = f"_g{int(gain):03d}" if gain is not None else ""
+        return f"{obj}_{filt}_{typ}_e{exposure_ms:06d}ms{gain_tag}_{frame_index:05d}.fit"
 
     @staticmethod
     def session_folder(
@@ -245,15 +247,16 @@ class FITSWriter:
         exposure_start: datetime,
         image_type: str,
         filter_name: str,
+        run_id: str = "",
     ) -> Path:
         """Return the Siril-compatible session folder for a given frame.
 
         Structure::
 
-            {base_dir}/sessions/{YYYYMMDD}_{OBJECT}/{ImageType}/{Filter}/
+            {base_dir}/{RUN}_{OBJECT}/{lights|darks|flats|biases}/
 
         Args:
-            base_dir:       Root output directory (from config).
+            base_dir:       Exact sessions directory selected in Settings.
             object_name:    Target name.
             exposure_start: Frame timestamp.
             image_type:     FITS IMAGETYP string.
@@ -262,20 +265,20 @@ class FITSWriter:
         Returns:
             Path to the output folder (not yet created).
         """
-        obj = _sanitize(object_name) or "Unknown"
-        date = exposure_start.strftime("%Y%m%d")
         base = image_type.replace(" Frame", "")  # e.g. "Light"
-        typ = "Biases" if base == "Bias" else base + "s"  # naive +s gives "Biass"
-        filt = _sanitize(FILTER_ABBREV.get(filter_name, filter_name))
-
-        return base_dir / "sessions" / f"{date}_{obj}" / typ / filt
+        typ = {"Light": "lights", "Dark": "darks", "Flat": "flats", "Bias": "biases"}.get(
+            base, _sanitize(base).lower() + "s"
+        )
+        return FITSWriter.session_root(base_dir, object_name, exposure_start, run_id=run_id) / typ
 
     @staticmethod
-    def session_root(base_dir: Path, object_name: str, exposure_start: datetime) -> Path:
+    def session_root(
+        base_dir: Path, object_name: str, exposure_start: datetime, run_id: str = ""
+    ) -> Path:
         """Return the per-session root folder (where ``session.json`` lives).
 
-        Structure: ``{base_dir}/sessions/{YYYYMMDD}_{OBJECT}/`` — the parent of
-        every ``{ImageType}/{Filter}/`` sub-folder produced by
+        Structure: ``{base_dir}/{RUN}_{OBJECT}/`` — the parent of lower-case
+        Siril image-type folders produced by
         :meth:`session_folder` for the same target/date.
 
         Args:
@@ -286,9 +289,9 @@ class FITSWriter:
         Returns:
             Path to the session root folder (not yet created).
         """
-        obj = _sanitize(object_name) or "Unknown"
-        date = exposure_start.strftime("%Y%m%d")
-        return base_dir / "sessions" / f"{date}_{obj}"
+        obj = _sanitize(object_name) or "unknown"
+        run = _sanitize(run_id) or exposure_start.strftime("%Y%m%dT%H%M%SZ")
+        return Path(base_dir) / f"{run}_{obj}"
 
 
 # --------------------------------------------------------------------------- #
@@ -297,8 +300,9 @@ class FITSWriter:
 
 
 def _sanitize(s: str) -> str:
-    """Remove characters that are unsafe in filenames."""
-    return re.sub(r"[^\w\-]", "", s.replace(" ", "_"))
+    """Return an ASCII-only token safe for files and Siril basenames."""
+    normalized = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^A-Za-z0-9_-]", "", normalized.replace(" ", "_"))
 
 
 def _decimal_to_hms(ra_hours: float) -> str:

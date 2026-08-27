@@ -30,6 +30,7 @@ from argos.core.photometry.airmass import airmass_from_altitude, bjd_tdb, julian
 from argos.core.photometry.lightcurve import LcPoint, LightCurve
 from argos.core.photometry.params import PhotometryParams, measure_frame
 from argos.core.photometry.tracking import ApertureTracker, TrackedWCS
+from argos.core.photometry.uncertainty import apply_systematic_floor, estimate_systematic_floor
 from argos.core.session.diagnostics import SessionDiagnostics
 from argos.core.session.types import PhotometryPoint
 
@@ -115,6 +116,7 @@ class PhotometryBatchWorker(QThread):
                 self._process_frame(diag, fpath, done, curves)
                 done += 1
                 self.progress.emit(done, total)
+            self._apply_systematic_floors(curves)
             self._write_csvs(curves)
             result = BatchResult(curves=curves, frames_done=done)
             for key in sorted(self._check_keys):
@@ -270,6 +272,7 @@ class PhotometryBatchWorker(QThread):
                 sky_adu=res.phot.sky_adu if res.phot else None,
                 comps_used=res.diff.comps_used,
                 saturated=bool(res.phot and res.phot.saturated),
+                formal_mag_err=res.diff.formal_mag_err or res.diff.mag_err or 0.0,
             )
             key = res.star.auid or res.star.display_name
             lc = curves.setdefault(
@@ -290,6 +293,23 @@ class PhotometryBatchWorker(QThread):
                     role=res.star.role,
                 )
             )
+
+    @staticmethod
+    def _apply_systematic_floors(curves: dict[str, LightCurve]) -> None:
+        """Apply the shared star_var_script uncertainty model after a batch."""
+        for curve in curves.values():
+            floor = estimate_systematic_floor(
+                [
+                    (point.jd_utc, point.mag, point.formal_mag_err or point.mag_err)
+                    for point in curve.points
+                ]
+            )
+            if floor is None:
+                continue
+            for point in curve.points:
+                formal = point.formal_mag_err if point.formal_mag_err is not None else point.mag_err
+                point.mag_err = apply_systematic_floor(formal, floor)
+                point.sigma_syst = floor.sigma_systematic
 
     def _bjd(self, jd: float | None, star) -> float | None:
         """BJD_TDB for a star at this frame's JD, or None without site/time."""

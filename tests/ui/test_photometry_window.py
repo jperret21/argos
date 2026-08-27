@@ -37,8 +37,30 @@ def test_photometry_window_accepts_points_and_metrics(qapp) -> None:
         qapp.processEvents()  # flush the deferred delete now (pyqtgraph teardown)
 
 
+def test_lightcurve_separates_comparisons_and_keeps_error_visibility(qapp) -> None:
+    """Comparison diagnostics have their own plot and honour the error toggle."""
+    win = PhotometryWindow()
+    try:
+        panel = win.lightcurve
+        panel.add_point("Target", 2451545.0, 9.0, 0.02, role="target")
+        panel.add_point("C1", 2451545.0, 11.0, 0.03, role="comparison")
+        panel.add_point("C1", 2451545.1, 11.2, 0.03, role="comparison")
+        assert panel._series["Target"]["plot"] is panel._target_plot
+        assert panel._series["C1"]["plot"] is panel._comparison_plot
+        _, comparison_y = panel._series["C1"]["curve"].getData()
+        assert comparison_y.tolist() == pytest.approx([-0.1, 0.1])
+
+        panel._errors.setChecked(False)
+        panel.add_point("C1", 2451545.2, 11.1, 0.03, role="comparison")
+        assert panel._series["C1"]["errbar"].isVisible() is False
+    finally:
+        win.close()
+        win.deleteLater()
+        qapp.processEvents()
+
+
 def test_lightcurve_export_csv(tmp_path, qapp) -> None:
-    """Export CSV writes the canonical 9-column schema (+ target), round-trippable."""
+    """Export CSV retains every curve's identity and role."""
     from argos.core.photometry.lightcurve import LcPoint, LightCurve
 
     win = PhotometryWindow()
@@ -63,10 +85,11 @@ def test_lightcurve_export_csv(tmp_path, qapp) -> None:
         write_curves_csv(path, list(win.lightcurves.values()))
         text = path.read_text().splitlines()
         assert text[0] == (
-            "target,jd_utc,bjd_tdb,mag,mag_err,airmass,fwhm,sky_adu,comps_used,saturated"
+            "star_id,role,name,auid,jd_utc,bjd_tdb,mag,mag_err,formal_mag_err,"
+            "sigma_syst,airmass,fwhm,sky_adu,comps_used,saturated"
         )
-        assert text[1].startswith("NU Ori,")
-        # Round-trips back through the canonical reader (extra target column ignored).
+        assert ",target,NU Ori," in text[1]
+        # The single-curve reader remains backwards compatible.
         reloaded = LightCurve.from_csv(path)
         assert len(reloaded.points) == 1
         assert reloaded.points[0].saturated is True
@@ -75,6 +98,31 @@ def test_lightcurve_export_csv(tmp_path, qapp) -> None:
         win.close()
         win.deleteLater()
         qapp.processEvents()  # flush the deferred delete now (pyqtgraph teardown)
+
+
+def test_measurement_export_round_trips_multiple_roles(tmp_path, qapp) -> None:
+    from argos.core.photometry.lightcurve import (
+        LcPoint,
+        LightCurve,
+        read_curves_csv,
+        write_curves_csv,
+    )
+
+    win = PhotometryWindow()
+    try:
+        target = LightCurve(auid="T", name="NU Ori", role="target")
+        target.append(LcPoint(2451545.0, 9.0, 0.02))
+        comparison = LightCurve(auid="C1", name="Comp 1", role="comparison")
+        comparison.append(LcPoint(2451545.0, 11.0, 0.03))
+        path = tmp_path / "measurements.csv"
+        write_curves_csv(path, [target, comparison])
+        curves = read_curves_csv(path)
+        assert {curve.role for curve in curves.values()} == {"target", "comparison"}
+        assert {curve.auid for curve in curves.values()} == {"T", "C1"}
+    finally:
+        win.close()
+        win.deleteLater()
+        qapp.processEvents()
 
 
 def test_variables_tab_lists_and_selects(qapp) -> None:
