@@ -124,9 +124,36 @@ become *overrides* on top of the profile, not a parallel source.
    (`90d590d`).
 4. **[done]** The f/3.2 bug — fell out of A. Witnessed on a written frame:
    `FOCRATIO` 3.2 → 5.3, `APTDIA` added, every other header byte-identical.
-5. B2 — splash, now that the active profile can appear on it
-6. C — `.dmg`
+5. **[done]** B2 — splash (`15195d9`), with real stage instrumentation and a
+   guaranteed close on failure.
+6. **[done]** C — unsigned `.dmg` (`f5aaf07`). Verified locally: 144 MB `.app`,
+   67 MB `.dmg`, mounts, and the app launches from the mounted image.
 7. Deferred to 0.4.2 — Linux port then `.deb`
+
+### What packaging taught us
+
+Two failures that only appear when you actually build:
+
+- PyInstaller's contrib astropy hook imports `astropy.visualization.wcsaxes`,
+  which needs matplotlib and aborts the build. `packaging/hooks/hook-astropy.py`
+  shadows it.
+- The bundle then built cleanly and **died on launch**: astropy's ply parsers
+  read their generated `*_parsetab.py` as source, and PyInstaller ships
+  bytecode. It surfaced as `'m / (s)' did not parse as unit`, before any
+  window. The hook now ships those files.
+
+Hence the release workflow boots the bundle headless and requires the
+`UI ready` line before shipping. A bundle that builds is not a bundle that
+runs.
+
+### Remaining before tagging v0.4.1
+
+- The CI and release workflows have never executed on GitHub — they are
+  syntactically valid and mirror commands verified locally, but the first
+  push will be their first real run.
+- Nothing here has touched a physical Seestar. The hardware-validation
+  checklist in `ui_redesign_todo.md` is still entirely unchecked, and the
+  S30/S50 profiles stay unvalidated until it is not.
 
 ### Still open in workstream A
 
