@@ -41,6 +41,11 @@ docs = [
     "myst-parser>=2.0.0",
     "sphinx-rtd-theme>=2.0.0",
 ]
+# Binary packaging. Kept out of `dev` so contributors don't pay for a
+# toolchain they only need at release time.
+package = [
+    "pyinstaller>=6.6.0",
+]
 
 [tool.uv]
 python-preference = "only-system"

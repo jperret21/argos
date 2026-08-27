@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # Lets a build be exercised without cutting a tag. The artifact is uploaded
+  # to the run rather than to a Release.
+  workflow_dispatch:
+
+permissions:
+  contents: write # needed to attach assets to the GitHub Release
+
+jobs:
+  macos:
+    # A .deb job joins this matrix once Argos actually runs on Linux — the
+    # ASTAP search paths are macOS/Homebrew only and run.sh is macOS-specific.
+    # See docs/release_0_4_1.md.
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --extra dev --extra package
+
+      # Never ship a build whose tests were not run.
+      - name: Tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          uv run --extra dev pytest -q --deselect tests/ui/test_photometry_window.py
+          uv run --extra dev pytest -q tests/ui/test_photometry_window.py
+
+      - name: Build Argos.app
+        run: uv run --extra package pyinstaller packaging/argos.spec --noconfirm
+
+      # A bundle that builds is not a bundle that runs: the astropy ply parser
+      # tables broke startup while building cleanly. Boot it headless and
+      # require the "UI ready" line before shipping.
+      - name: Smoke-test the bundle
+        env:
+          QT_QPA_PLATFORM: offscreen
+          ARGOS_NO_SPLASH: "1"
+        run: |
+          ./dist/Argos.app/Contents/MacOS/Argos > boot.log 2>&1 &
+          pid=$!
+          for _ in $(seq 1 60); do
+            grep -q "UI ready" boot.log && break
+            sleep 1
+          done
+          kill $pid 2>/dev/null || true
+          cat boot.log
+          grep -q "UI ready" boot.log || { echo "::error::bundle failed to start"; exit 1; }
+
+      - name: Build the .dmg
+        run: packaging/make_dmg.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: argos-macos-dmg
+          path: dist/*.dmg
+          if-no-files-found: error
+
+      - name: Attach to the Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.dmg
+          draft: true # a human writes the notes and publishes
+          body: |
+            **The macOS build is unsigned** — Argos has no Apple Developer
+            certificate. On first launch, right-click Argos and choose "Open",
+            then confirm. See "READ ME FIRST.txt" inside the .dmg.
+
+            Plate solving needs [ASTAP](https://www.hnsky.org/astap.htm)
+            installed separately; Argos does not bundle it.

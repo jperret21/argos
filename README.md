@@ -61,6 +61,20 @@ From raw photons to a calibrated light curve, all running locally:
 
 ## Try it
 
+**macOS — download the app.** Grab the `.dmg` from the
+[latest release](https://github.com/jperret21/argos/releases), drag Argos into
+Applications, then **right-click Argos → Open** the first time.
+
+Argos is not signed with an Apple Developer certificate, so macOS blocks the
+first launch. That is about the absence of a paid certificate, not about the
+software. If macOS claims Argos "is damaged", clear the quarantine flag:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Argos.app
+```
+
+**From source** (any platform where PyQt6 runs; only macOS is validated today):
+
 ```bash
 brew install uv
 git clone https://github.com/jperret21/argos.git
@@ -68,6 +82,9 @@ cd argos
 uv sync --extra dev
 uv run python main.py
 ```
+
+Plate solving needs [ASTAP](https://www.hnsky.org/astap.htm) installed
+separately — Argos finds it automatically but never bundles it.
 
 No telescope? Argos runs against the ASCOM Alpaca simulator:
 
