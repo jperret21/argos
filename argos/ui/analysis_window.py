@@ -157,7 +157,7 @@ class AnalysisWindow(QMainWindow):
         info_layout.addWidget(self._info_label)
         info_layout.addStretch()
 
-        # Tab widget: Histogram | Info
+        # Details stay available but do not compete with the image by default.
         self._right_tabs = QWidget()
         tab_layout = QVBoxLayout(self._right_tabs)
         tab_layout.setContentsMargins(0, 0, 0, 0)
@@ -165,8 +165,8 @@ class AnalysisWindow(QMainWindow):
         from PyQt6.QtWidgets import QTabWidget
 
         self._tab_widget = QTabWidget()
-        self._tab_widget.addTab(self._histogram, "Histogram")
-        self._tab_widget.addTab(self._info_panel, "Info")
+        self._tab_widget.addTab(self._info_panel, "Image information")
+        self._tab_widget.addTab(self._histogram, "Adjust image")
         tab_layout.addWidget(self._tab_widget)
 
         split = QSplitter(Qt.Orientation.Horizontal)
@@ -186,16 +186,22 @@ class AnalysisWindow(QMainWindow):
         brow.setSpacing(10)
 
         self._solve_btn = QPushButton("Identify field")
-        self._solve_btn.setToolTip("Find coordinates and scale for this image via ASTAP")
+        self._solve_btn.setToolTip("Determine sky coordinates and image scale with ASTAP")
         self._solve_btn.clicked.connect(self._on_solve)
         brow.addWidget(self._solve_btn)
 
-        self._grid_btn = QPushButton("Grid")
+        self._grid_btn = QPushButton("Coordinates")
         self._grid_btn.setCheckable(True)
         self._grid_btn.setEnabled(False)
-        self._grid_btn.setToolTip("Show/hide the RA/Dec grid")
+        self._grid_btn.setToolTip("Show or hide the RA/Dec coordinate grid after identification")
         self._grid_btn.toggled.connect(self._viewer.set_astrometry_enabled)
         brow.addWidget(self._grid_btn)
+
+        self._display_btn = QPushButton("Adjust image")
+        self._display_btn.setCheckable(True)
+        self._display_btn.setToolTip("Open the histogram, contrast and display tools")
+        self._display_btn.toggled.connect(self._show_display_tools)
+        brow.addWidget(self._display_btn)
 
         self._solve_lbl = QLabel("field not identified")
         self._solve_lbl.setStyleSheet(
@@ -206,6 +212,9 @@ class AnalysisWindow(QMainWindow):
         root.addWidget(bar)
 
         self.setCentralWidget(central)
+
+    def _show_display_tools(self, visible: bool) -> None:
+        self._tab_widget.setCurrentIndex(1 if visible else 0)
 
     def _wire(self) -> None:
         self._toolbar.channel_changed.connect(self._on_channel)
@@ -308,7 +317,7 @@ class AnalysisWindow(QMainWindow):
     def _on_open(self) -> None:
         from PyQt6.QtWidgets import QFileDialog
 
-        start = str(Path.home() / "Downloads")
+        start = str(self._cfg("sessions_path", Path.home()))
         path, _ = QFileDialog.getOpenFileName(
             self, "Open FITS", start, "FITS (*.fits *.fit *.fts);;All files (*)"
         )

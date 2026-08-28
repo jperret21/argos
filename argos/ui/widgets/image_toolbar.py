@@ -1,9 +1,4 @@
-"""Compact toolbar above the image — debayer-mode / channel selection.
-
-Stretch, histogram and measurement controls live in the Display tab
-(``HistogramDock``); this bar just picks the *view* (debayer mode / CFA channel)
-and shows the persistent "display ≠ data" reminder.
-"""
+"""Small observer-facing toolbar above the FITS image."""
 
 from __future__ import annotations
 
@@ -52,42 +47,43 @@ class ImageToolbar(QWidget):
         layout.setContentsMargins(8, 0, 8, 0)
         layout.setSpacing(8)
 
-        layout.addWidget(_lbl("View:"))
-        self._channel_combo = QComboBox()
-        self._channel_combo.setMinimumWidth(120)
-        self._channel_combo.setStyleSheet("font-size: 11px;")
-        for view in debayer.VIEWS:
-            self._channel_combo.addItem(view)
-        self._channel_combo.setCurrentIndex(0)  # Super-pixel (clean colour preview)
-        self._channel_combo.setToolTip(
-            "Display only — the saved FITS stays raw, linear, CFA.\n"
-            "Super-pixel  — 2×2→1 RGB, no interpolation (clean preview)\n"
-            "Interpolated — bilinear RGB, cosmetic only\n"
-            "Raw CFA      — the Bayer mosaic (check GRBG alignment / hot pixels)\n"
-            "R/G/B/G1/G2/Luminance — real CFA pixels (measurement-safe)"
-        )
-        self._channel_combo.currentTextChanged.connect(self.channel_changed)
-        layout.addWidget(self._channel_combo)
-
-        self._open_btn = QPushButton("Open FITS…")
-        self._open_btn.setStyleSheet("font-size: 11px;")
-        self._open_btn.setToolTip("Load a FITS file from disk into the viewer")
+        self._open_btn = QPushButton("Open image…")
+        self._open_btn.setToolTip("Open a FITS image")
         self._open_btn.clicked.connect(self.open_requested)
         layout.addWidget(self._open_btn)
 
-        layout.addStretch()
-
-        # Persistent reminder: the on-screen image is stretched/debayered while
-        # the data written to disk stays raw + linear (capture_panel.md §0).
-        indicator = QLabel("display stretched · data linear on disk")
-        indicator.setStyleSheet(
-            f"color: {theme.WARNING}; font-size: 10px; background: transparent;"
+        layout.addWidget(_lbl("Preview:"))
+        self._channel_combo = QComboBox()
+        self._channel_combo.setMinimumWidth(120)
+        self._channel_combo.setStyleSheet("font-size: 11px;")
+        labels = {
+            debayer.VIEW_SUPERPIXEL: "Colour",
+            debayer.VIEW_INTERP: "Smooth colour",
+            debayer.VIEW_RAW: "Raw sensor",
+            debayer.VIEW_R: "Red channel",
+            debayer.VIEW_G: "Green channel",
+            debayer.VIEW_B: "Blue channel",
+            debayer.VIEW_G1: "Green 1",
+            debayer.VIEW_G2: "Green 2",
+            debayer.VIEW_LUM: "Luminance",
+        }
+        for view in debayer.VIEWS:
+            self._channel_combo.addItem(labels[view], view)
+        self._channel_combo.setCurrentIndex(0)  # Super-pixel (clean colour preview)
+        self._channel_combo.setToolTip(
+            "Changes only the on-screen preview; the FITS data are unchanged."
         )
-        layout.addWidget(indicator)
+        self._channel_combo.currentIndexChanged.connect(
+            lambda _index: self.channel_changed.emit(str(self._channel_combo.currentData()))
+        )
+        layout.addWidget(self._channel_combo)
+
+        layout.addStretch()
+        layout.addWidget(_lbl("Preview only · FITS unchanged"))
 
     def set_view(self, view: str) -> None:
         """Programmatically select a view without re-emitting ``channel_changed``."""
-        idx = self._channel_combo.findText(view)
+        idx = self._channel_combo.findData(view)
         if idx < 0:
             return
         self._channel_combo.blockSignals(True)

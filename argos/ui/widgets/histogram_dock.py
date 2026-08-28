@@ -39,7 +39,7 @@ _MAX_ADU = 65535
 
 
 class HistogramDock(design.Card):
-    """Per-channel histogram + stretch + measurement readouts (the Display tab)."""
+    """Optional display and measurement tools for a FITS inspection."""
 
     stretch_changed = pyqtSignal(float, float, float, str)  # black, white, midtones, mode
     auto_requested = pyqtSignal()
@@ -52,7 +52,7 @@ class HistogramDock(design.Card):
     rotation_changed = pyqtSignal(str)  # a fits_viewer.ROTATION_MODES token
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("Display", parent)
+        super().__init__("Adjust image", parent)
         self._guard = False
         self._build_ui()
 
@@ -79,7 +79,8 @@ class HistogramDock(design.Card):
         self._b_curve = self._plot.plot(pen=pg.mkPen(theme.ACCENT, width=1))
         outer.addWidget(self._plot)
 
-        # Stretch sliders.
+        # Manual contrast controls are intentionally secondary: Auto-stretch is
+        # the normal observer action; these are for inspecting a difficult frame.
         grid = QGridLayout()
         grid.setHorizontalSpacing(design.SPACING_MD)
         grid.setVerticalSpacing(design.SPACING_SM)
@@ -103,7 +104,7 @@ class HistogramDock(design.Card):
         self._mode_combo = QComboBox()
         self._mode_combo.addItems(STRETCH_MODES)
         self._mode_combo.currentTextChanged.connect(lambda _t: self._emit_stretch())
-        mode_form.addRow(design.MutedLabel("Stretch"), self._mode_combo)
+        mode_form.addRow(design.MutedLabel("Contrast"), self._mode_combo)
         # Display rotation — visual only (saved FITS keep the sensor orientation).
         self._rot_combo = QComboBox()
         self._rot_combo.addItems(["Auto (landscape)", "0°", "90°", "180°", "270°"])
@@ -116,7 +117,7 @@ class HistogramDock(design.Card):
         mode_form.addRow(design.MutedLabel("Rotation"), self._rot_combo)
         outer.addLayout(mode_form)
 
-        self._auto_btn = design.PrimaryButton("Auto-stretch")
+        self._auto_btn = design.PrimaryButton("Improve contrast")
         self._auto_btn.clicked.connect(self.auto_requested)
         outer.addLayout(design.button_row(self._auto_btn))
 
