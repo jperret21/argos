@@ -35,6 +35,12 @@ _SIMBAD_TAP_URL = "https://simbad.cds.unistra.fr/simbad/sim-tap/sync"
 _CACHE_PATH = Path.home() / "Argos" / "cache" / "object_resolver.json"
 
 
+def configure_cache_path(path: Path | str) -> None:
+    """Set the persistent CDS/SIMBAD cache location for future lookups."""
+    global _CACHE_PATH
+    _CACHE_PATH = Path(path).expanduser()
+
+
 class ObjectResolutionError(RuntimeError):
     """The designation could not be resolved to an astronomical position."""
 
@@ -122,9 +128,10 @@ def nearby_cached_objects(
     dec_degrees: float,
     *,
     radius_arcsec: float = 90.0,
-    cache_path: Path = _CACHE_PATH,
+    cache_path: Path | None = None,
 ) -> list[NearbyObject]:
     """Return cached catalogue objects around a coordinate, nearest first."""
+    cache_path = cache_path or _CACHE_PATH
     matches: list[NearbyObject] = []
     seen: set[tuple[str, float, float]] = set()
     for row in _read_cache(cache_path).values():
@@ -212,7 +219,7 @@ def resolve_nearby_objects(
     radius_arcsec: float = 90.0,
     allow_network: bool = True,
     timeout_s: float = 8.0,
-    cache_path: Path = _CACHE_PATH,
+    cache_path: Path | None = None,
 ) -> list[NearbyObject]:
     """Find names near a Stellarium target, preferring the local cache.
 
@@ -221,6 +228,7 @@ def resolve_nearby_objects(
     stellar field.  If online lookup was not explicitly allowed, this is a
     strictly offline cache lookup.
     """
+    cache_path = cache_path or _CACHE_PATH
     if not (0.0 <= ra_degrees < 360.0 and -90.0 <= dec_degrees <= 90.0):
         raise ObjectResolutionError("Invalid ICRS coordinates for target-name suggestion.")
     cached = nearby_cached_objects(
@@ -242,9 +250,10 @@ def resolve_nearby_objects(
 
 
 def cached_object_suggestions(
-    query: str, *, cache_path: Path = _CACHE_PATH, limit: int = 8
+    query: str, *, cache_path: Path | None = None, limit: int = 8
 ) -> list[str]:
     """Return offline autocomplete candidates from prior CDS resolutions."""
+    cache_path = cache_path or _CACHE_PATH
     needle = _cache_key(query)
     if not needle:
         return []
@@ -287,13 +296,14 @@ def resolve_object(
     query: str,
     *,
     timeout_s: float = 8.0,
-    cache_path: Path = _CACHE_PATH,
+    cache_path: Path | None = None,
 ) -> ResolvedObject:
     """Resolve a catalogue designation, preferring a prior local result.
 
     Raises :class:`ObjectResolutionError` for an empty, unknown or temporarily
     unavailable designation.  Coordinates are J2000/ICRS decimal degrees.
     """
+    cache_path = cache_path or _CACHE_PATH
     query = normalize_designation(query)
     if not query:
         raise ObjectResolutionError("Enter an object designation first.")

@@ -53,6 +53,12 @@ class CatalogError(RuntimeError):
     """A catalog query failed (network, HTTP, or unparseable response)."""
 
 
+def configure_cache_directory(path: Path | str) -> None:
+    """Set the persistent VSX/VSP field-cache folder for future queries."""
+    global _CACHE_DIR
+    _CACHE_DIR = Path(path).expanduser()
+
+
 # --------------------------------------------------------------------------- #
 # Data model                                                                   #
 # --------------------------------------------------------------------------- #

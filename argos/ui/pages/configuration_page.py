@@ -24,12 +24,15 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QSpinBox,
+    QToolBox,
     QVBoxLayout,
     QWidget,
 )
 
 from argos import __version__
+from argos.core.catalog import aavso, exoplanets, object_resolver
 from argos.core.catalog.offline import essential_catalogue_info
 from argos.core.config import Config
 from argos.core.hardware import active, catalog
@@ -72,23 +75,55 @@ class ConfigurationPage(QWidget):
         scroll, body = design.scroll_page(max_width=940)
         root.addWidget(scroll)
 
-        body.addWidget(design.HeadingLabel("Configuration"))
+        body.addWidget(design.HeadingLabel("Settings"))
+        intro = design.MutedLabel(
+            "Configure the observatory, equipment, local libraries and optional catalogue caches. "
+            "Only explicit search or refresh actions contact online services."
+        )
+        intro.setWordWrap(True)
+        body.addWidget(intro)
 
-        # Two responsive columns: observer/site on the left, the rest stacked
-        # on the right. Both columns share width 1:1 and reflow on resize.
-        row, left, right = design.two_columns()
-        left.addWidget(self._build_observer_card())
-        left.addWidget(self._build_astrometry_card())
-        left.addStretch()
-        right.addWidget(self._build_telescope_card())
-        right.addWidget(self._build_paths_card())
-        right.addWidget(self._build_data_card())
-        right.addWidget(self._build_camera_card())
-        right.addWidget(self._build_appearance_card())
-        right.addWidget(self._build_about_card())
-        right.addStretch()
-        body.addLayout(row)
+        # One topic at a time is easier to scan at the telescope than two long
+        # unrelated columns. QToolBox behaves as a compact accordion and keeps
+        # the configuration hierarchy visible without hiding advanced controls.
+        self._settings_sections = QToolBox()
+        self._settings_sections.setObjectName("settings_sections")
+        self._settings_sections.addItem(
+            self._section_page(self._build_observer_card()), "Observatory"
+        )
+        self._settings_sections.addItem(
+            self._section_page(self._build_telescope_card(), self._build_camera_card()),
+            "Equipment & camera",
+        )
+        self._settings_sections.addItem(
+            self._section_page(self._build_astrometry_card()), "Astrometry"
+        )
+        self._settings_sections.addItem(
+            self._section_page(self._build_data_card()), "Catalogues & data"
+        )
+        self._settings_sections.addItem(
+            self._section_page(
+                self._build_paths_card(), self._build_appearance_card(), self._build_about_card()
+            ),
+            "Files & application",
+        )
+        self._settings_sections.setCurrentIndex(0)
+        body.addWidget(self._settings_sections)
         body.addStretch()
+
+    @staticmethod
+    def _section_page(*cards: QWidget) -> QWidget:
+        """Create one scroll-page section from grouped setting cards."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(
+            design.SPACING_XS, design.SPACING_SM, design.SPACING_XS, design.SPACING_SM
+        )
+        layout.setSpacing(design.SPACING_MD)
+        for card in cards:
+            layout.addWidget(card)
+        layout.addStretch()
+        return page
 
     def _build_observer_card(self) -> "design.Card":
         card = design.Card("Observer & Site")
@@ -224,13 +259,32 @@ class ConfigurationPage(QWidget):
         spin.setSuffix(" °")
         return spin
 
+    @staticmethod
+    def _catalogue_path_row(edit: QLineEdit, *, browse, clear) -> QWidget:
+        """Editable cache path with safe, explicit browse/refresh actions."""
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(design.SPACING_SM)
+        row.addWidget(edit, 1)
+        browse_btn = design.SecondaryButton("Browse…")
+        browse_btn.setToolTip("Choose a different local cache location")
+        browse_btn.clicked.connect(browse)
+        row.addWidget(browse_btn)
+        clear_btn = design.SecondaryButton("Refresh")
+        clear_btn.setToolTip("Clear this local cache; the next matching search fetches fresh data")
+        clear_btn.clicked.connect(clear)
+        row.addWidget(clear_btn)
+        widget = QWidget()
+        widget.setLayout(row)
+        return widget
+
     def _build_paths_card(self) -> "design.Card":
-        card = design.Card("Paths")
+        card = design.Card("Observation files")
         layout = design.card_layout(card)
 
         row = QHBoxLayout()
         row.setSpacing(design.SPACING_MD)
-        row.addWidget(design.MutedLabel("Sessions"))
+        row.addWidget(design.MutedLabel("Session output folder"))
         self._sessions_edit = QLineEdit()
         self._sessions_edit.editingFinished.connect(self._save_sessions_path)
         row.addWidget(self._sessions_edit, 1)
@@ -238,6 +292,11 @@ class ConfigurationPage(QWidget):
         browse.clicked.connect(self._browse_sessions_path)
         row.addWidget(browse)
         layout.addLayout(row)
+        layout.addWidget(
+            design.MutedLabel(
+                "Raw FITS, session.json, observation metadata and local diagnostics are written here."
+            )
+        )
         return card
 
     def _build_data_card(self) -> "design.Card":
@@ -246,10 +305,10 @@ class ConfigurationPage(QWidget):
         layout = design.card_layout(card)
 
         essential = essential_catalogue_info()
+        layout.addWidget(design.SectionLabel("Included with Argos"))
         layout.addWidget(
-            design.SectionLabel(
-                f"Built-in essential catalogue · v{essential['version']} · "
-                f"{essential['object_count']:,} objects"
+            design.MetricLabel(
+                f"Essential catalogue · v{essential['version']} · {essential['object_count']:,} objects"
             )
         )
         layout.addWidget(
@@ -260,13 +319,60 @@ class ConfigurationPage(QWidget):
             )
         )
         layout.addWidget(design.MutedLabel(f"Source: {essential['source']}"))
+        layout.addWidget(design.MutedLabel("Storage: inside the Argos application · read-only"))
+        layout.addWidget(design.horizontal_divider())
+
+        layout.addWidget(design.SectionLabel("Online catalogues and local caches"))
         layout.addWidget(
             design.MutedLabel(
-                "HD is intentionally not bundled yet: the historical catalogue has legacy positions. "
-                "Argos will use a versioned modern HD pack when it is available, rather than silently "
-                "pointing from stale coordinates."
+                "Each service is queried only by an explicit action. Change a cache location below to "
+                "keep these data on a chosen disk; clearing a cache makes the next matching search fetch "
+                "fresh data when online."
             )
         )
+
+        self._object_cache_edit = QLineEdit()
+        self._object_cache_edit.setToolTip("CDS/SIMBAD object-name cache file")
+        self._object_cache_edit.editingFinished.connect(self._save_catalogue_paths)
+        object_row = self._catalogue_path_row(
+            self._object_cache_edit,
+            browse=lambda: self._browse_catalogue_file(
+                self._object_cache_edit, "Choose CDS cache file"
+            ),
+            clear=lambda: self._clear_catalogue_cache("object"),
+        )
+        layout.addWidget(design.MutedLabel("Target names · CDS / SIMBAD"))
+        layout.addWidget(object_row)
+
+        self._exoplanet_cache_edit = QLineEdit()
+        self._exoplanet_cache_edit.setToolTip("NASA Exoplanet Archive ephemeris cache file")
+        self._exoplanet_cache_edit.editingFinished.connect(self._save_catalogue_paths)
+        planet_row = self._catalogue_path_row(
+            self._exoplanet_cache_edit,
+            browse=lambda: self._browse_catalogue_file(
+                self._exoplanet_cache_edit, "Choose NASA ephemeris cache file"
+            ),
+            clear=lambda: self._clear_catalogue_cache("exoplanet"),
+        )
+        layout.addWidget(design.MutedLabel("Transit ephemerides · NASA Exoplanet Archive"))
+        layout.addWidget(planet_row)
+
+        self._aavso_cache_edit = QLineEdit()
+        self._aavso_cache_edit.setToolTip("AAVSO VSX/VSP solved-field cache folder")
+        self._aavso_cache_edit.editingFinished.connect(self._save_catalogue_paths)
+        aavso_row = self._catalogue_path_row(
+            self._aavso_cache_edit,
+            browse=lambda: self._browse_catalogue_directory(
+                self._aavso_cache_edit, "Choose AAVSO field-cache folder"
+            ),
+            clear=lambda: self._clear_catalogue_cache("aavso"),
+        )
+        layout.addWidget(design.MutedLabel("Variables & comparison stars · AAVSO VSX / VSP"))
+        layout.addWidget(aavso_row)
+
+        self._catalogue_cache_status = design.MutedLabel("")
+        self._catalogue_cache_status.setWordWrap(True)
+        layout.addWidget(self._catalogue_cache_status)
         layout.addWidget(design.horizontal_divider())
         layout.addWidget(design.SectionLabel("Local diagnostics"))
 
@@ -285,11 +391,8 @@ class ConfigurationPage(QWidget):
         )
         layout.addWidget(
             design.MutedLabel(
-                "Catalogue availability: CDS Sesame names and NASA exoplanet ephemerides are online "
-                "on first search, then cached locally under ~/Argos/cache. AAVSO VSX/VSP field "
-                "catalogues are cached under ~/.argos/cache/catalog. No catalogue refreshes or "
-                "uploads happen automatically; repeat a search while online to refresh it. "
-                "The optional Stellarium target-name lookup is configured in Connection."
+                "HD remains an online/cache lookup until a modern, versioned J2000 cross-match pack is "
+                "distributed. The historical HD positions are deliberately not used for blind pointing."
             )
         )
         return card
@@ -549,6 +652,16 @@ class ConfigurationPage(QWidget):
         self._elev_spin.setValue(float(self._config.get("site.elevation", 0.0) or 0.0))
         self._refresh_favorites()
         self._sessions_edit.setText(str(self._config.sessions_path))
+        self._object_cache_edit.setText(
+            str(self._config.get("data_paths.object_catalogue_cache", object_resolver._CACHE_PATH))
+        )
+        self._exoplanet_cache_edit.setText(
+            str(self._config.get("data_paths.exoplanet_cache", exoplanets._CACHE_PATH))
+        )
+        self._aavso_cache_edit.setText(
+            str(self._config.get("data_paths.aavso_cache_directory", aavso._CACHE_DIR))
+        )
+        self._apply_catalogue_paths(save=False)
         self._refresh_telescope_card()
         preset_name: str = self._config.get("ui.theme.preset", EQUILUX.name)  # type: ignore[assignment]
         idx = self._palette_combo.findText(preset_name)
@@ -746,6 +859,93 @@ class ConfigurationPage(QWidget):
             self._sessions_edit.setText(chosen)
             self._config.sessions_path = chosen
             self._config.save()
+
+    def _browse_catalogue_file(self, edit: QLineEdit, title: str) -> None:
+        """Pick a cache file without creating or deleting anything yet."""
+        start = edit.text().strip() or str(Path.home())
+        chosen, _ = QFileDialog.getSaveFileName(
+            self, title, start, "JSON files (*.json);;All files (*)"
+        )
+        if chosen:
+            edit.setText(chosen)
+            self._save_catalogue_paths()
+
+    def _browse_catalogue_directory(self, edit: QLineEdit, title: str) -> None:
+        start = edit.text().strip() or str(Path.home())
+        chosen = QFileDialog.getExistingDirectory(self, title, start)
+        if chosen:
+            edit.setText(chosen)
+            self._save_catalogue_paths()
+
+    def _apply_catalogue_paths(self, *, save: bool) -> None:
+        """Apply user-chosen cache locations to the next catalogue operation."""
+        object_path = Path(self._object_cache_edit.text().strip()).expanduser()
+        exoplanet_path = Path(self._exoplanet_cache_edit.text().strip()).expanduser()
+        aavso_path = Path(self._aavso_cache_edit.text().strip()).expanduser()
+        if not object_path.name or not exoplanet_path.name or not aavso_path.name:
+            self._catalogue_cache_status.setText(
+                "Choose a valid file or folder for each catalogue cache."
+            )
+            return
+        object_resolver.configure_cache_path(object_path)
+        exoplanets.configure_cache_path(exoplanet_path)
+        aavso.configure_cache_directory(aavso_path)
+        if save:
+            self._config.set("data_paths.object_catalogue_cache", str(object_path))
+            self._config.set("data_paths.exoplanet_cache", str(exoplanet_path))
+            self._config.set("data_paths.aavso_cache_directory", str(aavso_path))
+        self._refresh_catalogue_cache_status()
+
+    def _save_catalogue_paths(self) -> None:
+        if self._loading:
+            return
+        self._apply_catalogue_paths(save=True)
+
+    def _refresh_catalogue_cache_status(self) -> None:
+        object_path = Path(self._object_cache_edit.text().strip()).expanduser()
+        exoplanet_path = Path(self._exoplanet_cache_edit.text().strip()).expanduser()
+        aavso_path = Path(self._aavso_cache_edit.text().strip()).expanduser()
+        parts = [
+            f"CDS: {'cached' if object_path.exists() else 'empty'}",
+            f"NASA: {'cached' if exoplanet_path.exists() else 'empty'}",
+            f"AAVSO: {len(list(aavso_path.glob('*.json'))) if aavso_path.is_dir() else 0} field file(s)",
+        ]
+        self._catalogue_cache_status.setText(" · ".join(parts))
+
+    def _clear_catalogue_cache(self, kind: str) -> None:
+        """Forget selected cached responses; no online request is made here."""
+        labels = {
+            "object": "CDS/SIMBAD target-name cache",
+            "exoplanet": "NASA exoplanet ephemeris cache",
+            "aavso": "AAVSO VSX/VSP field cache",
+        }
+        label = labels[kind]
+        answer = QMessageBox.question(
+            self,
+            "Refresh local catalogue cache",
+            f"Clear the {label}?\n\n"
+            "No data will be downloaded now. The next matching lookup refreshes it if internet access is available.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            if kind == "object":
+                Path(self._object_cache_edit.text().strip()).expanduser().unlink(missing_ok=True)
+            elif kind == "exoplanet":
+                Path(self._exoplanet_cache_edit.text().strip()).expanduser().unlink(missing_ok=True)
+            else:
+                folder = Path(self._aavso_cache_edit.text().strip()).expanduser()
+                for entry in folder.glob("*.json") if folder.is_dir() else ():
+                    entry.unlink(missing_ok=True)
+        except OSError as exc:
+            self._catalogue_cache_status.setText(f"Could not clear {label}: {exc}")
+            return
+        self._refresh_catalogue_cache_status()
+        self._catalogue_cache_status.setText(
+            f"{label} cleared. " + self._catalogue_cache_status.text()
+        )
 
     def _select_downsample(self, value: int) -> None:
         for i, (_label, v) in enumerate(_DOWNSAMPLE):

@@ -22,6 +22,14 @@ _DEFAULTS: dict[str, Any] = {
         "port": 32323,  # Alpaca HTTP port (4700 is the native JSON-RPC port)
     },
     "sessions_path": str(Path.home() / "Argos" / "sessions"),
+    # User-visible locations for durable observing data and replaceable
+    # catalogue caches.  The bundled essential catalogue is read-only inside
+    # the application; these are only the caches acquired on demand.
+    "data_paths": {
+        "object_catalogue_cache": str(Path.home() / "Argos" / "cache" / "object_resolver.json"),
+        "exoplanet_cache": str(Path.home() / "Argos" / "cache" / "exoplanets.json"),
+        "aavso_cache_directory": str(Path.home() / ".argos" / "cache" / "catalog"),
+    },
     "observer": {
         "name": "",
         "obscode": "",  # AAVSO observer code — stamped on every AAVSO export

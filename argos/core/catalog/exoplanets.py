@@ -20,6 +20,12 @@ _TAP_URL = "https://exoplanetarchive.ipac.caltech.edu/TAP/sync"
 _CACHE_PATH = Path.home() / "Argos" / "cache" / "exoplanets.json"
 
 
+def configure_cache_path(path: Path | str) -> None:
+    """Set the persistent NASA ephemeris cache location for future lookups."""
+    global _CACHE_PATH
+    _CACHE_PATH = Path(path).expanduser()
+
+
 class ExoplanetLookupError(RuntimeError):
     """The requested planet has no usable published transit ephemeris."""
 
@@ -90,9 +96,10 @@ def _write_cache(path: Path, cache: dict[str, dict]) -> None:
 
 
 def cached_exoplanet_suggestions(
-    query: str, *, cache_path: Path = _CACHE_PATH, limit: int = 8
+    query: str, *, cache_path: Path | None = None, limit: int = 8
 ) -> list[str]:
     """Return offline autocomplete candidates from previously fetched planets."""
+    cache_path = cache_path or _CACHE_PATH
     needle = _cache_key(query)
     if not needle:
         return []
@@ -161,7 +168,7 @@ def lookup_exoplanet(
     query: str,
     *,
     timeout_s: float = 12.0,
-    cache_path: Path = _CACHE_PATH,
+    cache_path: Path | None = None,
 ) -> ExoplanetTarget:
     """Fetch a confirmed planet's ephemeris from NASA's ``pscomppars`` table.
 
@@ -169,6 +176,7 @@ def lookup_exoplanet(
     A cached exact name is preferred; clearing the local cache is the explicit
     way to refresh a previously prepared target.
     """
+    cache_path = cache_path or _CACHE_PATH
     query = normalize_exoplanet_designation(query)
     if not query:
         raise ExoplanetLookupError("Enter a planet designation first (for example HD 189733 b).")

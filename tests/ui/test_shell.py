@@ -10,7 +10,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication, QLabel  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QLabel, QToolBox  # noqa: E402
 
 from argos.core.config import Config  # noqa: E402
 
@@ -48,6 +48,23 @@ def test_shell_three_mode_walkthrough() -> None:
         assert isinstance(shell._pages["connect"], ConnectionPage)
         assert isinstance(shell._pages["capture"], ImagingPage)
         assert isinstance(shell._pages["settings"], ConfigurationPage)
+        settings = shell._pages["settings"]
+        assert isinstance(settings._settings_sections, QToolBox)
+        assert [
+            settings._settings_sections.itemText(i)
+            for i in range(settings._settings_sections.count())
+        ] == [
+            "Observatory",
+            "Equipment & camera",
+            "Astrometry",
+            "Catalogues & data",
+            "Files & application",
+        ]
+        assert settings._sessions_edit.isEnabled()
+        assert settings._astap_edit.isEnabled() and settings._astap_db_edit.isEnabled()
+        assert settings._object_cache_edit.isEnabled()
+        assert settings._exoplanet_cache_edit.isEnabled()
+        assert settings._aavso_cache_edit.isEnabled()
         connection = shell._pages["connect"]
         assert connection._telescope_combo.count() >= 3
         assert connection._telescope_combo.currentData() == "s30pro"

@@ -10,32 +10,35 @@
 |---|---|
 | Connexion | Un seul réglage clair : **adresse IP Alpaca + port**. `Discover` recherche le Seestar et mémorise la dernière adresse. |
 | Télescope | Le modèle est choisi dans **Connection**. S30 Pro est le profil de référence ; S30 et S50 sont signalés *unvalidated*. |
-| Site | **Settings** peut chercher un lieu, récupérer latitude/longitude/altitude de terrain, et enregistrer des sites favoris. |
+| Site | **Settings → Observatory** peut chercher un lieu, récupérer latitude/longitude/altitude de terrain, et enregistrer des sites favoris. |
 | Planification | Recherche d'objets (`M 42`, `NGC 7000`, `HD 189733`…), aperçu d'altitude et séquence multi-étapes dans des panneaux déplaçables. |
 | Acquisition | Les panneaux de Capture sont de vrais docks : on peut les déplacer, redimensionner, empiler ou détacher sur un second écran. |
-| Astrométrie | ASTAP et son dossier de bases stellaires sont configurables explicitement dans **Settings**. |
+| Astrométrie | ASTAP et son dossier de bases stellaires sont configurables explicitement dans **Settings → Astrometry**. |
 | Photométrie | Courbe cible/check séparée des diagnostics des comparaisons ; incertitudes par image ; export CSV de toutes les mesures. |
 | Informations d'étoile | Cliquer une étoile affiche identité catalogue, coordonnées et mesures ; la carte est déplaçable et redimensionnable. |
 | Données | Sessions compatibles Siril, `session.json` et diagnostics JSONL locaux optionnels. |
 
 ## 2. Préparation à domicile
 
-1. Dans **Settings → Observer & Site**, renseigner le nom de l'observateur et,
+1. Dans **Settings → Observatory**, renseigner le nom de l'observateur et,
    si nécessaire, le code AAVSO. Rechercher le lieu, choisir le bon résultat,
    puis corriger l'altitude si l'observatoire a une altitude mesurée. Sauvegarder
    le site en favori.
-2. Dans **Settings → Telescope**, sélectionner le matériel réellement utilisé.
+2. Dans **Settings → Equipment & camera**, sélectionner le matériel réellement utilisé.
    Ne pas faire de photométrie de précision avec le S30 ou le S50 tant que leurs
    paramètres ne sont pas validés sur le terrain.
-3. Dans **Settings → Paths**, choisir le dossier racine des sessions. C'est là
+3. Dans **Settings → Files & application**, choisir le dossier racine des sessions. C'est là
    que seront écrits les FITS, le journal de session et les mesures.
 4. Dans **Settings → Astrometry**, vérifier que l'exécutable ASTAP est détecté.
    Renseigner **Database folder** si la base stellaire n'est pas dans un chemin
    détecté automatiquement. Le statut doit confirmer ASTAP **et** la base.
-5. Dans **Settings → Local diagnostics**, activer l'enregistrement JSONL
+5. Dans **Settings → Catalogues & data**, vérifier le catalogue essentiel et les chemins
+   de cache CDS/NASA/AAVSO. **Refresh** efface seulement le cache sélectionné ; la
+   prochaine recherche explicite le récupère à nouveau si internet est disponible.
+6. Dans **Settings → Catalogues & data**, activer l'enregistrement JSONL
    seulement si l'essai nécessite un diagnostic détaillé. Ces fichiers restent
    dans le dossier de séance et ne sont jamais transmis par Argos.
-6. Pendant que l'accès internet est disponible, rechercher les objets prévus et
+7. Pendant que l'accès internet est disponible, rechercher les objets prévus et
    résoudre/consulter les champs nécessaires : les recherches de catalogue sont
    alors réutilisables depuis le cache au terrain.
 
