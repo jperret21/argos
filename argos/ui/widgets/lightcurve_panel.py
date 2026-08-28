@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QCheckBox, QLabel, QSplitter, QVBoxLayout, QWidget
 
 from argos.ui import theme
@@ -21,6 +21,9 @@ _PALETTE = (theme.SUCCESS, theme.CYAN, theme.WARNING, theme.VARIABLE, theme.ACCE
 
 class LightCurvePanel(QWidget):
     """Two X-linked plots for science curves and comparison diagnostics."""
+
+    point_hovered = pyqtSignal(str, float, float, float)
+    point_clicked = pyqtSignal(str, float, float, float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -132,6 +135,16 @@ class LightCurvePanel(QWidget):
                 "role": role,
                 "plot": plot,
             }
+            curve.sigPointsHovered.connect(
+                lambda _curve, points, _event, series=name: self._emit_point_event(
+                    self.point_hovered, series, points
+                )
+            )
+            curve.sigPointsClicked.connect(
+                lambda _curve, points, _event, series=name: self._emit_point_event(
+                    self.point_clicked, series, points
+                )
+            )
             self._series[name] = s
 
         safe_err = float(err or 0.0)
@@ -181,7 +194,7 @@ class LightCurvePanel(QWidget):
             baseline = float(np.median(y[finite]))
             y = y - baseline
             sat_y = sat_y - baseline
-        s["curve"].setData(x, y)
+        s["curve"].setData(x, y, data=[{"err": value} for value in e])
         s["errbar"].setData(x=x, y=y, top=e, bottom=e, beam=3.0)
         s["sat"].setData(np.asarray(s["sat_jd"], dtype=float), sat_y)
         s["errbar"].setVisible(self._errors.isChecked())
@@ -213,6 +226,16 @@ class LightCurvePanel(QWidget):
             for item_key in ("errbar", "curve", "sat"):
                 s["plot"].removeItem(s[item_key])
         self._series = {}
+
+    @staticmethod
+    def _emit_point_event(signal, name: str, points) -> None:
+        if not points:
+            return
+        point = points[0]
+        data = point.data() or {}
+        signal.emit(
+            name, float(point.pos().x()), float(point.pos().y()), float(data.get("err", 0.0))
+        )
 
     # ------------------------------------------------------------------
     # View state

@@ -118,11 +118,6 @@ _DEFAULTS: dict[str, Any] = {
         # sent anywhere; observers explicitly choose whether to create it.
         "enabled": False,
     },
-    "postprocessing": {
-        # Explicit, local-only command used by Review → Ready for post-processing.
-        # ``{session}`` and ``{lights}`` are substituted without a shell.
-        "star_var_command": "",
-    },
     "stellarium": {
         "host": "127.0.0.1",
         "port": 10001,

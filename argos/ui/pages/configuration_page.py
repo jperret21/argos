@@ -106,7 +106,6 @@ class ConfigurationPage(QWidget):
         self._settings_sections.addItem(
             self._section_page(
                 self._build_paths_card(),
-                self._build_postprocessing_card(),
                 self._build_appearance_card(),
                 self._build_about_card(),
             ),
@@ -699,28 +698,6 @@ class ConfigurationPage(QWidget):
         layout.addWidget(design.MutedLabel("Language change applies after restart."))
         return card
 
-    def _build_postprocessing_card(self) -> "design.Card":
-        card = design.Card("Post-processing")
-        layout = design.card_layout(card)
-        self._star_var_command_edit = QLineEdit()
-        self._star_var_command_edit.setPlaceholderText(
-            'e.g. /path/to/star_var_script/launcher --session "{session}"'
-        )
-        self._star_var_command_edit.setToolTip(
-            "Local command launched by Review → Ready for post-processing. "
-            "Use {session} for the selected Argos session folder and {lights} for its lights folder."
-        )
-        self._star_var_command_edit.editingFinished.connect(self._save_postprocessing)
-        layout.addWidget(design.MutedLabel("star_var_script launcher command"))
-        layout.addWidget(self._star_var_command_edit)
-        layout.addWidget(
-            design.MutedLabel(
-                "Optional and local-only. Argos does not bundle, download or inspect star_var_script. "
-                "The command runs only after you confirm it from Review."
-            )
-        )
-        return card
-
     def _build_about_card(self) -> "design.Card":
         card = design.Card("About")
         layout = design.card_layout(card)
@@ -787,9 +764,6 @@ class ConfigurationPage(QWidget):
         self._select_downsample(int(self._config.get("astrometry.downsample", 2)))
         self._scale_hint_chk.setChecked(bool(self._config.get("astrometry.use_scale_hint", True)))
         self._diagnostics_chk.setChecked(bool(self._config.get("diagnostics.enabled", False)))
-        self._star_var_command_edit.setText(
-            str(self._config.get("postprocessing.star_var_command", "") or "")
-        )
         self._refresh_astap_status()
         self._loading = False
 
@@ -1112,12 +1086,6 @@ class ConfigurationPage(QWidget):
         # user's first interaction so the migration never overrides it again.
         self._config.set("diagnostics.local_opt_in_v1", True)
         self._config.set("diagnostics.enabled", bool(enabled))
-
-    def _save_postprocessing(self) -> None:
-        if not self._loading:
-            self._config.set(
-                "postprocessing.star_var_command", self._star_var_command_edit.text().strip()
-            )
 
     def _refresh_astap_status(self) -> None:
         found = find_astap(self._astap_edit.text().strip())

@@ -54,11 +54,10 @@
    tendances **FWHM**, **HFD**, température et fond de ciel. Ces mesures décrivent la
    séance Argos ; elles ne remplacent pas la réduction scientifique.
 3. Les courbes affichées sont les prévisualisations différentielles enregistrées pendant
-   l'acquisition. Les FITS bruts restent inchangés.
-4. **Ready for post-processing…** n'est disponible que si une commande locale
-   `star_var_script` est définie dans **Settings → Files & application → Post-processing**.
-   Les variables `{session}` et `{lights}` transmettent les dossiers correspondants sans
-   utiliser de shell. Argos lance cette commande uniquement après confirmation.
+   l'acquisition. Survoler un point affiche ses valeurs ; cliquer le relie à sa pose source
+   et **Open source frame** ouvre le visualiseur FITS. L'onglet **Frames** offre le même
+   accès par double-clic, avec astrométrie et inspection complète disponibles dans ce
+   visualiseur. Les FITS bruts restent inchangés.
 
 ## 3. Déroulé d'une soirée
 

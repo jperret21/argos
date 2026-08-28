@@ -79,6 +79,23 @@ class ReviewedSession:
             issues.append("No FITS frames found in this session folder.")
         return issues
 
+    def frame_path(self, frame: ReviewFrame) -> Path | None:
+        """Find the stored FITS for a logged frame without modifying the session."""
+        return next(self.root.rglob(frame.filename), None)
+
+    def nearest_light_frame(self, jd_utc: float) -> ReviewFrame | None:
+        """Match a preview-photometry JD to its closest recorded light frame."""
+        if not self.light_frames:
+            return None
+        seconds_since_unix = (float(jd_utc) - 2_440_587.5) * 86_400.0
+        candidates = [frame for frame in self.light_frames if frame.timestamp is not None]
+        if not candidates:
+            return None
+        return min(
+            candidates,
+            key=lambda frame: abs(frame.timestamp.timestamp() - seconds_since_unix),
+        )
+
 
 def load_session(path: Path | str, *, read_temperature: bool = True) -> ReviewedSession:
     """Load a session folder or its ``session.json`` file.

@@ -49,4 +49,6 @@ def test_load_session_summarises_frames_and_flags_missing_fits(tmp_path) -> None
     assert len(review.light_frames) == 1
     assert review.filter_counts == {"IR": 1, "Dark": 1}
     assert review.metric_samples()[0][0] == 0.0
+    jd = review.light_frames[0].timestamp.timestamp() / 86_400.0 + 2_440_587.5
+    assert review.nearest_light_frame(jd).filename.endswith("00001.fit")
     assert any("Missing FITS frame" in issue for issue in review.readiness_issues())

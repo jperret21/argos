@@ -15,14 +15,13 @@ and warns when it is unset (AAVSO submissions need a real code).
 from __future__ import annotations
 
 import logging
-import shlex
-import subprocess
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QShowEvent
 from PyQt6.QtWidgets import (
     QFileDialog,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QMessageBox,
     QTableWidget,
@@ -40,6 +39,10 @@ from argos.ui.widgets.lightcurve_panel import LightCurvePanel
 from argos.ui.widgets.session_review import SessionQualityPlot
 
 logger = logging.getLogger(__name__)
+
+
+def _format_metric(value) -> str:
+    return "—" if value is None else f"{float(value):.2f}"
 
 
 class AnalyzeScreen(QWidget):
@@ -131,24 +134,44 @@ class AnalyzeScreen(QWidget):
         self._review_tabs = QTabWidget()
         self._quality = SessionQualityPlot()
         self._curves = LightCurvePanel()
+        self._curves.point_hovered.connect(self._on_curve_point_hovered)
+        self._curves.point_clicked.connect(self._on_curve_point_clicked)
+        curves_page = QWidget()
+        curves_layout = QVBoxLayout(curves_page)
+        curves_layout.setContentsMargins(0, 0, 0, 0)
+        curves_layout.addWidget(self._curves, 1)
+        curve_row = QHBoxLayout()
+        self._curve_point_info = design.MutedLabel(
+            "Hover a point to inspect it; click to select it."
+        )
+        self._curve_point_info.setWordWrap(True)
+        curve_row.addWidget(self._curve_point_info, 1)
+        self._open_curve_frame_btn = design.SecondaryButton("Open source frame")
+        self._open_curve_frame_btn.setEnabled(False)
+        self._open_curve_frame_btn.clicked.connect(self._open_selected_curve_frame)
+        curve_row.addWidget(self._open_curve_frame_btn)
+        curves_layout.addLayout(curve_row)
+        self._selected_curve_frame = None
+
+        self._frames = QTableWidget(0, 9)
+        self._frames.setHorizontalHeaderLabels(
+            ["UTC", "Type", "Filter", "Exp (s)", "Gain", "FWHM", "HFD", "Temp (°C)", "File"]
+        )
+        self._frames.verticalHeader().setVisible(False)
+        self._frames.horizontalHeader().setStretchLastSection(True)
+        self._frames.cellDoubleClicked.connect(self._open_frame_from_table)
         self._metadata = QTableWidget(0, 2)
         self._metadata.setHorizontalHeaderLabels(["Field", "Value"])
         self._metadata.verticalHeader().setVisible(False)
         self._metadata.horizontalHeader().setStretchLastSection(True)
         self._review_tabs.addTab(self._quality, "Quality trends")
-        self._review_tabs.addTab(self._curves, "Preview light curves")
+        self._review_tabs.addTab(curves_page, "Preview light curves")
+        self._review_tabs.addTab(self._frames, "Frames")
         self._review_tabs.addTab(self._metadata, "Metadata")
         self._review_tabs.setMinimumHeight(340)
         self._review_tabs.setEnabled(False)
         layout.addWidget(self._review_tabs)
 
-        self._postprod_btn = design.PrimaryButton("Ready for post-processing…")
-        self._postprod_btn.setEnabled(False)
-        self._postprod_btn.setToolTip(
-            "Launches the local star_var_script command configured in Settings. Raw FITS are not changed."
-        )
-        self._postprod_btn.clicked.connect(self._launch_postprocessing)
-        layout.addWidget(self._postprod_btn)
         return card
 
     # ------------------------------------------------------------------
@@ -179,7 +202,6 @@ class AnalyzeScreen(QWidget):
 
     def showEvent(self, event: QShowEvent) -> None:
         self._refresh_export_info()  # observer code may have changed in Settings
-        self._update_postprocessing_state()
         super().showEvent(event)
 
     # ------------------------------------------------------------------
@@ -211,13 +233,37 @@ class AnalyzeScreen(QWidget):
         )
         self._quality.set_session(review)
         self._curves.set_curves(load_session_curves(review))
+        self._selected_curve_frame = None
+        self._open_curve_frame_btn.setEnabled(False)
+        self._curve_point_info.setText(
+            "Hover a point to inspect it; click to select its source frame."
+        )
+        self._populate_frames(review)
         self._populate_metadata(review)
         issues = review.readiness_issues()
         self._session_warnings.setText(
             " · ".join(issues) if issues else "Session structure looks complete."
         )
         self._review_tabs.setEnabled(True)
-        self._update_postprocessing_state()
+
+    def _populate_frames(self, review) -> None:
+        self._frames.setRowCount(len(review.frames))
+        for row, frame in enumerate(review.frames):
+            values = (
+                frame.timestamp.isoformat(timespec="seconds") if frame.timestamp else "—",
+                frame.image_type,
+                frame.filter_name or "—",
+                f"{frame.exposure_s:g}",
+                str(frame.gain),
+                _format_metric(frame.fwhm),
+                _format_metric(frame.hfd),
+                _format_metric(frame.ccd_temp),
+                frame.filename,
+            )
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setData(Qt.ItemDataRole.UserRole, frame)
+                self._frames.setItem(row, column, item)
 
     def _populate_metadata(self, review) -> None:
         values = [
@@ -234,46 +280,50 @@ class AnalyzeScreen(QWidget):
             self._metadata.setItem(row, 0, QTableWidgetItem(key))
             self._metadata.setItem(row, 1, QTableWidgetItem(value))
 
-    def _update_postprocessing_state(self) -> None:
-        configured = bool(
-            str(self._config.get("postprocessing.star_var_command", "") or "").strip()
+    def _on_curve_point_hovered(self, name: str, jd: float, mag: float, error: float) -> None:
+        self._curve_point_info.setText(
+            f"{name} · JD {jd:.6f} · preview value {mag:.4f} ± {error:.4f}"
         )
-        self._postprod_btn.setEnabled(self._review is not None and configured)
-        if self._review is not None and not configured:
-            self._postprod_btn.setToolTip(
-                "Set the local star_var_script command in Settings → Files & application first."
-            )
 
-    def _launch_postprocessing(self) -> None:
+    def _on_curve_point_clicked(self, name: str, jd: float, mag: float, error: float) -> None:
         if self._review is None:
             return
-        template = str(self._config.get("postprocessing.star_var_command", "") or "").strip()
-        if not template:
+        frame = self._review.nearest_light_frame(jd)
+        self._selected_curve_frame = frame
+        if frame is None:
+            self._curve_point_info.setText(f"{name} · no logged light frame matches JD {jd:.6f}")
+            self._open_curve_frame_btn.setEnabled(False)
             return
-        try:
-            command = shlex.split(
-                template.format(
-                    session=str(self._review.root), lights=str(self._review.root / "lights")
-                )
-            )
-        except (ValueError, KeyError) as exc:
-            QMessageBox.warning(self, "Invalid post-processing command", str(exc))
-            return
-        if not command:
-            return
-        answer = QMessageBox.question(
-            self,
-            "Start post-processing",
-            "Launch the configured local star_var_script command for this session?\n\n"
-            + " ".join(command),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        self._curve_point_info.setText(
+            f"{name} · {frame.filename} · {frame.timestamp.isoformat(timespec='seconds') if frame.timestamp else 'unknown UTC'} "
+            f"· FWHM {_format_metric(frame.fwhm)} · HFD {_format_metric(frame.hfd)}"
         )
-        if answer != QMessageBox.StandardButton.Yes:
+        self._open_curve_frame_btn.setEnabled(self._review.frame_path(frame) is not None)
+
+    def _open_selected_curve_frame(self) -> None:
+        if self._selected_curve_frame is not None:
+            self._open_review_frame(self._selected_curve_frame)
+
+    def _open_frame_from_table(self, row: int, _column: int) -> None:
+        item = self._frames.item(row, 0)
+        if item is not None:
+            self._open_review_frame(item.data(Qt.ItemDataRole.UserRole))
+
+    def _open_review_frame(self, frame) -> None:
+        if self._review is None:
             return
-        try:
-            subprocess.Popen(command, cwd=self._review.root, start_new_session=True)
-        except OSError as exc:
-            QMessageBox.warning(self, "Could not start post-processing", str(exc))
+        path = self._review.frame_path(frame)
+        if path is None:
+            QMessageBox.warning(self, "Frame unavailable", f"Could not find {frame.filename}.")
+            return
+        from argos.ui.analysis_window import AnalysisWindow
+
+        window = AnalysisWindow(self._config)
+        window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        if window.load(str(path)):
+            window.show()
+            window.raise_()
+            self._windows.append(window)
 
     def _open_lightcurve(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
