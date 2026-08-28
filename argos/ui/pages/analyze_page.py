@@ -54,6 +54,7 @@ class AnalyzeScreen(QWidget):
         # Hold references so the spawned companion windows aren't garbage-collected.
         self._windows: list[QWidget] = []
         self._review = None
+        self._review_frame_window = None
 
         self.setStyleSheet(f"background:{theme.BG};")
         scroll, content = design.scroll_page()
@@ -318,12 +319,16 @@ class AnalyzeScreen(QWidget):
             return
         from argos.ui.analysis_window import AnalysisWindow
 
-        window = AnalysisWindow(self._config)
-        window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        window = self._review_frame_window
+        if window is None:
+            window = AnalysisWindow(self._config)
+            window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+            self._review_frame_window = window
+            self._windows.append(window)
         if window.load(str(path)):
             window.show()
             window.raise_()
-            self._windows.append(window)
+            window.activateWindow()
 
     def _open_lightcurve(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
