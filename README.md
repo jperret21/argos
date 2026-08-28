@@ -113,6 +113,28 @@ uv run python main.py
 
 See [`docs/simulator_testing.md`](docs/simulator_testing.md) for the full guide.
 
+## CI and releases
+
+GitHub Actions runs linting, formatting, documentation and tests on every pull
+request and on every push to `main` or `release/**`.
+
+Installers are deliberately **not** rebuilt for every commit on `main`. After a
+release branch has been merged and its CI is green, create and push a version
+tag, for example `v0.4.1`:
+
+```bash
+git checkout main
+git pull --ff-only
+git tag -a v0.4.1 -m "Argos 0.4.1"
+git push origin v0.4.1
+```
+
+The release workflow then builds the macOS `.dmg` and Debian/Ubuntu `.deb`,
+smoke-tests both bundles, and creates a GitHub release **draft** with the two
+artifacts attached. Publishing that draft remains a deliberate human step. The
+same packaging workflow can also be started manually from the
+[Actions page](https://github.com/jperret21/argos/actions).
+
 ## Contributing
 
 Argos is open source and built in the open. Issues, ideas and pull requests are all
