@@ -61,9 +61,7 @@ def test_shell_three_mode_walkthrough() -> None:
         # The planner mirrors Capture's modular workspace: the centre table is
         # stable while search, visibility and controls are true movable docks.
         sequence_panel = shell._pages["sequencer"].panel
-        assert {"search", "transit", "plan", "visibility", "presets", "run"} <= set(
-            sequence_panel._docks
-        )
+        assert {"source", "plan", "visibility", "presets", "run"} <= set(sequence_panel._docks)
         assert sequence_panel._docks["visibility"].features()
         from argos.core.catalog.object_resolver import ResolvedObject
 

@@ -31,7 +31,10 @@ Choose the observing settings in the transit panel:
   default is 60 minutes on each side; increase it when the event and night
   allow it.
 * **Exposure** and **cadence** are start-to-start values. Cadence must be at
-  least as long as exposure.
+  least as long as exposure. During the sequence Argos deducts acquisition and
+  download time from the cadence budget rather than adding an idle delay after
+  every frame; if the hardware cannot keep up, it takes the next frame as soon
+  as possible and does not pretend the requested cadence was achieved.
 * Use one **filter** throughout the series. The generated plan has one Light
   step, no dithering, no autofocus and no filter changes so the cadence and
   flux time series remain stable.

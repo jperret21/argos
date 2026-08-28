@@ -37,6 +37,10 @@ class SequenceStep:
         gain:         Camera gain value.
         count:        Number of frames to shoot for this step.
         interval_s:   Idle delay inserted after each frame of this step.
+        cadence_s:    Optional start-to-start cadence. When set, the sequence
+                      waits only for the remaining cadence after acquisition;
+                      it never adds ``interval_s`` on top. Used for transit
+                      time series, where cadence is a scientific constraint.
         dither_every: Dither cadence (frames). 0 = off. Dithering is not
                       supported on the Seestar (no guiding) — kept for forward
                       compatibility only.
@@ -49,6 +53,7 @@ class SequenceStep:
     gain: int = 80
     count: int = 10
     interval_s: float = 0.0
+    cadence_s: float | None = None
     dither_every: int = 0
 
 
@@ -95,6 +100,7 @@ class FrameSpec:
     exposure_s: float
     gain: int
     interval_s: float
+    cadence_s: float | None
     dither_every: int
     frame_index: int  # 1-based counter within its (image_type, filter) bucket
     step_index: int  # index of the SequenceStep that produced it (0-based)
@@ -155,6 +161,7 @@ def expand_plan(plan: SequencePlan) -> Iterator[FrameSpec]:
                     exposure_s=step.exposure_s,
                     gain=step.gain,
                     interval_s=step.interval_s,
+                    cadence_s=step.cadence_s,
                     dither_every=step.dither_every,
                     frame_index=counters[key],
                     step_index=step_index,
@@ -179,7 +186,12 @@ def estimated_duration_s(plan: SequencePlan) -> float:
     floor, shown before the run so the user can sanity-check the night.
     """
     per_pass = sum(
-        s.count * (s.exposure_s + s.interval_s + _FRAME_OVERHEAD_S)
+        s.count
+        * (
+            s.cadence_s
+            if s.cadence_s is not None
+            else s.exposure_s + s.interval_s + _FRAME_OVERHEAD_S
+        )
         for s in plan.steps
         if s.enabled and s.count > 0
     )

@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QLineEdit,
     QProgressBar,
+    QStackedWidget,
     QSpinBox,
     QSizePolicy,
     QTableWidget,
@@ -250,8 +251,10 @@ class SequencePanel(QWidget):
         search_row = QHBoxLayout()
         search_row.setSpacing(design.SPACING_SM)
         self._search_edit = QLineEdit()
-        self._search_edit.setPlaceholderText("M 42, NGC 7000, HD 189733…")
-        self._search_edit.setToolTip("Search an astronomical catalogue by designation")
+        self._search_edit.setPlaceholderText("T CrB, RR Lyr, V404 Cyg…")
+        self._search_edit.setToolTip(
+            "Resolve the variable star's designation to its observing coordinates"
+        )
         self._search_edit.returnPressed.connect(self._request_object_lookup)
         search_row.addWidget(self._search_edit, 1)
         self._search_btn = design.SecondaryButton("Find")
@@ -259,7 +262,7 @@ class SequencePanel(QWidget):
         search_row.addWidget(self._search_btn)
         search_l.addLayout(search_row)
         self._search_result = design.MutedLabel(
-            "Select a target for this plan. Telescope pointing stays a separate action."
+            "Select the variable star. Argos will add it as the photometry target; pointing stays manual."
         )
         self._search_result.setWordWrap(True)
         search_l.addWidget(self._search_result)
@@ -379,6 +382,27 @@ class SequencePanel(QWidget):
         self._prepare_transit_btn.clicked.connect(self.transit_plan_requested)
         transit_l.addLayout(design.button_row(self._prepare_transit_btn))
 
+        # One source card governs both programmes.  Once selected, both use
+        # the same target set, comparison ensemble, visibility and sequence
+        # table; only exoplanets need an additional ephemeris/cadence step.
+        source_panel = QWidget()
+        source_l = QVBoxLayout(source_panel)
+        source_l.setContentsMargins(0, 0, 0, 0)
+        source_l.setSpacing(design.SPACING_SM)
+        source_l.addWidget(design.MutedLabel("Observing programme"))
+        self._source_kind = QComboBox()
+        self._source_kind.addItem("Variable star", "variable")
+        self._source_kind.addItem("Exoplanet transit", "exoplanet")
+        self._source_kind.setToolTip(
+            "Both programmes use the same target and comparison-star workflow"
+        )
+        source_l.addWidget(self._source_kind)
+        self._source_stack = QStackedWidget()
+        self._source_stack.addWidget(search_panel)
+        self._source_stack.addWidget(transit_panel)
+        self._source_kind.currentIndexChanged.connect(self._source_stack.setCurrentIndex)
+        source_l.addWidget(self._source_stack)
+
         presets_panel = QWidget()
         presets_l = QVBoxLayout(presets_panel)
         presets_l.setContentsMargins(0, 0, 0, 0)
@@ -421,10 +445,7 @@ class SequencePanel(QWidget):
         run_l.addWidget(self._readiness_lbl)
 
         self._docks = {
-            "search": make_dock("Target search", search_panel, object_name="sequencer.search"),
-            "transit": make_dock(
-                "Exoplanet transit", transit_panel, object_name="sequencer.transit"
-            ),
+            "source": make_dock("Scientific source", source_panel, object_name="sequencer.source"),
             "plan": make_dock("Plan settings", plan_panel, object_name="sequencer.plan"),
             "visibility": make_dock(
                 "Target visibility",
@@ -452,8 +473,7 @@ class SequencePanel(QWidget):
             f" padding: 1px 8px; }} QToolBar QToolButton:checked {{ color: {theme.FG}; }}"
         )
         for key, label in (
-            ("search", "Target search"),
-            ("transit", "Exoplanet transit"),
+            ("source", "Scientific source"),
             ("plan", "Plan settings"),
             ("visibility", "Visibility"),
             ("presets", "Presets"),
@@ -472,12 +492,9 @@ class SequencePanel(QWidget):
         workspace = self._workspace
         right = Qt.DockWidgetArea.RightDockWidgetArea
         bottom = Qt.DockWidgetArea.BottomDockWidgetArea
-        workspace.addDockWidget(right, self._docks["search"])
+        workspace.addDockWidget(right, self._docks["source"])
         workspace.splitDockWidget(
-            self._docks["search"], self._docks["transit"], Qt.Orientation.Vertical
-        )
-        workspace.splitDockWidget(
-            self._docks["transit"], self._docks["visibility"], Qt.Orientation.Vertical
+            self._docks["source"], self._docks["visibility"], Qt.Orientation.Vertical
         )
         workspace.splitDockWidget(
             self._docks["visibility"], self._docks["plan"], Qt.Orientation.Vertical
@@ -515,6 +532,10 @@ class SequencePanel(QWidget):
     def _request_object_lookup(self) -> None:
         self.object_lookup_requested.emit(self._search_edit.text().strip())
 
+    def source_kind(self) -> str:
+        """The observing programme selected in the unified source card."""
+        return str(self._source_kind.currentData() or "variable")
+
     def _request_exoplanet_lookup(self) -> None:
         self.exoplanet_lookup_requested.emit(self._transit_edit.text().strip())
 
@@ -528,7 +549,8 @@ class SequencePanel(QWidget):
         type_suffix = f" · {result.object_type}" if result.object_type else ""
         self._search_result.setText(
             f"{result.name}{type_suffix}\nRA {result.ra_hours:.5f} h · Dec {result.dec_degrees:+.5f}°\n"
-            "Selected for the plan; telescope pointing remains manual."
+            "Selected as the variable-star target. Identify the field, then review comparisons; "
+            "telescope pointing remains manual."
         )
 
     def set_lookup_error(self, message: str) -> None:
@@ -617,6 +639,7 @@ class SequencePanel(QWidget):
         exp.setRange(*self._exposure_range)
         exp.setDecimals(2)
         exp.setValue(step.exposure_s)
+        exp.setProperty("cadence_s", step.cadence_s)
         exp.valueChanged.connect(self._refresh_estimate)
         self._table.setCellWidget(r, 3, exp)
 
@@ -695,6 +718,7 @@ class SequencePanel(QWidget):
             gain=int(self._table.cellWidget(r, 4).value()),
             count=int(self._table.cellWidget(r, 5).value()),
             interval_s=float(self._table.cellWidget(r, 6).value()),
+            cadence_s=self._table.cellWidget(r, 3).property("cadence_s"),
             dither_every=int(self._table.cellWidget(r, 7).value()),
         )
 
@@ -705,6 +729,7 @@ class SequencePanel(QWidget):
         self._table.cellWidget(r, 1).setCurrentText(step.frame_type)
         self._table.cellWidget(r, 2).setCurrentText(step.filter_name)
         self._table.cellWidget(r, 3).setValue(step.exposure_s)
+        self._table.cellWidget(r, 3).setProperty("cadence_s", step.cadence_s)
         self._table.cellWidget(r, 4).setValue(step.gain)
         self._table.cellWidget(r, 5).setValue(step.count)
         self._table.cellWidget(r, 6).setValue(step.interval_s)

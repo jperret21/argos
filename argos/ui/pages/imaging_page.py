@@ -1589,6 +1589,33 @@ class ImagingPage(QWidget):
             f"Catalogue target: {result.name} — RA {result.ra_hours:.5f}h Dec {result.dec_degrees:+.5f}°",
         )
 
+    @pyqtSlot(str, object)
+    def set_science_source(self, programme: str, result) -> None:
+        """Turn a planned source into the shared photometry target.
+
+        The Sequencer has already updated the observation identity before this
+        signal is emitted.  Creating the target now means variable-star and
+        exoplanet observations enter the identical target/comparison workflow;
+        the solved-field catalogue later supplies or lets the observer review
+        comparison stars.
+        """
+        source = "exoplanet_host" if programme == "exoplanet" else "variable_catalogue"
+        star = TargetStar(
+            role="target",
+            ra_deg=result.ra_degrees,
+            dec_deg=result.dec_degrees,
+            name=result.name,
+            source=source,
+            mags={},
+        )
+        self._engine.set_target_role(star)
+        label = "Exoplanet host" if programme == "exoplanet" else "Variable star"
+        self.log_message.emit(
+            "OK",
+            f"{label} selected for photometry: {star.display_name}. "
+            "Identify the field, then review the comparison ensemble.",
+        )
+
     @pyqtSlot(str)
     def _on_object_lookup_failed(self, message: str) -> None:
         self._mount_dock.set_lookup_error(message)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from argos.core.imaging.sequencer import (
     SequencePlan,
     SequenceStep,
+    estimated_duration_s,
     expand_plan,
     plan_from_dict,
     plan_to_dict,
@@ -174,3 +175,10 @@ def test_estimated_duration_counts_enabled_frames_only() -> None:
     est = estimated_duration_s(plan)
     # 2 passes × 10 frames × (30 + 2 + overhead) — the disabled step is ignored.
     assert 2 * 10 * 32 <= est <= 2 * 10 * 40
+
+
+def test_cadence_is_used_instead_of_interval_and_overhead() -> None:
+    plan = SequencePlan(
+        steps=[SequenceStep(count=10, exposure_s=10.0, interval_s=99.0, cadence_s=13.0)]
+    )
+    assert estimated_duration_s(plan) == 130.0

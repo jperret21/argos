@@ -42,7 +42,8 @@ class PhotometryWindow(QWidget):
         root = QVBoxLayout(self)
         banner = QLabel(
             "Preview — raw, uncalibrated subs. BJD_TDB is recorded when the site and "
-            "exposure time are available; publishable reduction remains in Siril."
+            "exposure time are available. Relative flux is a live diagnostic, not a detrended "
+            "transit result; publishable reduction remains in Siril."
         )
         banner.setWordWrap(True)
         banner.setStyleSheet(
@@ -57,7 +58,7 @@ class PhotometryWindow(QWidget):
         self.comparisons = ComparisonEnsembleTable()
         tabs = QTabWidget()
         # Variables first: picking the target there is the workflow's entry point.
-        tabs.addTab(self.variables, "Variables")
+        tabs.addTab(self.variables, "Field variables")
         tabs.addTab(self.lightcurve, "Light curve")
         tabs.addTab(self.metrics, "Metrics")
         tabs.addTab(self.targets, "Targets")

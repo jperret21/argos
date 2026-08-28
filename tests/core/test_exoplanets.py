@@ -84,7 +84,8 @@ def test_predicts_coverage_and_builds_stable_light_sequence(tmp_path: Path, monk
     assert plan.autofocus_on_filter_change is False
     assert len(plan.steps) == 1
     assert plan.steps[0].frame_type == "Light"
-    assert plan.steps[0].interval_s == pytest.approx(3.0)
+    assert plan.steps[0].interval_s == 0.0
+    assert plan.steps[0].cadence_s == pytest.approx(13.0)
     assert plan.steps[0].dither_every == 0
     assert plan.steps[0].count * 13.0 >= window.coverage_hours * 3600.0
     assert plan.metadata["observation_type"] == "exoplanet_transit"

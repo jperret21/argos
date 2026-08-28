@@ -213,6 +213,7 @@ class SequenceWorker(QThread):
                     return False
 
             self.frame_started.emit(done, total, spec)
+            frame_boundary = time.monotonic()
             path, record = self._shoot_one(spec)
             if path is None:
                 return False  # stop requested or error already emitted
@@ -230,7 +231,13 @@ class SequenceWorker(QThread):
                 if self._stop_flag:
                     return False
 
-            if spec.interval_s > 0 and not self._interruptible_sleep(spec.interval_s):
+            wait_s = spec.interval_s
+            if spec.cadence_s is not None:
+                # Transit cadence is start-to-start. Acquisition/download time
+                # consumes the budget; a slow camera is never hidden by adding
+                # another idle delay after it.
+                wait_s = max(0.0, spec.cadence_s - (time.monotonic() - frame_boundary))
+            if wait_s > 0 and not self._interruptible_sleep(wait_s):
                 return False
 
         return not self._stop_flag

@@ -96,7 +96,8 @@ def make_transit_sequence(
                 exposure_s=exposure_s,
                 gain=gain,
                 count=count,
-                interval_s=cadence_s - exposure_s,
+                interval_s=0.0,
+                cadence_s=cadence_s,
                 dither_every=0,
             )
         ],

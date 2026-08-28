@@ -41,8 +41,8 @@ class ComparisonEnsembleTable(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self._hint = QLabel(
-            "Comparison ensemble — these stars' catalog mags form the "
-            "differential zero-point. Need ≥ min_comparisons with a mag."
+            "Comparison ensemble — catalogue magnitudes enable differential magnitudes; "
+            "relative-flux preview only needs stable, unsaturated comparison stars."
         )
         self._hint.setWordWrap(True)
         self._hint.setStyleSheet("color:#9a9a9a; font-size:11px; padding:2px 0;")

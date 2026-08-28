@@ -25,6 +25,7 @@ class SequencerPage(QWidget):
     """Full-page host for the sequence planner, wired to the engine."""
 
     target_resolved = pyqtSignal(object)
+    science_source_resolved = pyqtSignal(str, object)  # programme, host/target coordinates
 
     def __init__(self, config, session, engine, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -107,6 +108,7 @@ class SequencerPage(QWidget):
         # Shell routes this to ImagingPage, which makes the same target visible
         # in Capture and arms (but does not execute) the Telescope slew button.
         self.target_resolved.emit(result)
+        self.science_source_resolved.emit("variable", result)
 
     @pyqtSlot(str)
     def _on_object_lookup_failed(self, message: str) -> None:
@@ -232,6 +234,7 @@ class SequencerPage(QWidget):
         )
         self._show_transit_visibility(target, self._transit_window, local_window)
         self.target_resolved.emit(host)
+        self.science_source_resolved.emit("exoplanet", host)
 
     @pyqtSlot(str)
     def _on_exoplanet_lookup_failed(self, message: str) -> None:
