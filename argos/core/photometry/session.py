@@ -21,7 +21,12 @@ from argos.core.catalog.targets import (
     TargetStar,
 )
 from argos.core.photometry.aperture import AperturePhot, measure_aperture
-from argos.core.photometry.differential import DiffResult, differential_mag
+from argos.core.photometry.differential import (
+    DiffResult,
+    RelativeFluxResult,
+    differential_mag,
+    relative_flux,
+)
 
 
 @dataclass
@@ -31,6 +36,7 @@ class TargetResult:
     star: TargetStar
     diff: DiffResult | None  # differential magnitude (None when uncomputable)
     phot: AperturePhot | None  # raw aperture measurement
+    relative: RelativeFluxResult | None = None  # comparison-flux ratio for transit preview
 
 
 def _cat_mag(star: TargetStar, band: str) -> float | None:
@@ -93,7 +99,8 @@ def measure_targets(
         measured.append((s, phot))
 
     # Usable ensemble members, keyed so a comp can be excluded from its own
-    # calibration (leave-one-out) without re-filtering per star.
+    # calibration (leave-one-out) without re-filtering per star.  The relative
+    # flux path intentionally has no catalogue-magnitude requirement.
     comp_pairs: list[tuple[str, tuple[float, float]]] = [
         (s.key(), (phot.inst_mag, _cat_mag(s, band)))
         for s, phot in measured
@@ -104,10 +111,20 @@ def measure_targets(
         and not phot.saturated
     ]
     comps = [pair for _key, pair in comp_pairs]
+    comp_fluxes: list[tuple[str, tuple[float, float]]] = [
+        (s.key(), (phot.flux_adu, phot.snr))
+        for s, phot in measured
+        if s.role == ROLE_COMPARISON
+        and phot is not None
+        and phot.flux_adu > 0
+        and phot.snr > 0
+        and not phot.saturated
+        and not phot.suspect
+    ]
 
     out: list[TargetResult] = []
     for s, phot in measured:
-        result = _calibrate_star(s, phot, comp_pairs, comps, min_comps)
+        result = _calibrate_star(s, phot, comp_pairs, comps, comp_fluxes, min_comps)
         if result is not None:
             out.append(result)
     return out
@@ -118,18 +135,26 @@ def _calibrate_star(
     phot: AperturePhot | None,
     comp_pairs: list[tuple[str, tuple[float, float]]],
     comps: list[tuple[float, float]],
+    comp_fluxes: list[tuple[str, tuple[float, float]]],
     min_comps: int,
 ) -> TargetResult | None:
     """One star's calibrated result: full ensemble for targets/checks,
     leave-one-out for comparisons, ``None`` when there is nothing to report."""
     science = s.role in (ROLE_TARGET, ROLE_CHECK)
-    if phot is None or phot.inst_mag is None:
+    if phot is None:
         return TargetResult(s, None, phot) if science else None
     if science:
         ensemble = comps
+        flux_ensemble = [pair for _key, pair in comp_fluxes]
     else:  # comparison: vet against the ensemble minus itself
         ensemble = [pair for key, pair in comp_pairs if key != s.key()]
-        if not ensemble or len(comp_pairs) < 2:
+        flux_ensemble = [pair for key, pair in comp_fluxes if key != s.key()]
+        if not ensemble and not flux_ensemble:
             return None  # a lone comp has nothing to be vetted against
-    diff = differential_mag(phot.inst_mag, phot.inst_mag_err, ensemble, min_comps=min_comps)
-    return TargetResult(s, diff, phot)
+    diff = (
+        differential_mag(phot.inst_mag, phot.inst_mag_err, ensemble, min_comps=min_comps)
+        if phot.inst_mag is not None
+        else None
+    )
+    relative = relative_flux(phot.flux_adu, phot.snr, flux_ensemble, min_comps=min_comps)
+    return TargetResult(s, diff, phot, relative)

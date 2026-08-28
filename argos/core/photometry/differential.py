@@ -25,6 +25,22 @@ class DiffResult:
     formal_mag_err: float | None = None  # before the run-level systematic floor
 
 
+@dataclass(frozen=True)
+class RelativeFluxResult:
+    """Unnormalised target/comparison ensemble flux ratio.
+
+    ``flux_ratio`` is ``F_target / sum(F_comparisons)``.  It needs no
+    catalogue magnitudes, unlike :class:`DiffResult`, and is intended for the
+    live transit preview.  Normalising to an out-of-transit baseline and
+    detrending remain post-processing operations.
+    """
+
+    flux_ratio: float | None
+    flux_ratio_err: float | None
+    comps_used: int
+    note: str = ""
+
+
 #: Outlier threshold for the ensemble clip, in robust sigmas (P3).
 _CLIP_SIGMA = 2.5
 #: Floor on the clip threshold — with 3–4 near-identical comps the MAD can be
@@ -114,3 +130,33 @@ def differential_mag(
         zp_rms=zp_rms,
         formal_mag_err=round(formal_mag_err, 4),
     )
+
+
+def relative_flux(
+    target_flux_adu: float | None,
+    target_snr: float | None,
+    comparisons: Iterable[tuple[float | None, float | None]],
+    *,
+    min_comps: int = 2,
+) -> RelativeFluxResult:
+    """Return a raw flux ratio and propagated photon-noise uncertainty.
+
+    Each comparison is ``(flux_adu, snr)``. Invalid/non-positive fluxes and
+    non-positive SNR values are excluded.  The ensemble is deliberately the
+    *sum* of comparison fluxes: it has the correct ratio uncertainty and does
+    not require catalogue magnitudes.  It is not an out-of-transit-normalised
+    or detrended science product.
+    """
+    if target_flux_adu is None or target_flux_adu <= 0 or not target_snr or target_snr <= 0:
+        return RelativeFluxResult(None, None, 0, "no valid target flux")
+    comps = [(float(f), float(s)) for f, s in comparisons if f and f > 0 and s and s > 0]
+    if not comps:
+        return RelativeFluxResult(None, None, 0, "no valid comparisons")
+    comp_flux = sum(f for f, _snr in comps)
+    ratio = float(target_flux_adu) / comp_flux
+    target_fractional_err = 1.0 / float(target_snr)
+    comp_variance = sum((f / snr) ** 2 for f, snr in comps)
+    comp_fractional_err = math.sqrt(comp_variance) / comp_flux
+    err = ratio * math.sqrt(target_fractional_err**2 + comp_fractional_err**2)
+    note = f"only {len(comps)} comparison(s)" if len(comps) < min_comps else ""
+    return RelativeFluxResult(ratio, err, len(comps), note)

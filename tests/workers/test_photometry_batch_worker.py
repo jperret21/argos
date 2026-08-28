@@ -133,7 +133,7 @@ def test_batch_measures_and_writes_uncertainty_aware_csv(_scene) -> None:
     header = csvs[0].read_text().splitlines()[0]
     assert header == (
         "jd_utc,bjd_tdb,mag,mag_err,formal_mag_err,sigma_syst,airmass,fwhm,sky_adu,"
-        "comps_used,saturated"
+        "comps_used,relative_flux,relative_flux_err,saturated"
     )
     reloaded = LightCurve.from_csv(csvs[0])
     assert len(reloaded.points) == 3

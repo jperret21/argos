@@ -14,7 +14,7 @@ from argos.core.photometry.airmass import (
     utc_from_bjd_tdb,
 )
 from argos.core.photometry.aperture import measure_aperture
-from argos.core.photometry.differential import differential_mag, ensemble_zero_point
+from argos.core.photometry.differential import differential_mag, ensemble_zero_point, relative_flux
 from argos.core.photometry.lightcurve import LcPoint, LightCurve, read_curves_csv, write_curves_csv
 
 
@@ -67,6 +67,13 @@ def test_ensemble_zero_point() -> None:
     zp, rms, n, rejected = ensemble_zero_point([(-5.0, 10.0), (-5.0, 10.0)])
     assert zp == 15.0 and rms == 0.0 and n == 2 and rejected == 0
     assert ensemble_zero_point([]) == (None, None, 0, 0)
+
+
+def test_relative_flux_needs_no_catalogue_magnitudes() -> None:
+    result = relative_flux(1000.0, 100.0, [(400.0, 50.0), (600.0, 60.0)])
+    assert result.flux_ratio == 1.0
+    assert result.flux_ratio_err is not None and result.flux_ratio_err > 0
+    assert result.comps_used == 2
 
 
 def test_ensemble_clips_a_bad_comp() -> None:

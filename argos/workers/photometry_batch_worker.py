@@ -16,6 +16,7 @@ between frames.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -257,22 +258,30 @@ class PhotometryBatchWorker(QThread):
         their keys are remembered for the K-RMS summary (comps are not).
         """
         for res in results:
-            if res.diff is None or res.diff.mag is None:
+            if res.relative is None or res.relative.flux_ratio is None:
                 continue
             if res.star.role == ROLE_CHECK:
                 self._check_keys.add(res.star.auid or res.star.display_name)
             bjd = self._bjd(jd, res.star)
             pt = LcPoint(
                 jd_utc=jd or 0.0,
-                mag=res.diff.mag,
-                mag_err=res.diff.mag_err or 0.0,
+                mag=res.diff.mag if res.diff and res.diff.mag is not None else float("nan"),
+                mag_err=(
+                    res.diff.mag_err if res.diff and res.diff.mag_err is not None else float("nan")
+                ),
                 bjd_tdb=bjd,
                 airmass=self._airmass(jd, res.star),
                 fwhm=self._series_fwhm,
                 sky_adu=res.phot.sky_adu if res.phot else None,
-                comps_used=res.diff.comps_used,
+                comps_used=res.relative.comps_used,
                 saturated=bool(res.phot and res.phot.saturated),
-                formal_mag_err=res.diff.formal_mag_err or res.diff.mag_err or 0.0,
+                formal_mag_err=(
+                    res.diff.formal_mag_err or res.diff.mag_err
+                    if res.diff and res.diff.mag_err is not None
+                    else None
+                ),
+                relative_flux=res.relative.flux_ratio,
+                relative_flux_err=res.relative.flux_ratio_err,
             )
             key = res.star.auid or res.star.display_name
             lc = curves.setdefault(
@@ -291,6 +300,8 @@ class PhotometryBatchWorker(QThread):
                     mag_err=pt.mag_err,
                     saturated=pt.saturated,
                     role=res.star.role,
+                    relative_flux=pt.relative_flux,
+                    relative_flux_err=pt.relative_flux_err,
                 )
             )
 
@@ -302,11 +313,15 @@ class PhotometryBatchWorker(QThread):
                 [
                     (point.jd_utc, point.mag, point.formal_mag_err or point.mag_err)
                     for point in curve.points
+                    if math.isfinite(point.mag)
+                    and math.isfinite(point.formal_mag_err or point.mag_err)
                 ]
             )
             if floor is None:
                 continue
             for point in curve.points:
+                if not math.isfinite(point.mag):
+                    continue
                 formal = point.formal_mag_err if point.formal_mag_err is not None else point.mag_err
                 point.mag_err = apply_systematic_floor(formal, floor)
                 point.sigma_syst = floor.sigma_systematic

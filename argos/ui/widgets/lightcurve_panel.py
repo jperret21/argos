@@ -50,6 +50,12 @@ class LightCurvePanel(QWidget):
         self._errors.setToolTip("Show the per-image photometric uncertainty")
         self._errors.toggled.connect(self._apply_error_visibility)
         layout.addWidget(self._errors, 0, Qt.AlignmentFlag.AlignRight)
+        self._relative_flux = QCheckBox("Relative flux")
+        self._relative_flux.setToolTip(
+            "Median-normalised live preview; final normalisation and detrending belong to post-processing"
+        )
+        self._relative_flux.toggled.connect(self._set_relative_flux)
+        layout.addWidget(self._relative_flux, 0, Qt.AlignmentFlag.AlignRight)
 
         self._series: dict[str, dict] = {}
 
@@ -77,9 +83,11 @@ class LightCurvePanel(QWidget):
         err: float,
         saturated: bool = False,
         role: str = "target",
+        relative_flux: float | None = None,
+        relative_flux_err: float | None = None,
     ) -> None:
         """Append a point to its scientific or comparison-diagnostic plot."""
-        if not (np.isfinite(jd) and np.isfinite(mag)):
+        if not np.isfinite(jd) or not (np.isfinite(mag) or np.isfinite(relative_flux)):
             return
         s = self._series.get(name)
         if s is None:
@@ -113,8 +121,11 @@ class LightCurvePanel(QWidget):
                 "jd": [],
                 "mag": [],
                 "err": [],
+                "flux": [],
+                "flux_err": [],
                 "sat_jd": [],
                 "sat_mag": [],
+                "sat_flux": [],
                 "curve": curve,
                 "errbar": errbar,
                 "sat": sat,
@@ -129,9 +140,15 @@ class LightCurvePanel(QWidget):
         s["jd"].append(float(jd))
         s["mag"].append(float(mag))
         s["err"].append(safe_err)
+        s["flux"].append(float(relative_flux) if relative_flux is not None else float("nan"))
+        flux_err = float(relative_flux_err or 0.0)
+        s["flux_err"].append(flux_err if np.isfinite(flux_err) and flux_err >= 0 else 0.0)
         if saturated:
             s["sat_jd"].append(float(jd))
             s["sat_mag"].append(float(mag))
+            s["sat_flux"].append(
+                float(relative_flux) if relative_flux is not None else float("nan")
+            )
         self._refresh_series(name)
 
     def _refresh_series(self, name: str) -> None:
@@ -143,13 +160,27 @@ class LightCurvePanel(QWidget):
         """
         s = self._series[name]
         x = np.asarray(s["jd"], dtype=float)
-        y = np.asarray(s["mag"], dtype=float)
-        sat_y = np.asarray(s["sat_mag"], dtype=float)
-        if s["role"] == "comparison" and y.size:
-            baseline = float(np.median(y))
+        flux_mode = self._relative_flux.isChecked()
+        y = np.asarray(s["flux" if flux_mode else "mag"], dtype=float)
+        e = np.asarray(s["flux_err" if flux_mode else "err"], dtype=float)
+        sat_y = np.asarray(s["sat_flux" if flux_mode else "sat_mag"], dtype=float)
+        finite = np.isfinite(y)
+        if not finite.any():
+            s["curve"].setData([], [])
+            s["errbar"].setData(x=np.array([]), y=np.array([]))
+            s["sat"].setData([], [])
+            return
+        if flux_mode:
+            baseline = float(np.median(y[finite]))
+            if baseline <= 0:
+                return
+            y, e, sat_y = y / baseline, e / baseline, sat_y / baseline
+            if s["role"] == "comparison":
+                y, sat_y = y - 1.0, sat_y - 1.0
+        elif s["role"] == "comparison":
+            baseline = float(np.median(y[finite]))
             y = y - baseline
             sat_y = sat_y - baseline
-        e = np.asarray(s["err"], dtype=float)
         s["curve"].setData(x, y)
         s["errbar"].setData(x=x, y=y, top=e, bottom=e, beam=3.0)
         s["sat"].setData(np.asarray(s["sat_jd"], dtype=float), sat_y)
@@ -162,7 +193,16 @@ class LightCurvePanel(QWidget):
             label = lc.name or lc.auid or "TARGET"
             role = getattr(lc, "role", "target")
             for p in lc.points:
-                self.add_point(label, p.jd_utc, p.mag, p.mag_err, saturated=p.saturated, role=role)
+                self.add_point(
+                    label,
+                    p.jd_utc,
+                    p.mag,
+                    p.mag_err,
+                    saturated=p.saturated,
+                    role=role,
+                    relative_flux=p.relative_flux,
+                    relative_flux_err=p.relative_flux_err,
+                )
         self._auto_range()
 
     def has_data(self) -> bool:
@@ -181,6 +221,19 @@ class LightCurvePanel(QWidget):
     def _apply_error_visibility(self, visible: bool) -> None:
         for s in self._series.values():
             s["errbar"].setVisible(bool(visible))
+
+    def _set_relative_flux(self, enabled: bool) -> None:
+        self._target_plot.setLabel(
+            "left", "Relative flux (median-normalised)" if enabled else "Differential mag"
+        )
+        self._comparison_plot.setLabel(
+            "left", "Δ relative flux" if enabled else "Δmag from own median"
+        )
+        self._target_plot.getViewBox().invertY(not enabled)
+        self._comparison_plot.getViewBox().invertY(not enabled)
+        for name in self._series:
+            self._refresh_series(name)
+        self._auto_range()
 
     def _auto_range(self) -> None:
         for plot in (self._target_plot, self._comparison_plot):

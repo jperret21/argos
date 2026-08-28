@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass, field
+import math
 from pathlib import Path
 
 _COLUMNS = (
@@ -21,6 +22,8 @@ _COLUMNS = (
     "fwhm",
     "sky_adu",
     "comps_used",
+    "relative_flux",
+    "relative_flux_err",
     "saturated",
 )
 
@@ -45,6 +48,8 @@ class LcPoint:
     saturated: bool = False
     formal_mag_err: float | None = None
     sigma_syst: float | None = None
+    relative_flux: float | None = None
+    relative_flux_err: float | None = None
 
 
 @dataclass
@@ -110,6 +115,8 @@ def _row(p: LcPoint) -> list:
         "" if p.fwhm is None else p.fwhm,
         "" if p.sky_adu is None else p.sky_adu,
         p.comps_used,
+        "" if p.relative_flux is None else p.relative_flux,
+        "" if p.relative_flux_err is None else p.relative_flux_err,
         int(p.saturated),
     ]
 
@@ -166,6 +173,8 @@ def _point_from_row(row: dict[str, str]) -> LcPoint:
         saturated=bool(int(row.get("saturated") or 0)),
         formal_mag_err=_opt_float(row.get("formal_mag_err")) or mag_err,
         sigma_syst=_opt_float(row.get("sigma_syst")),
+        relative_flux=_opt_float(row.get("relative_flux")),
+        relative_flux_err=_opt_float(row.get("relative_flux_err")),
     )
 
 
@@ -204,6 +213,8 @@ def write_aavso(
                 continue
             name = (lc.name or lc.auid or "TARGET").upper()
             for p in lc.points:
+                if not (math.isfinite(p.mag) and math.isfinite(p.mag_err)):
+                    continue
                 amass = "na" if p.airmass is None else f"{p.airmass:.3f}"
                 f.write(
                     f"{name},{p.jd_utc:.6f},{p.mag:.4f},{p.mag_err:.4f},{filt},NO,STD,"

@@ -86,7 +86,8 @@ def test_lightcurve_export_csv(tmp_path, qapp) -> None:
         text = path.read_text().splitlines()
         assert text[0] == (
             "star_id,role,name,auid,jd_utc,bjd_tdb,mag,mag_err,formal_mag_err,"
-            "sigma_syst,airmass,fwhm,sky_adu,comps_used,saturated"
+            "sigma_syst,airmass,fwhm,sky_adu,comps_used,relative_flux,relative_flux_err,"
+            "saturated"
         )
         assert ",target,NU Ori," in text[1]
         # The single-curve reader remains backwards compatible.

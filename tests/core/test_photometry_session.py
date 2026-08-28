@@ -55,6 +55,7 @@ def test_measure_targets_calibrates_against_comps() -> None:
     r = by_auid["T"]
     assert r.diff is not None and r.diff.mag is not None
     assert r.diff.comps_used == 2 and r.diff.note == ""
+    assert r.relative is not None and r.relative.flux_ratio is not None
     # The target is brighter than the comps (V=11) → it should read brighter.
     assert r.diff.mag < 11.0
 

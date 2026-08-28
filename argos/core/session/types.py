@@ -82,3 +82,5 @@ class PhotometryPoint:
     mag_err: float
     saturated: bool
     role: str = "target"  # target / check / comparison — display grouping
+    relative_flux: float | None = None
+    relative_flux_err: float | None = None

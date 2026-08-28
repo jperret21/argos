@@ -53,6 +53,10 @@ in an old ephemeris.
 Argos's Photometry window remains a raw-sub preview. Its measurements are
 useful to see that the target, comparison stars and cadence behave sensibly in
 the field, but they are not a claim of a publishable transit light curve.
+The **Relative flux** switch shows `F_target / sum(F_comparisons)` normalised
+to the displayed series median. This path does not require catalogue
+magnitudes, so it remains available for a manual transit comparison ensemble.
+It is deliberately not an out-of-transit normalisation or detrending result.
 
 When the sequence starts, Argos stores `observation.json` beside `session.json`
 and the raw FITS. For a transit it preserves the planet and host names, archive

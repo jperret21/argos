@@ -25,6 +25,7 @@ stops using a device *before* the session drops the handle.
 from __future__ import annotations
 
 import logging
+import math
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1049,7 +1050,7 @@ class AcquisitionEngine(QObject):
                     comps_used=res.diff.comps_used,
                     note=res.diff.note or None,
                 )
-            if res.diff is None or res.diff.mag is None:
+            if res.relative is None or res.relative.flux_ratio is None:
                 continue
             self._emit_live_point(res, jd, air, fwhm, (lat, lon, elev))
 
@@ -1063,15 +1064,21 @@ class AcquisitionEngine(QObject):
         )
         point = LcPoint(
             jd_utc=jd,
-            mag=res.diff.mag,
-            mag_err=res.diff.mag_err or 0.0,
+            mag=res.diff.mag if res.diff and res.diff.mag is not None else float("nan"),
+            mag_err=res.diff.mag_err if res.diff and res.diff.mag_err is not None else float("nan"),
             bjd_tdb=bjd,
             airmass=air,
             fwhm=fwhm,
             sky_adu=res.phot.sky_adu if res.phot else None,
-            comps_used=res.diff.comps_used,
+            comps_used=res.relative.comps_used if res.relative else 0,
             saturated=bool(res.phot and res.phot.saturated),
-            formal_mag_err=res.diff.formal_mag_err or res.diff.mag_err or 0.0,
+            formal_mag_err=(
+                res.diff.formal_mag_err or res.diff.mag_err
+                if res.diff and res.diff.mag_err is not None
+                else None
+            ),
+            relative_flux=res.relative.flux_ratio if res.relative else None,
+            relative_flux_err=res.relative.flux_ratio_err if res.relative else None,
         )
         key = res.star.auid or res.star.display_name
         lc = self._lightcurves.setdefault(
@@ -1091,10 +1098,12 @@ class AcquisitionEngine(QObject):
                     key=key,
                     name=res.star.display_name,
                     jd=jd,
-                    mag=res.diff.mag,
+                    mag=point.mag,
                     mag_err=point.mag_err,
                     saturated=point.saturated,
                     role=res.star.role,
+                    relative_flux=point.relative_flux,
+                    relative_flux_err=point.relative_flux_err,
                 )
             )
         try:
@@ -1109,6 +1118,7 @@ class AcquisitionEngine(QObject):
             [
                 (point.jd_utc, point.mag, point.formal_mag_err or point.mag_err)
                 for point in curve.points
+                if math.isfinite(point.mag) and math.isfinite(point.formal_mag_err or point.mag_err)
             ],
             manual_floor=manual,
         )
@@ -1116,6 +1126,8 @@ class AcquisitionEngine(QObject):
             return False
         changed = False
         for point in curve.points:
+            if not math.isfinite(point.mag):
+                continue
             formal = point.formal_mag_err if point.formal_mag_err is not None else point.mag_err
             final = apply_systematic_floor(formal, floor)
             if point.mag_err != final or point.sigma_syst != floor.sigma_systematic:
