@@ -5,7 +5,11 @@ from pathlib import Path
 import pytest
 
 from argos.core.catalog import object_resolver
-from argos.core.catalog.object_resolver import ObjectResolutionError, resolve_object
+from argos.core.catalog.object_resolver import (
+    ObjectResolutionError,
+    normalize_designation,
+    resolve_object,
+)
 
 _SESAME_XML = """<?xml version='1.0'?>
 <Sesame>
@@ -51,3 +55,8 @@ def test_resolve_object_parses_and_caches_response(tmp_path: Path, monkeypatch) 
 def test_resolve_object_rejects_empty_query(tmp_path: Path) -> None:
     with pytest.raises(ObjectResolutionError, match="designation"):
         resolve_object("  ", cache_path=tmp_path / "resolver.json")
+
+
+def test_normalize_compact_designations() -> None:
+    assert normalize_designation("hd189733") == "HD 189733"
+    assert normalize_designation("ngc7000") == "NGC 7000"

@@ -259,8 +259,10 @@ class ConfigurationPage(QWidget):
         )
         layout.addWidget(
             design.MutedLabel(
-                "Variable-star catalogue results are cached automatically in "
-                "~/.argos/cache/catalog for offline observing."
+                "Catalogue availability: CDS Sesame names and NASA exoplanet ephemerides are online "
+                "on first search, then cached locally under ~/Argos/cache. AAVSO VSX/VSP field "
+                "catalogues are cached under ~/.argos/cache/catalog. No catalogue refreshes or "
+                "uploads happen automatically; repeat a search while online to refresh it."
             )
         )
         return card

@@ -5,7 +5,11 @@ from pathlib import Path
 import pytest
 
 from argos.core.catalog import exoplanets
-from argos.core.catalog.exoplanets import ExoplanetLookupError, lookup_exoplanet
+from argos.core.catalog.exoplanets import (
+    ExoplanetLookupError,
+    lookup_exoplanet,
+    normalize_exoplanet_designation,
+)
 from argos.core.exoplanet.transit import make_transit_sequence, predict_next_transit
 
 _ROW = {
@@ -54,6 +58,24 @@ def test_lookup_parses_and_caches_nasa_ephemeris(tmp_path: Path, monkeypatch) ->
 def test_lookup_requires_planet_name(tmp_path: Path) -> None:
     with pytest.raises(ExoplanetLookupError, match="planet designation"):
         lookup_exoplanet(" ", cache_path=tmp_path / "exoplanets.json")
+
+
+def test_compact_designation_is_normalised_and_falls_back_to_prefix(
+    tmp_path: Path, monkeypatch
+) -> None:
+    replies = [[], [_ROW]]
+
+    class Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self):
+            return replies.pop(0)
+
+    monkeypatch.setattr(exoplanets.requests, "get", lambda *_a, **_kw: Response())
+    result = lookup_exoplanet("hd18973", cache_path=tmp_path / "exoplanets.json")
+    assert normalize_exoplanet_designation("HD189733B") == "HD 189733 b"
+    assert result.planet_name == "HD 189733 b"
 
 
 def test_predicts_coverage_and_builds_stable_light_sequence(tmp_path: Path, monkeypatch) -> None:

@@ -71,3 +71,10 @@ published depth. It is a post-processing hand-off record, not a measurement.
 NASA is contacted only after the observer requests a planet lookup. Results
 are cached locally under `~/Argos/cache/exoplanets.json`; Argos sends no
 telemetry and never uploads session data.
+
+The source fields ignore case and common missing spaces: `hd189733b`,
+`HD 189733 B` and `hd 189733 b` identify the same planet. Cached source names
+appear in the completion menu without a network connection. A new planet or a
+partial first search still needs the NASA archive; repeat an online search to
+refresh a cached ephemeris. Settings → Local diagnostics lists the local cache
+locations and the online/offline behaviour of CDS, NASA and AAVSO catalogues.

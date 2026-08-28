@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 
 import requests
 
@@ -53,7 +54,22 @@ class ExoplanetTarget:
 
 
 def _cache_key(query: str) -> str:
-    return " ".join(query.casefold().split())
+    return re.sub(r"[^a-z0-9]", "", query.casefold())
+
+
+def normalize_exoplanet_designation(query: str) -> str:
+    """Accept common compact/case-insensitive planet designations.
+
+    ``hd189733b``, ``HD 189733 B`` and ``hd 189733 b`` all become
+    ``HD 189733 b``.  Other designations retain their internal spelling while
+    whitespace is made predictable for the archive and local cache.
+    """
+    value = " ".join(query.strip().split())
+    match = re.fullmatch(r"([A-Za-z]+)\s*(\d+)\s*([A-Za-z])?", value)
+    if not match:
+        return value
+    prefix, number, letter = match.groups()
+    return f"{prefix.upper()} {number}{(' ' + letter.lower()) if letter else ''}"
 
 
 def _read_cache(path: Path) -> dict[str, dict]:
@@ -71,6 +87,21 @@ def _write_cache(path: Path, cache: dict[str, dict]) -> None:
     except OSError:
         # A read-only home directory must not turn a successful lookup into a failure.
         pass
+
+
+def cached_exoplanet_suggestions(
+    query: str, *, cache_path: Path = _CACHE_PATH, limit: int = 8
+) -> list[str]:
+    """Return offline autocomplete candidates from previously fetched planets."""
+    needle = _cache_key(query)
+    if not needle:
+        return []
+    names = {
+        str(row.get("planet_name", "")).strip()
+        for row in _read_cache(cache_path).values()
+        if isinstance(row, dict) and needle in _cache_key(str(row.get("planet_name", "")))
+    }
+    return sorted(name for name in names if name)[:limit]
 
 
 def _number(row: dict, key: str, *, required: bool = False) -> float | None:
@@ -138,7 +169,7 @@ def lookup_exoplanet(
     A cached exact name is preferred; clearing the local cache is the explicit
     way to refresh a previously prepared target.
     """
-    query = " ".join(query.split())
+    query = normalize_exoplanet_designation(query)
     if not query:
         raise ExoplanetLookupError("Enter a planet designation first (for example HD 189733 b).")
     key = _cache_key(query)
@@ -166,6 +197,27 @@ def lookup_exoplanet(
         raise ExoplanetLookupError(
             "NASA Exoplanet Archive is unavailable. Connect to the internet or use a cached planet."
         ) from exc
+    if not isinstance(rows, list) or not rows:
+        # The archive is also the authoritative autocomplete fallback.  A
+        # compact partial designation (e.g. ``hd18973``) resolves to its first
+        # matching confirmed planet instead of making the observer guess spaces
+        # and case at the telescope.
+        compact = query.replace(" ", "")
+        prefix = re.match(r"([A-Za-z]+)(\d+)", compact)
+        if prefix is None:
+            raise ExoplanetLookupError(f"No confirmed transiting planet named ‘{query}’ was found.")
+        pattern = f"{prefix.group(1).upper()} {prefix.group(2)}%".replace("'", "''")
+        partial_sql = (
+            f"select {columns} from pscomppars where lower(pl_name) like lower('{pattern}')"
+        )
+        try:
+            response = requests.get(
+                _TAP_URL, params={"query": partial_sql, "format": "json"}, timeout=timeout_s
+            )
+            response.raise_for_status()
+            rows = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            raise ExoplanetLookupError("NASA Exoplanet Archive search failed.") from exc
     if not isinstance(rows, list) or not rows:
         raise ExoplanetLookupError(f"No confirmed transiting planet named ‘{query}’ was found.")
     result = _from_row(rows[0], query)

@@ -18,11 +18,12 @@ import logging
 from pathlib import Path
 
 import pyqtgraph as pg
-from PyQt6.QtCore import QByteArray, Qt, pyqtSignal
+from PyQt6.QtCore import QByteArray, Qt, QStringListModel, pyqtSignal
 from PyQt6.QtGui import QAction, QColor
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QCompleter,
     QDoubleSpinBox,
     QFileDialog,
     QGridLayout,
@@ -49,6 +50,8 @@ from argos.core.imaging.sequencer import (
     plan_to_dict,
 )
 from argos.core.imaging.sky_geometry import upcoming_night_altitudes
+from argos.core.catalog.exoplanets import cached_exoplanet_suggestions
+from argos.core.catalog.object_resolver import cached_object_suggestions
 from argos.ui import design, theme
 from argos.ui.widgets.dock_host import make_dock, style_toggle_action
 
@@ -255,6 +258,12 @@ class SequencePanel(QWidget):
         self._search_edit.setToolTip(
             "Resolve the variable star's designation to its observing coordinates"
         )
+        self._object_suggestion_model = QStringListModel(self)
+        self._object_completer = QCompleter(self._object_suggestion_model, self)
+        self._object_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._object_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self._search_edit.setCompleter(self._object_completer)
+        self._search_edit.textEdited.connect(self._refresh_object_suggestions)
         self._search_edit.returnPressed.connect(self._request_object_lookup)
         search_row.addWidget(self._search_edit, 1)
         self._search_btn = design.SecondaryButton("Find")
@@ -320,6 +329,12 @@ class SequencePanel(QWidget):
         self._transit_edit.setToolTip(
             "Search the NASA Exoplanet Archive for a published transit ephemeris"
         )
+        self._exoplanet_suggestion_model = QStringListModel(self)
+        self._exoplanet_completer = QCompleter(self._exoplanet_suggestion_model, self)
+        self._exoplanet_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._exoplanet_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self._transit_edit.setCompleter(self._exoplanet_completer)
+        self._transit_edit.textEdited.connect(self._refresh_exoplanet_suggestions)
         self._transit_edit.returnPressed.connect(self._request_exoplanet_lookup)
         transit_search.addWidget(self._transit_edit, 1)
         self._transit_search_btn = design.SecondaryButton("Find planet")
@@ -532,12 +547,18 @@ class SequencePanel(QWidget):
     def _request_object_lookup(self) -> None:
         self.object_lookup_requested.emit(self._search_edit.text().strip())
 
+    def _refresh_object_suggestions(self, query: str) -> None:
+        self._object_suggestion_model.setStringList(cached_object_suggestions(query))
+
     def source_kind(self) -> str:
         """The observing programme selected in the unified source card."""
         return str(self._source_kind.currentData() or "variable")
 
     def _request_exoplanet_lookup(self) -> None:
         self.exoplanet_lookup_requested.emit(self._transit_edit.text().strip())
+
+    def _refresh_exoplanet_suggestions(self, query: str) -> None:
+        self._exoplanet_suggestion_model.setStringList(cached_exoplanet_suggestions(query))
 
     def set_lookup_busy(self, busy: bool) -> None:
         self._search_edit.setEnabled(not busy)

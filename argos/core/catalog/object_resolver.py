@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
+import re
 from urllib.parse import quote
 import xml.etree.ElementTree as ET
 
@@ -45,7 +46,19 @@ class ResolvedObject:
 
 
 def _cache_key(query: str) -> str:
-    return " ".join(query.casefold().split())
+    return re.sub(r"[^a-z0-9]", "", query.casefold())
+
+
+def normalize_designation(query: str) -> str:
+    """Normalise common compact stellar/deep-sky designations for Sesame."""
+    value = " ".join(query.strip().split())
+    match = re.fullmatch(r"([A-Za-z]+)\s*(\d+)\s*([A-Za-z])?", value)
+    if not match:
+        return value
+    prefix, number, suffix = match.groups()
+    if prefix.upper() in {"HD", "HIP", "NGC", "IC", "M"}:
+        return f"{prefix.upper()} {number}{(' ' + suffix.lower()) if suffix else ''}"
+    return value
 
 
 def _read_cache(path: Path) -> dict[str, dict]:
@@ -63,6 +76,21 @@ def _write_cache(path: Path, cache: dict[str, dict]) -> None:
     except OSError:
         # A read-only home directory must not make an otherwise valid lookup fail.
         pass
+
+
+def cached_object_suggestions(
+    query: str, *, cache_path: Path = _CACHE_PATH, limit: int = 8
+) -> list[str]:
+    """Return offline autocomplete candidates from prior CDS resolutions."""
+    needle = _cache_key(query)
+    if not needle:
+        return []
+    names = {
+        str(row.get("name", "")).strip()
+        for row in _read_cache(cache_path).values()
+        if isinstance(row, dict) and needle in _cache_key(str(row.get("name", "")))
+    }
+    return sorted(name for name in names if name)[:limit]
 
 
 def _from_xml(text: str, query: str) -> ResolvedObject:
@@ -102,7 +130,7 @@ def resolve_object(
     Raises :class:`ObjectResolutionError` for an empty, unknown or temporarily
     unavailable designation.  Coordinates are J2000/ICRS decimal degrees.
     """
-    query = " ".join(query.split())
+    query = normalize_designation(query)
     if not query:
         raise ObjectResolutionError("Enter an object designation first.")
     key = _cache_key(query)
