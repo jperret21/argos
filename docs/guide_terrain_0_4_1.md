@@ -17,6 +17,7 @@
 | Photométrie | Courbe cible/check séparée des diagnostics des comparaisons ; incertitudes par image ; export CSV de toutes les mesures. |
 | Informations d'étoile | Cliquer une étoile affiche identité catalogue, coordonnées et mesures ; la carte est déplaçable et redimensionnable. |
 | Données | Dossier de travail des sessions, préréglages de séquence, calibrations caméra, caches de catalogues et diagnostics JSONL sont visibles séparément. |
+| Review | Ouvre un dossier de séance fini : inventaire des FITS, filtres, métadonnées, tendances FWHM/HFD/température et courbes de prévisualisation. |
 
 ## 2. Préparation à domicile
 
@@ -44,6 +45,20 @@
 8. Pendant que l'accès internet est disponible, rechercher les objets prévus et
    résoudre/consulter les champs nécessaires : les recherches de catalogue sont
    alors réutilisables depuis le cache au terrain.
+
+## Review après une nuit
+
+1. Ouvrir **Review → Open session folder…** et sélectionner le dossier qui contient
+   `session.json` (pas directement `lights/`).
+2. Vérifier le nombre de poses, les filtres et les avertissements, puis regarder les
+   tendances **FWHM**, **HFD**, température et fond de ciel. Ces mesures décrivent la
+   séance Argos ; elles ne remplacent pas la réduction scientifique.
+3. Les courbes affichées sont les prévisualisations différentielles enregistrées pendant
+   l'acquisition. Les FITS bruts restent inchangés.
+4. **Ready for post-processing…** n'est disponible que si une commande locale
+   `star_var_script` est définie dans **Settings → Files & application → Post-processing**.
+   Les variables `{session}` et `{lights}` transmettent les dossiers correspondants sans
+   utiliser de shell. Argos lance cette commande uniquement après confirmation.
 
 ## 3. Déroulé d'une soirée
 

@@ -314,9 +314,7 @@ class Shell(QMainWindow):
         self._connection.connect_all_requested.connect(self._session.connect_all)
         self._connection.disconnect_all_requested.connect(self._session.disconnect_all)
         self._connection.telescope_profile_requested.connect(self._on_telescope_profile_requested)
-        self._configuration.telescope_profile_requested.connect(
-            self._on_telescope_profile_requested
-        )
+        self._configuration.set_telescope_profile_applier(self._on_telescope_profile_requested)
         self._session.discovered_address.connect(self._connection.set_discovered_address)
         self._session.mount_mode.connect(self._status.set_mount_mode)
 
