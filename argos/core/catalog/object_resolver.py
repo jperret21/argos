@@ -1,11 +1,10 @@
 """Resolve astronomical object designations to ICRS coordinates.
 
-This deliberately uses CDS Sesame rather than shipping a partial, stale copy
-of the Messier/NGC/HD catalogues.  Sesame federates the major astronomical
-name services and accepts the names observers actually type (``M 42``,
-``NGC 7000``, ``HD 189733`` …).  Successful lookups are cached locally, so a
-target used during preparation remains available at the telescope without a
-network connection.
+Argos first searches its embedded Messier/NGC/IC catalogue, then the local
+CDS cache, and finally CDS Sesame for broader designations such as HD/HIP or
+free-text names. Successful online lookups are cached locally, so a target
+used during preparation remains available at the telescope without a network
+connection.
 
 The module is Qt-free.  Call it from :mod:`argos.workers.object_resolver_worker`
 when used by the UI.
@@ -24,6 +23,12 @@ from urllib.parse import quote
 import xml.etree.ElementTree as ET
 
 import requests
+
+from argos.core.catalog.offline import (
+    essential_catalogue_objects,
+    essential_catalogue_suggestions,
+    resolve_essential_object,
+)
 
 _SESAME_URL = "https://cds.unistra.fr/cgi-bin/nph-sesame/-oxp/SNV?"
 _SIMBAD_TAP_URL = "https://simbad.cds.unistra.fr/simbad/sim-tap/sync"
@@ -55,6 +60,17 @@ class NearbyObject:
 
     object: ResolvedObject
     separation_arcsec: float
+
+
+def _resolved_embedded(item, *, name: str | None = None) -> ResolvedObject:
+    """Adapt a bundled catalogue entry to the public resolver result."""
+    return ResolvedObject(
+        name=name or item.name,
+        ra_degrees=item.ra_degrees,
+        dec_degrees=item.dec_degrees,
+        object_type=item.object_type,
+        source="Argos Essential Catalogue",
+    )
 
 
 def _cache_key(query: str) -> str:
@@ -130,6 +146,20 @@ def nearby_cached_objects(
     return sorted(matches, key=lambda item: item.separation_arcsec)
 
 
+def nearby_essential_objects(
+    ra_degrees: float, dec_degrees: float, *, radius_arcsec: float = 90.0
+) -> list[NearbyObject]:
+    """Find bundled Messier/NGC/IC entries around a Stellarium coordinate."""
+    matches: list[NearbyObject] = []
+    for item in essential_catalogue_objects():
+        separation = _angular_separation_arcsec(
+            ra_degrees, dec_degrees, item.ra_degrees, item.dec_degrees
+        )
+        if separation <= radius_arcsec:
+            matches.append(NearbyObject(_resolved_embedded(item), separation))
+    return sorted(matches, key=lambda candidate: candidate.separation_arcsec)
+
+
 def _nearby_from_simbad(
     ra_degrees: float, dec_degrees: float, radius_arcsec: float, timeout_s: float
 ) -> list[NearbyObject]:
@@ -196,8 +226,11 @@ def resolve_nearby_objects(
     cached = nearby_cached_objects(
         ra_degrees, dec_degrees, radius_arcsec=radius_arcsec, cache_path=cache_path
     )
-    if cached or not allow_network:
+    if cached:
         return cached
+    embedded = nearby_essential_objects(ra_degrees, dec_degrees, radius_arcsec=radius_arcsec)
+    if embedded or not allow_network:
+        return embedded
     matches = _nearby_from_simbad(ra_degrees, dec_degrees, radius_arcsec, timeout_s)
     # Preserve a successful reverse lookup for a later offline session.
     cache = _read_cache(cache_path)
@@ -220,6 +253,7 @@ def cached_object_suggestions(
         for row in _read_cache(cache_path).values()
         if isinstance(row, dict) and needle in _cache_key(str(row.get("name", "")))
     }
+    names.update(essential_catalogue_suggestions(query, limit=limit))
     return sorted(name for name in names if name)[:limit]
 
 
@@ -263,6 +297,16 @@ def resolve_object(
     query = normalize_designation(query)
     if not query:
         raise ObjectResolutionError("Enter an object designation first.")
+    embedded = resolve_essential_object(query)
+    if embedded is not None:
+        # Preserve a standard designation the observer explicitly asked for:
+        # ``M42`` should remain ``M 42`` in FITS rather than unexpectedly
+        # becoming its NGC cross-identification.  Free-text aliases resolve to
+        # the catalogue's canonical NGC/IC name.
+        requested = normalize_designation(query)
+        if re.fullmatch(r"(?:M|NGC|IC) \d+(?: [a-z])?", requested):
+            return _resolved_embedded(embedded, name=requested)
+        return _resolved_embedded(embedded)
     key = _cache_key(query)
     cached = _read_cache(cache_path).get(key)
     if isinstance(cached, dict):

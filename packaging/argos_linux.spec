@@ -20,6 +20,7 @@ if not _match:
 
 datas = [
     (str(PROJECT_ROOT / "argos" / "ui" / "assets"), "argos/ui/assets"),
+    (str(PROJECT_ROOT / "argos" / "resources" / "catalogues"), "argos/resources/catalogues"),
     (str(PROJECT_ROOT / "LICENSE"), "."),
 ]
 hiddenimports = collect_submodules("alpaca")

@@ -8,7 +8,9 @@ from argos.core.catalog import object_resolver
 from argos.core.catalog.object_resolver import (
     ObjectResolutionError,
     ResolvedObject,
+    cached_object_suggestions,
     nearby_cached_objects,
+    nearby_essential_objects,
     normalize_designation,
     resolve_nearby_objects,
     resolve_object,
@@ -63,6 +65,33 @@ def test_resolve_object_rejects_empty_query(tmp_path: Path) -> None:
 def test_normalize_compact_designations() -> None:
     assert normalize_designation("hd189733") == "HD 189733"
     assert normalize_designation("ngc7000") == "NGC 7000"
+
+
+def test_embedded_catalogue_resolves_common_deep_sky_targets_offline(
+    tmp_path: Path, monkeypatch
+) -> None:
+    def fail_network(*_args, **_kwargs):
+        raise AssertionError("built-in catalogue must not query CDS")
+
+    monkeypatch.setattr(object_resolver.requests, "get", fail_network)
+
+    m42 = resolve_object("m42", cache_path=tmp_path / "resolver.json")
+    ngc = resolve_object("ngc224", cache_path=tmp_path / "resolver.json")
+    ic = resolve_object("ic434", cache_path=tmp_path / "resolver.json")
+
+    assert m42.name == "M 42"
+    assert m42.source == "Argos Essential Catalogue"
+    assert ngc.name == "NGC 224"
+    assert ic.name == "IC 434"
+
+
+def test_embedded_catalogue_offline_suggestions_and_nearby_match() -> None:
+    suggestions = cached_object_suggestions("m4")
+    nearby = nearby_essential_objects(10.675, 41.2666667, radius_arcsec=1.0)
+
+    assert "M 42" in suggestions
+    assert nearby[0].object.name == "NGC 224"
+    assert nearby[0].object.source == "Argos Essential Catalogue"
 
 
 def test_nearby_cache_is_offline_and_sorted(tmp_path: Path) -> None:

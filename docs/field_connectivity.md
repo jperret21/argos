@@ -11,14 +11,16 @@ network, and what still works (or not) without internet.
 | Manual jog (native JSON-RPC :4700) | yes | no |
 | Plate solving (ASTAP, local star database) | no | **no** |
 | Stellarium telescope control (local server) | no | no |
+| Messier, NGC and IC target names | no — **built in** | no |
 | AAVSO VSX/VSP catalogs (photometry overlays) | no | yes — **cached** |
 
-Plate solving is fully offline: ASTAP and its database live on the Mac.
-The only internet-dependent feature is the AAVSO catalog lookup, and every
-successful lookup is cached in `~/.argos/cache/catalog` — a field you have
-already observed (or pre-fetched at home) keeps its variables and comparison
-stars with no internet at all. When the network is down, Argos serves the
-cached result and says so in the log.
+Plate solving is fully offline: ASTAP and its database live on the Mac. Messier,
+NGC and IC target lookup is also fully offline. AAVSO catalog lookup, new HD
+or free-text CDS name lookups, NASA ephemerides and place search need internet
+at their first use; successful catalogue results are cached. A field already
+prepared at home keeps its variables and comparison stars with no internet at
+all. When the network is down, Argos serves the cached result and says so in
+the log.
 
 The status bar shows two quiet dots — `Seestar ●  Net ●` — so you always
 know which of the two links is up.

@@ -62,9 +62,11 @@ l'altitude, les préréglages et les commandes d'exécution. Les panneaux peuven
 être déplacés, redimensionnés, empilés ou flottés ; le tableau des étapes reste
 au centre.
 
-1. Dans **Target search**, chercher par désignation. La recherche passe par CDS
-   Sesame et accepte notamment Messier, NGC, IC, HD et de nombreux noms usuels.
-   Elle demande internet au premier usage, puis garde le résultat en cache.
+1. Dans **Target search**, chercher par désignation. Messier, NGC et IC sont
+   disponibles immédiatement dans le catalogue essentiel embarqué ; la recherche
+   accepte les minuscules, espaces facultatifs et aliases courants. HD et les
+   noms hors de ce catalogue passent par CDS Sesame au premier usage, puis sont
+   gardés en cache local.
 2. Le résultat remplit le nom et les coordonnées du plan. Il **n'effectue pas
    automatiquement un GoTo** : vérifier la cible et commander le pointage dans
    le panneau Telescope de Capture ou par Stellarium.

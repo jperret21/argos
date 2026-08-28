@@ -44,6 +44,9 @@ From raw photons to a calibrated light curve, all running locally:
   eccentricity for focus and frame-quality metrics
 - ASTAP plate solving — a full WCS recovered on every sub, so any pixel maps to real
   sky coordinates
+- Built-in offline target catalogue — Messier, NGC and IC names, aliases and
+  pointing coordinates work without Wi-Fi; broader designations such as HD use
+  CDS on first lookup and are then cached locally
 
 **Photometry**
 - Aperture photometry — circular aperture + median sky annulus → background-subtracted
@@ -125,10 +128,11 @@ See [`docs/simulator_testing.md`](docs/simulator_testing.md) for the full guide.
 
 ## Privacy and field diagnostics
 
-Argos has **no remote telemetry, analytics or automatic crash upload**. Target,
-catalogue and site searches use the network only when the observer asks for
-them. Local diagnostics are opt-in and can be disabled in **Settings → Local
-diagnostics**.
+Argos has **no remote telemetry, analytics or automatic crash upload**. The
+built-in Messier/NGC/IC catalogue is fully local. Broader target, catalogue and
+site searches use the network only when the observer asks for them; optional
+Stellarium coordinate lookup requires a separate explicit opt-in. Local
+diagnostics are opt-in and can be disabled in **Settings → Data & catalogues**.
 
 For a field issue, **More → Create local support bundle…** creates a ZIP only
 when requested. It contains redacted local logs and, if selected, redacted

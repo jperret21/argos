@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
 )
 
 from argos import __version__
+from argos.core.catalog.offline import essential_catalogue_info
 from argos.core.config import Config
 from argos.core.hardware import active, catalog
 from argos.core.imaging.platesolve import find_astap, find_astap_db
@@ -241,8 +242,33 @@ class ConfigurationPage(QWidget):
 
     def _build_data_card(self) -> "design.Card":
         """Controls for the small, durable data products of an observing run."""
-        card = design.Card("Local diagnostics")
+        card = design.Card("Data & catalogues")
         layout = design.card_layout(card)
+
+        essential = essential_catalogue_info()
+        layout.addWidget(
+            design.SectionLabel(
+                f"Built-in essential catalogue · v{essential['version']} · "
+                f"{essential['object_count']:,} objects"
+            )
+        )
+        layout.addWidget(
+            design.MutedLabel(
+                "Messier, NGC and IC names, common aliases and pointing coordinates are available "
+                "immediately without a network. This compact catalogue is for target selection, "
+                "not precision astrometry or photometric calibration."
+            )
+        )
+        layout.addWidget(design.MutedLabel(f"Source: {essential['source']}"))
+        layout.addWidget(
+            design.MutedLabel(
+                "HD is intentionally not bundled yet: the historical catalogue has legacy positions. "
+                "Argos will use a versioned modern HD pack when it is available, rather than silently "
+                "pointing from stale coordinates."
+            )
+        )
+        layout.addWidget(design.horizontal_divider())
+        layout.addWidget(design.SectionLabel("Local diagnostics"))
 
         self._diagnostics_chk = QCheckBox("Save per-frame diagnostic records")
         self._diagnostics_chk.setToolTip(

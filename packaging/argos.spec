@@ -32,6 +32,7 @@ VERSION = _match.group(1)
 # Path(__file__).parent must be listed here or it vanishes in the bundle.
 datas = [
     (str(PROJECT_ROOT / "argos" / "ui" / "assets"), "argos/ui/assets"),
+    (str(PROJECT_ROOT / "argos" / "resources" / "catalogues"), "argos/resources/catalogues"),
     (str(PROJECT_ROOT / "LICENSE"), "."),
 ]
 

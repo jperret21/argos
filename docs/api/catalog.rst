@@ -10,6 +10,11 @@
 Modules
 =======
 
+.. automodule:: argos.core.catalog.offline
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 .. automodule:: argos.core.catalog.aavso
    :members:
    :undoc-members:
