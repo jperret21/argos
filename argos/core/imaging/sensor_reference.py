@@ -14,6 +14,14 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
+_CALIBRATION_DIRECTORY = Path.home() / ".argos"
+
+
+def configure_calibration_directory(path: Path | str) -> None:
+    """Set the folder searched for local photon-transfer calibrations."""
+    global _CALIBRATION_DIRECTORY
+    _CALIBRATION_DIRECTORY = Path(path).expanduser()
+
 
 @dataclass(frozen=True)
 class SensorReference:
@@ -27,7 +35,7 @@ class SensorReference:
 
     @property
     def calibration_path(self) -> Path:
-        return Path.home() / ".argos" / f"camera_calibration_{self.name.lower()}.json"
+        return _CALIBRATION_DIRECTORY / f"camera_calibration_{self.name.lower()}.json"
 
     def lookup_egain(self, gain_setting: int) -> float:
         gain = self._clamp(gain_setting)

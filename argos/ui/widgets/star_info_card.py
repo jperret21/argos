@@ -40,7 +40,7 @@ class StarInfoCard(QFrame):
             "Drag the title to move this panel. Drag its lower-right corner to resize it."
         )
         self.setStyleSheet(
-            f"QFrame {{ background: rgba(13,17,23,225); border: 1px solid {theme.ACCENT};"
+            f"QFrame {{ background: {theme.BG2}; border: 1px solid {theme.ACCENT};"
             f" border-radius: 4px; }}"
         )
         root = QVBoxLayout(self)

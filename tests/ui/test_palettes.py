@@ -138,13 +138,11 @@ def test_apply_palette_rebinds_constants() -> None:
 
 
 def test_get_stylesheet_reflects_palette() -> None:
-    from argos.ui.palettes import HIGH_CONTRAST
-
     try:
-        theme.apply_palette(HIGH_CONTRAST)
+        theme.apply_palette(NIGHT_RED)
         qss = theme.get_stylesheet()
-        assert HIGH_CONTRAST.bg in qss, "QSS should contain the new bg color"
-        assert HIGH_CONTRAST.accent in qss, "QSS should contain the new accent color"
+        assert NIGHT_RED.bg in qss, "QSS should contain the new bg color"
+        assert NIGHT_RED.accent in qss, "QSS should contain the new accent color"
         # The default Observatory accent should NOT appear (they differ).
         assert EQUILUX.accent not in qss
     finally:

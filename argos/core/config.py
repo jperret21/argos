@@ -26,6 +26,12 @@ _DEFAULTS: dict[str, Any] = {
     # catalogue caches.  The bundled essential catalogue is read-only inside
     # the application; these are only the caches acquired on demand.
     "data_paths": {
+        # A session is Argos's working folder: each observation gets its own
+        # subfolder holding FITS frames, metadata, preview products and logs.
+        "sequence_presets_directory": str(Path.home() / "Argos" / "sequences"),
+        # Per-sensor photon-transfer calibrations are deliberately separate
+        # from sessions, because they remain valid across observing runs.
+        "camera_calibration_directory": str(Path.home() / ".argos"),
         "object_catalogue_cache": str(Path.home() / "Argos" / "cache" / "object_resolver.json"),
         "exoplanet_cache": str(Path.home() / "Argos" / "cache" / "exoplanets.json"),
         "aavso_cache_directory": str(Path.home() / ".argos" / "cache" / "catalog"),

@@ -52,6 +52,12 @@ _ANCHORS: list[tuple[int, float, float]] = [
 _USER_CALIB_PATH = Path.home() / ".argos" / "camera_calibration.json"
 
 
+def configure_calibration_directory(path: Path | str) -> None:
+    """Set the folder searched for the legacy IMX585 PTC calibration."""
+    global _USER_CALIB_PATH
+    _USER_CALIB_PATH = Path(path).expanduser() / "camera_calibration.json"
+
+
 def lookup_egain(gain_setting: int) -> float:
     """Return e-/ADU for the given gain setting (0–600).
 

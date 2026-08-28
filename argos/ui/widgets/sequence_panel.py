@@ -834,7 +834,12 @@ class SequencePanel(QWidget):
     # ------------------------------------------------------------------
 
     def _presets_dir(self) -> str:
-        d = Path.home() / "Argos" / "sequences"
+        configured = (
+            self._config.get("data_paths.sequence_presets_directory", "")
+            if hasattr(self, "_config")
+            else ""
+        )
+        d = Path(configured).expanduser() if configured else Path.home() / "Argos" / "sequences"
         d.mkdir(parents=True, exist_ok=True)
         return str(d)
 

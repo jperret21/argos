@@ -118,32 +118,6 @@ CHARCOAL = Palette(
 )
 
 # ---------------------------------------------------------------------------
-# High Contrast — maximum legibility (WCAG AA target)
-# ---------------------------------------------------------------------------
-
-HIGH_CONTRAST = Palette(
-    name="High Contrast",
-    bg="#000000",
-    bg2="#0a0a0a",
-    surface="#1a1a1a",
-    border="#666666",
-    border_soft="#444444",
-    fg="#ffffff",
-    fg_muted="#cccccc",
-    fg_disabled="#666666",
-    accent="#4db8ff",
-    accent_hover="#80ccff",
-    accent_deep="#1a8fe0",
-    cyan="#5fd3e8",
-    success="#66dd44",
-    warning="#ffcc00",
-    danger="#ff4444",
-    variable="#dd88ff",
-    font_ui='"Avenir Next", "SF Pro Text", "Segoe UI Variable", "Noto Sans", "Helvetica Neue", sans-serif',
-    font_mono='"SF Mono", "Cascadia Mono", "Noto Sans Mono", "Menlo", "Consolas", monospace',
-)
-
-# ---------------------------------------------------------------------------
 # Night (Red) — every colour derived from red/dark-red for dark adaptation.
 #
 # Rules:
@@ -159,22 +133,22 @@ HIGH_CONTRAST = Palette(
 
 NIGHT_RED = Palette(
     name="Night (Red)",
-    bg="#1a0000",
-    bg2="#110000",
-    surface="#280a0a",
-    border="#3d1010",
-    border_soft="#2a0808",
-    fg="#c08080",  # desaturated warm red — readable but dim
-    fg_muted="#7a4040",  # secondary: noticeably dimmer
-    fg_disabled="#3d2020",
-    accent="#e03030",  # bright red — primary action / focus
-    accent_hover="#f04040",
-    accent_deep="#b82020",
-    cyan="#c45050",  # "info" tint — warm mid-red, no blue component
-    success="#882828",  # dim red — "connected / OK" (lowest brightness)
-    warning="#c44040",  # mid-bright red — caution
-    danger="#ff5050",  # maximum brightness — error / alarm
-    variable="#a03838",  # VSX markers — mid-dark red variant
+    bg="#120405",
+    bg2="#0c0303",
+    surface="#1d0809",
+    border="#351315",
+    border_soft="#240c0d",
+    fg="#d9a6a6",  # enough contrast to read, deliberately not white
+    fg_muted="#9b6263",
+    fg_disabled="#4b292a",
+    accent="#a83a3d",  # restrained: preserve night vision, avoid alarm-red UI
+    accent_hover="#bd4b4e",
+    accent_deep="#752528",
+    cyan="#b56a6b",  # informational tint, still strictly red-dominant
+    success="#743033",  # state is communicated by label/icon as well as luminance
+    warning="#9b4547",
+    danger="#d05d60",
+    variable="#854044",
     font_ui='"Avenir Next", "SF Pro Text", "Segoe UI Variable", "Noto Sans", "Helvetica Neue", sans-serif',
     font_mono='"SF Mono", "Cascadia Mono", "Noto Sans Mono", "Menlo", "Consolas", monospace',
 )
@@ -184,4 +158,4 @@ NIGHT_RED = Palette(
 # ---------------------------------------------------------------------------
 
 #: All available preset palettes, in display order.
-PALETTES: dict[str, Palette] = {p.name: p for p in (EQUILUX, CHARCOAL, HIGH_CONTRAST, NIGHT_RED)}
+PALETTES: dict[str, Palette] = {p.name: p for p in (EQUILUX, CHARCOAL, NIGHT_RED)}

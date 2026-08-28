@@ -36,6 +36,7 @@ from argos.core.catalog import aavso, exoplanets, object_resolver
 from argos.core.catalog.offline import essential_catalogue_info
 from argos.core.config import Config
 from argos.core.hardware import active, catalog
+from argos.core.imaging import imx585, sensor_reference
 from argos.core.imaging.platesolve import find_astap, find_astap_db
 from argos.ui import design, theme
 from argos.ui.palettes import EQUILUX, PALETTES
@@ -260,8 +261,8 @@ class ConfigurationPage(QWidget):
         return spin
 
     @staticmethod
-    def _catalogue_path_row(edit: QLineEdit, *, browse, clear) -> QWidget:
-        """Editable cache path with safe, explicit browse/refresh actions."""
+    def _catalogue_path_row(edit: QLineEdit, *, browse, clear=None) -> QWidget:
+        """Editable local path with an optional explicit cache-refresh action."""
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(design.SPACING_SM)
@@ -270,10 +271,13 @@ class ConfigurationPage(QWidget):
         browse_btn.setToolTip("Choose a different local cache location")
         browse_btn.clicked.connect(browse)
         row.addWidget(browse_btn)
-        clear_btn = design.SecondaryButton("Refresh")
-        clear_btn.setToolTip("Clear this local cache; the next matching search fetches fresh data")
-        clear_btn.clicked.connect(clear)
-        row.addWidget(clear_btn)
+        if clear is not None:
+            clear_btn = design.SecondaryButton("Refresh")
+            clear_btn.setToolTip(
+                "Clear this local cache; the next matching search fetches fresh data"
+            )
+            clear_btn.clicked.connect(clear)
+            row.addWidget(clear_btn)
         widget = QWidget()
         widget.setLayout(row)
         return widget
@@ -284,7 +288,7 @@ class ConfigurationPage(QWidget):
 
         row = QHBoxLayout()
         row.setSpacing(design.SPACING_MD)
-        row.addWidget(design.MutedLabel("Session output folder"))
+        row.addWidget(design.MutedLabel("Default working folder (sessions)"))
         self._sessions_edit = QLineEdit()
         self._sessions_edit.editingFinished.connect(self._save_sessions_path)
         row.addWidget(self._sessions_edit, 1)
@@ -294,7 +298,8 @@ class ConfigurationPage(QWidget):
         layout.addLayout(row)
         layout.addWidget(
             design.MutedLabel(
-                "Raw FITS, session.json, observation metadata and local diagnostics are written here."
+                "Each observation receives its own folder here: raw FITS, session.json, metadata, "
+                "preview products and local diagnostics."
             )
         )
         return card
@@ -320,6 +325,53 @@ class ConfigurationPage(QWidget):
         )
         layout.addWidget(design.MutedLabel(f"Source: {essential['source']}"))
         layout.addWidget(design.MutedLabel("Storage: inside the Argos application · read-only"))
+        layout.addWidget(design.horizontal_divider())
+
+        layout.addWidget(design.SectionLabel("Local observing files"))
+        layout.addWidget(
+            design.MutedLabel(
+                "These folders remain on this computer. They are not catalogues and are never uploaded."
+            )
+        )
+
+        self._presets_dir_edit = QLineEdit()
+        self._presets_dir_edit.setToolTip("Folder used by Save/Load sequence preset")
+        self._presets_dir_edit.editingFinished.connect(self._save_local_data_paths)
+        layout.addWidget(design.MutedLabel("Sequence presets"))
+        layout.addWidget(
+            self._catalogue_path_row(
+                self._presets_dir_edit,
+                browse=lambda: self._browse_catalogue_directory(
+                    self._presets_dir_edit,
+                    "Choose sequence preset folder",
+                    on_chosen=self._save_local_data_paths,
+                ),
+            )
+        )
+
+        self._calibration_dir_edit = QLineEdit()
+        self._calibration_dir_edit.setToolTip(
+            "Folder containing local camera_calibration*.json photon-transfer files"
+        )
+        self._calibration_dir_edit.editingFinished.connect(self._save_local_data_paths)
+        layout.addWidget(design.MutedLabel("Camera photon-transfer calibrations"))
+        layout.addWidget(
+            self._catalogue_path_row(
+                self._calibration_dir_edit,
+                browse=lambda: self._browse_catalogue_directory(
+                    self._calibration_dir_edit,
+                    "Choose camera calibration folder",
+                    on_chosen=self._save_local_data_paths,
+                ),
+            )
+        )
+        layout.addWidget(
+            design.MutedLabel(
+                "Contains optional camera_calibration.json (IMX585) and "
+                "camera_calibration_imx*.json files. Argos uses them only when a driver does not "
+                "provide electron gain."
+            )
+        )
         layout.addWidget(design.horizontal_divider())
 
         layout.addWidget(design.SectionLabel("Online catalogues and local caches"))
@@ -652,6 +704,16 @@ class ConfigurationPage(QWidget):
         self._elev_spin.setValue(float(self._config.get("site.elevation", 0.0) or 0.0))
         self._refresh_favorites()
         self._sessions_edit.setText(str(self._config.sessions_path))
+        self._presets_dir_edit.setText(
+            str(
+                self._config.get(
+                    "data_paths.sequence_presets_directory", Path.home() / "Argos" / "sequences"
+                )
+            )
+        )
+        self._calibration_dir_edit.setText(
+            str(self._config.get("data_paths.camera_calibration_directory", Path.home() / ".argos"))
+        )
         self._object_cache_edit.setText(
             str(self._config.get("data_paths.object_catalogue_cache", object_resolver._CACHE_PATH))
         )
@@ -662,6 +724,7 @@ class ConfigurationPage(QWidget):
             str(self._config.get("data_paths.aavso_cache_directory", aavso._CACHE_DIR))
         )
         self._apply_catalogue_paths(save=False)
+        self._apply_local_data_paths(save=False)
         self._refresh_telescope_card()
         preset_name: str = self._config.get("ui.theme.preset", EQUILUX.name)  # type: ignore[assignment]
         idx = self._palette_combo.findText(preset_name)
@@ -870,12 +933,12 @@ class ConfigurationPage(QWidget):
             edit.setText(chosen)
             self._save_catalogue_paths()
 
-    def _browse_catalogue_directory(self, edit: QLineEdit, title: str) -> None:
+    def _browse_catalogue_directory(self, edit: QLineEdit, title: str, *, on_chosen=None) -> None:
         start = edit.text().strip() or str(Path.home())
         chosen = QFileDialog.getExistingDirectory(self, title, start)
         if chosen:
             edit.setText(chosen)
-            self._save_catalogue_paths()
+            (on_chosen or self._save_catalogue_paths)()
 
     def _apply_catalogue_paths(self, *, save: bool) -> None:
         """Apply user-chosen cache locations to the next catalogue operation."""
@@ -895,6 +958,23 @@ class ConfigurationPage(QWidget):
             self._config.set("data_paths.exoplanet_cache", str(exoplanet_path))
             self._config.set("data_paths.aavso_cache_directory", str(aavso_path))
         self._refresh_catalogue_cache_status()
+
+    def _apply_local_data_paths(self, *, save: bool) -> None:
+        """Apply reusable local-file locations without touching their contents."""
+        presets = Path(self._presets_dir_edit.text().strip()).expanduser()
+        calibrations = Path(self._calibration_dir_edit.text().strip()).expanduser()
+        if not presets.name or not calibrations.name:
+            return
+        sensor_reference.configure_calibration_directory(calibrations)
+        imx585.configure_calibration_directory(calibrations)
+        if save:
+            self._config.set("data_paths.sequence_presets_directory", str(presets))
+            self._config.set("data_paths.camera_calibration_directory", str(calibrations))
+
+    def _save_local_data_paths(self) -> None:
+        if self._loading:
+            return
+        self._apply_local_data_paths(save=True)
 
     def _save_catalogue_paths(self) -> None:
         if self._loading:

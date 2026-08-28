@@ -61,6 +61,8 @@ def test_shell_three_mode_walkthrough() -> None:
             "Files & application",
         ]
         assert settings._sessions_edit.isEnabled()
+        assert settings._presets_dir_edit.isEnabled()
+        assert settings._calibration_dir_edit.isEnabled()
         assert settings._astap_edit.isEnabled() and settings._astap_db_edit.isEnabled()
         assert settings._object_cache_edit.isEnabled()
         assert settings._exoplanet_cache_edit.isEnabled()

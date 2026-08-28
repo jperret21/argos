@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 )
 
 from argos.core.imaging.platesolve import format_dec_dms, format_ra_hms
+from argos.ui import theme
 
 _ENSEMBLE_HEADERS = ("Name / AUID", "RA (J2000)", "Dec (J2000)", "Mags")
 
@@ -45,7 +46,7 @@ class ComparisonEnsembleTable(QWidget):
             "relative-flux preview only needs stable, unsaturated comparison stars."
         )
         self._hint.setWordWrap(True)
-        self._hint.setStyleSheet("color:#9a9a9a; font-size:11px; padding:2px 0;")
+        self._hint.setStyleSheet(f"color:{theme.FG_MUTED}; font-size:11px; padding:2px 0;")
         layout.addWidget(self._hint)
 
         self._table = QTableWidget(0, len(_ENSEMBLE_HEADERS))
@@ -61,7 +62,7 @@ class ComparisonEnsembleTable(QWidget):
 
         row = QHBoxLayout()
         self._count = QLabel("")
-        self._count.setStyleSheet("color:#9a9a9a;")
+        self._count.setStyleSheet(f"color:{theme.FG_MUTED};")
         row.addWidget(self._count)
         row.addStretch(1)
         self._remove_btn = QPushButton("Remove selected")

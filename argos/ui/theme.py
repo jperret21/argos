@@ -289,7 +289,7 @@ QPushButton:disabled {{
 
 QPushButton[class="primary"] {{
     background-color: {ACCENT_DEEP};
-    color: white;
+    color: {FG};
     border-color: {ACCENT_DEEP};
     font-weight: 600;
 }}
@@ -313,11 +313,11 @@ QPushButton[class="danger"] {{
 
 QPushButton[class="danger"]:hover {{
     background-color: {DANGER};
-    color: white;
+    color: {FG};
 }}
 
 QPushButton[class="success"] {{
-    color: white;
+    color: {FG};
     border-color: {ACCENT_DEEP};
     background-color: {ACCENT_DEEP};
     font-weight: 600;
@@ -339,7 +339,7 @@ QLineEdit, QSpinBox, QDoubleSpinBox {{
     font-family: {FONT_UI};
     font-size: 13px;
     selection-background-color: {ACCENT};
-    selection-color: white;
+    selection-color: {FG};
 }}
 
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
@@ -625,7 +625,7 @@ QTextEdit, QPlainTextEdit {{
     font-family: {FONT_MONO};
     font-size: 12px;
     selection-background-color: {ACCENT};
-    selection-color: white;
+    selection-color: {FG};
 }}
 
 /* ── Toolbar (top app bar) ─────────────────────────────────────────────── */

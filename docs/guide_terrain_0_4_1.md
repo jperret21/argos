@@ -16,7 +16,7 @@
 | Astrométrie | ASTAP et son dossier de bases stellaires sont configurables explicitement dans **Settings → Astrometry**. |
 | Photométrie | Courbe cible/check séparée des diagnostics des comparaisons ; incertitudes par image ; export CSV de toutes les mesures. |
 | Informations d'étoile | Cliquer une étoile affiche identité catalogue, coordonnées et mesures ; la carte est déplaçable et redimensionnable. |
-| Données | Sessions compatibles Siril, `session.json` et diagnostics JSONL locaux optionnels. |
+| Données | Dossier de travail des sessions, préréglages de séquence, calibrations caméra, caches de catalogues et diagnostics JSONL sont visibles séparément. |
 
 ## 2. Préparation à domicile
 
@@ -27,18 +27,21 @@
 2. Dans **Settings → Equipment & camera**, sélectionner le matériel réellement utilisé.
    Ne pas faire de photométrie de précision avec le S30 ou le S50 tant que leurs
    paramètres ne sont pas validés sur le terrain.
-3. Dans **Settings → Files & application**, choisir le dossier racine des sessions. C'est là
-   que seront écrits les FITS, le journal de session et les mesures.
+3. Dans **Settings → Files & application**, choisir le **dossier de travail des sessions**.
+   C'est là que seront écrits les FITS, le journal de session et les mesures.
 4. Dans **Settings → Astrometry**, vérifier que l'exécutable ASTAP est détecté.
    Renseigner **Database folder** si la base stellaire n'est pas dans un chemin
    détecté automatiquement. Le statut doit confirmer ASTAP **et** la base.
 5. Dans **Settings → Catalogues & data**, vérifier le catalogue essentiel et les chemins
    de cache CDS/NASA/AAVSO. **Refresh** efface seulement le cache sélectionné ; la
    prochaine recherche explicite le récupère à nouveau si internet est disponible.
-6. Dans **Settings → Catalogues & data**, activer l'enregistrement JSONL
+6. Dans **Settings → Catalogues & data**, choisir si nécessaire le dossier des **préréglages
+   de séquence** et celui des **calibrations caméra** (fichiers PTC locaux). Ils sont distincts
+   des caches de catalogues ; Argos ne les modifie pas automatiquement.
+7. Dans **Settings → Catalogues & data**, activer l'enregistrement JSONL
    seulement si l'essai nécessite un diagnostic détaillé. Ces fichiers restent
    dans le dossier de séance et ne sont jamais transmis par Argos.
-7. Pendant que l'accès internet est disponible, rechercher les objets prévus et
+8. Pendant que l'accès internet est disponible, rechercher les objets prévus et
    résoudre/consulter les champs nécessaires : les recherches de catalogue sont
    alors réutilisables depuis le cache au terrain.
 

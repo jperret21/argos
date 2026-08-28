@@ -244,7 +244,7 @@ class MountDock(design.Card):
         center_stop.clicked.connect(lambda: (self.jog_stop.emit(0), self.jog_stop.emit(1)))
         center_stop.setStyleSheet(
             f"QPushButton {{ color:{theme.DANGER}; }}"
-            f"QPushButton:hover {{ background:{theme.DANGER}; color:white; }}"
+            f"QPushButton:hover {{ background:{theme.DANGER}; color:{theme.FG}; }}"
         )
         pad.addWidget(center_stop, 1, 1, alignment=Qt.AlignmentFlag.AlignCenter)
         # Push the pad into the centre of the rail.

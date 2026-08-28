@@ -118,7 +118,7 @@ class FitsViewer(QWidget):
         # so the value sits where you point instead of in a side column.
         self._readout = QLabel(self)
         self._readout.setStyleSheet(
-            f"background: rgba(13,17,23,190); color: {theme.FG};"
+            f"background: {theme.BG2}; color: {theme.FG};"
             f" font-family: {theme.FONT_MONO}; font-size: 11px;"
             f" padding: 2px 7px; border-radius: 3px;"
         )
@@ -139,7 +139,7 @@ class FitsViewer(QWidget):
 
         self._sel_label = QLabel(self)
         self._sel_label.setStyleSheet(
-            f"background: rgba(13,17,23,205); color: {theme.FG};"
+            f"background: {theme.BG2}; color: {theme.FG};"
             f" font-family: {theme.FONT_MONO}; font-size: 11px;"
             f" padding: 4px 8px; border-radius: 3px; border: 1px solid {theme.ACCENT};"
         )
@@ -184,7 +184,7 @@ class FitsViewer(QWidget):
         self._view.getView().addItem(self._targets_item, ignoreBounds=True)
         self._astro_label = QLabel(self)
         self._astro_label.setStyleSheet(
-            f"background: rgba(13,17,23,205); color: {theme.FG};"
+            f"background: {theme.BG2}; color: {theme.FG};"
             f" font-family: {theme.FONT_MONO}; font-size: 11px;"
             f" padding: 3px 7px; border-radius: 3px; border: 1px solid {theme.ACCENT};"
         )
