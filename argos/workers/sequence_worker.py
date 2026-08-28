@@ -8,6 +8,7 @@ polling) happens here, off the UI thread; the UI subscribes to the signals.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -36,6 +37,8 @@ from argos.core.imaging.session_log import (
 )
 
 logger = logging.getLogger(__name__)
+
+OBSERVATION_FILENAME = "observation.json"
 
 #: Extra time on top of the exposure before a frame is considered timed out.
 _DOWNLOAD_MARGIN_S = 15.0
@@ -439,11 +442,32 @@ class SequenceWorker(QThread):
                 software=self._software,
                 started_utc=start_dt.isoformat(),
             )
+            self._write_observation_metadata()
         self._session_log.add(record)
         try:
             self._session_log.write(self._session_root / SESSION_FILENAME)
         except OSError:  # pragma: no cover - disk hiccup must not abort the run
             logger.warning("Could not write %s", SESSION_FILENAME, exc_info=True)
+
+    def _write_observation_metadata(self) -> None:
+        """Persist an optional science-planning hand-off beside the raw FITS.
+
+        The data are a declared plan, not a post-processing result.  In
+        particular, a transit sidecar preserves the published ephemeris and
+        requested coverage without pretending that Argos fitted a transit.
+        """
+        if not self._plan.metadata or self._session_root is None:
+            return
+        payload = {
+            "schema_version": 1,
+            "object_name": self._plan.object_name,
+            **self._plan.metadata,
+        }
+        try:
+            path = self._session_root / OBSERVATION_FILENAME
+            path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        except OSError:  # pragma: no cover - disk hiccup must not abort the run
+            logger.warning("Could not write %s", OBSERVATION_FILENAME, exc_info=True)
 
     def _safe_stop_exposure(self) -> None:
         try:

@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pyqtgraph as pg
 from PyQt6.QtCore import QByteArray, Qt, pyqtSignal
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QColor
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -90,6 +90,17 @@ class TargetVisibilityPlot(QWidget):
         self._plot.getAxis("left").setTextPen(pg.mkPen(theme.FG_MUTED))
         self._plot.getAxis("bottom").setTextPen(pg.mkPen(theme.FG_MUTED))
         self._curve = self._plot.plot(pen=pg.mkPen(theme.ACCENT, width=2))
+        transit_brush = QColor(theme.WARNING).darker(120)
+        transit_brush.setAlpha(55)
+        self._transit_region = pg.LinearRegionItem(
+            values=(0, 0),
+            movable=False,
+            brush=pg.mkBrush(transit_brush),
+            pen=pg.mkPen(theme.WARNING, width=1),
+        )
+        self._transit_region.setZValue(-5)
+        self._transit_region.hide()
+        self._plot.addItem(self._transit_region)
         self._horizon = pg.InfiniteLine(
             pos=30,
             angle=0,
@@ -103,9 +114,16 @@ class TargetVisibilityPlot(QWidget):
         layout.addWidget(self._summary)
 
     def set_target(
-        self, name: str, ra_hours: float, dec_degrees: float, lat: float, lon: float
+        self,
+        name: str,
+        ra_hours: float,
+        dec_degrees: float,
+        lat: float,
+        lon: float,
+        *,
+        night_date=None,
     ) -> None:
-        samples = upcoming_night_altitudes(ra_hours, dec_degrees, lat, lon)
+        samples = upcoming_night_altitudes(ra_hours, dec_degrees, lat, lon, now=night_date)
         if not samples:
             self.clear()
             return
@@ -122,7 +140,13 @@ class TargetVisibilityPlot(QWidget):
 
     def clear(self) -> None:
         self._curve.setData([], [])
+        self._transit_region.hide()
         self._summary.setText("Resolve a target to preview its altitude.")
+
+    def set_transit_coverage(self, start, end) -> None:
+        """Shade an exoplanet's full requested coverage on the altitude plot."""
+        self._transit_region.setRegion((start.timestamp(), end.timestamp()))
+        self._transit_region.show()
 
 
 class SequencePanel(QWidget):
@@ -134,6 +158,8 @@ class SequencePanel(QWidget):
     resume_requested = pyqtSignal()
     stop_requested = pyqtSignal()
     object_lookup_requested = pyqtSignal(str)
+    exoplanet_lookup_requested = pyqtSignal(str)
+    transit_plan_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -277,6 +303,82 @@ class SequencePanel(QWidget):
         self._visibility_plot = TargetVisibilityPlot()
         visibility_l.addWidget(self._visibility_plot)
 
+        # A transit is planned differently from a generic catalogue target:
+        # the planet name resolves to its host star, and the observer needs an
+        # uninterrupted light-only cadence plus out-of-transit baselines.
+        transit_panel = QWidget()
+        transit_l = QVBoxLayout(transit_panel)
+        transit_l.setContentsMargins(0, 0, 0, 0)
+        transit_l.setSpacing(design.SPACING_SM)
+        transit_search = QHBoxLayout()
+        transit_search.setSpacing(design.SPACING_SM)
+        self._transit_edit = QLineEdit()
+        self._transit_edit.setPlaceholderText("HD 189733 b, WASP-12 b…")
+        self._transit_edit.setToolTip(
+            "Search the NASA Exoplanet Archive for a published transit ephemeris"
+        )
+        self._transit_edit.returnPressed.connect(self._request_exoplanet_lookup)
+        transit_search.addWidget(self._transit_edit, 1)
+        self._transit_search_btn = design.SecondaryButton("Find planet")
+        self._transit_search_btn.clicked.connect(self._request_exoplanet_lookup)
+        transit_search.addWidget(self._transit_search_btn)
+        transit_l.addLayout(transit_search)
+        self._transit_result = design.MutedLabel(
+            "Find a confirmed planet to prepare a stable, single-filter transit sequence."
+        )
+        self._transit_result.setWordWrap(True)
+        transit_l.addWidget(self._transit_result)
+        transit_opts = QGridLayout()
+        transit_opts.setHorizontalSpacing(design.SPACING_MD)
+        transit_opts.setVerticalSpacing(design.SPACING_SM)
+        transit_opts.setColumnStretch(1, 1)
+        transit_opts.addWidget(design.MutedLabel("Baseline"), 0, 0)
+        self._transit_baseline_spin = QSpinBox()
+        self._transit_baseline_spin.setRange(0, 240)
+        self._transit_baseline_spin.setValue(60)
+        self._transit_baseline_spin.setSuffix(" min each side")
+        self._transit_baseline_spin.setToolTip(
+            "Out-of-transit coverage before ingress and after egress"
+        )
+        transit_opts.addWidget(self._transit_baseline_spin, 0, 1)
+        transit_opts.addWidget(design.MutedLabel("Exposure"), 1, 0)
+        self._transit_exposure_spin = QDoubleSpinBox()
+        self._transit_exposure_spin.setRange(*self._exposure_range)
+        self._transit_exposure_spin.setDecimals(2)
+        self._transit_exposure_spin.setValue(10.0)
+        self._transit_exposure_spin.setSuffix(" s")
+        transit_opts.addWidget(self._transit_exposure_spin, 1, 1)
+        transit_opts.addWidget(design.MutedLabel("Cadence"), 2, 0)
+        self._transit_cadence_spin = QDoubleSpinBox()
+        self._transit_cadence_spin.setRange(0.01, 3600.0)
+        self._transit_cadence_spin.setDecimals(1)
+        self._transit_cadence_spin.setValue(13.0)
+        self._transit_cadence_spin.setSuffix(" s")
+        self._transit_cadence_spin.setToolTip(
+            "Start-to-start cadence; includes the exposure and any idle interval"
+        )
+        transit_opts.addWidget(self._transit_cadence_spin, 2, 1)
+        transit_opts.addWidget(design.MutedLabel("Gain"), 3, 0)
+        self._transit_gain_spin = QSpinBox()
+        self._transit_gain_spin.setRange(*self._gain_range)
+        self._transit_gain_spin.setValue(80)
+        transit_opts.addWidget(self._transit_gain_spin, 3, 1)
+        transit_opts.addWidget(design.MutedLabel("Filter"), 4, 0)
+        self._transit_filter_combo = QComboBox()
+        self._transit_filter_combo.addItems(self._filters)
+        self._transit_filter_combo.setToolTip(
+            "Keep one filter for the entire transit; do not change filters mid-series"
+        )
+        transit_opts.addWidget(self._transit_filter_combo, 4, 1)
+        transit_l.addLayout(transit_opts)
+        self._prepare_transit_btn = design.SuccessButton("Prepare transit sequence")
+        self._prepare_transit_btn.setEnabled(False)
+        self._prepare_transit_btn.setToolTip(
+            "Replace the table with one uninterrupted light-only acquisition step"
+        )
+        self._prepare_transit_btn.clicked.connect(self.transit_plan_requested)
+        transit_l.addLayout(design.button_row(self._prepare_transit_btn))
+
         presets_panel = QWidget()
         presets_l = QVBoxLayout(presets_panel)
         presets_l.setContentsMargins(0, 0, 0, 0)
@@ -320,6 +422,9 @@ class SequencePanel(QWidget):
 
         self._docks = {
             "search": make_dock("Target search", search_panel, object_name="sequencer.search"),
+            "transit": make_dock(
+                "Exoplanet transit", transit_panel, object_name="sequencer.transit"
+            ),
             "plan": make_dock("Plan settings", plan_panel, object_name="sequencer.plan"),
             "visibility": make_dock(
                 "Target visibility",
@@ -348,6 +453,7 @@ class SequencePanel(QWidget):
         )
         for key, label in (
             ("search", "Target search"),
+            ("transit", "Exoplanet transit"),
             ("plan", "Plan settings"),
             ("visibility", "Visibility"),
             ("presets", "Presets"),
@@ -368,7 +474,10 @@ class SequencePanel(QWidget):
         bottom = Qt.DockWidgetArea.BottomDockWidgetArea
         workspace.addDockWidget(right, self._docks["search"])
         workspace.splitDockWidget(
-            self._docks["search"], self._docks["visibility"], Qt.Orientation.Vertical
+            self._docks["search"], self._docks["transit"], Qt.Orientation.Vertical
+        )
+        workspace.splitDockWidget(
+            self._docks["transit"], self._docks["visibility"], Qt.Orientation.Vertical
         )
         workspace.splitDockWidget(
             self._docks["visibility"], self._docks["plan"], Qt.Orientation.Vertical
@@ -406,6 +515,9 @@ class SequencePanel(QWidget):
     def _request_object_lookup(self) -> None:
         self.object_lookup_requested.emit(self._search_edit.text().strip())
 
+    def _request_exoplanet_lookup(self) -> None:
+        self.exoplanet_lookup_requested.emit(self._transit_edit.text().strip())
+
     def set_lookup_busy(self, busy: bool) -> None:
         self._search_edit.setEnabled(not busy)
         self._search_btn.setEnabled(not busy)
@@ -421,6 +533,54 @@ class SequencePanel(QWidget):
 
     def set_lookup_error(self, message: str) -> None:
         self._search_result.setText(message)
+
+    def set_exoplanet_lookup_busy(self, busy: bool) -> None:
+        self._transit_edit.setEnabled(not busy)
+        self._transit_search_btn.setEnabled(not busy)
+        if busy:
+            self._transit_result.setText("Searching NASA Exoplanet Archive…")
+
+    def set_exoplanet_result(self, target, window=None, local_mid=None) -> None:
+        """Show a published ephemeris and its current coverage window."""
+        duration = (
+            f"{target.duration_hours:.2f} h"
+            if target.duration_hours is not None
+            else "not published"
+        )
+        depth = (
+            f"{target.depth_percent:.3g}%" if target.depth_percent is not None else "not published"
+        )
+        text = (
+            f"{target.planet_name} — host: {target.host_name}\n"
+            f"P {target.period_days:.8f} d · duration {duration} · depth {depth}\n"
+            f"Epoch: {target.epoch_bjd_tdb:.6f} ({target.epoch_system})"
+        )
+        if window is not None:
+            text += (
+                f"\nNext mid-transit: BJD_TDB {window.mid_bjd_tdb:.6f} "
+                f"(E={window.epoch_number}); coverage {window.coverage_hours:.2f} h."
+            )
+            if local_mid is not None:
+                text += f"\nApprox. local midpoint: {local_mid.strftime('%Y-%m-%d %H:%M %Z')}."
+        else:
+            text += "\nSet the observing site to calculate the next coverage window."
+        text += "\nNASA ephemeris: verify close to the observing night."
+        self._transit_result.setText(text)
+        self._prepare_transit_btn.setEnabled(window is not None)
+
+    def set_exoplanet_error(self, message: str) -> None:
+        self._transit_result.setText(message)
+        self._prepare_transit_btn.setEnabled(False)
+
+    def transit_settings(self) -> dict[str, float | int | str]:
+        """Return the observer-selected, stable cadence settings."""
+        return {
+            "baseline_minutes": float(self._transit_baseline_spin.value()),
+            "exposure_s": float(self._transit_exposure_spin.value()),
+            "cadence_s": float(self._transit_cadence_spin.value()),
+            "gain": int(self._transit_gain_spin.value()),
+            "filter_name": self._transit_filter_combo.currentText(),
+        }
 
     # ------------------------------------------------------------------
     # Row management
@@ -591,6 +751,29 @@ class SequencePanel(QWidget):
         self.set_object_name(name)
         self._visibility_plot.set_target(name, ra_hours, dec_degrees, site_lat, site_lon)
 
+    def set_transit_visibility(
+        self,
+        name: str,
+        ra_hours: float,
+        dec_degrees: float,
+        site_lat: float,
+        site_lon: float,
+        coverage_start,
+        coverage_end,
+    ) -> None:
+        """Show the altitude curve for the transit night and shade its coverage."""
+        midpoint = coverage_start + (coverage_end - coverage_start) / 2
+        self.set_object_name(name)
+        self._visibility_plot.set_target(
+            name,
+            ra_hours,
+            dec_degrees,
+            site_lat,
+            site_lon,
+            night_date=midpoint,
+        )
+        self._visibility_plot.set_transit_coverage(coverage_start, coverage_end)
+
     def _on_object_edited(self) -> None:
         self._refresh_readiness()
         self.object_name_changed.emit(self._object_edit.text().strip())
@@ -660,6 +843,8 @@ class SequencePanel(QWidget):
         for r in range(self._table.rowCount()):
             self._table.cellWidget(r, 3).setRange(*self._exposure_range)
             self._table.cellWidget(r, 4).setRange(*self._gain_range)
+        self._transit_exposure_spin.setRange(*self._exposure_range)
+        self._transit_gain_spin.setRange(*self._gain_range)
 
     def set_filter_options(self, names: list[str]) -> None:
         self._filters = list(names or _DEFAULT_FILTERS)
@@ -673,6 +858,14 @@ class SequencePanel(QWidget):
             if idx >= 0:
                 combo.setCurrentIndex(idx)
             combo.blockSignals(False)
+        current = self._transit_filter_combo.currentText()
+        self._transit_filter_combo.blockSignals(True)
+        self._transit_filter_combo.clear()
+        self._transit_filter_combo.addItems(self._filters)
+        idx = self._transit_filter_combo.findText(current)
+        if idx >= 0:
+            self._transit_filter_combo.setCurrentIndex(idx)
+        self._transit_filter_combo.blockSignals(False)
 
     def set_running(self, running: bool) -> None:
         self._running = running

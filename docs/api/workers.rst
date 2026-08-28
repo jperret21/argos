@@ -60,6 +60,11 @@ Workers
    :undoc-members:
    :show-inheritance:
 
+.. automodule:: argos.workers.exoplanet_worker
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 .. automodule:: argos.workers.location_resolver_worker
    :members:
    :undoc-members:

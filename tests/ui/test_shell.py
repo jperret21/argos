@@ -61,13 +61,34 @@ def test_shell_three_mode_walkthrough() -> None:
         # The planner mirrors Capture's modular workspace: the centre table is
         # stable while search, visibility and controls are true movable docks.
         sequence_panel = shell._pages["sequencer"].panel
-        assert {"search", "plan", "visibility", "presets", "run"} <= set(sequence_panel._docks)
+        assert {"search", "transit", "plan", "visibility", "presets", "run"} <= set(
+            sequence_panel._docks
+        )
         assert sequence_panel._docks["visibility"].features()
         from argos.core.catalog.object_resolver import ResolvedObject
 
         resolved = ResolvedObject("HD 189733", 300.1821, 22.7099, "Star")
         sequence_panel.set_lookup_result(resolved)
         assert "HD 189733" in sequence_panel._search_result.text()
+        from argos.core.catalog.exoplanets import ExoplanetTarget
+        from argos.core.exoplanet.transit import predict_next_transit
+
+        transit_target = ExoplanetTarget(
+            "HD 189733 b",
+            "HD 189733",
+            300.1821,
+            22.7099,
+            2.21857567,
+            2454279.436714,
+            duration_hours=1.823,
+            depth_percent=2.4,
+            epoch_system="BJD-TDB",
+        )
+        sequence_panel.set_exoplanet_result(
+            transit_target, predict_next_transit(transit_target, 2454279.5)
+        )
+        assert sequence_panel._prepare_transit_btn.isEnabled()
+        assert "HD 189733 b" in sequence_panel._transit_result.text()
         assert "connect the camera" in sequence_panel._readiness_lbl.text().lower()
         sequence_panel.set_device_state("camera", "connected")
         assert "object name" in sequence_panel._readiness_lbl.text().lower()

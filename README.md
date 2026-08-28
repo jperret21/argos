@@ -56,6 +56,16 @@ From raw photons to a calibrated light curve, all running locally:
 - Light-curve export — per-target CSV: JD_UTC / BJD_TDB, magnitude and error, airmass
   (Kasten–Young), FWHM, sky background, comparisons used
 
+**Exoplanet transit preparation**
+
+- NASA Exoplanet Archive lookup — resolve a confirmed planet to its host star,
+  retrieve and locally cache the published BJD_TDB ephemeris
+- Transit sequence preparation — one stable Light series, fixed filter/cadence,
+  no autofocus or dithering, with configurable pre/post-transit baseline
+- Argos prepares capture and raw-sub preview only; Siril and the dedicated
+  post-processing workflow remain responsible for calibration and final transit
+  photometry/model fitting
+
 ## On the way
 
 - Autofocus — HFD V-curve sweep with a parabola-fit minimum (focuser control is

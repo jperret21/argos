@@ -12,6 +12,7 @@ documented inline.
 
    alpaca
    catalog
+   exoplanet
    imaging
    photometry
    seestar

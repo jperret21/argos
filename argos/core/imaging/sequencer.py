@@ -71,6 +71,8 @@ class SequencePlan:
                                     (an explicit user choice, logged when run).
         base_dir:                   Output root (defaults to ``Config.sessions_path``
                                     when ``None``).
+        metadata:                   Optional JSON-safe science-planning hand-off
+                                    written beside a sequence's raw FITS.
     """
 
     steps: list[SequenceStep] = field(default_factory=list)
@@ -80,6 +82,7 @@ class SequencePlan:
     autofocus_on_filter_change: bool = False
     on_complete: str = "Nothing"
     base_dir: Path | None = None
+    metadata: dict[str, str | int | float | bool | None] = field(default_factory=dict)
 
 
 @dataclass
@@ -192,6 +195,7 @@ def plan_to_dict(plan: SequencePlan) -> dict:
         "autofocus_on_filter_change": plan.autofocus_on_filter_change,
         "on_complete": plan.on_complete,
         "base_dir": str(plan.base_dir) if plan.base_dir is not None else None,
+        "metadata": plan.metadata,
         "steps": [asdict(s) for s in plan.steps],
     }
 
@@ -208,4 +212,5 @@ def plan_from_dict(data: dict) -> SequencePlan:
         autofocus_on_filter_change=data.get("autofocus_on_filter_change", False),
         on_complete=data.get("on_complete", "Nothing"),
         base_dir=Path(base) if base else None,
+        metadata=dict(data.get("metadata") or {}),
     )

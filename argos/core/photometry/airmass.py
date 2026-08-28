@@ -7,7 +7,7 @@ a post-processing step.)
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 
 def airmass_from_altitude(alt_deg: float | None) -> float | None:
@@ -72,3 +72,36 @@ def bjd_tdb(
         return float((t.tdb + ltt).jd)
     except Exception:  # astropy missing / bad inputs → caller falls back to JD
         return None
+
+
+def utc_from_bjd_tdb(
+    bjd: float,
+    ra_deg: float,
+    dec_deg: float,
+    lat_deg: float,
+    lon_deg: float,
+    elev_m: float = 0.0,
+) -> datetime | None:
+    """Invert :func:`bjd_tdb` to a topocentric UTC instant.
+
+    A transit catalogue epoch is a barycentric arrival time, while the
+    observer needs a clock time at their site.  Starting from astropy's TDB →
+    UTC conversion, a few light-travel-time iterations solve that difference
+    to well below the precision appropriate for planning a sequence.  ``None``
+    means that astropy/site data could not produce a trustworthy conversion.
+    """
+    try:
+        from astropy.time import Time
+
+        when = Time(float(bjd), format="jd", scale="tdb").utc.to_datetime(timezone=timezone.utc)
+    except Exception:
+        return None
+    for _ in range(4):
+        calculated = bjd_tdb(julian_date(when), ra_deg, dec_deg, lat_deg, lon_deg, elev_m)
+        if calculated is None:
+            return None
+        correction_s = (float(bjd) - calculated) * 86400.0
+        when += timedelta(seconds=correction_s)
+        if abs(correction_s) < 0.001:
+            break
+    return when

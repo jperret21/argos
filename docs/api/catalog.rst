@@ -29,3 +29,8 @@ Modules
    :members:
    :undoc-members:
    :show-inheritance:
+
+.. automodule:: argos.core.catalog.exoplanets
+   :members:
+   :undoc-members:
+   :show-inheritance:

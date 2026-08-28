@@ -41,8 +41,8 @@ class PhotometryWindow(QWidget):
 
         root = QVBoxLayout(self)
         banner = QLabel(
-            "Preview — raw subs, no dark/flat/bias. The publishable light curve is "
-            "produced in post-processing (with calibration + BJD_TDB)."
+            "Preview — raw, uncalibrated subs. BJD_TDB is recorded when the site and "
+            "exposure time are available; publishable reduction remains in Siril."
         )
         banner.setWordWrap(True)
         banner.setStyleSheet(

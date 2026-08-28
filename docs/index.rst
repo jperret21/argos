@@ -67,6 +67,7 @@ What this documentation covers
 
    CONTRIBUTING.md
    guide_terrain_0_4_1.md
+   exoplanet_transits.md
    simulator_testing.md
    field_connectivity.md
 

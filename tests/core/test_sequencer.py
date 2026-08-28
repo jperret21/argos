@@ -112,6 +112,7 @@ def test_preset_round_trip(tmp_path) -> None:
         autofocus_every_n=10,
         autofocus_on_filter_change=True,
         base_dir=tmp_path,
+        metadata={"observation_type": "exoplanet_transit", "planet_name": "HD 189733 b"},
     )
     restored = plan_from_dict(plan_to_dict(plan))
     assert restored.object_name == "M42"
@@ -119,6 +120,7 @@ def test_preset_round_trip(tmp_path) -> None:
     assert restored.autofocus_every_n == 10
     assert restored.autofocus_on_filter_change is True
     assert restored.base_dir == tmp_path
+    assert restored.metadata["observation_type"] == "exoplanet_transit"
     assert len(restored.steps) == 2
     assert restored.steps[0].filter_name == "Ha"
     assert restored.steps[0].exposure_s == 60.0

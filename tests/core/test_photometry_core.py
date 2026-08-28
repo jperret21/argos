@@ -7,7 +7,12 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from argos.core.photometry.airmass import airmass_from_altitude, bjd_tdb, julian_date
+from argos.core.photometry.airmass import (
+    airmass_from_altitude,
+    bjd_tdb,
+    julian_date,
+    utc_from_bjd_tdb,
+)
 from argos.core.photometry.aperture import measure_aperture
 from argos.core.photometry.differential import differential_mag, ensemble_zero_point
 from argos.core.photometry.lightcurve import LcPoint, LightCurve, read_curves_csv, write_curves_csv
@@ -230,6 +235,16 @@ def test_bjd_tdb_close_to_jd() -> None:
     bjd = bjd_tdb(2451545.0, ra_deg=83.6, dec_deg=22.0, lat_deg=43.6, lon_deg=1.4, elev_m=150.0)
     assert bjd is not None
     assert abs(bjd - 2451545.0) < 0.01
+
+
+def test_bjd_tdb_to_local_utc_round_trip() -> None:
+    original = datetime(2026, 8, 28, 5, 30, tzinfo=timezone.utc)
+    jd = julian_date(original)
+    bjd = bjd_tdb(jd, ra_deg=300.1821, dec_deg=22.7099, lat_deg=43.6, lon_deg=1.4)
+    assert bjd is not None
+    recovered = utc_from_bjd_tdb(bjd, 300.1821, 22.7099, 43.6, 1.4)
+    assert recovered is not None
+    assert abs((recovered - original).total_seconds()) < 0.1
 
 
 # --------------------------------------------------------------------------- #
