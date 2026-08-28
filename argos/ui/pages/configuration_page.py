@@ -241,20 +241,20 @@ class ConfigurationPage(QWidget):
 
     def _build_data_card(self) -> "design.Card":
         """Controls for the small, durable data products of an observing run."""
-        card = design.Card("Data & telemetry")
+        card = design.Card("Local diagnostics")
         layout = design.card_layout(card)
 
-        self._diagnostics_chk = QCheckBox("Record per-frame observing telemetry")
+        self._diagnostics_chk = QCheckBox("Save per-frame diagnostic records")
         self._diagnostics_chk.setToolTip(
-            "Writes a compact JSONL flight recorder beside each session: exposure, "
-            "mount, focus and photometry-quality measurements."
+            "Writes a compact JSONL file beside each session: exposure, mount, "
+            "focus and photometry-quality measurements. Nothing is uploaded."
         )
         self._diagnostics_chk.toggled.connect(self._save_diagnostics)
         layout.addWidget(self._diagnostics_chk)
         layout.addWidget(
             design.MutedLabel(
-                "Saved in each session's diagnostics folder. Keep this enabled when "
-                "testing in the field; it is useful for diagnosing a bad light curve."
+                "Optional. Saved only in the session's diagnostics folder; no data is "
+                "sent to Argos or any third party. Enable it when investigating a problem."
             )
         )
         layout.addWidget(
@@ -541,7 +541,7 @@ class ConfigurationPage(QWidget):
         self._radius_spin.setValue(int(self._config.get("astrometry.search_radius_deg", 30)))
         self._select_downsample(int(self._config.get("astrometry.downsample", 2)))
         self._scale_hint_chk.setChecked(bool(self._config.get("astrometry.use_scale_hint", True)))
-        self._diagnostics_chk.setChecked(bool(self._config.get("diagnostics.enabled", True)))
+        self._diagnostics_chk.setChecked(bool(self._config.get("diagnostics.enabled", False)))
         self._refresh_astap_status()
         self._loading = False
 
@@ -756,8 +756,10 @@ class ConfigurationPage(QWidget):
     def _save_diagnostics(self, enabled: bool) -> None:
         if self._loading:
             return
+        # Existing configs predate the privacy-first opt-in policy.  Mark the
+        # user's first interaction so the migration never overrides it again.
+        self._config.set("diagnostics.local_opt_in_v1", True)
         self._config.set("diagnostics.enabled", bool(enabled))
-        self._config.save()
 
     def _refresh_astap_status(self) -> None:
         found = find_astap(self._astap_edit.text().strip())

@@ -100,7 +100,9 @@ _DEFAULTS: dict[str, Any] = {
         "systematic_floor_mag": None,
     },
     "diagnostics": {
-        "enabled": True,  # per-frame JSONL flight recorder inside each session
+        # Opt-in local JSONL flight recorder inside each session. This is never
+        # sent anywhere; observers explicitly choose whether to create it.
+        "enabled": False,
     },
 }
 
@@ -139,6 +141,7 @@ class Config:
             _migrate_camera_keys(data)
             _migrate_legacy_site(data, on_disk)
             _migrate_alpaca_profiles(data, on_disk)
+            _migrate_diagnostics_opt_in(data, on_disk)
             logger.debug("Config loaded from %s", _CONFIG_FILE)
             return cls(data)
         except Exception as exc:
@@ -267,6 +270,21 @@ def _migrate_legacy_site(data: dict, on_disk: dict) -> None:
         site = data.setdefault("site", {})
         site.update(values)
         logger.info("Migrated legacy observer coordinates to site settings")
+
+
+def _migrate_diagnostics_opt_in(data: dict, on_disk: dict) -> None:
+    """Make pre-privacy-policy diagnostic recording opt-in on upgrade.
+
+    Older releases created ``diagnostics.enabled: true`` automatically, so a
+    true value in such a file is not evidence of an observer's affirmative
+    choice.  Preserve only settings made after the local-only policy landed.
+    """
+    saved = on_disk.get("diagnostics") or {}
+    if saved.get("local_opt_in_v1") is True:
+        return
+    diagnostics = data.setdefault("diagnostics", {})
+    diagnostics["enabled"] = False
+    logger.info("Local diagnostics disabled until explicitly enabled in Settings")
 
 
 def _migrate_alpaca_profiles(data: dict, on_disk: dict) -> None:

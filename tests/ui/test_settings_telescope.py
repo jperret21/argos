@@ -99,8 +99,13 @@ def test_telescope_picker_walkthrough() -> None:
         assert page._site_name_edit.text() == "Berkeley roof"
         assert page._lat_spin.value() == 37.8715
 
-        # Field telemetry can be explicitly disabled, while ASTAP's local
-        # database directory is persisted separately from its database set.
+        # Local diagnostics are off by default and remain an explicit opt-in;
+        # ASTAP's local database directory is persisted separately from its
+        # database set.
+        assert page._diagnostics_chk.isChecked() is False
+        page._diagnostics_chk.setChecked(True)
+        assert config.get("diagnostics.enabled") is True
+        assert config.get("diagnostics.local_opt_in_v1") is True
         page._diagnostics_chk.setChecked(False)
         assert config.get("diagnostics.enabled") is False
         page._astap_db_edit.setText("/Volumes/Astro/astap")

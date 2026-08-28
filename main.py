@@ -84,16 +84,14 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from argos.core.config import Config  # noqa: E402
 from argos.core.hardware import active as hardware  # noqa: E402
+from argos.core.support_bundle import configure_local_logging, install_crash_reporter  # noqa: E402
 from argos.ui import theme  # noqa: E402
 from argos.ui.palettes import PALETTES, EQUILUX  # noqa: E402
 
 
 def _setup_logging(level: str) -> None:
-    logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    """Keep a bounded technical journal on this computer plus stderr."""
+    configure_local_logging(level)
 
 
 def _load_palette(config: Config) -> None:
@@ -144,6 +142,7 @@ def main() -> None:
 
     config = Config.load()
     _setup_logging(config.get("ui.log_level", "INFO"))
+    install_crash_reporter()
 
     logger = logging.getLogger(__name__)
     logger.info("Argos starting")

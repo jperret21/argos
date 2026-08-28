@@ -16,7 +16,7 @@
 | Astrométrie | ASTAP et son dossier de bases stellaires sont configurables explicitement dans **Settings**. |
 | Photométrie | Courbe cible/check séparée des diagnostics des comparaisons ; incertitudes par image ; export CSV de toutes les mesures. |
 | Informations d'étoile | Cliquer une étoile affiche identité catalogue, coordonnées et mesures ; la carte est déplaçable et redimensionnable. |
-| Données | Sessions compatibles Siril, `session.json` et télémétrie JSONL par image. |
+| Données | Sessions compatibles Siril, `session.json` et diagnostics JSONL locaux optionnels. |
 
 ## 2. Préparation à domicile
 
@@ -32,8 +32,9 @@
 4. Dans **Settings → Astrometry**, vérifier que l'exécutable ASTAP est détecté.
    Renseigner **Database folder** si la base stellaire n'est pas dans un chemin
    détecté automatiquement. Le statut doit confirmer ASTAP **et** la base.
-5. Dans **Settings → Data & telemetry**, laisser la télémétrie activée pour les
-   essais. Elle aidera à expliquer une courbe dégradée.
+5. Dans **Settings → Local diagnostics**, activer l'enregistrement JSONL
+   seulement si l'essai nécessite un diagnostic détaillé. Ces fichiers restent
+   dans le dossier de séance et ne sont jamais transmis par Argos.
 6. Pendant que l'accès internet est disponible, rechercher les objets prévus et
    résoudre/consulter les champs nécessaires : les recherches de catalogue sont
    alors réutilisables depuis le cache au terrain.
@@ -181,14 +182,21 @@ dans Settings avant un export ; `XXX` indique qu'il manque.
 | Déplacement de docks | mise en page conservée après relance | panneau concerné, disposition attendue |
 | Incident volontaire | arrêt propre lors de perte réseau/ASTAP | action, heure, log et fichiers restants |
 
-Pour un retour exploitable, joindre si possible : version Argos, modèle de
-Seestar, macOS/Linux, réseau, log Argos, `session.json`, le CSV, un ou deux FITS
-bruts et une capture de l'écran. Ne pas envoyer seulement une image étirée : le
-FITS brut et le contexte de séance sont indispensables.
+Pour un retour exploitable, commencer par **More → Create local support
+bundle…**. Le ZIP est créé localement à ta demande ; il contient les logs
+techniques expurgés et, si tu le choisis, les métadonnées JSON/CSV/JSONL de la
+séance. Il n'inclut jamais les FITS bruts, l'identité de l'observateur, les
+coordonnées ou l'adresse réseau, et Argos ne l'envoie jamais. Vérifier son
+contenu avant de le partager.
+
+Si l'analyse exige ensuite les FITS bruts ou une coordonnée précise, les joindre
+séparément et uniquement après décision explicite. Ajouter version Argos,
+modèle de Seestar, macOS/Linux et une capture d'écran du problème.
 
 ## 7. Aide et limites
 
 - **More → Documentation & website** ouvre les ressources en ligne ;
+  **More → Create local support bundle…** fabrique un ZIP de diagnostic local ;
   **More → About & credits** donne version, licence et crédits.
 - Le S30 Pro est le profil de référence. S30 et S50 restent des profils de test
   pour la photométrie de précision.

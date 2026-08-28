@@ -113,6 +113,19 @@ uv run python main.py
 
 See [`docs/simulator_testing.md`](docs/simulator_testing.md) for the full guide.
 
+## Privacy and field diagnostics
+
+Argos has **no remote telemetry, analytics or automatic crash upload**. Target,
+catalogue and site searches use the network only when the observer asks for
+them. Local diagnostics are opt-in and can be disabled in **Settings → Local
+diagnostics**.
+
+For a field issue, **More → Create local support bundle…** creates a ZIP only
+when requested. It contains redacted local logs and, if selected, redacted
+session metadata; raw FITS, observing-site coordinates, network addresses and
+observer identity are excluded. Argos never uploads the ZIP — review and share
+it manually only if you choose to do so.
+
 ## CI and releases
 
 GitHub Actions runs linting, formatting, documentation and tests on every pull

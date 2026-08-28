@@ -29,8 +29,10 @@ from PyQt6.QtGui import QAction, QCloseEvent, QDesktopServices, QKeySequence, QP
 from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -40,6 +42,7 @@ from argos import __version__
 from argos.core.config import Config
 from argos.core.session.acquisition_engine import AcquisitionEngine
 from argos.core.session.device_session import DeviceSession
+from argos.core.support_bundle import create_support_bundle, diagnostics_directory
 from argos.ui import theme
 from argos.ui.pages.configuration_page import ConfigurationPage
 from argos.ui.pages.connection_page import ConnectionPage
@@ -209,6 +212,12 @@ class Shell(QMainWindow):
         documentation.setToolTip("Open the Argos documentation and project website")
         documentation.triggered.connect(self._open_project_website)
         more_menu.addAction(documentation)
+        support_bundle = QAction("Create local support bundle…", self)
+        support_bundle.setToolTip(
+            "Create a local ZIP of redacted logs and optionally session metadata. Nothing is uploaded."
+        )
+        support_bundle.triggered.connect(self._create_support_bundle)
+        more_menu.addAction(support_bundle)
         more_menu.addSeparator()
         about = QAction("About & credits", self)
         about.triggered.connect(self._show_about)
@@ -438,6 +447,63 @@ class Shell(QMainWindow):
     def _show_about(self) -> None:
         """Show the branded About window with credits and project links."""
         self._build_about_dialog().exec()
+
+    def _create_support_bundle(self) -> None:
+        """Create an explicitly local, privacy-preserving support ZIP."""
+        include_session = (
+            QMessageBox.question(
+                self,
+                "Include session metadata?",
+                "Include one session's JSON, JSONL and CSV files? Raw FITS, "
+                "site coordinates and network addresses are excluded. The ZIP stays "
+                "on this computer until you choose to share it.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            == QMessageBox.StandardButton.Yes
+        )
+        session_dir: Path | None = None
+        if include_session:
+            selected = QFileDialog.getExistingDirectory(
+                self, "Choose an Argos session", str(self._config.sessions_path)
+            )
+            if not selected:
+                return
+            session_dir = Path(selected)
+
+        desktop = Path.home() / "Desktop"
+        start = desktop if desktop.is_dir() else Path.home()
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save local support bundle",
+            str(start / f"argos-support-{self.APP_VERSION}.zip"),
+            "ZIP archive (*.zip)",
+        )
+        if not filename:
+            return
+        summary = {
+            "hardware_profile": self._config.get("hardware.profile", "unknown"),
+            "log_level": self._config.get("ui.log_level", "INFO"),
+            "local_diagnostics_enabled": bool(self._config.get("diagnostics.enabled", False)),
+            "astap_configured": bool(self._config.get("astrometry.astap_path", "")),
+        }
+        try:
+            bundle = create_support_bundle(
+                filename,
+                log_directory=diagnostics_directory(),
+                session_directory=session_dir,
+                config_summary=summary,
+            )
+        except OSError as exc:
+            logger.exception("Could not create local support bundle")
+            QMessageBox.warning(self, "Support bundle", f"Could not create the ZIP:\n{exc}")
+            return
+        QMessageBox.information(
+            self,
+            "Local support bundle created",
+            f"Created {bundle.path.name} with {len(bundle.files)} file(s).\n\n"
+            "Argos did not upload it. Review the ZIP before sharing it.",
+        )
 
     def _build_about_dialog(self) -> QDialog:
         """Create the About dialog separately so it stays easy to inspect/test."""

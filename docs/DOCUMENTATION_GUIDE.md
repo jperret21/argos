@@ -89,6 +89,9 @@ file-by-file map (one-line purpose taken from each module's own docstring).
 
 **config.py** — persistent application configuration stored as JSON
 
+**support_bundle.py** — local rotating logs, crash reports and manually-created,
+privacy-redacted support ZIPs; never sends data over the network
+
 ### workers/ — QThread bridges, core + QtCore only
 
 - `discovery_worker.py` — Alpaca UDP discovery thread

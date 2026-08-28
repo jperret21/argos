@@ -103,6 +103,9 @@ core/
 │   ├── protocol.py                Stellarium Telescope Protocol v1.0 binary codec
 │   └── server.py                  Asyncio TCP server, bridges to Qt worker
 │
+├── support_bundle.py              Local rotating logs, crash reports and manual,
+│                                  privacy-redacted support ZIPs (no network)
+│
 └── config.py                      ~/.argos/config.json: observer, astrometry,
                                    photometry params, camera constants, UI state
 ```
@@ -362,7 +365,7 @@ Key sections:
 | `astrometry` | `astap_path` / `database_path` / `database` | `""` / `""` / `""` | ASTAP executable, optional star-database folder and database set |
 | `catalog` | `mag_limit` / `max_results` | 15.0 / 250 | VSX cone search bounds |
 | `photometry` | `aperture_fwhm_mult` / etc. | 2.5 / ... | Aperture radii in FWHM units |
-| `diagnostics` | `enabled` | `true` | Per-frame JSONL telemetry alongside a session |
+| `diagnostics` | `enabled` | `false` | Optional local per-frame JSONL diagnostics; never uploaded |
 
 ---
 

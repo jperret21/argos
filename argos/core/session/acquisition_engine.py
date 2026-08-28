@@ -620,7 +620,7 @@ class AcquisitionEngine(QObject):
             )
             self._diag = SessionDiagnostics(
                 root / f"{safe or 'Unknown'}_live_diagnostics.jsonl",
-                enabled=bool(self._cfg("diagnostics.enabled", True)),
+                enabled=bool(self._cfg("diagnostics.enabled", False)),
             )
             self._diag_object = obj
             self._diag_frame = 0

@@ -92,7 +92,11 @@ def test_shell_three_mode_walkthrough() -> None:
         file_actions = {act.text() for act in menus["File"].actions()}
         assert {"Open FITS image…", "Open session photometry…", "Quit Argos"} <= file_actions
         more_actions = {act.text() for act in menus["More"].actions()}
-        assert {"Documentation & website", "About & credits"} <= more_actions
+        assert {
+            "Documentation & website",
+            "Create local support bundle…",
+            "About & credits",
+        } <= more_actions
         about_dialog = shell._build_about_dialog()
         assert about_dialog.findChild(QLabel, "about_logo").pixmap() is not None
         assert "Jules Perret" in about_dialog.findChild(QLabel, "about_credits").text()

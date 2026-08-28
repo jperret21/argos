@@ -46,8 +46,9 @@ class SessionDiagnostics:
     """Append-only JSONL writer for one run (live session or batch re-run).
 
     The file is opened lazily on the first record so an enabled-but-unused
-    recorder leaves nothing behind. ``enabled=False`` (config
-    ``diagnostics.enabled``) makes every call a no-op.
+    recorder leaves nothing behind. It is an opt-in local diagnostic file and
+    has no network transport. ``enabled=False`` (config ``diagnostics.enabled``)
+    makes every call a no-op.
     """
 
     def __init__(self, path: Path | str, enabled: bool = True) -> None:

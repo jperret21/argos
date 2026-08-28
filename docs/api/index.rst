@@ -16,6 +16,7 @@ documented inline.
    photometry
    seestar
    stellarium
+   support
 
 .. toctree::
    :maxdepth: 2

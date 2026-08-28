@@ -8,10 +8,14 @@ would change what photometry flags as saturated, without telling anyone.
 
 from __future__ import annotations
 
+import json
+
+from argos.core import config as config_module
 from argos.core.config import (
     _DEFAULTS,
     _migrate_alpaca_profiles,
     _migrate_camera_keys,
+    _migrate_diagnostics_opt_in,
     _migrate_legacy_site,
 )
 
@@ -75,6 +79,29 @@ def test_explicit_site_is_never_overwritten_by_legacy_observer_values():
     }
     _migrate_legacy_site(data, on_disk={"site": data["site"]})
     assert data["site"]["latitude"] == 0.0
+
+
+def test_legacy_enabled_diagnostics_become_opt_in():
+    """The old default was true, not an affirmative privacy choice."""
+    data = {"diagnostics": {"enabled": True}}
+    _migrate_diagnostics_opt_in(data, on_disk={"diagnostics": {"enabled": True}})
+    assert data["diagnostics"]["enabled"] is False
+
+
+def test_explicit_local_diagnostics_choice_is_preserved():
+    data = {"diagnostics": {"enabled": True}}
+    saved = {"diagnostics": {"enabled": True, "local_opt_in_v1": True}}
+    _migrate_diagnostics_opt_in(data, on_disk=saved)
+    assert data["diagnostics"]["enabled"] is True
+
+
+def test_config_load_disables_legacy_diagnostics_without_opt_in():
+    config_module._CONFIG_DIR.mkdir(parents=True)
+    config_module._CONFIG_FILE.write_text(
+        json.dumps({"diagnostics": {"enabled": True}}), encoding="utf-8"
+    )
+    loaded = config_module.Config.load()
+    assert loaded.get("diagnostics.enabled") is False
 
 
 def test_active_legacy_alpaca_profile_becomes_the_single_endpoint():

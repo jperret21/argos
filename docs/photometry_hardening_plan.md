@@ -269,8 +269,8 @@ plots every comp's raw behaviour in three lines of notebook code.
 Wiring: `AcquisitionEngine` (live) and `PhotometryBatchWorker` (re-runs) emit
 records; `measure_targets` returns the per-star detail it already computes
 (today it drops everything but the calibrated targets). Config key
-`diagnostics.enabled` (default **true** — a few kB/frame; a night is worth
-having the black box on).
+`diagnostics.enabled` (default **false** — it is an explicitly enabled local
+diagnostic file, never telemetry or an upload).
 
 **Prove it.** Batch test: rotating synthetic scene → jsonl exists, one `star`
 record per star per frame, `tracking.rotation_deg` matches BatchResult,
