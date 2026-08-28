@@ -33,7 +33,9 @@ _LOG_BACKUPS = 5
 _MAX_BUNDLE_FILE_BYTES = 10_000_000
 _MAX_BUNDLE_SESSION_BYTES = 50_000_000
 _SESSION_EXTENSIONS = frozenset({".csv", ".json", ".jsonl"})
-_IPV4_RE = re.compile(r"(?<![\d.])(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}(?![\d.])")
+_IPV4_RE = re.compile(
+    r"(?<![\d.])(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}(?![\d.])"
+)
 _PRIVATE_FIELDS = frozenset(
     {
         "address",
@@ -86,7 +88,9 @@ def configure_local_logging(level: str, directory: Path | None = None) -> Path |
     except OSError:
         # ``basicConfig`` below ensures this remains visible even before the
         # application's logging tree exists.
-        logging.getLogger(__name__).warning("Could not initialise local file logging", exc_info=True)
+        logging.getLogger(__name__).warning(
+            "Could not initialise local file logging", exc_info=True
+        )
 
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO), handlers=handlers, force=True
@@ -130,9 +134,12 @@ def install_crash_reporter(directory: Path | None = None) -> None:
     sys.excepthook = report
 
     if threading_excepthook is not None:
+
         def report_thread(args) -> None:
             path = write_crash_report(args.exc_type, args.exc_value, args.exc_traceback, directory)
-            logging.getLogger(__name__).critical("Unhandled thread exception; local report: %s", path)
+            logging.getLogger(__name__).critical(
+                "Unhandled thread exception; local report: %s", path
+            )
             previous_thread_hook(args)
 
         threading.excepthook = report_thread
@@ -199,9 +206,15 @@ def create_support_bundle(
 
         root = log_directory or diagnostics_directory(home=home)
         for log in sorted(root.glob("argos.log*")) if root.is_dir() else []:
-            if log.is_file() and not log.is_symlink() and log.stat().st_size <= _MAX_BUNDLE_FILE_BYTES:
+            if (
+                log.is_file()
+                and not log.is_symlink()
+                and log.stat().st_size <= _MAX_BUNDLE_FILE_BYTES
+            ):
                 name = f"logs/{log.name}"
-                archive.writestr(name, redact_text(log.read_text(encoding="utf-8", errors="replace"), home))
+                archive.writestr(
+                    name, redact_text(log.read_text(encoding="utf-8", errors="replace"), home)
+                )
                 included.append(name)
 
         if session_directory is not None:
@@ -217,7 +230,11 @@ def _add_session_metadata(archive: zipfile.ZipFile, root: Path) -> list[str]:
     added: list[str] = []
     total = 0
     for candidate in sorted(root.rglob("*")):
-        if not candidate.is_file() or candidate.is_symlink() or candidate.suffix.lower() not in _SESSION_EXTENSIONS:
+        if (
+            not candidate.is_file()
+            or candidate.is_symlink()
+            or candidate.suffix.lower() not in _SESSION_EXTENSIONS
+        ):
             continue
         size = candidate.stat().st_size
         if size > _MAX_BUNDLE_FILE_BYTES or total + size > _MAX_BUNDLE_SESSION_BYTES:

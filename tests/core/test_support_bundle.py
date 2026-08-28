@@ -29,9 +29,7 @@ def test_support_bundle_whitelists_session_metadata_and_redacts_logs(tmp_path: P
         '{"observer":"Jules", "latitude":37.8, "frames": []}', encoding="utf-8"
     )
     (session / "photometry.csv").write_text("jd,ra_deg,mag\n1,300.1,12.2\n", encoding="utf-8")
-    (diagnostics / "run.jsonl").write_text(
-        '{"kind":"frame", "dec_deg":22.7}\n', encoding="utf-8"
-    )
+    (diagnostics / "run.jsonl").write_text('{"kind":"frame", "dec_deg":22.7}\n', encoding="utf-8")
     (session / "raw.fits").write_bytes(b"must not be shared")
     (session / "private.bin").write_bytes(b"must not be shared")
 
