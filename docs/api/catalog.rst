@@ -24,3 +24,8 @@ Modules
    :members:
    :undoc-members:
    :show-inheritance:
+
+.. automodule:: argos.core.catalog.object_resolver
+   :members:
+   :undoc-members:
+   :show-inheritance:

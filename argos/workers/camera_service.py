@@ -14,6 +14,8 @@ injected hooks (so it stays hardware-free and unit-testable).
 
 Priority (highest wins): SEQUENCE > AUTOFOCUS > LIVE / SINGLE.
 
+State-transition policy::
+
     acquire(requested)
         IDLE                        → granted
         same state                  → refused ("already running")
@@ -34,11 +36,13 @@ Priority (highest wins): SEQUENCE > AUTOFOCUS > LIVE / SINGLE.
         no-ops. Releasing AUTOFOCUS returns to SEQUENCE when the handshake
         is active, else to IDLE.
 
-Signals:
-    state_changed(CameraState)  — after every ownership transition
-    acquire_refused(str)        — human-readable reason (log as WARN)
-    preempted(str)              — a live/single preview was stopped for a
-                                  higher-priority owner (log as INFO)
+Signals
+-------
+
+* ``state_changed(CameraState)`` — emitted after every ownership transition.
+* ``acquire_refused(str)`` — human-readable reason to log as WARN.
+* ``preempted(str)`` — a live/single preview was stopped for a higher-priority
+  owner; log this as INFO.
 """
 
 from __future__ import annotations

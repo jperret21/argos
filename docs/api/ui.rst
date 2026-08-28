@@ -53,6 +53,16 @@ Pages
    :undoc-members:
    :show-inheritance:
 
+.. automodule:: argos.ui.pages.sequencer_page
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.ui.pages.analyze_page
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 .. automodule:: argos.ui.pages.configuration_page
    :members:
    :undoc-members:
@@ -150,6 +160,16 @@ Widgets
    :show-inheritance:
 
 .. automodule:: argos.ui.widgets.metrics_panel
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.ui.widgets.hfd_history_dock
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.ui.widgets.statistics_dock
    :members:
    :undoc-members:
    :show-inheritance:

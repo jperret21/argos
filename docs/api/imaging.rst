@@ -13,6 +13,26 @@ Modules
    :undoc-members:
    :show-inheritance:
 
+.. automodule:: argos.core.imaging.imx662
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.core.imaging.imx462
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.core.imaging.sensor_models
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.core.imaging.sensor_reference
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 .. automodule:: argos.core.imaging.debayer
    :members:
    :undoc-members:

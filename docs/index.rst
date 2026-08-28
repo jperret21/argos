@@ -66,6 +66,7 @@ What this documentation covers
    :name: sec-getting-started
 
    CONTRIBUTING.md
+   guide_terrain_0_4_1.md
    simulator_testing.md
    field_connectivity.md
 

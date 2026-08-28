@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Argos — scientific observing for ZWO Seestar telescopes</title>
-    <meta name="description" content="Desktop acquisition, astrometry and differential photometry for ZWO Seestar telescopes. A field-validation alpha: from raw FITS to live differential light curves on your laptop." />
+    <meta name="description" content="Desktop acquisition, astrometry and differential photometry for ZWO Seestar telescopes. An alpha version: from raw FITS to live differential light curves on your laptop." />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="apple-touch-icon.png" />
     <link rel="stylesheet" href="css/style.css" />
@@ -47,7 +47,7 @@
         <div class="hero-curve" aria-hidden="true"><svg id="curve" xmlns="http://www.w3.org/2000/svg"></svg></div>
 
         <div class="container hero-content">
-            <a href="#start" class="hero-badge hero-badge-link">Field-validation build v0.4.1 &middot; how to run it &rarr;</a>
+            <a href="#start" class="hero-badge hero-badge-link">Alpha version v0.4.1 &middot; how to run it &rarr;</a>
             <h1>Argos</h1>
             <p class="hero-myth">the hundred-eyed watcher</p>
             <p class="hero-sub">Scientific acquisition, astrometry &amp; differential photometry<br />for ZWO Seestar telescopes.</p>
@@ -196,7 +196,7 @@
         <div class="container container-wide">
             <div class="section-header">
                 <h2>How to start</h2>
-                <p><strong>v0.4.1 is a field-validation build.</strong> The S30 Pro is the reference profile; S30 and S50 remain explicitly unvalidated for precision photometry. Run it on your Seestar &mdash; or against the ASCOM Alpaca simulator, no telescope needed.</p>
+                <p><strong>v0.4.1 is an alpha version.</strong> The S30 Pro is the reference profile; S30 and S50 remain explicitly unvalidated for precision photometry. Run it on your Seestar &mdash; or against the ASCOM Alpaca simulator, no telescope needed.</p>
             </div>
 
             <div class="code-wrap">
@@ -236,10 +236,13 @@ uv run python main.py
 <span class="hl">docker</span> run -d --name omnisim \
   -p 32323:32323 -p 32227:32227/udp omnisim
 uv run python main.py
-<span class="cm"># Connection &rarr; host localhost, port 32323</span></code></pre>
+<span class="cm"># Connection &rarr; IP address localhost, port 32323</span></code></pre>
                     </div>
                     <a href="https://github.com/jperret21/argos/blob/main/docs/simulator_testing.md" class="btn btn-ghost start-col-link" target="_blank" rel="noopener">Build the simulator image &rarr;</a>
                 </div>
+            </div>
+            <div class="start-links">
+                <a href="https://github.com/jperret21/argos/blob/main/docs/guide_terrain_0_4_1.md" class="btn btn-ghost" target="_blank" rel="noopener">0.4.1 field guide &rarr;</a>
             </div>
         </div>
     </section>

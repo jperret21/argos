@@ -138,8 +138,8 @@ Then walk the app:
 
 | Step | Where | Check |
 |---|---|---|
-| 1. Connect | **Connection** panel | Host `localhost`, port `32323` → **Connect** the 4 devices (LEDs go green) |
-| 2. Preview | **Acquisition** → **Capture** | Start a 1 s exposure → image appears, **no UI freeze**, auto-STF stretches it |
+| 1. Connect | **Connection** | IP address `localhost`, port `32323` → **Connect equipment** (the 4 devices become Ready) |
+| 2. Preview | **Observe** | Start a 1 s exposure → image appears, **no UI freeze**, auto-STF stretches it |
 | 3. Display | **Display** tab | R/G/B histogram visible; black/white/midtone sliders react; view selector (super-pixel / bilinear / CFA channels) |
 | 4. Measure | on the image | Crosshair cursor + ROI selection → stats (min/max/mean/σ) show in the bar (not a big column) |
 | 5. Focus | **Focus** tab | HFD curve fills as exposures roll in |

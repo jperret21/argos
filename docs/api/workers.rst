@@ -55,6 +55,31 @@ Workers
    :undoc-members:
    :show-inheritance:
 
+.. automodule:: argos.workers.object_resolver_worker
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.workers.location_resolver_worker
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.workers.photometry_batch_worker
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.workers.camera_service
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.workers.network_monitor
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 .. automodule:: argos.workers.stellarium_worker
    :members:
    :undoc-members:

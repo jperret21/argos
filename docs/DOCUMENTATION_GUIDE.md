@@ -59,7 +59,10 @@ file-by-file map (one-line purpose taken from each module's own docstring).
 - `server.py` — asyncio TCP server speaking that protocol
 
 **imaging/** — frames, FITS, solving, metrics
-- `imx585.py` — Sony IMX585 calibration constants (Seestar telephoto camera)
+- `imx585.py`, `imx662.py`, `imx462.py` — sensor reference constants for the
+  supported Seestar camera profiles
+- `sensor_models.py`, `sensor_reference.py` — sensor-profile selection and
+  shared sensor metadata
 - `debayer.py` — Bayer demosaicing, CFA channel split, focus metrics (GRBG)
 - `green.py` — the canonical green plane, one definition for the science stack
 - `stretch.py` — display stretch transforms + measurement stats (display only)
@@ -73,6 +76,7 @@ file-by-file map (one-line purpose taken from each module's own docstring).
 
 **catalog/** — external star catalogs
 - `aavso.py` — AAVSO VSX + VSP HTTP clients (Qt-free, network-isolated)
+- `object_resolver.py` — CDS Sesame object-name resolution with a local cache
 - `photometry.py` — comparison-star selection for differential photometry
 - `targets.py` — persistent target / comparison set for a session (§5 B4)
 
@@ -97,27 +101,33 @@ file-by-file map (one-line purpose taken from each module's own docstring).
 - `astrometry_controller.py` — live page solve lifecycle + auto-solve policy
 - `catalog_worker.py` — fetch VSX/VSP catalog objects off the UI thread
 - `stellarium_worker.py` — bridge between the asyncio Stellarium server and Qt
+- `object_resolver_worker.py` — resolve object designations without blocking Qt
+- `location_resolver_worker.py` — resolve a searched observing location
+- `photometry_batch_worker.py` — reprocess saved photometry measurements
+- `camera_service.py` — serializes camera operations shared by live capture and sequences
+- `network_monitor.py` — reports network availability and connection changes
 
 ### ui/ — PyQt6, no business logic, no network I/O
 
 **Shell & chrome**
-- `shell.py` — main window built around 3 modes
-- `sidebar.py` — left navigation, switches the 3 modes
+- `shell.py` — main window built around Connection, Observe, Plan, Review and Settings
+- `sidebar.py` — left navigation between the five workspaces
 - `statusbar.py` — permanent top status strip (devices, tracking, last action)
 - `theme.py` — Siril-inspired equilux dark palette
 - `design.py` — design system, single source of truth for layout primitives
 - `analysis_window.py` — standalone viewer for inspecting a single FITS frame
 
-**pages/** — the three modes
-- `connection_page.py` — connect Seestar devices + Stellarium server
-- `imaging_page.py` — acquisition mode, the main work surface
-- `configuration_page.py` — software settings (observer, site, paths, appearance)
+**pages/** — the five workspaces
+- `connection_page.py` — choose the telescope and connect Alpaca equipment
+- `imaging_page.py` — Observe: acquisition and live field work surface
+- `sequencer_page.py` — Plan: target search, altitude preview and sequence editor
+- `analyze_page.py` — Review: reopen saved images and photometry data
+- `configuration_page.py` — Settings: observer, site, paths, astrometry and appearance
 
 **panels/**
 - `log_panel.py` — session log viewer
 - `manual_control_dialog.py` — Alpaca MoveAxis jogging
 - `stellarium_card.py` — Stellarium server toggle card
-- `photometry_setup_window.py` — "mission control" for a photometry session
 - `photometry_window.py` — floating photometry window (§6 C5/C6)
 
 **widgets/**
@@ -128,7 +138,8 @@ file-by-file map (one-line purpose taken from each module's own docstring).
 - `camera_dock.py` — single-shot capture controls
 - `focuser_dock.py` — focuser control (right rail)
 - `mount_dock.py` — mount control (right side)
-- `filterwheel_dock.py` — filter wheel control (right rail)
+- `statistics_dock.py` — optional detailed image statistics
+- `hfd_history_dock.py` — optional focus-diagnostics history
 - `sequence_panel.py` — advanced multi-step acquisition table
 - `astrometry_settings.py` — popup to tune solving + catalog queries
 - `star_info_card.py` — on-image star-info card (§5 B2)

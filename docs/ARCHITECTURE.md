@@ -124,6 +124,11 @@ workers/
 ├── solve_worker.py                ASTAP solve on one frame → SolveResult signal
 ├── astrometry_controller.py       Auto-solve policy: cadence, mount-distance gate
 ├── catalog_worker.py              VSX cone search + VSP chart off the UI thread
+├── object_resolver_worker.py      CDS Sesame object designation lookup
+├── location_resolver_worker.py    Explicit observing-site lookup + elevation
+├── photometry_batch_worker.py     Re-measure a saved FITS set off the UI thread
+├── camera_service.py              Camera ownership between preview/sequence/focus
+├── network_monitor.py             Quiet device/internet reachability status
 └── stellarium_worker.py           Asyncio event loop → Qt signals
 ```
 
@@ -133,22 +138,23 @@ Layout, colour, widgets. No `requests`, no `socket`, no business logic.
 
 ```
 ui/
-├── shell.py                       Main window, 3-mode navigation
-├── sidebar.py                     Mode switcher (Connection / Imaging / Config)
+├── shell.py                       Main window, workflow navigation + File/More menus
+├── sidebar.py                     Mode switcher (Connection / Observe / Plan / Review / Settings)
 ├── statusbar.py                   Live status: devices, tracking, last action
 ├── theme.py                       Siril-inspired equilux dark palette
 ├── design.py                      Spacing, typography, layout primitives
 ├── analysis_window.py             Standalone FITS inspector (post-processing)
 │
-├── pages/                         # The three main modes
+├── pages/                         # Workflow screens
 │   ├── connection_page.py         Device connect/discover + Stellarium pairing
-│   ├── imaging_page.py            Live view, capture, focus, sequence, photometry
-│   └── configuration_page.py      Observer, site, astrometry, catalog settings
+│   ├── imaging_page.py            Dockable live view, capture, focus and photometry
+│   ├── sequencer_page.py          Target lookup + dockable planning workspace
+│   ├── analyze_page.py            Reload/export measurements and inspect FITS
+│   └── configuration_page.py      Observer/site, telescope, paths and astrometry
 │
 ├── panels/                        # Floating / modal panels
 │   ├── log_panel.py               Session log (§7) viewer
 │   ├── manual_control_dialog.py   MoveAxis jogging with direction pads
-│   ├── photometry_setup_window.py Target selection, comparison stars, session prefs
 │   ├── photometry_window.py       Live light curve + comparison table (§6 C5/C6)
 │   └── stellarium_card.py         Server on/off, connection status
 │
@@ -160,13 +166,14 @@ ui/
     ├── camera_dock.py             Single-shot and continuous exposure controls
     ├── focuser_dock.py            Position readout, move, autofocus trigger
     ├── mount_dock.py              RA/Dec, Alt/Az, jog, GoTo, tracking toggle
-    ├── filterwheel_dock.py        Current filter display, position selector
     ├── sequence_panel.py          Multi-step plan table (Light/Dark/Flat/Bias)
     ├── astrometry_settings.py     Solve parameters: radius, scale hint, timeout
     ├── star_info_card.py          On-click star: coordinates, magnitude, HFD
     ├── target_table.py            Target set: name, RA/Dec, priority, status
-    ├── comparison_table.py        Full photometry table for a single variable
-    ├── lightcurve_panel.py        Live differential light-curve plot (§6 C5)
+    ├── comparison_table.py        In-use comparison/check ensemble
+    ├── lightcurve_panel.py        Separate science and comparison-diagnostic plots
+    ├── hfd_history_dock.py        Focus HFD/FWHM history
+    ├── statistics_dock.py         Detailed image statistics
     └── metrics_panel.py           Session trending: HFD, SNR, airmass over time
 ```
 
@@ -334,7 +341,8 @@ photometry/lightcurve.py ──► time-series accumulator
 ```
 
 Each module is unit-testable in isolation. The full chain runs off the UI
-thread via `photometry_setup_window.py` + `solve_worker.py` + `catalog_worker.py`.
+thread through the acquisition engine, ASTAP/catalog workers and the batch
+photometry worker; the live window only renders the resulting measurements.
 
 ---
 
@@ -346,14 +354,15 @@ Key sections:
 
 | Path | Key | Default | Notes |
 |------|-----|---------|-------|
-| `alpaca` | `host` / `port` | `""` / `32323` | Device IP and Alpaca port (mirror of the active profile) |
-| `alpaca` | `profile` / `profiles` | `home` | Per-network connection profiles (see docs/field_connectivity.md) |
+| `alpaca` | `host` / `port` | `""` / `32323` | One device IP address and Alpaca port; discovery fills the same endpoint |
 | `sessions_path` | — | `~/Argos/sessions/` | Output; Siril-compatible layout |
-| `observer` | `name` / `lat` / `lon` / `elev` | empty / 0 | FITS header site info |
+| `observer` | `name` / `obscode` | empty | FITS observer identity and AAVSO export code |
+| `site` | `name` / `latitude` / `longitude` / `elevation` / `favorites` | empty / 0 | FITS site metadata, visibility and airmass/Moon geometry |
 | `camera` | `adc_bits` / `full_well_adu` | 12 / 60000 | IMX585: 12-bit ADC → 16-bit FITS |
-| `astrometry` | `astap_path` / `database` | `""` / `""` | Empty → auto-detect |
+| `astrometry` | `astap_path` / `database_path` / `database` | `""` / `""` / `""` | ASTAP executable, optional star-database folder and database set |
 | `catalog` | `mag_limit` / `max_results` | 15.0 / 250 | VSX cone search bounds |
 | `photometry` | `aperture_fwhm_mult` / etc. | 2.5 / ... | Aperture radii in FWHM units |
+| `diagnostics` | `enabled` | `true` | Per-frame JSONL telemetry alongside a session |
 
 ---
 

@@ -98,6 +98,10 @@ uv run python main.py
 Plate solving needs [ASTAP](https://www.hnsky.org/astap.htm) installed
 separately — Argos finds it automatically but never bundles it.
 
+Before a first observing session, read the French
+[0.4.1 field guide](docs/guide_terrain_0_4_1.md): site setup, ASTAP, connection,
+planning, dockable workspaces, photometry roles, exports and the field-test checklist.
+
 No telescope? Argos runs against the ASCOM Alpaca simulator:
 
 ```bash
