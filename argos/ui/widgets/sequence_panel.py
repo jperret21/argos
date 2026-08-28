@@ -1,10 +1,10 @@
-"""Sequence panel — the multi-step acquisition table, NINA-style.
+"""Sequence panel — dockable multi-step acquisition planning workspace.
 
-Lives in the bottom dock of the Capture page (wide layout: the step table
-gets the width it deserves, the plan options + run controls sit in a right
-column). UI-only: builds a :class:`SequencePlan` from the editable table and
-emits ``start/pause/resume/stop`` intents; the AcquisitionEngine drives the
-``SequenceWorker`` and feeds progress back via the public setters.
+The sequence table is the stable centre.  Target search, plan options,
+visibility, presets and controls are independent docks which can be moved,
+tabbed, resized, or floated.  UI-only: builds a :class:`SequencePlan` from the
+editable table and emits ``start/pause/resume/stop`` intents; the
+``AcquisitionEngine`` drives the ``SequenceWorker`` and feeds progress back.
 
 Presets: a plan (steps + options) saves/loads as JSON via the sequencer's
 ``plan_to_dict`` / ``plan_from_dict`` round-trip.
@@ -12,11 +12,14 @@ Presets: a plan (steps + options) saves/loads as JSON via the sequencer's
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal
+import pyqtgraph as pg
+from PyQt6.QtCore import QByteArray, Qt, pyqtSignal
+from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -27,10 +30,11 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QLineEdit,
     QProgressBar,
-    QScrollArea,
     QSpinBox,
-    QSplitter,
+    QSizePolicy,
     QTableWidget,
+    QMainWindow,
+    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -43,7 +47,9 @@ from argos.core.imaging.sequencer import (
     plan_from_dict,
     plan_to_dict,
 )
+from argos.core.imaging.sky_geometry import upcoming_night_altitudes
 from argos.ui import design, theme
+from argos.ui.widgets.dock_host import make_dock, style_toggle_action
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +62,7 @@ _COLUMNS = ("✓", "Type", "Filter", "Exp (s)", "Gain", "Count", "Interval (s)",
 #: Fallback limits when no camera is connected (the historical hardcodes).
 _DEFAULT_GAIN_RANGE = (0, 600)
 _DEFAULT_EXPOSURE_RANGE = (0.01, 600.0)
+_CFG_LAYOUT = "ui.sequencer.layout"
 
 
 def _format_duration(seconds: float) -> str:
@@ -64,18 +71,69 @@ def _format_duration(seconds: float) -> str:
     return f"{h}h {m:02d}m" if h else f"{m}m {s:02d}s"
 
 
-class SequencePanel(QWidget):
-    """Editable multi-step sequence plan + run controls (full-page layout).
+class TargetVisibilityPlot(QWidget):
+    """Compact, local-time altitude preview for the current sequence target."""
 
-    Pure UI — Steps / Plan / Presets / Run cards; the hosting SequencerPage
-    wires the signals to the engine and pushes device-derived limits in.
-    """
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(design.SPACING_SM)
+        axis = pg.DateAxisItem(orientation="bottom")
+        self._plot = pg.PlotWidget(axisItems={"bottom": axis})
+        self._plot.setBackground(theme.BG2)
+        self._plot.setMinimumHeight(145)
+        self._plot.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._plot.showGrid(x=False, y=True, alpha=0.2)
+        self._plot.getAxis("left").setLabel("Altitude (°)")
+        self._plot.getAxis("bottom").setLabel("Local time")
+        self._plot.getAxis("left").setTextPen(pg.mkPen(theme.FG_MUTED))
+        self._plot.getAxis("bottom").setTextPen(pg.mkPen(theme.FG_MUTED))
+        self._curve = self._plot.plot(pen=pg.mkPen(theme.ACCENT, width=2))
+        self._horizon = pg.InfiniteLine(
+            pos=30,
+            angle=0,
+            pen=pg.mkPen(theme.FG_MUTED, width=1, style=Qt.PenStyle.DashLine),
+        )
+        self._plot.addItem(self._horizon)
+        self._plot.setYRange(-15, 90, padding=0)
+        layout.addWidget(self._plot)
+        self._summary = design.MutedLabel("Resolve a target to preview its altitude.")
+        self._summary.setWordWrap(True)
+        layout.addWidget(self._summary)
+
+    def set_target(
+        self, name: str, ra_hours: float, dec_degrees: float, lat: float, lon: float
+    ) -> None:
+        samples = upcoming_night_altitudes(ra_hours, dec_degrees, lat, lon)
+        if not samples:
+            self.clear()
+            return
+        x = [when.timestamp() for when, _altitude in samples]
+        y = [altitude for _when, altitude in samples]
+        self._curve.setData(x, y)
+        self._plot.setXRange(x[0], x[-1], padding=0.02)
+        peak = max(range(len(y)), key=y.__getitem__)
+        peak_when, peak_alt = samples[peak]
+        self._summary.setText(
+            f"{name}: highest {peak_alt:.1f}° at {peak_when.strftime('%H:%M')} local time. "
+            "Dashed line: 30° altitude."
+        )
+
+    def clear(self) -> None:
+        self._curve.setData([], [])
+        self._summary.setText("Resolve a target to preview its altitude.")
+
+
+class SequencePanel(QWidget):
+    """Editable, observer-arrangeable sequence planning workspace."""
 
     start_requested = pyqtSignal(object)  # SequencePlan
     object_name_changed = pyqtSignal(str)
     pause_requested = pyqtSignal()
     resume_requested = pyqtSignal()
     stop_requested = pyqtSignal()
+    object_lookup_requested = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -95,21 +153,29 @@ class SequencePanel(QWidget):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        body = QHBoxLayout(self)
+        body = QVBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
 
-        # The planner is intentionally a splitter rather than a fixed two-column
-        # layout: at a laptop width the observer can give the step table the
-        # room it needs; at a tall/narrow window the control rail scrolls instead
-        # of clipping the Start/Stop controls.
-        self._splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._splitter.setChildrenCollapsible(False)
-        body.addWidget(self._splitter)
+        # The Sequencer is a real dockable workspace rather than a fixed
+        # right-hand rail.  The table remains the stable centre; every planning
+        # aid can be moved, tabbed, resized or floated to another monitor.
+        self._workspace = QMainWindow()
+        self._workspace.setWindowFlags(Qt.WindowType.Widget)
+        self._workspace.setDockNestingEnabled(True)
+        self._workspace.setDockOptions(
+            QMainWindow.DockOption.AnimatedDocks
+            | QMainWindow.DockOption.AllowTabbedDocks
+            | QMainWindow.DockOption.AllowNestedDocks
+            | QMainWindow.DockOption.GroupedDragging
+        )
 
-        # ── Steps card: the table + row editing (takes the width) ───────
-        steps_card = design.Card("Steps")
-        left = design.card_layout(steps_card)
+        # ── Stable centre: sequence table + row editing ────────────────
+        steps = QWidget()
+        left = QVBoxLayout(steps)
+        left.setContentsMargins(
+            design.SPACING_MD, design.SPACING_MD, design.SPACING_MD, design.SPACING_MD
+        )
         left.setSpacing(design.SPACING_SM)
 
         self._table = QTableWidget(0, len(_COLUMNS))
@@ -148,14 +214,33 @@ class SequencePanel(QWidget):
         )
         edit_row.addWidget(self._estimate_lbl)
         left.addLayout(edit_row)
-        self._splitter.addWidget(steps_card)
+        self._workspace.setCentralWidget(steps)
 
-        # ── Right rail: Plan / Presets / Run cards ───────────────────────
-        right = QVBoxLayout()
-        right.setSpacing(design.SPACING_LG)
+        # ── Individually dockable planning panels ──────────────────────
+        search_panel = QWidget()
+        search_l = QVBoxLayout(search_panel)
+        search_l.setContentsMargins(0, 0, 0, 0)
+        search_l.setSpacing(design.SPACING_SM)
+        search_row = QHBoxLayout()
+        search_row.setSpacing(design.SPACING_SM)
+        self._search_edit = QLineEdit()
+        self._search_edit.setPlaceholderText("M 42, NGC 7000, HD 189733…")
+        self._search_edit.setToolTip("Search an astronomical catalogue by designation")
+        self._search_edit.returnPressed.connect(self._request_object_lookup)
+        search_row.addWidget(self._search_edit, 1)
+        self._search_btn = design.SecondaryButton("Find")
+        self._search_btn.clicked.connect(self._request_object_lookup)
+        search_row.addWidget(self._search_btn)
+        search_l.addLayout(search_row)
+        self._search_result = design.MutedLabel(
+            "Select a target for this plan. Telescope pointing stays a separate action."
+        )
+        self._search_result.setWordWrap(True)
+        search_l.addWidget(self._search_result)
 
-        plan_card = design.Card("Plan")
-        plan_l = design.card_layout(plan_card)
+        plan_panel = QWidget()
+        plan_l = QVBoxLayout(plan_panel)
+        plan_l.setContentsMargins(0, 0, 0, 0)
         opts = QGridLayout()
         opts.setHorizontalSpacing(design.SPACING_MD)
         opts.setVerticalSpacing(design.SPACING_SM)
@@ -185,10 +270,16 @@ class SequencePanel(QWidget):
         )
         opts.addWidget(self._on_complete_combo, 4, 1)
         plan_l.addLayout(opts)
-        right.addWidget(plan_card)
 
-        presets_card = design.Card("Presets")
-        presets_l = design.card_layout(presets_card)
+        visibility_panel = QWidget()
+        visibility_l = QVBoxLayout(visibility_panel)
+        visibility_l.setContentsMargins(0, 0, 0, 0)
+        self._visibility_plot = TargetVisibilityPlot()
+        visibility_l.addWidget(self._visibility_plot)
+
+        presets_panel = QWidget()
+        presets_l = QVBoxLayout(presets_panel)
+        presets_l.setContentsMargins(0, 0, 0, 0)
         preset_row = QHBoxLayout()
         preset_row.setSpacing(design.SPACING_SM)
         save_btn = design.SecondaryButton("Save preset…")
@@ -198,10 +289,10 @@ class SequencePanel(QWidget):
         preset_row.addWidget(save_btn, 1)
         preset_row.addWidget(load_btn, 1)
         presets_l.addLayout(preset_row)
-        right.addWidget(presets_card)
 
-        run_card = design.Card("Run")
-        run_l = design.card_layout(run_card)
+        run_panel = QWidget()
+        run_l = QVBoxLayout(run_panel)
+        run_l.setContentsMargins(0, 0, 0, 0)
         self._start_btn = design.SuccessButton("▶  Start sequence")
         self._start_btn.clicked.connect(self._on_start)
         self._pause_btn = design.SecondaryButton("⏸  Pause")
@@ -226,23 +317,110 @@ class SequencePanel(QWidget):
             "A compact pre-flight check. Argos still validates the hardware when you start."
         )
         run_l.addWidget(self._readiness_lbl)
-        right.addWidget(run_card)
 
-        right.addStretch()
-
-        right_wrap = QWidget()
-        right_wrap.setLayout(right)
-        rail = QScrollArea()
-        rail.setWidgetResizable(True)
-        rail.setFrameShape(QScrollArea.Shape.NoFrame)
-        rail.setMinimumWidth(280)
-        rail.setMaximumWidth(380)
-        rail.setWidget(right_wrap)
-        self._splitter.addWidget(rail)
-        self._splitter.setStretchFactor(0, 1)
-        self._splitter.setStretchFactor(1, 0)
-        self._splitter.setSizes([760, 320])
+        self._docks = {
+            "search": make_dock("Target search", search_panel, object_name="sequencer.search"),
+            "plan": make_dock("Plan settings", plan_panel, object_name="sequencer.plan"),
+            "visibility": make_dock(
+                "Target visibility",
+                visibility_panel,
+                object_name="sequencer.visibility",
+                scroll=False,
+            ),
+            "presets": make_dock("Presets", presets_panel, object_name="sequencer.presets"),
+            "run": make_dock("Sequence control", run_panel, object_name="sequencer.run"),
+        }
+        self._apply_default_layout()
+        self._restore_layout()
+        body.addWidget(self._build_panel_bar())
+        body.addWidget(self._workspace, 1)
         self._refresh_readiness()
+
+    def _build_panel_bar(self) -> QToolBar:
+        """Reveal/recover planning panels after the observer rearranges them."""
+        bar = QToolBar()
+        bar.setMovable(False)
+        bar.setStyleSheet(
+            f"QToolBar {{ background-color: {theme.SURFACE_3};"
+            f" border-bottom: 1px solid {theme.SURFACE_4}; padding: 2px 6px; spacing: 4px; }}"
+            f" QToolBar QToolButton {{ color: {theme.FG_MUTED}; font-size: 11px;"
+            f" padding: 1px 8px; }} QToolBar QToolButton:checked {{ color: {theme.FG}; }}"
+        )
+        for key, label in (
+            ("search", "Target search"),
+            ("plan", "Plan settings"),
+            ("visibility", "Visibility"),
+            ("presets", "Presets"),
+            ("run", "Sequence control"),
+        ):
+            action = style_toggle_action(self._docks[key].toggleViewAction(), label)
+            action.setToolTip("Drag the panel title to arrange it; double-click to detach it.")
+            bar.addAction(action)
+        reset = QAction("Reset panels", bar)
+        reset.setToolTip("Restore the default Sequencer panel arrangement")
+        reset.triggered.connect(self.reset_layout)
+        bar.addAction(reset)
+        return bar
+
+    def _apply_default_layout(self) -> None:
+        workspace = self._workspace
+        right = Qt.DockWidgetArea.RightDockWidgetArea
+        bottom = Qt.DockWidgetArea.BottomDockWidgetArea
+        workspace.addDockWidget(right, self._docks["search"])
+        workspace.splitDockWidget(
+            self._docks["search"], self._docks["visibility"], Qt.Orientation.Vertical
+        )
+        workspace.splitDockWidget(
+            self._docks["visibility"], self._docks["plan"], Qt.Orientation.Vertical
+        )
+        workspace.addDockWidget(bottom, self._docks["run"])
+        workspace.addDockWidget(bottom, self._docks["presets"])
+        workspace.tabifyDockWidget(self._docks["run"], self._docks["presets"])
+        self._docks["run"].raise_()
+
+    def _restore_layout(self) -> None:
+        """Restore the observer's panel arrangement if it was saved previously."""
+        blob = self._config.get(_CFG_LAYOUT) if hasattr(self, "_config") else None
+        if not blob:
+            return
+        try:
+            self._workspace.restoreState(QByteArray(base64.b64decode(blob)))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Sequencer layout restore failed: %s", exc)
+
+    def set_config(self, config) -> None:
+        """Attach persistence after construction without coupling this UI to Config."""
+        self._config = config
+        self._restore_layout()
+
+    def save_layout(self) -> None:
+        if hasattr(self, "_config"):
+            state = bytes(self._workspace.saveState())
+            self._config.set(_CFG_LAYOUT, base64.b64encode(state).decode())
+
+    def reset_layout(self) -> None:
+        if hasattr(self, "_config"):
+            self._config.set(_CFG_LAYOUT, None)
+        self._apply_default_layout()
+
+    def _request_object_lookup(self) -> None:
+        self.object_lookup_requested.emit(self._search_edit.text().strip())
+
+    def set_lookup_busy(self, busy: bool) -> None:
+        self._search_edit.setEnabled(not busy)
+        self._search_btn.setEnabled(not busy)
+        if busy:
+            self._search_result.setText("Searching catalogue…")
+
+    def set_lookup_result(self, result) -> None:
+        type_suffix = f" · {result.object_type}" if result.object_type else ""
+        self._search_result.setText(
+            f"{result.name}{type_suffix}\nRA {result.ra_hours:.5f} h · Dec {result.dec_degrees:+.5f}°\n"
+            "Selected for the plan; telescope pointing remains manual."
+        )
+
+    def set_lookup_error(self, message: str) -> None:
+        self._search_result.setText(message)
 
     # ------------------------------------------------------------------
     # Row management
@@ -405,6 +583,13 @@ class SequencePanel(QWidget):
         self._refresh_readiness()
         if emit:
             self._on_object_edited()
+
+    def set_target_coordinates(
+        self, name: str, ra_hours: float, dec_degrees: float, site_lat: float, site_lon: float
+    ) -> None:
+        """Update the visibility card from a Telescope catalogue resolution."""
+        self.set_object_name(name)
+        self._visibility_plot.set_target(name, ra_hours, dec_degrees, site_lat, site_lon)
 
     def _on_object_edited(self) -> None:
         self._refresh_readiness()

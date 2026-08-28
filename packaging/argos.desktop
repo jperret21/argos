@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Argos
+Comment=Scientific acquisition and differential photometry for Seestar telescopes
+Exec=argos
+Icon=argos
+Terminal=false
+Categories=Science;Astronomy;
+Keywords=astronomy;photometry;seestar;FITS;

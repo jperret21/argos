@@ -10,7 +10,9 @@ Public interface (used by the Shell): just the constructor ``ConfigurationPage(c
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -30,9 +32,10 @@ from PyQt6.QtWidgets import (
 from argos import __version__
 from argos.core.config import Config
 from argos.core.hardware import active, catalog
-from argos.core.imaging.platesolve import find_astap
+from argos.core.imaging.platesolve import find_astap, find_astap_db
 from argos.ui import design, theme
 from argos.ui.palettes import EQUILUX, PALETTES
+from argos.workers.location_resolver_worker import LocationResolverWorker
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +55,7 @@ class ConfigurationPage(QWidget):
         super().__init__(parent)
         self._config = config
         self._loading = False  # guards _save_* while populating fields
+        self._location_worker: LocationResolverWorker | None = None
         self._build_ui()
         self._load_config()
 
@@ -77,6 +81,7 @@ class ConfigurationPage(QWidget):
         left.addStretch()
         right.addWidget(self._build_telescope_card())
         right.addWidget(self._build_paths_card())
+        right.addWidget(self._build_data_card())
         right.addWidget(self._build_camera_card())
         right.addWidget(self._build_appearance_card())
         right.addWidget(self._build_about_card())
@@ -105,26 +110,108 @@ class ConfigurationPage(QWidget):
         grid.addWidget(design.MutedLabel("AAVSO code"), 0, 2)
         grid.addWidget(self._obscode_edit, 0, 3)
 
+        self._site_name_edit = QLineEdit()
+        self._site_name_edit.setPlaceholderText("Home observatory")
+        self._site_name_edit.setToolTip("Name recorded with the current default observing site")
+        self._site_name_edit.editingFinished.connect(self._save_site)
+        grid.addWidget(design.MutedLabel("Default site"), 1, 0)
+        grid.addWidget(self._site_name_edit, 1, 1, 1, 3)
+
         self._lat_spin = self._make_deg_spin(-90.0, 90.0)
         self._lat_spin.valueChanged.connect(self._save_site)
         self._lon_spin = self._make_deg_spin(-180.0, 180.0)
         self._lon_spin.valueChanged.connect(self._save_site)
-        grid.addWidget(design.MutedLabel("Latitude"), 1, 0)
-        grid.addWidget(self._lat_spin, 1, 1)
-        grid.addWidget(design.MutedLabel("Longitude"), 1, 2)
-        grid.addWidget(self._lon_spin, 1, 3)
+        grid.addWidget(design.MutedLabel("Latitude"), 2, 0)
+        grid.addWidget(self._lat_spin, 2, 1)
+        grid.addWidget(design.MutedLabel("Longitude"), 2, 2)
+        grid.addWidget(self._lon_spin, 2, 3)
 
         self._elev_spin = QDoubleSpinBox()
         self._elev_spin.setRange(-500.0, 9000.0)
         self._elev_spin.setDecimals(1)
         self._elev_spin.setSuffix(" m")
         self._elev_spin.valueChanged.connect(self._save_site)
-        grid.addWidget(design.MutedLabel("Elevation"), 2, 0)
-        grid.addWidget(self._elev_spin, 2, 1)
+        grid.addWidget(design.MutedLabel("Elevation"), 3, 0)
+        grid.addWidget(self._elev_spin, 3, 1)
+
+        self._site_search_edit = QLineEdit()
+        self._site_search_edit.setPlaceholderText("Berkeley, France, Mauna Kea…")
+        self._site_search_edit.setToolTip(
+            "Search a place online to fill latitude, longitude and terrain elevation"
+        )
+        self._site_search_edit.returnPressed.connect(self._search_site)
+        search_row = QHBoxLayout()
+        search_row.setSpacing(design.SPACING_SM)
+        search_row.addWidget(self._site_search_edit, 1)
+        self._site_search_btn = design.SecondaryButton("Search")
+        self._site_search_btn.clicked.connect(self._search_site)
+        search_row.addWidget(self._site_search_btn)
+        search_wrap = QWidget()
+        search_wrap.setLayout(search_row)
+        grid.addWidget(design.MutedLabel("Find location"), 4, 0)
+        grid.addWidget(search_wrap, 4, 1, 1, 3)
+
+        self._site_results_combo = QComboBox()
+        self._site_results_combo.setEnabled(False)
+        self._site_results_combo.setToolTip(
+            "Choose the intended place before applying its coordinates"
+        )
+        self._apply_location_btn = design.SecondaryButton("Use selected")
+        self._apply_location_btn.setEnabled(False)
+        self._apply_location_btn.clicked.connect(self._apply_location_result)
+        result_row = QHBoxLayout()
+        result_row.setSpacing(design.SPACING_SM)
+        result_row.addWidget(self._site_results_combo, 1)
+        result_row.addWidget(self._apply_location_btn)
+        result_wrap = QWidget()
+        result_wrap.setLayout(result_row)
+        grid.addWidget(design.MutedLabel("Matches"), 5, 0)
+        grid.addWidget(result_wrap, 5, 1, 1, 3)
+
+        self._site_search_status = design.MutedLabel(
+            "Search is optional. Verify the terrain elevation for a permanent observatory."
+        )
+        self._site_search_status.setWordWrap(True)
+        grid.addWidget(self._site_search_status, 6, 1, 1, 3)
+
+        self._favorites_combo = QComboBox()
+        self._favorites_combo.setEnabled(False)
+        self._use_favorite_btn = design.SecondaryButton("Set default")
+        self._use_favorite_btn.setEnabled(False)
+        self._use_favorite_btn.clicked.connect(self._use_selected_favorite)
+        self._remove_favorite_btn = design.SecondaryButton("Remove")
+        self._remove_favorite_btn.setEnabled(False)
+        self._remove_favorite_btn.clicked.connect(self._remove_selected_favorite)
+        favorite_row = QHBoxLayout()
+        favorite_row.setSpacing(design.SPACING_SM)
+        favorite_row.addWidget(self._favorites_combo, 1)
+        favorite_row.addWidget(self._use_favorite_btn)
+        favorite_row.addWidget(self._remove_favorite_btn)
+        favorite_wrap = QWidget()
+        favorite_wrap.setLayout(favorite_row)
+        grid.addWidget(design.MutedLabel("Saved sites"), 7, 0)
+        grid.addWidget(favorite_wrap, 7, 1, 1, 3)
+
+        self._favorite_name_edit = QLineEdit()
+        self._favorite_name_edit.setPlaceholderText("Favourite name")
+        self._favorite_name_edit.returnPressed.connect(self._save_current_favorite)
+        self._save_favorite_btn = design.SecondaryButton("Save current")
+        self._save_favorite_btn.clicked.connect(self._save_current_favorite)
+        save_row = QHBoxLayout()
+        save_row.setSpacing(design.SPACING_SM)
+        save_row.addWidget(self._favorite_name_edit, 1)
+        save_row.addWidget(self._save_favorite_btn)
+        save_wrap = QWidget()
+        save_wrap.setLayout(save_row)
+        grid.addWidget(design.MutedLabel("Add favourite"), 8, 0)
+        grid.addWidget(save_wrap, 8, 1, 1, 3)
 
         layout.addLayout(grid)
         layout.addWidget(
-            design.MutedLabel("Written to every FITS header (OBSERVER, SITELAT/LONG/ELEV).")
+            design.MutedLabel(
+                "Default site is written to every FITS header (SITELAT/LONG/ELEV) and used for "
+                "airmass, Moon geometry and target visibility."
+            )
         )
         return card
 
@@ -150,6 +237,32 @@ class ConfigurationPage(QWidget):
         browse.clicked.connect(self._browse_sessions_path)
         row.addWidget(browse)
         layout.addLayout(row)
+        return card
+
+    def _build_data_card(self) -> "design.Card":
+        """Controls for the small, durable data products of an observing run."""
+        card = design.Card("Data & telemetry")
+        layout = design.card_layout(card)
+
+        self._diagnostics_chk = QCheckBox("Record per-frame observing telemetry")
+        self._diagnostics_chk.setToolTip(
+            "Writes a compact JSONL flight recorder beside each session: exposure, "
+            "mount, focus and photometry-quality measurements."
+        )
+        self._diagnostics_chk.toggled.connect(self._save_diagnostics)
+        layout.addWidget(self._diagnostics_chk)
+        layout.addWidget(
+            design.MutedLabel(
+                "Saved in each session's diagnostics folder. Keep this enabled when "
+                "testing in the field; it is useful for diagnosing a bad light curve."
+            )
+        )
+        layout.addWidget(
+            design.MutedLabel(
+                "Variable-star catalogue results are cached automatically in "
+                "~/.argos/cache/catalog for offline observing."
+            )
+        )
         return card
 
     def _build_telescope_card(self) -> "design.Card":
@@ -277,6 +390,22 @@ class ConfigurationPage(QWidget):
         self._astap_status = design.MutedLabel("")
         layout.addWidget(self._astap_status)
 
+        db_path_row = QHBoxLayout()
+        db_path_row.setSpacing(design.SPACING_SM)
+        db_path_row.addWidget(design.MutedLabel("Database folder"))
+        self._astap_db_edit = QLineEdit()
+        self._astap_db_edit.setPlaceholderText("auto-detect (ASTAP default locations)")
+        self._astap_db_edit.setToolTip(
+            "Folder containing the downloaded ASTAP star databases. Leave empty "
+            "to use ASTAP's normal locations."
+        )
+        self._astap_db_edit.editingFinished.connect(self._save_astrometry)
+        db_path_row.addWidget(self._astap_db_edit, 1)
+        db_browse = design.SecondaryButton("Browse…")
+        db_browse.clicked.connect(self._browse_astap_database)
+        db_path_row.addWidget(db_browse)
+        layout.addLayout(db_path_row)
+
         form = QFormLayout()
         form.setHorizontalSpacing(design.SPACING_MD)
         form.setVerticalSpacing(design.SPACING_SM)
@@ -289,7 +418,7 @@ class ConfigurationPage(QWidget):
             "of view (recommended). For the Seestar's ~1° field, D50/D80 or V17 fit."
         )
         self._catalog_combo.currentTextChanged.connect(self._save_astrometry)
-        form.addRow(design.MutedLabel("Catalog"), self._catalog_combo)
+        form.addRow(design.MutedLabel("Database set"), self._catalog_combo)
 
         self._radius_spin = QSpinBox()
         self._radius_spin.setRange(0, 180)
@@ -385,9 +514,11 @@ class ConfigurationPage(QWidget):
         self._loading = True
         self._observer_edit.setText(str(self._config.get("observer.name", "") or ""))
         self._obscode_edit.setText(str(self._config.get("observer.obscode", "") or ""))
+        self._site_name_edit.setText(str(self._config.get("site.name", "") or ""))
         self._lat_spin.setValue(float(self._config.get("site.latitude", 0.0) or 0.0))
         self._lon_spin.setValue(float(self._config.get("site.longitude", 0.0) or 0.0))
         self._elev_spin.setValue(float(self._config.get("site.elevation", 0.0) or 0.0))
+        self._refresh_favorites()
         self._sessions_edit.setText(str(self._config.sessions_path))
         self._refresh_telescope_card()
         preset_name: str = self._config.get("ui.theme.preset", EQUILUX.name)  # type: ignore[assignment]
@@ -403,12 +534,14 @@ class ConfigurationPage(QWidget):
         self._adc_spin.setValue(int(self._config.get("camera.adc_bits", 12)))
         # Astrometry
         self._astap_edit.setText(str(self._config.get("astrometry.astap_path", "") or ""))
+        self._astap_db_edit.setText(str(self._config.get("astrometry.database_path", "") or ""))
         cat = str(self._config.get("astrometry.database", "") or "")
         idx = self._catalog_combo.findText(cat) if cat else 0
         self._catalog_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._radius_spin.setValue(int(self._config.get("astrometry.search_radius_deg", 30)))
         self._select_downsample(int(self._config.get("astrometry.downsample", 2)))
         self._scale_hint_chk.setChecked(bool(self._config.get("astrometry.use_scale_hint", True)))
+        self._diagnostics_chk.setChecked(bool(self._config.get("diagnostics.enabled", True)))
         self._refresh_astap_status()
         self._loading = False
 
@@ -426,10 +559,142 @@ class ConfigurationPage(QWidget):
     def _save_site(self) -> None:
         if self._loading:
             return
+        self._config.set("site.name", self._site_name_edit.text().strip())
         self._config.set("site.latitude", float(self._lat_spin.value()))
         self._config.set("site.longitude", float(self._lon_spin.value()))
         self._config.set("site.elevation", float(self._elev_spin.value()))
         self._config.save()
+
+    def _search_site(self) -> None:
+        if self._location_worker is not None:
+            return
+        self._site_search_edit.setEnabled(False)
+        self._site_search_btn.setEnabled(False)
+        self._site_search_status.setText("Searching location and terrain elevation…")
+        worker = LocationResolverWorker(self._site_search_edit.text().strip(), self)
+        self._location_worker = worker
+        worker.resolved.connect(self._on_locations_resolved)
+        worker.failed.connect(self._on_location_search_failed)
+        worker.finished.connect(self._finish_location_search)
+        worker.start()
+
+    def _on_locations_resolved(self, results) -> None:
+        self._site_results_combo.clear()
+        for result in results:
+            label = result.label
+            self._site_results_combo.addItem(label, result)
+            self._site_results_combo.setItemData(
+                self._site_results_combo.count() - 1, label, Qt.ItemDataRole.ToolTipRole
+            )
+        available = self._site_results_combo.count() > 0
+        self._site_results_combo.setEnabled(available)
+        self._apply_location_btn.setEnabled(available)
+        self._site_search_status.setText(
+            "Choose a match, then use it. Elevation is terrain-modelled; edit it for a surveyed site."
+        )
+
+    def _on_location_search_failed(self, message: str) -> None:
+        self._site_results_combo.clear()
+        self._site_results_combo.setEnabled(False)
+        self._apply_location_btn.setEnabled(False)
+        self._site_search_status.setText(message)
+
+    def _finish_location_search(self) -> None:
+        self._site_search_edit.setEnabled(True)
+        self._site_search_btn.setEnabled(True)
+        worker = self._location_worker
+        self._location_worker = None
+        if worker is not None:
+            worker.deleteLater()
+
+    def _apply_location_result(self) -> None:
+        result = self._site_results_combo.currentData()
+        if result is None:
+            return
+        self._loading = True
+        self._site_name_edit.setText(result.label.split(",", 1)[0])
+        self._lat_spin.setValue(result.latitude)
+        self._lon_spin.setValue(result.longitude)
+        if result.elevation_m is not None:
+            self._elev_spin.setValue(result.elevation_m)
+        self._loading = False
+        self._save_site()
+        elevation = (
+            f"{result.elevation_m:.0f} m" if result.elevation_m is not None else "not available"
+        )
+        self._site_search_status.setText(
+            f"Default site set: {result.latitude:.5f}°, {result.longitude:.5f}°, elevation {elevation}."
+        )
+
+    def _favorites(self) -> list[dict]:
+        raw = self._config.get("site.favorites", []) or []
+        return [item for item in raw if isinstance(item, dict) and item.get("name")]
+
+    def _refresh_favorites(self, selected_name: str = "") -> None:
+        self._favorites_combo.blockSignals(True)
+        self._favorites_combo.clear()
+        for favorite in self._favorites():
+            self._favorites_combo.addItem(str(favorite["name"]), favorite)
+        if selected_name:
+            index = self._favorites_combo.findText(selected_name)
+            if index >= 0:
+                self._favorites_combo.setCurrentIndex(index)
+        self._favorites_combo.blockSignals(False)
+        enabled = self._favorites_combo.count() > 0
+        self._favorites_combo.setEnabled(enabled)
+        self._use_favorite_btn.setEnabled(enabled)
+        self._remove_favorite_btn.setEnabled(enabled)
+
+    def _save_current_favorite(self) -> None:
+        name = self._favorite_name_edit.text().strip() or self._site_name_edit.text().strip()
+        if not name:
+            self._site_search_status.setText("Name the site before saving it as a favourite.")
+            return
+        favorite = {
+            "name": name,
+            "latitude": float(self._lat_spin.value()),
+            "longitude": float(self._lon_spin.value()),
+            "elevation": float(self._elev_spin.value()),
+        }
+        favorites = [
+            item for item in self._favorites() if str(item["name"]).casefold() != name.casefold()
+        ]
+        favorites.append(favorite)
+        self._config.set("site.favorites", favorites)
+        self._refresh_favorites(name)
+        self._favorite_name_edit.clear()
+        self._site_search_status.setText(f"Saved favourite site: {name}.")
+
+    def _use_selected_favorite(self) -> None:
+        favorite = self._favorites_combo.currentData()
+        if not isinstance(favorite, dict):
+            return
+        self._loading = True
+        self._site_name_edit.setText(str(favorite["name"]))
+        self._lat_spin.setValue(float(favorite["latitude"]))
+        self._lon_spin.setValue(float(favorite["longitude"]))
+        self._elev_spin.setValue(float(favorite["elevation"]))
+        self._loading = False
+        self._save_site()
+        self._site_search_status.setText(f"Default site set to saved site: {favorite['name']}.")
+
+    def _remove_selected_favorite(self) -> None:
+        favorite = self._favorites_combo.currentData()
+        if not isinstance(favorite, dict):
+            return
+        name = str(favorite["name"])
+        self._config.set(
+            "site.favorites",
+            [item for item in self._favorites() if str(item["name"]).casefold() != name.casefold()],
+        )
+        self._refresh_favorites()
+        self._site_search_status.setText(f"Removed saved site: {name}.")
+
+    def shutdown(self) -> None:
+        """Let an in-flight public geocoding request finish before Qt teardown."""
+        if self._location_worker is not None:
+            self._location_worker.wait(9000)  # both requests use an 8 second timeout
+            self._location_worker = None
 
     def _save_camera(self) -> None:
         if self._loading:
@@ -465,6 +730,7 @@ class ConfigurationPage(QWidget):
             return
         cat = self._catalog_combo.currentText()
         self._config.set("astrometry.astap_path", self._astap_edit.text().strip())
+        self._config.set("astrometry.database_path", self._astap_db_edit.text().strip())
         self._config.set("astrometry.database", "" if cat == "Auto" else cat)
         self._config.set("astrometry.search_radius_deg", int(self._radius_spin.value()))
         self._config.set(
@@ -480,10 +746,41 @@ class ConfigurationPage(QWidget):
             self._astap_edit.setText(chosen)
             self._save_astrometry()
 
+    def _browse_astap_database(self) -> None:
+        start = self._astap_db_edit.text().strip() or "/"
+        chosen = QFileDialog.getExistingDirectory(self, "Locate ASTAP star databases", start)
+        if chosen:
+            self._astap_db_edit.setText(chosen)
+            self._save_astrometry()
+
+    def _save_diagnostics(self, enabled: bool) -> None:
+        if self._loading:
+            return
+        self._config.set("diagnostics.enabled", bool(enabled))
+        self._config.save()
+
     def _refresh_astap_status(self) -> None:
         found = find_astap(self._astap_edit.text().strip())
         if found:
-            self._astap_status.setText(f"✓ ASTAP detected: {found}")
+            configured_db = self._astap_db_edit.text().strip()
+            if configured_db:
+                folder = Path(configured_db).expanduser()
+                contains_database = folder.is_dir() and any(
+                    any(folder.glob(pattern)) for pattern in ("*.1476", "*.290", "*.101")
+                )
+                database = (
+                    f" · Star database: {folder}"
+                    if contains_database
+                    else f" · Star database not found in: {folder}"
+                )
+            else:
+                detected_db = find_astap_db(found)
+                database = (
+                    f" · Star database: {detected_db}"
+                    if detected_db
+                    else " · Star database not detected"
+                )
+            self._astap_status.setText(f"✓ ASTAP detected: {found}{database}")
         else:
             self._astap_status.setText("✗ ASTAP not found — install it or set the path above")
 

@@ -9,9 +9,9 @@ Only the **S30 Pro** is validated: it is the model Argos was built against and
 every one of its values is confirmed by the code it replaces. The S30 and S50
 entries carry published optics and sensor geometry — the plate scales they
 imply match the manufacturer's own field-of-view figures, which is a real
-cross-check — but their CFA layout and gain behaviour have never been seen by
-this code. They are marked accordingly and must not be trusted for photometry
-until someone runs them on hardware.
+cross-check. Their sensor reference curves are available as fallbacks, but
+their CFA layout and Seestar-specific gain scaling still need hardware
+verification before precision photometry.
 
 The **S50 Pro** is deliberately absent. Its optics are published (50 mm,
 260 mm, f/5.2) but its sensor is described only as "1/1.2-inch 4K", and
@@ -29,7 +29,7 @@ from argos.core.hardware.profile import TelescopeProfile
 #: wrong photosites and poisons every magnitude derived from them.
 _UNSEEN = (
     "Bayer pattern assumed GRBG — confirm before trusting photometry",
-    "gain range and EGAIN curve not characterised",
+    "Seestar gain scale and EGAIN curve require a photon-transfer calibration",
     "ADC depth and saturation thresholds inherited from the S30 Pro",
 )
 

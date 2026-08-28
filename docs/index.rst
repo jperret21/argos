@@ -1,9 +1,15 @@
 Welcome to Argos's documentation
 ========================================
 
-Argos is a cross-platform desktop application for **ensemble differential
-photometry** with the ZWO Seestar S30 Pro — from raw GRBG mosaic straight off
-the sensor to an AAVSO-ready light curve, all in one session.
+Argos is a macOS desktop application for **ensemble differential photometry**
+with ZWO Seestar telescopes — from the raw mosaic straight off the sensor to a
+reviewable differential light curve in one observing session. The S30 Pro is
+the reference profile; S30 and S50 support remains explicitly unvalidated for
+precision photometry.
+
+Argos 0.4.1 is a field-validation alpha. It is intended for technically
+confident observers who retain their raw FITS and independently review the
+results; it is not an unattended-observatory or general-public release.
 
 What it does
 ------------
@@ -16,7 +22,7 @@ workflow beyond "save an image". Argos fills the gap:
   any ASCOM-compatible focuser / filter wheel / camera through the Alpaca
   protocol. The Alpaca layer is generic: the same code works with the
   Seestar, a simulator, or any Alpaca device.
-* **Plate solving via ASTAP** — recovers a WCS from each frame (solved on
+* **Plate solving via ASTAP** — can recover a WCS from a frame (solved on
   the green half-res plane), so star positions are known in celestial
   coordinates. Used to drive an RA/Dec grid overlay and to project variable-
   star and comparison-star markers from the AAVSO VSP catalogue.
@@ -31,7 +37,7 @@ workflow beyond "save an image". Argos fills the gap:
 * **Sequence engine** — multi-step plans (Light/Dark/Flat/Bias) with repeats,
   autofocus cadence, and Siril-compatible folder layout.
 * **AAVSO workflow** — target lookup from VSX, comparison stars from VSP,
-  light-curve export in AAVSO Extended File Format.
+  differential light-curve export and cached catalogue queries for field use.
 
 The two-pipeline rule
 ---------------------
@@ -99,6 +105,13 @@ What this documentation covers
    :caption: Internal
 
    DOCUMENTATION_GUIDE.md
+   hardware_test_plan.md
+   photometry_hardening_plan.md
+   release_0_4_1.md
+   ui_design.md
+   ui_design_pass.md
+   ui_interaction_architecture.md
+   ui_redesign_todo.md
 
 .. toctree::
    :maxdepth: 1

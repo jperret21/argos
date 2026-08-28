@@ -23,7 +23,7 @@ from astropy.io import fits
 from astropy.time import Time
 
 from argos.core.hardware import active as hardware
-from argos.core.imaging import imx585, sky_geometry
+from argos.core.imaging import sensor_models, sky_geometry
 
 # Optics and sensor geometry come from the active telescope profile — see
 # argos.core.hardware. They used to be five constants here, duplicating five
@@ -58,7 +58,7 @@ class FrameContext:
 
     # Dynamic camera state read just before/after exposure
     ccd_temp: float | None = None
-    egain_driver: float | None = None  # e-/ADU from driver (None → IMX585 lookup)
+    egain_driver: float | None = None  # e-/ADU from driver (None → active sensor reference)
     offset: int | None = None
     readout_mode: str | None = None
 
@@ -330,10 +330,15 @@ def _ensure_utc(dt: datetime) -> datetime:
 
 
 def _resolve_egain(gain_setting: int, driver_value: float | None) -> tuple[float, str]:
-    """Return (e-/ADU, source) — driver if available, else IMX585 lookup."""
+    """Return (e-/ADU, source) — driver if available, else active sensor reference."""
     if driver_value and driver_value > 0:
         return float(driver_value), "driver"
-    return float(imx585.lookup_egain(gain_setting)), "IMX585 lookup"
+    sensor = hardware.profile().sensor
+    model = sensor_models.for_sensor(sensor)
+    source = f"{model.SENSOR_NAME} ref"
+    if not sensor_models.is_known(sensor):
+        source += " fallback"
+    return sensor_models.lookup_egain(sensor, gain_setting), source
 
 
 # --------------------------------------------------------------------------- #
@@ -372,15 +377,17 @@ def _add_sensor_headers(
     egain_source: str,
     ctx: "FrameContext",
 ) -> None:
-    rdnoise = imx585.lookup_read_noise(gain)
-    full_well = imx585.full_well_capacity(gain)
+    sensor = hardware.profile().sensor
+    model = sensor_models.for_sensor(sensor)
+    rdnoise = sensor_models.lookup_read_noise(sensor, gain)
+    full_well = sensor_models.full_well_capacity(sensor, gain)
     eg = round(egain, 4)
     hdr["GAIN"] = (gain, "camera gain setting")
     hdr["EGAIN"] = (eg, f"[e-/ADU] electron gain ({egain_source})")
     hdr["EPERDN"] = (eg, "[e-/ADU] electron gain (alias)")
     hdr["GAIN_E"] = (eg, "[e-/ADU] electron gain (AAVSO alias)")
-    hdr["RDNOISE"] = (round(rdnoise, 3), "[e-] read noise (IMX585 lookup)")
-    hdr["FULLWELL"] = (int(full_well), "[e-] full-well capacity (IMX585 lookup)")
+    hdr["RDNOISE"] = (round(rdnoise, 3), f"[e-] read noise ({model.SENSOR_NAME} reference)")
+    hdr["FULLWELL"] = (int(full_well), f"[e-] full-well capacity ({model.SENSOR_NAME} reference)")
     hdr["XBINNING"] = (1, "binning factor X")
     hdr["YBINNING"] = (1, "binning factor Y")
     if ctx.ccd_temp is not None:

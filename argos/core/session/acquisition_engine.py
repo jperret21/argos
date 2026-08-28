@@ -42,7 +42,8 @@ from argos.core.catalog.targets import (
     TargetStar,
 )
 from argos.core.config import Config
-from argos.core.imaging import imx585
+from argos.core.hardware import active as hardware
+from argos.core.imaging import sensor_models
 from argos.core.imaging.astrometry_session import field_geometry
 from argos.core.imaging.fits_writer import FITSWriter, FrameContext
 from argos.core.imaging.green import green_plane
@@ -926,7 +927,7 @@ class AcquisitionEngine(QObject):
     # ------------------------------------------------------------------
 
     def _egain(self) -> float:
-        """e-/ADU for photometric errors: config → driver → IMX585 profile."""
+        """e-/ADU for photometric errors: config → driver → active sensor reference."""
         table = self._cfg("camera.egain_table", {}) or {}
         gain = str(self._params().gain)
         if isinstance(table, dict) and gain in table:
@@ -937,7 +938,7 @@ class AcquisitionEngine(QObject):
         value = self._session.egain_driver()
         if value:
             return float(value)
-        return float(imx585.lookup_egain(self._params().gain))
+        return sensor_models.lookup_egain(hardware.profile().sensor, self._params().gain)
 
     def _photometry_csv_path(self, star) -> Path:
         obj = self.target_set().object_name or "Unknown"

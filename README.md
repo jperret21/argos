@@ -3,7 +3,9 @@
 **Desktop astrophotography & differential photometry for the ZWO Seestar S30 Pro.**
 *The hundred-eyed watcher — from raw frames to calibrated light curves, on your laptop.*
 
-> Early development. An alpha for testers is coming soon; not ready for general use yet.
+> **Field-validation alpha (0.4.1).** Suitable for technically confident
+> testers who retain their raw FITS and review results independently; not yet
+> a general-public or unattended-observatory release.
 
 The Seestar S30 Pro is a formidable little sky-explorer, and its app is a pleasure
 to use — but it is built for *looking*, not for *measuring*. The FITS files it saves
@@ -73,7 +75,17 @@ software. If macOS claims Argos "is damaged", clear the quarantine flag:
 xattr -dr com.apple.quarantine /Applications/Argos.app
 ```
 
-**From source** (any platform where PyQt6 runs; only macOS is validated today):
+**Debian / Ubuntu (x86_64 technical preview).** A tagged release also carries
+a `.deb` built and smoke-tested on Ubuntu CI. Download it, then install it with:
+
+```bash
+sudo apt install ./argos_0.4.1_amd64.deb
+```
+
+Launch **Argos** from the applications menu or run `argos`. The Linux package
+is not field-validated yet; keep it to technical testing until that changes.
+
+**From source** (macOS is the reference platform; Linux is a technical preview):
 
 ```bash
 brew install uv

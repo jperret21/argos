@@ -6,11 +6,9 @@ Receives a **linear** display array (2-D uint16 plane or 3-D uint16 RGB from
 measurement (§4): pixel readout on hover, a region-stats ROI, and a
 saturation/clipping overlay. None of this touches the data written to FITS.
 
-Signals:
-    levels_changed(black, white): emitted after an auto-stretch so the
-        histogram dock can sync its sliders.
-    pixel_info(str):   readout under the cursor ("(x,y) … ADU").
-    region_info(dict|None): stats of the ROI region (or None when cleared).
+Signals include ``levels_changed(black, white)`` after an auto-stretch,
+``pixel_info(str)`` for the cursor readout, and ``region_info(dict | None)``
+for the ROI statistics.
 """
 
 from __future__ import annotations

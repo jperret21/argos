@@ -30,6 +30,8 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QGridLayout,
+    QHBoxLayout,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QWidget,
@@ -53,6 +55,8 @@ class MountDock(design.Card):
     """Compact mount control group for the right side of the Imaging page."""
 
     goto_clicked = pyqtSignal(float, float)  # ra_hours, dec_degrees
+    object_lookup_requested = pyqtSignal(str)
+    resolved_goto_clicked = pyqtSignal(float, float, str)
     sync_to_current_clicked = pyqtSignal()
     tracking_toggled = pyqtSignal(bool)
     tracking_rate_changed = pyqtSignal(int)
@@ -67,6 +71,8 @@ class MountDock(design.Card):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Mount", parent)
+        self._connected = False
+        self._resolved_object = None
         self._build_ui()
         self.set_enabled(False)
 
@@ -117,7 +123,40 @@ class MountDock(design.Card):
 
         outer.addWidget(design.horizontal_divider())
 
-        # Goto form
+        # Catalogue lookup keeps common designations out of a cryptic manual
+        # RA/Dec form.  Looking up is safe offline/while disconnected; only the
+        # explicit Slew button can command the mount.
+        lookup_form = QFormLayout()
+        lookup_form.setHorizontalSpacing(design.SPACING_MD)
+        lookup_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        self._object_edit = QLineEdit()
+        self._object_edit.setPlaceholderText("M 42, NGC 7000, HD 189733…")
+        self._object_edit.setToolTip("Search an astronomical catalogue by designation")
+        self._object_edit.returnPressed.connect(self._request_lookup)
+        lookup_row = QHBoxLayout()
+        lookup_row.setSpacing(design.SPACING_SM)
+        lookup_row.addWidget(self._object_edit, 1)
+        self._find_btn = design.SecondaryButton("Find")
+        self._find_btn.clicked.connect(self._request_lookup)
+        lookup_row.addWidget(self._find_btn)
+        lookup_wrap = QWidget()
+        lookup_wrap.setLayout(lookup_row)
+        lookup_form.addRow(design.MutedLabel("Object"), lookup_wrap)
+        outer.addLayout(lookup_form)
+        self._lookup_result = design.MutedLabel(
+            "Search a catalogue object; the mount will not move until you confirm."
+        )
+        self._lookup_result.setWordWrap(True)
+        outer.addWidget(self._lookup_result)
+        self._resolved_slew_btn = design.PrimaryButton("Slew to selected object")
+        self._resolved_slew_btn.setToolTip("Send the selected catalogue coordinates to the mount")
+        self._resolved_slew_btn.clicked.connect(self._on_resolved_slew)
+        outer.addLayout(design.button_row(self._resolved_slew_btn))
+
+        outer.addWidget(design.horizontal_divider())
+
+        # Manual coordinates remain available for coordinates from an observing
+        # circular, plate solution, or a source not covered by the catalogue.
         goto_form = QFormLayout()
         goto_form.setHorizontalSpacing(design.SPACING_MD)
         goto_form.setVerticalSpacing(design.SPACING_SM)
@@ -219,6 +258,8 @@ class MountDock(design.Card):
             *self._jog_btns.values(),
         ):
             w.setEnabled(connected)
+        self._connected = connected
+        self._resolved_slew_btn.setEnabled(connected and self._resolved_object is not None)
 
     def set_position(
         self,
@@ -249,12 +290,45 @@ class MountDock(design.Card):
         self._goto_ra.setValue(float(ra_h))
         self._goto_dec.setValue(float(dec_d))
 
+    def set_lookup_busy(self, busy: bool) -> None:
+        """Render the non-blocking catalogue lookup state."""
+        self._object_edit.setEnabled(not busy)
+        self._find_btn.setEnabled(not busy)
+        if busy:
+            self._lookup_result.setText("Searching catalogue…")
+
+    def set_resolved_object(self, result) -> None:
+        """Show a resolved object and arm the explicit confirmation action."""
+        self._resolved_object = result
+        self.set_goto_fields(result.ra_hours, result.dec_degrees)
+        type_suffix = f" · {result.object_type}" if result.object_type else ""
+        self._lookup_result.setText(
+            f"{result.name}{type_suffix}\nRA {result.ra_hours:.5f} h · Dec {result.dec_degrees:+.5f}°"
+        )
+        self._resolved_slew_btn.setEnabled(self._connected)
+
+    def set_lookup_error(self, message: str) -> None:
+        self._resolved_object = None
+        self._lookup_result.setText(message)
+        self._resolved_slew_btn.setEnabled(False)
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
     def _on_slew(self) -> None:
         self.goto_clicked.emit(self._goto_ra.value(), self._goto_dec.value())
+
+    def _request_lookup(self) -> None:
+        self.object_lookup_requested.emit(self._object_edit.text().strip())
+
+    def _on_resolved_slew(self) -> None:
+        if self._resolved_object is not None:
+            self.resolved_goto_clicked.emit(
+                self._resolved_object.ra_hours,
+                self._resolved_object.dec_degrees,
+                self._resolved_object.name,
+            )
 
     def _on_park_clicked(self) -> None:
         """Confirm before parking — it physically closes the Seestar arm and

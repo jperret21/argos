@@ -10,7 +10,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QLabel  # noqa: E402
 
 from argos.core.config import Config  # noqa: E402
 
@@ -52,12 +52,22 @@ def test_shell_three_mode_walkthrough() -> None:
         assert connection._telescope_combo.count() >= 3
         assert connection._telescope_combo.currentData() == "s30pro"
         assert "f/5.3" in connection._telescope_specs.text()
+        # Connection intentionally has one physical endpoint, not opaque
+        # network modes. Discovery fills the same IP/port fields.
+        assert not hasattr(connection, "_profile_combo")
+        assert connection._host_edit.placeholderText() == "192.168.x.x"
+        assert connection._port_spin.minimum() == 1
 
-        # The planner remains usable at laptop sizes: the table and the
-        # control rail are independently resizable, and the run card explains
-        # the next required action instead of failing mysteriously on Start.
+        # The planner mirrors Capture's modular workspace: the centre table is
+        # stable while search, visibility and controls are true movable docks.
         sequence_panel = shell._pages["sequencer"].panel
-        assert sequence_panel._splitter.count() == 2
+        assert {"search", "plan", "visibility", "presets", "run"} <= set(sequence_panel._docks)
+        assert sequence_panel._docks["visibility"].features()
+        from argos.core.catalog.object_resolver import ResolvedObject
+
+        resolved = ResolvedObject("HD 189733", 300.1821, 22.7099, "Star")
+        sequence_panel.set_lookup_result(resolved)
+        assert "HD 189733" in sequence_panel._search_result.text()
         assert "connect the camera" in sequence_panel._readiness_lbl.text().lower()
         sequence_panel.set_device_state("camera", "connected")
         assert "object name" in sequence_panel._readiness_lbl.text().lower()
@@ -78,9 +88,14 @@ def test_shell_three_mode_walkthrough() -> None:
         from argos.ui.widgets import astrometry_settings as _astro_mod
 
         menus = {a.menu().title(): a.menu() for a in shell.menuBar().actions() if a.menu()}
-        assert "File" in menus and "Field" in menus and "Photometry" in menus
+        assert "File" in menus and "More" in menus and "Field" in menus and "Photometry" in menus
         file_actions = {act.text() for act in menus["File"].actions()}
         assert {"Open FITS image…", "Open session photometry…", "Quit Argos"} <= file_actions
+        more_actions = {act.text() for act in menus["More"].actions()}
+        assert {"Documentation & website", "About & credits"} <= more_actions
+        about_dialog = shell._build_about_dialog()
+        assert about_dialog.findChild(QLabel, "about_logo").pixmap() is not None
+        assert "Jules Perret" in about_dialog.findChild(QLabel, "about_credits").text()
         astro_actions = {act.text(): act for act in menus["Field"].actions()}
         assert {
             "Identify field",

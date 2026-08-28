@@ -57,6 +57,37 @@ def altitude_at(
     return math.degrees(math.asin(max(-1.0, min(1.0, sin_alt))))
 
 
+def upcoming_night_altitudes(
+    ra_hours: float,
+    dec_deg: float,
+    lat_deg: float,
+    lon_deg: float,
+    *,
+    now: datetime | None = None,
+    interval_minutes: int = 10,
+) -> list[tuple[datetime, float]]:
+    """Sample an object's altitude over the next local observing night.
+
+    The planning view deliberately uses 18:00–06:00 local civil time: it is
+    predictable, works without a network/ephemeris download, and is labelled
+    as such in the UI.  ``datetime`` values retain the computer's local time
+    zone so axis labels agree with the observer's clock.
+    """
+    if interval_minutes <= 0:
+        raise ValueError("interval_minutes must be positive")
+    local_now = (now or datetime.now().astimezone()).astimezone()
+    start = local_now.replace(hour=18, minute=0, second=0, microsecond=0)
+    end = start + timedelta(hours=12)
+    step = timedelta(minutes=interval_minutes)
+    samples: list[tuple[datetime, float]] = []
+    point = start
+    while point <= end:
+        jd = point.astimezone(timezone.utc).timestamp() / 86400.0 + 2440587.5
+        samples.append((point, altitude_at(jd, ra_hours, dec_deg, lat_deg, lon_deg)))
+        point += step
+    return samples
+
+
 def field_rotation_rate(
     altitude_deg: float, azimuth_deg: float, latitude_deg: float
 ) -> Optional[float]:
@@ -170,16 +201,10 @@ def compute_target_geometry(
 ) -> dict:
     """Return the observing geometry of a target as seen from a site, at a time.
 
-    Keys (any may be missing if astropy fails or inputs are incomplete):
-        altitude:    Target altitude in degrees (negative = below horizon).
-        azimuth:     Target azimuth in degrees (north = 0, increasing east).
-        airmass:     Pickering airmass, or absent below the horizon.
-        hour_angle:  Hour angle in decimal hours, wrapped to [-12, 12).
-        transit_in:  Hours until the next meridian transit (>= 0).
-        transit_utc: Datetime (UTC) of the next meridian transit.
-        moon_sep:    Angular separation target-Moon in degrees.
-        field_rotation: Alt-az field rotation rate in deg/hour (signed);
-                     only meaningful while the mount runs alt-az.
+    Returns a mapping whose optional keys include ``altitude`` (degrees),
+    ``azimuth`` (degrees north through east), ``airmass``, ``hour_angle``
+    (hours), ``transit_in`` (hours), ``transit_utc``, ``moon_sep`` (degrees)
+    and ``field_rotation`` (signed degrees/hour while the mount runs alt-az).
 
     Args mirror :func:`compute_moon_info`; ``when_utc`` naive is treated as UTC.
     Pure and network-free (astropy built-in ephemeris), but ~50 ms — call off the

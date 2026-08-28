@@ -61,7 +61,7 @@ def build_solve_settings(
 
     return SolveSettings(
         astap_path=str(cfg_get("astrometry.astap_path", "")),
-        database=str(cfg_get("astrometry.database", "")),
+        database=str(cfg_get("astrometry.database_path", "") or cfg_get("astrometry.database", "")),
         search_radius_deg=radius,
         downsample=int(cfg_get("astrometry.downsample", 2)),
         fov_hint_deg=(gh * arcsec_per_green_px() / 3600.0) if use_hint else None,

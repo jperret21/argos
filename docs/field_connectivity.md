@@ -35,8 +35,8 @@ The Seestar out of the box runs its own access point (the network the iPad
 joins). No home router, no phone involved.
 
 1. On the Mac, join the `S30…`/`Seestar…` WiFi network.
-2. In Argos, pick the **Field — Seestar AP** profile on the Connection page.
-   It is pre-set to the Seestar's fixed AP address (`10.0.0.1`).
+2. In Argos, enter the Seestar's fixed IP address (`10.0.0.1`) and the
+   Alpaca port (`32323`) on the Connection page.
 3. Connect all. Capture, goto, focus and plate solving all work.
 
 No internet: catalog lookups fall back to the offline cache (pre-fetch your
@@ -53,11 +53,11 @@ field setup — one network for everything.
    (forces 2.4 GHz, which the Seestar needs).
 2. Seestar: in the Seestar app, switch the device to *station mode* and join
    the phone's hotspot (one-time setup).
-3. Mac: join the same hotspot. Pick the **Field — Phone hotspot** profile.
-4. Press **Discover**. Phone hotspots usually block the Alpaca UDP
+3. Mac: join the same hotspot, then press **Discover** in Argos.
+4. Phone hotspots usually block the Alpaca UDP
    broadcast, so Argos falls back to probing the last-used address and then
-   sweeping the hotspot subnet (`172.20.10.x`) — the found address is stored
-   in the profile for next time.
+   sweeping the hotspot subnet (`172.20.10.x`) — the found IP address is
+   kept for next time.
 
 Caveats: the hotspot may pause when the phone sleeps, and the Seestar must
 be re-pointed at the hotspot's SSID if you renamed it.
@@ -75,15 +75,15 @@ PAN — slower but fine for catalog queries).
    *Wi-Fi* in the service order (⋯ menu → *Set Service Order…*). The default
    route (internet) then goes through the phone while the Seestar subnet
    stays on WiFi.
-4. In Argos: **Field — Seestar AP** profile, connect all. Both status dots
-   go green.
+4. In Argos, use `10.0.0.1:32323`, then connect all. Both status dots go green.
 
-## Profiles
+## Address
 
-Each profile (Home network / Field — Seestar AP / Field — Phone hotspot)
-remembers its own host and port, so switching networks is one combo-box
-click, not retyping addresses. The active profile's address is what the
-Discover fallback probes first.
+Argos uses one clear endpoint: an **IP address** and an **Alpaca port**. The
+last successful address is retained and is the first one tried by discovery.
+For the Seestar access-point network that is normally `10.0.0.1:32323`; on a
+home network or phone hotspot use **Discover** or enter the IP shown by your
+router.
 
 ## Discovery, layer by layer
 

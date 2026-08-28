@@ -3,19 +3,37 @@ name: Release
 on:
   push:
     tags: ["v*"]
-  # Lets a build be exercised without cutting a tag. The artifact is uploaded
-  # to the run rather than to a Release.
+  # Build both installable artifacts without publishing a GitHub Release.
   workflow_dispatch:
 
 permissions:
-  contents: write # needed to attach assets to the GitHub Release
+  contents: read
 
 jobs:
-  macos:
-    # A .deb job joins this matrix once Argos actually runs on Linux — the
-    # ASTAP search paths are macOS/Homebrew only and run.sh is macOS-specific.
-    # See docs/release_0_4_1.md.
-    runs-on: macos-latest
+  package:
+    name: Package ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macOS DMG
+            artifact: argos-macos-dmg
+            output: dist/*.dmg
+            spec: packaging/argos.spec
+            package_command: packaging/make_dmg.sh
+            binary: ./dist/Argos.app/Contents/MacOS/Argos
+          - os: ubuntu-22.04
+            label: Debian package
+            artifact: argos-linux-deb
+            output: dist/*.deb
+            spec: packaging/argos_linux.spec
+            package_command: packaging/make_deb.sh
+            binary: ./dist/Argos/Argos
+
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
 
     steps:
       - uses: actions/checkout@v4
@@ -28,57 +46,83 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Install Linux runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libdbus-1-3 libegl1 libfontconfig1 libgl1 libxkbcommon0
+
       - name: Install dependencies
         run: uv sync --extra dev --extra package
 
-      # Never ship a build whose tests were not run.
+      # Tests run on the exact OS and wheel set that will be packaged. The
+      # photometry window remains isolated because PyQt can abort when it is
+      # constructed alongside the simulator fixtures in one process.
       - name: Tests
-        env:
-          QT_QPA_PLATFORM: offscreen
         run: |
           uv run --extra dev pytest -q --deselect tests/ui/test_photometry_window.py
           uv run --extra dev pytest -q tests/ui/test_photometry_window.py
 
-      - name: Build Argos.app
-        run: uv run --extra package pyinstaller packaging/argos.spec --noconfirm
+      - name: Build PyInstaller bundle
+        run: uv run --extra package pyinstaller ${{ matrix.spec }} --noconfirm
 
-      # A bundle that builds is not a bundle that runs: the astropy ply parser
-      # tables broke startup while building cleanly. Boot it headless and
-      # require the "UI ready" line before shipping.
-      - name: Smoke-test the bundle
+      # Building is not proof that the frozen app starts. It must reach the
+      # real Shell's "UI ready" checkpoint before an installer is generated.
+      - name: Smoke-test bundle
         env:
-          QT_QPA_PLATFORM: offscreen
           ARGOS_NO_SPLASH: "1"
         run: |
-          ./dist/Argos.app/Contents/MacOS/Argos > boot.log 2>&1 &
+          ${{ matrix.binary }} > boot.log 2>&1 &
           pid=$!
+          ready=0
           for _ in $(seq 1 60); do
-            grep -q "UI ready" boot.log && break
+            if grep -q "UI ready" boot.log; then ready=1; break; fi
             sleep 1
           done
-          kill $pid 2>/dev/null || true
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
           cat boot.log
-          grep -q "UI ready" boot.log || { echo "::error::bundle failed to start"; exit 1; }
+          test "$ready" -eq 1 || { echo "::error::bundle failed to start"; exit 1; }
 
-      - name: Build the .dmg
-        run: packaging/make_dmg.sh
+      - name: Build installer
+        run: ${{ matrix.package_command }}
 
       - uses: actions/upload-artifact@v4
         with:
-          name: argos-macos-dmg
-          path: dist/*.dmg
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.output }}
           if-no-files-found: error
 
-      - name: Attach to the Release
-        if: startsWith(github.ref, 'refs/tags/v')
+  publish:
+    name: Draft GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Drafts prevent an incomplete release from becoming public. Publishing
+      # it remains a deliberate human action after downloading both artifacts.
+      - name: Attach macOS and Debian installers
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.dmg
-          draft: true # a human writes the notes and publishes
+          draft: true
+          files: |
+            dist/*.dmg
+            dist/*.deb
           body: |
-            **The macOS build is unsigned** — Argos has no Apple Developer
-            certificate. On first launch, right-click Argos and choose "Open",
-            then confirm. See "READ ME FIRST.txt" inside the .dmg.
+            ## Argos ${{ github.ref_name }}
 
-            Plate solving needs [ASTAP](https://www.hnsky.org/astap.htm)
-            installed separately; Argos does not bundle it.
+            - **macOS:** the `.dmg` is currently unsigned. On first launch,
+              right-click Argos and choose **Open**.
+            - **Linux:** the `.deb` is an x86_64 Debian/Ubuntu technical
+              preview. It is built and smoke-tested in CI, but needs field
+              validation before it is recommended for production observing.
+            - Plate solving requires a separately installed [ASTAP](https://www.hnsky.org/astap.htm)
+              executable and star database.

@@ -8,7 +8,7 @@ and test the whole app — connect, expose, preview, focus, jog, sequence —
 This doc covers:
 
 1. [What the simulator gives you](#1-what-the-simulator-gives-you)
-2. [Installing & building it (macOS arm64)](#2-installing--building-it-macos-arm64)
+2. Installing and building it (macOS arm64)
 3. [Running it](#3-running-it)
 4. [Manual app test against the sim](#4-manual-app-test-against-the-sim)
 5. [Automated integration tests](#5-automated-integration-tests)

@@ -31,7 +31,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --extra dev --extra docs
 
       # main.py is real source and was outside the local lint habit — which is
       # how it drifted out of black. scripts/ stays out on purpose: those are
@@ -42,6 +42,12 @@ jobs:
 
       - name: Format check (black)
         run: uv run --extra dev black --check argos/ tests/ main.py
+
+      # The public documentation is part of the product. Treat warnings as
+      # failures so stale API references or broken links cannot reach a
+      # release unnoticed.
+      - name: Build documentation
+        run: uv run --extra docs sphinx-build -W -b html docs /tmp/argos-docs
 
       # The Qt tests need a platform plugin; offscreen is the headless one.
       # test_photometry_window.py runs in its own process: the whole suite in

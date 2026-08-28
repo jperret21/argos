@@ -6,12 +6,9 @@ the Shell routes them to the device session living on the Acquisition page.
 State updates flow back via ``set_device_state``. The Stellarium telescope-
 control server is started/stopped from the embedded ``StellariumCard``.
 
-Public interface (used by the Shell):
-    Signals: discover_requested(), connect_requested(device, host, port),
-             disconnect_requested(device), connect_all_requested(host, port),
-             disconnect_all_requested()
-    Slots:   set_device_state(device, state, info), set_discovered_address(host, port)
-    Property: stellarium_card -> StellariumCard
+The Shell uses its discovery/connect/disconnect signals, the
+``set_device_state`` and ``set_discovered_address`` slots, and the
+``stellarium_card`` property.
 """
 
 from __future__ import annotations
@@ -38,15 +35,6 @@ from argos.ui.panels.stellarium_card import StellariumCard
 
 logger = logging.getLogger(__name__)
 
-
-# (profile_id, display label) — one per network situation. "field_ap" comes
-# pre-filled with the Seestar's fixed AP-mode address; the other two remember
-# whatever host the user last used on that network (docs/field_connectivity.md).
-_PROFILES: tuple[tuple[str, str], ...] = (
-    ("home", "Home network"),
-    ("field_ap", "Field — Seestar AP"),
-    ("hotspot", "Field — Phone hotspot"),
-)
 
 # (device_id, display label, hint) — one row per device. Order matches the
 # global status bar so connection state reads left-to-right consistently.
@@ -89,8 +77,8 @@ class ConnectionPage(QWidget):
 
         body.addWidget(design.HeadingLabel("Connection"))
         intro = QLabel(
-            "Connect the saved equipment profile, then move on to framing and observing. "
-            "Connection details stay available when you need to troubleshoot."
+            "Enter the Seestar Alpaca IP address, connect the equipment, then move on to framing "
+            "and observing."
         )
         intro.setWordWrap(True)
         intro.setStyleSheet(
@@ -108,8 +96,6 @@ class ConnectionPage(QWidget):
         advanced = QVBoxLayout(self._advanced)
         advanced.setContentsMargins(0, design.SPACING_SM, 0, 0)
         advanced.setSpacing(design.SPACING_MD)
-        advanced.addWidget(design.SectionLabel("Connection details"))
-        advanced.addWidget(self._build_address_card())
         advanced.addWidget(design.SectionLabel("Individual devices"))
         advanced.addLayout(self._build_devices_grid())
         advanced.addLayout(self._build_bulk_row())
@@ -155,6 +141,13 @@ class ConnectionPage(QWidget):
         self._refresh_telescope_summary()
 
         layout.addWidget(design.horizontal_divider())
+        layout.addLayout(self._build_endpoint_row())
+        layout.addWidget(
+            design.MutedLabel(
+                "Use Discover on a new network; Argos remembers the last successful address."
+            )
+        )
+        layout.addWidget(design.horizontal_divider())
         self._summary_labels: dict[str, QLabel] = {}
         for device_id, label, _hint in _DEVICES:
             status = QLabel()
@@ -171,21 +164,14 @@ class ConnectionPage(QWidget):
         self._refresh_summary()
         return card
 
-    def _build_address_card(self) -> "design.Card":
-        card = design.Card("Address")
-        layout = design.card_layout(card)
-
+    def _build_endpoint_row(self) -> QHBoxLayout:
+        """The only network setting an observer needs: Alpaca IP + port."""
         row = QHBoxLayout()
         row.setSpacing(design.SPACING_MD)
-        self._profile_combo = QComboBox()
-        for profile_id, label in _PROFILES:
-            self._profile_combo.addItem(label, profile_id)
-        self._profile_combo.setToolTip("Network profile — each remembers its own Seestar address")
-        self._profile_combo.currentIndexChanged.connect(self._on_profile_changed)
-        row.addWidget(self._profile_combo)
-        row.addWidget(design.MutedLabel("Host"))
+        row.addWidget(design.MutedLabel("IP address"))
         self._host_edit = QLineEdit()
         self._host_edit.setPlaceholderText("192.168.x.x")
+        self._host_edit.setToolTip("IPv4 address of the Seestar on the current network")
         self._host_edit.textChanged.connect(self._on_host_changed)
         row.addWidget(self._host_edit, 1)
         row.addWidget(design.MutedLabel("Port"))
@@ -198,8 +184,7 @@ class ConnectionPage(QWidget):
         self._discover_btn.setToolTip("Send an Alpaca UDP discovery broadcast")
         self._discover_btn.clicked.connect(self.discover_requested)
         row.addWidget(self._discover_btn)
-        layout.addLayout(row)
-        return card
+        return row
 
     def _build_devices_grid(self) -> QGridLayout:
         grid = QGridLayout()
@@ -327,45 +312,20 @@ class ConnectionPage(QWidget):
     # ------------------------------------------------------------------
 
     def _load_config(self) -> None:
-        profile = str(self._config.get("alpaca.profile", "home"))
-        index = next((i for i, (pid, _) in enumerate(_PROFILES) if pid == profile), 0)
         self._loading = True
-        self._profile_combo.setCurrentIndex(index)
         self._host_edit.setText(self._config.alpaca_host or "")
         self._port_spin.setValue(self._config.alpaca_port or 32323)
         self._loading = False
-        # Pre-profile configs have alpaca.host but an empty profile entry —
-        # adopt the current address into the active profile once.
-        self._save_into_profile()
-
-    def _on_profile_changed(self, index: int) -> None:
-        if self._loading:
-            return
-        profile_id = _PROFILES[index][0]
-        self._config.set("alpaca.profile", profile_id)
-        host = str(self._config.get(f"alpaca.profiles.{profile_id}.host", ""))
-        port = int(self._config.get(f"alpaca.profiles.{profile_id}.port", 32323) or 32323)
-        # Filling the form re-enters _on_host/port_changed, which mirrors the
-        # profile's address into alpaca.host/port for the device wrappers.
-        self._host_edit.setText(host)
-        self._port_spin.setValue(port)
-
-    def _save_into_profile(self) -> None:
-        profile_id = _PROFILES[self._profile_combo.currentIndex()][0]
-        self._config.set(f"alpaca.profiles.{profile_id}.host", self._config.alpaca_host)
-        self._config.set(f"alpaca.profiles.{profile_id}.port", self._config.alpaca_port)
 
     def _on_host_changed(self, text: str) -> None:
         if self._loading:
             return
         self._config.alpaca_host = text.strip()
-        self._save_into_profile()
 
     def _on_port_changed(self, value: int) -> None:
         if self._loading:
             return
         self._config.alpaca_port = value
-        self._save_into_profile()
 
     def _on_connect_one(self, device_id: str) -> None:
         host = self._host_edit.text().strip()

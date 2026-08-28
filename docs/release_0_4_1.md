@@ -165,6 +165,14 @@ runs.
 - `green.py` and `debayer.py` still assume the GRBG tile geometry. Correct
   for every profile shipped; it needs revisiting the day a model differs.
 
+### Packaging update — August 2026
+
+The release workflow now builds both installers on every `v*` tag: a macOS
+`.dmg` and an x86_64 Debian/Ubuntu `.deb`. Each is built on its native GitHub
+runner, runs the full automated suite, smoke-tests the frozen application and
+is attached to the same **draft** GitHub Release. The Debian package is a
+technical preview, not evidence that Argos has been field-validated on Linux.
+
 **Method note.** Workstream A touches science code. Every step ends with a
 green `pytest` *and* a before/after FITS header comparison on a test frame:
 for the S30 Pro every value must be identical except `FOCRATIO`, which must

@@ -32,13 +32,16 @@ _MIN_SOLVE_PX = 256
 
 #: Executable names to look for on PATH.
 _ASTAP_NAMES = ("astap_cli", "astap")
-#: Common macOS / Homebrew install locations checked when not on PATH.
+#: Common macOS, Homebrew and Linux install locations checked when not on PATH.
 _ASTAP_PATHS = (
     "/Applications/ASTAP.app/Contents/MacOS/astap",
     "/opt/homebrew/bin/astap",
     "/opt/homebrew/bin/astap_cli",
     "/usr/local/bin/astap",
     "/usr/local/bin/astap_cli",
+    "/usr/bin/astap",
+    "/usr/bin/astap_cli",
+    "/opt/astap/astap",
 )
 
 #: Common star-database locations checked when the config gives none.
@@ -57,6 +60,8 @@ _ASTAP_DB_PATHS = (
     "/usr/local/share/astap",
     "/usr/local/opt/astap",
     "/usr/local/var/astap",
+    "/usr/share/astap",
+    "/opt/astap",
     "/Applications/ASTAP.app/Contents/MacOS",
     str(Path.home() / ".local" / "share" / "astap"),
     str(Path.home() / "astap"),

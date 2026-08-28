@@ -3,9 +3,7 @@
 =============================
 
 .. automodule:: argos.core.imaging
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   :no-members:
 
 Modules
 =======
@@ -44,11 +42,13 @@ Modules
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:
 
 .. automodule:: argos.core.imaging.session_log
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:
 
 .. automodule:: argos.core.imaging.platesolve
    :members:

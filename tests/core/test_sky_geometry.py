@@ -116,6 +116,27 @@ def test_altitude_at_matches_astropy() -> None:
         assert abs(got - float(ref)) < 0.3, f"RA={ra_h}h Dec={dec}"
 
 
+def test_upcoming_night_altitudes_has_a_complete_local_night() -> None:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from argos.core.imaging.sky_geometry import upcoming_night_altitudes
+
+    samples = upcoming_night_altitudes(
+        20.0,
+        22.0,
+        43.0,
+        1.0,
+        now=datetime(2026, 8, 27, 12, tzinfo=ZoneInfo("Europe/Paris")),
+        interval_minutes=60,
+    )
+
+    assert len(samples) == 13
+    assert samples[0][0].hour == 18
+    assert samples[-1][0].hour == 6
+    assert all(-90.0 <= altitude <= 90.0 for _when, altitude in samples)
+
+
 def test_airmass_formulas_agree_project_wide() -> None:
     """P4: the photometry entry point delegates to Pickering — no more
     header-vs-curve disagreement."""

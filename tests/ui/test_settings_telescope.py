@@ -33,6 +33,9 @@ class _FakeConfig:
     def set(self, key, value):
         self._values[key] = value
 
+    def save(self):
+        pass
+
     @property
     def sessions_path(self):
         return "/tmp/sessions"
@@ -80,5 +83,28 @@ def test_telescope_picker_walkthrough() -> None:
         page._scope_combo.setCurrentIndex(page._scope_combo.findData("s30pro"))
         assert page._scope_warning.text() == ""
         assert active.profile().key == "s30pro"
+
+        # A saved observing site is separate from the observer name and can
+        # become the active/default site in one explicit action.
+        page._site_name_edit.setText("Berkeley roof")
+        page._lat_spin.setValue(37.8715)
+        page._lon_spin.setValue(-122.2730)
+        page._elev_spin.setValue(52.0)
+        page._favorite_name_edit.setText("Berkeley roof")
+        page._save_current_favorite()
+        assert page._favorites_combo.count() == 1
+        page._site_name_edit.setText("Elsewhere")
+        page._lat_spin.setValue(0.0)
+        page._use_selected_favorite()
+        assert page._site_name_edit.text() == "Berkeley roof"
+        assert page._lat_spin.value() == 37.8715
+
+        # Field telemetry can be explicitly disabled, while ASTAP's local
+        # database directory is persisted separately from its database set.
+        page._diagnostics_chk.setChecked(False)
+        assert config.get("diagnostics.enabled") is False
+        page._astap_db_edit.setText("/Volumes/Astro/astap")
+        page._save_astrometry()
+        assert config.get("astrometry.database_path") == "/Volumes/Astro/astap"
     finally:
         active.set_profile(before)

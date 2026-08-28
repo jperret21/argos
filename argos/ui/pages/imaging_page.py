@@ -102,6 +102,7 @@ from argos.ui.widgets.star_info_card import StarInfoCard
 from argos.ui.widgets.statistics_dock import StatisticsDock
 from argos.workers.camera_service import CameraState
 from argos.workers.preview_processor import PreviewProcessor
+from argos.workers.object_resolver_worker import ObjectResolverWorker
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +129,7 @@ class ImagingPage(QWidget):
     action_changed = pyqtSignal(str)
     log_message = pyqtSignal(str, str)  # level, message
     autofocus_step = pyqtSignal(int, int, int, object)  # step, total, pos, hfd|None
+    target_coordinates_changed = pyqtSignal(str, float, float)  # name, RA h, Dec deg
     autofocus_best = pyqtSignal(int, object)  # best position, best hfd|None
     autofocus_state = pyqtSignal(bool)  # sweep running / stopped
     auto_solve_armed = pyqtSignal(bool)  # → the Shell's checkable menu action
@@ -170,6 +172,7 @@ class ImagingPage(QWidget):
         self._metrics_t0: float | None = None
         self._batch_worker = None  # WS7 batch re-run (QThread) + its progress dialog
         self._batch_dialog: QProgressDialog | None = None
+        self._object_resolver_worker: ObjectResolverWorker | None = None
 
         self._build_ui()
         # The engine reads capture parameters through these providers — the
@@ -549,6 +552,8 @@ class ImagingPage(QWidget):
 
         # Mount dock — command intents go straight to the device session.
         self._mount_dock.goto_clicked.connect(self._on_goto)
+        self._mount_dock.object_lookup_requested.connect(self._lookup_object)
+        self._mount_dock.resolved_goto_clicked.connect(self._goto_resolved_object)
         self._mount_dock.sync_to_current_clicked.connect(self._session.sync_current)
         self._mount_dock.tracking_toggled.connect(self._session.set_tracking)
         self._mount_dock.tracking_rate_changed.connect(self._session.set_tracking_rate)
@@ -1554,6 +1559,56 @@ class ImagingPage(QWidget):
         # The session emits ``slewed`` on success → _clear_astrometry.
         self._session.goto(ra_h, dec_d)
 
+    def _lookup_object(self, query: str) -> None:
+        """Resolve a designation in a disposable worker; never freeze Capture."""
+        if self._object_resolver_worker is not None:
+            return
+        self._mount_dock.set_lookup_busy(True)
+        worker = ObjectResolverWorker(query, self)
+        self._object_resolver_worker = worker
+        worker.resolved.connect(self._on_object_resolved)
+        worker.failed.connect(self._on_object_lookup_failed)
+        worker.finished.connect(self._finish_object_lookup)
+        worker.start()
+
+    @pyqtSlot(object)
+    def _on_object_resolved(self, result) -> None:
+        self.set_catalogue_target(result)
+
+    @pyqtSlot(object)
+    def set_catalogue_target(self, result) -> None:
+        """Apply a catalogue choice made here or in the Sequencer workspace."""
+        self._mount_dock.set_resolved_object(result)
+        # Object is a shared observation identity.  Updating it here keeps
+        # Capture paths, FITS OBJECT and the Sequence plan in agreement before
+        # the observer elects to slew.
+        self._camera_dock.set_object_name(result.name, emit=True)
+        self.target_coordinates_changed.emit(result.name, result.ra_hours, result.dec_degrees)
+        self.log_message.emit(
+            "INFO",
+            f"Catalogue target: {result.name} — RA {result.ra_hours:.5f}h Dec {result.dec_degrees:+.5f}°",
+        )
+
+    @pyqtSlot(str)
+    def _on_object_lookup_failed(self, message: str) -> None:
+        self._mount_dock.set_lookup_error(message)
+        self.log_message.emit("WARN", f"Catalogue lookup: {message}")
+
+    def _finish_object_lookup(self) -> None:
+        self._mount_dock.set_lookup_busy(False)
+        worker = self._object_resolver_worker
+        self._object_resolver_worker = None
+        if worker is not None:
+            worker.deleteLater()
+
+    def _goto_resolved_object(self, ra_h: float, dec_d: float, label: str) -> None:
+        """The second, intentional action after a successful catalogue search."""
+        if not self._session.telescope:
+            self.log_message.emit("WARN", "Slew requested but mount not connected")
+            return
+        self.log_message.emit("CMD", f"Catalogue slew {label} → RA {ra_h:.4f}h Dec {dec_d:+.4f}°")
+        self._on_goto(ra_h, dec_d)
+
     def goto_target(self, ra_h: float, dec_d: float, label: str = "") -> None:
         """Slew to ``(ra, dec)`` from an external source (Stellarium, wizard).
 
@@ -1649,6 +1704,9 @@ class ImagingPage(QWidget):
             self._batch_worker.cancel()
             self._batch_worker.wait(3000)
             self._batch_worker = None
+        if self._object_resolver_worker is not None:
+            self._object_resolver_worker.wait(9000)  # resolver request timeout is 8 seconds
+            self._object_resolver_worker = None
         self._engine.shutdown()
         self._processor.stop()
         self._processor.wait(2000)

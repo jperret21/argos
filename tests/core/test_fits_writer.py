@@ -38,7 +38,7 @@ def _write_frame(
 
 
 def test_minimal_write_still_carries_electron_gain(tmp_path: Path) -> None:
-    """Even without a FrameContext, EGAIN must come from IMX585 lookup."""
+    """Even without a FrameContext, EGAIN comes from the active sensor reference."""
     hdr = _write_frame(tmp_path)
     assert "EGAIN" in hdr
     assert "EPERDN" in hdr
@@ -131,6 +131,20 @@ def test_instrument_headers_follow_the_active_profile(tmp_path: Path) -> None:
     assert hdr["FOCALLEN"] == pytest.approx(250.0)
     assert hdr["APTDIA"] == pytest.approx(50.0)
     assert hdr["FOCRATIO"] == pytest.approx(5.0, abs=0.05)
+    assert "IMX462 reference" in hdr.comments["RDNOISE"]
+    assert "IMX462 reference" in hdr.comments["FULLWELL"]
+
+
+def test_s30_uses_the_imx662_reference_when_driver_has_no_egain(tmp_path: Path) -> None:
+    active.set_profile(catalog.S30)
+    try:
+        hdr = _write_frame(tmp_path, gain=200)
+    finally:
+        active.set_profile(catalog.S30_PRO)
+
+    assert hdr["INSTRUME"] == "IMX662"
+    assert "IMX662 ref" in hdr.comments["EGAIN"]
+    assert "IMX662 reference" in hdr.comments["RDNOISE"]
 
 
 def test_default_profile_headers_are_the_s30_pro(tmp_path: Path) -> None:

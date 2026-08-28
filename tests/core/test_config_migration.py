@@ -8,7 +8,12 @@ would change what photometry flags as saturated, without telling anyone.
 
 from __future__ import annotations
 
-from argos.core.config import _DEFAULTS, _migrate_camera_keys
+from argos.core.config import (
+    _DEFAULTS,
+    _migrate_alpaca_profiles,
+    _migrate_camera_keys,
+    _migrate_legacy_site,
+)
 
 
 def _fresh(**camera):
@@ -55,3 +60,35 @@ def test_missing_sections_do_not_raise():
     data = {}
     _migrate_camera_keys(data)
     assert data["hardware"]["overrides"] == {}
+
+
+def test_legacy_observer_coordinates_migrate_when_no_site_exists():
+    data = {"observer": {"latitude": 46.2, "longitude": 6.1, "elevation": 430.0}}
+    _migrate_legacy_site(data, on_disk={"observer": data["observer"]})
+    assert data["site"] == {"latitude": 46.2, "longitude": 6.1, "elevation": 430.0}
+
+
+def test_explicit_site_is_never_overwritten_by_legacy_observer_values():
+    data = {
+        "observer": {"latitude": 46.2, "longitude": 6.1, "elevation": 430.0},
+        "site": {"latitude": 0.0, "longitude": 0.0, "elevation": 0.0},
+    }
+    _migrate_legacy_site(data, on_disk={"site": data["site"]})
+    assert data["site"]["latitude"] == 0.0
+
+
+def test_active_legacy_alpaca_profile_becomes_the_single_endpoint():
+    old = {
+        "alpaca": {
+            "profile": "field_ap",
+            "profiles": {
+                "home": {"host": "192.168.1.42", "port": 32323},
+                "field_ap": {"host": "10.0.0.1", "port": 41234},
+            },
+        }
+    }
+    data = {"alpaca": {"host": "", "port": 32323, **old["alpaca"]}}
+
+    _migrate_alpaca_profiles(data, old)
+
+    assert data["alpaca"] == {"host": "10.0.0.1", "port": 41234}

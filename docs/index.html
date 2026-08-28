@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Argos — photometry for the Seestar S30 Pro</title>
-    <meta name="description" content="Desktop astrophotography and differential photometry for the ZWO Seestar S30 Pro. From raw frames to light curves, on your laptop. Alpha now available." />
+    <title>Argos — scientific observing for ZWO Seestar telescopes</title>
+    <meta name="description" content="Desktop acquisition, astrometry and differential photometry for ZWO Seestar telescopes. A field-validation alpha: from raw FITS to live differential light curves on your laptop." />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="apple-touch-icon.png" />
     <link rel="stylesheet" href="css/style.css" />
@@ -47,10 +47,10 @@
         <div class="hero-curve" aria-hidden="true"><svg id="curve" xmlns="http://www.w3.org/2000/svg"></svg></div>
 
         <div class="container hero-content">
-            <a href="#start" class="hero-badge hero-badge-link">Alpha v0.4.0 is here &middot; how to run it &rarr;</a>
+            <a href="#start" class="hero-badge hero-badge-link">Field-validation build v0.4.1 &middot; how to run it &rarr;</a>
             <h1>Argos</h1>
             <p class="hero-myth">the hundred-eyed watcher</p>
-            <p class="hero-sub">Desktop astrophotography &amp; differential photometry<br />for the ZWO Seestar S30 Pro.</p>
+            <p class="hero-sub">Scientific acquisition, astrometry &amp; differential photometry<br />for ZWO Seestar telescopes.</p>
             <div class="hero-actions">
                 <a href="https://github.com/jperret21/argos" class="btn btn-primary" target="_blank" rel="noopener">View on GitHub</a>
                 <a href="#start" class="btn btn-ghost">How to start</a>
@@ -69,9 +69,9 @@
                 The S30 Pro is a formidable little sky-explorer, and its app is a pleasure to use
                 &mdash; but it&rsquo;s built for looking, not for measuring. The FITS it saves are
                 missing the metadata that real science needs. Argos picks up from there and turns
-                this remarkable telescope into a scientific instrument: complete science headers,
-                every star measured, astrometry on each frame, and differential light curves
-                &mdash; on your laptop, as the light lands.
+                this remarkable telescope into a scientific observing workstation: complete science
+                headers, optional local plate solving, measured stars and live differential light
+                curves &mdash; on your laptop, as the light lands.
             </p>
             <p class="intro-aside">
                 Argos Panoptes, the giant of a hundred eyes, was set to watch and never sleep —
@@ -89,14 +89,14 @@
             <figure class="app-window">
                 <div class="app-bar">
                     <span class="app-dot"></span><span class="app-dot"></span><span class="app-dot"></span>
-                    <span class="app-title">Argos v0.3.1</span>
+                    <span class="app-title">Argos live observing session</span>
                 </div>
                 <picture>
                     <source srcset="img/screenshot-photometry.webp" type="image/webp" />
                     <img src="img/screenshot-photometry.png" width="2868" height="1638" loading="lazy" decoding="async"
                          alt="Argos capturing RR Lyrae: a live view with the variable and its comparison stars marked, next to a differential light-curve panel filling in over 205 subs." />
                 </picture>
-                <figcaption class="showcase-cap">RR&nbsp;Lyrae &middot; 105/205 subs &middot; variable &amp; comparisons auto-matched from the AAVSO chart &middot; plate-solved live at 3.67&Prime;/px</figcaption>
+                <figcaption class="showcase-cap">RR&nbsp;Lyrae &middot; 105/205 subs &middot; variable &amp; comparison stars selected from the AAVSO chart &middot; plate-solved at 3.67&Prime;/px</figcaption>
             </figure>
         </div>
     </section>
@@ -121,7 +121,7 @@
                     <div class="stage-rail"><span class="stage-num">01</span></div>
                     <div class="stage-body">
                         <h3 class="stage-name">Capture</h3>
-                        <p class="stage-lead">Point, track and shoot &mdash; live view, sequences and full telescope control, from your laptop.</p>
+                        <p class="stage-lead">Point, track and shoot &mdash; target lookup, altitude preview, live view and sequences from your laptop.</p>
                     </div>
                 </article>
 
@@ -145,7 +145,7 @@
                     <div class="stage-rail"><span class="stage-num">04</span></div>
                     <div class="stage-body">
                         <h3 class="stage-name">Photometry</h3>
-                        <p class="stage-lead">Each star measured and calibrated against reference stars from the AAVSO catalog.</p>
+                        <p class="stage-lead">A target measured against a comparison-star ensemble, with diagnostics kept separate from the science curve.</p>
                     </div>
                 </article>
 
@@ -153,7 +153,7 @@
                     <div class="stage-rail"><span class="stage-num end">05</span></div>
                     <div class="stage-body">
                         <h3 class="stage-name">Light curve</h3>
-                        <p class="stage-lead">Brightness over time, building live as the light lands &mdash; and exported when you&rsquo;re done.</p>
+                        <p class="stage-lead">Differential brightness over time, building live as the light lands &mdash; and exported with its session data.</p>
                     </div>
                 </article>
             </div>
@@ -196,7 +196,7 @@
         <div class="container container-wide">
             <div class="section-header">
                 <h2>How to start</h2>
-                <p>Alpha <strong>v0.4.0</strong> is out. Run it on your Seestar &mdash; or against the ASCOM Alpaca simulator, no telescope needed.</p>
+                <p><strong>v0.4.1 is a field-validation build.</strong> The S30 Pro is the reference profile; S30 and S50 remain explicitly unvalidated for precision photometry. Run it on your Seestar &mdash; or against the ASCOM Alpaca simulator, no telescope needed.</p>
             </div>
 
             <div class="code-wrap">
@@ -220,9 +220,9 @@ uv sync --extra dev</code></pre>
                         </div>
                         <pre><code><span class="cm"># power on the Seestar, join its Wi-Fi</span>
 uv run python main.py
-<span class="cm"># Connection &rarr; host &lt;seestar-ip&gt;, port 32323</span></code></pre>
+<span class="cm"># Connection &rarr; IP address &lt;seestar-ip&gt;, port 32323</span></code></pre>
                     </div>
-                    <a href="https://github.com/jperret21/argos/releases/tag/v0.4.0" class="btn btn-ghost start-col-link" target="_blank" rel="noopener">v0.4.0 release notes &rarr;</a>
+                    <a href="https://github.com/jperret21/argos/blob/main/docs/release_0_4_1.md" class="btn btn-ghost start-col-link" target="_blank" rel="noopener">v0.4.1 build status &rarr;</a>
                 </div>
 
                 <div class="start-col">
@@ -252,8 +252,8 @@ uv run python main.py
             </div>
             <p class="contribute-text">
                 Issues, ideas, and pull requests are all welcome &mdash; especially from Seestar
-                owners who want to push their data further. The codebase is uv-managed, fully
-                typed, and covered by tests.
+                owners who want to push their data further. The codebase is uv-managed, linted,
+                and covered by automated tests.
             </p>
             <div class="code-wrap">
                 <div class="code-bar">
@@ -292,7 +292,7 @@ uv run --extra dev pytest</code></pre>
                 <a href="#contribute">Contribute</a>
                 <a href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub</a>
             </div>
-            <div class="footer-copy">MIT &middot; Jules Perret - built under californian skies</div>
+            <div class="footer-copy">GNU GPL v3+ &middot; Jules Perret - built under Californian skies</div>
         </div>
     </footer>
 

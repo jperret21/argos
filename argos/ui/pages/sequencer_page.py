@@ -1,29 +1,31 @@
-"""Sequencer mode — plan and run the night's capture sequence.
+"""Sequencer mode — plan and run a capture sequence.
 
-The SequencePanel (pure UI) gets a full page here instead of a Capture
-dock: steps table on the left, Plan / Presets / Run cards on the right.
-This page owns all panel↔engine wiring; frames, the log and the light
-curve stay on the Capture page, and the top status-bar strip keeps the
-run's progress visible from every mode.
+The SequencePanel is a dockable workspace: the table stays central, while
+target search, visibility and controls are movable.  This page owns panel↔
+engine wiring; frames, the log and live light curve stay on Capture.
 """
 
 from __future__ import annotations
 
-from PyQt6.QtCore import pyqtSlot
+from PyQt6.QtCore import pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import QVBoxLayout, QWidget
 
 from argos.ui import design
 from argos.ui.widgets.sequence_panel import SequencePanel
+from argos.workers.object_resolver_worker import ObjectResolverWorker
 
 
 class SequencerPage(QWidget):
     """Full-page host for the sequence planner, wired to the engine."""
+
+    target_resolved = pyqtSignal(object)
 
     def __init__(self, config, session, engine, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = config
         self._session = session
         self._engine = engine
+        self._object_resolver_worker: ObjectResolverWorker | None = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(
@@ -38,6 +40,7 @@ class SequencerPage(QWidget):
         intro.setWordWrap(True)
         outer.addWidget(intro)
         self.panel = SequencePanel()
+        self.panel.set_config(config)
         outer.addWidget(self.panel, 1)
 
         # Intents → engine.
@@ -45,6 +48,7 @@ class SequencerPage(QWidget):
         self.panel.pause_requested.connect(engine.pause_sequence)
         self.panel.resume_requested.connect(engine.resume_sequence_run)
         self.panel.stop_requested.connect(engine.stop_sequence)
+        self.panel.object_lookup_requested.connect(self._lookup_object)
         # Engine → run feedback.
         engine.sequence_running.connect(self.panel.set_running)
         engine.sequence_paused.connect(self.panel.set_paused)
@@ -63,6 +67,54 @@ class SequencerPage(QWidget):
             # Refused (no camera / already running / AF owns the camera) —
             # the reason is logged; snap the panel button back.
             self.panel.set_running(False)
+
+    def set_target_coordinates(self, name: str, ra_hours: float, dec_degrees: float) -> None:
+        """Receive the shared Telescope target for the Plan visibility preview."""
+        self.panel.set_target_coordinates(
+            name,
+            ra_hours,
+            dec_degrees,
+            float(self._config.get("site.latitude", 0.0) or 0.0),
+            float(self._config.get("site.longitude", 0.0) or 0.0),
+        )
+
+    def _lookup_object(self, query: str) -> None:
+        if self._object_resolver_worker is not None:
+            return
+        self.panel.set_lookup_busy(True)
+        worker = ObjectResolverWorker(query, self)
+        self._object_resolver_worker = worker
+        worker.resolved.connect(self._on_object_resolved)
+        worker.failed.connect(self._on_object_lookup_failed)
+        worker.finished.connect(self._finish_object_lookup)
+        worker.start()
+
+    @pyqtSlot(object)
+    def _on_object_resolved(self, result) -> None:
+        self.panel.set_lookup_result(result)
+        self.set_target_coordinates(result.name, result.ra_hours, result.dec_degrees)
+        # Shell routes this to ImagingPage, which makes the same target visible
+        # in Capture and arms (but does not execute) the Telescope slew button.
+        self.target_resolved.emit(result)
+
+    @pyqtSlot(str)
+    def _on_object_lookup_failed(self, message: str) -> None:
+        self.panel.set_lookup_error(message)
+
+    def _finish_object_lookup(self) -> None:
+        self.panel.set_lookup_busy(False)
+        worker = self._object_resolver_worker
+        self._object_resolver_worker = None
+        if worker is not None:
+            worker.deleteLater()
+
+    def save_layout(self) -> None:
+        self.panel.save_layout()
+
+    def shutdown(self) -> None:
+        if self._object_resolver_worker is not None:
+            self._object_resolver_worker.wait(9000)  # resolver request timeout is 8 seconds
+            self._object_resolver_worker = None
 
     @pyqtSlot(str, int, int, float)
     def _on_progress(self, _obj: str, done: int, total: int, eta_s: float) -> None:

@@ -20,16 +20,6 @@ _DEFAULTS: dict[str, Any] = {
     "alpaca": {
         "host": "",
         "port": 32323,  # Alpaca HTTP port (4700 is the native JSON-RPC port)
-        # Connection profiles — one per network situation. "host"/"port" above
-        # always mirror the active profile (kept for back-compat: every device
-        # wrapper reads them). "field_ap" is pre-set to the Seestar's fixed
-        # address when it runs its own access point (see docs/field_connectivity.md).
-        "profile": "home",
-        "profiles": {
-            "home": {"host": "", "port": 32323},
-            "field_ap": {"host": "10.0.0.1", "port": 32323},
-            "hotspot": {"host": "", "port": 32323},
-        },
     },
     "sessions_path": str(Path.home() / "Argos" / "sessions"),
     "observer": {
@@ -38,6 +28,13 @@ _DEFAULTS: dict[str, Any] = {
         "latitude": 0.0,
         "longitude": 0.0,
         "elevation": 0.0,
+    },
+    "site": {
+        "name": "",
+        "latitude": 0.0,
+        "longitude": 0.0,
+        "elevation": 0.0,
+        "favorites": [],
     },
     "ui": {
         "log_level": "INFO",
@@ -64,13 +61,14 @@ _DEFAULTS: dict[str, Any] = {
         "adc_bits": 12,
         "full_well_adu": 60000,
         "linearity_max_adu": 50000,
-        "egain_table": {},  # {gain_value: e-/ADU}; empty → driver/IMX585 lookup
+        "egain_table": {},  # {gain_value: e-/ADU}; empty → driver/sensor reference lookup
     },
     # Plate-solving (ASTAP) + the live auto-solve policy. See
     # docs/photometry_plan.md §4/§8. Empty astap_path/database → auto-detect.
     "astrometry": {
         "astap_path": "",
         "database": "",
+        "database_path": "",  # optional ASTAP star-database directory (-d)
         "downsample": 2,
         "search_radius_deg": 30,  # thorough/manual solve (around a hint)
         "use_scale_hint": True,
@@ -100,6 +98,9 @@ _DEFAULTS: dict[str, Any] = {
         # derives it from the light curve after ten valid points; a numeric
         # value is an observer-approved systematic floor in magnitudes.
         "systematic_floor_mag": None,
+    },
+    "diagnostics": {
+        "enabled": True,  # per-frame JSONL flight recorder inside each session
     },
 }
 
@@ -136,6 +137,8 @@ class Config:
                 on_disk = json.load(f)
             data = _deep_merge(_DEFAULTS, on_disk)
             _migrate_camera_keys(data)
+            _migrate_legacy_site(data, on_disk)
+            _migrate_alpaca_profiles(data, on_disk)
             logger.debug("Config loaded from %s", _CONFIG_FILE)
             return cls(data)
         except Exception as exc:
@@ -247,3 +250,42 @@ def _migrate_camera_keys(data: dict) -> None:
     if moved:
         hardware["overrides"] = moved
         logger.info("Migrated tuned camera settings to hardware.overrides: %s", sorted(moved))
+
+
+def _migrate_legacy_site(data: dict, on_disk: dict) -> None:
+    """Promote pre-0.4 site coordinates nested under ``observer`` once.
+
+    Earlier defaults exposed these values under ``observer`` although the
+    capture pipeline reads ``site.*``.  Never overwrite an explicit modern
+    site block, even when its values are zero (zero is a valid coordinate).
+    """
+    if "site" in on_disk:
+        return
+    observer = data.get("observer") or {}
+    values = {key: observer.get(key) for key in ("latitude", "longitude", "elevation")}
+    if any(value not in (None, 0, 0.0) for value in values.values()):
+        site = data.setdefault("site", {})
+        site.update(values)
+        logger.info("Migrated legacy observer coordinates to site settings")
+
+
+def _migrate_alpaca_profiles(data: dict, on_disk: dict) -> None:
+    """Flatten pre-0.4.1 network profiles to one active IP/port endpoint."""
+    old = on_disk.get("alpaca") or {}
+    profiles = old.get("profiles")
+    if not isinstance(profiles, dict):
+        return
+    selected = profiles.get(old.get("profile", "home"), {})
+    if not isinstance(selected, dict):
+        return
+    alpaca = data.setdefault("alpaca", {})
+    # An explicitly typed modern endpoint always wins over profile data.
+    if not old.get("host") and selected.get("host"):
+        alpaca["host"] = str(selected["host"])
+    # ``port`` was always populated by the old defaults, so the selected
+    # profile is the only reliable source for a non-standard legacy port.
+    if selected.get("port"):
+        alpaca["port"] = int(selected["port"])
+    alpaca.pop("profile", None)
+    alpaca.pop("profiles", None)
+    logger.info("Migrated Alpaca network profiles to one IP/port endpoint")

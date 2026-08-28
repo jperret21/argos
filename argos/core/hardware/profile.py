@@ -40,9 +40,8 @@ class TelescopeProfile:
             the only source of the focal ratio.
         focal_length_mm: Written to FITS ``FOCALLEN``, and the denominator of
             the plate scale.
-        sensor: Sensor model name, written to FITS ``INSTRUME``. The EGAIN and
-            read-noise curves are still keyed off the IMX585 module; moving
-            them behind this name is the remaining step of the migration.
+        sensor: Sensor model name, written to FITS ``INSTRUME`` and used to
+            select the matching fallback EGAIN/read-noise reference curve.
         pixel_size_um: Unbinned physical pixel pitch, FITS ``XPIXSZ``/``YPIXSZ``.
         sensor_width_px: Full-frame width. A *fallback* only — the Alpaca
             driver's ``CameraXSize`` wins at connect.

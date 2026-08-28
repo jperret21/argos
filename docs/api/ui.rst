@@ -71,11 +71,6 @@ Panels
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: argos.ui.panels.photometry_setup_window
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 .. automodule:: argos.ui.panels.photometry_window
    :members:
    :undoc-members:
@@ -120,11 +115,6 @@ Widgets
    :show-inheritance:
 
 .. automodule:: argos.ui.widgets.mount_dock
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. automodule:: argos.ui.widgets.filterwheel_dock
    :members:
    :undoc-members:
    :show-inheritance:

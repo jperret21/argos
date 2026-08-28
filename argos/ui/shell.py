@@ -1,11 +1,12 @@
 """Shell — the Argos main window. NINA-style: the night happens in ONE screen.
 
-    Equipment — connect the Seestar devices + the Stellarium server
-                (a 2-minute setup stop; mode id "connect" for back-compat)
-    Capture   — THE screen: hero image, camera + sequencer, mount goto,
-                focuser + V-curve, photometry overlays and the live curve
-    Analyze   — post-prod: reload curves, vetting, AAVSO export
-    Settings  — observer, site, paths, appearance
+The main workflow is:
+
+* **Equipment** — connect the Seestar devices and Stellarium server.
+* **Capture** — live image, camera, mount, focus and photometry workspace.
+* **Plan** — target lookup, altitude preview and observing sequences.
+* **Analyze** — reload, vet and export saved photometry.
+* **Settings** — observer, site, data paths and appearance.
 
 The session layer owns the hardware (WS5): ``DeviceSession`` holds the device
 handles, pollers and the Stellarium server; ``AcquisitionEngine`` holds the
@@ -21,10 +22,14 @@ from __future__ import annotations
 
 import base64
 import logging
+from pathlib import Path
 
-from PyQt6.QtCore import QByteArray, Qt
-from PyQt6.QtGui import QAction, QCloseEvent, QKeySequence
+from PyQt6.QtCore import QByteArray, Qt, QUrl
+from PyQt6.QtGui import QAction, QCloseEvent, QDesktopServices, QKeySequence, QPixmap
 from PyQt6.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
+    QLabel,
     QMainWindow,
     QStackedWidget,
     QVBoxLayout,
@@ -56,6 +61,7 @@ logger = logging.getLogger(__name__)
 _CFG_GEOMETRY = "ui.shell.geometry"
 _CFG_STATE = "ui.shell.state"
 _CFG_MODE = "ui.shell.mode"
+_PROJECT_URL = "https://github.com/jperret21/argos"
 
 #: Modes that need hardware to be useful. Devices are never connected at
 #: startup, so restoring one of these would land the user on a dead screen —
@@ -160,6 +166,8 @@ class Shell(QMainWindow):
         plan = self._sequencer.panel
         camera.object_name_changed.connect(plan.set_object_name)
         plan.object_name_changed.connect(self._on_sequence_object_changed)
+        self._acquisition.target_coordinates_changed.connect(self._sequencer.set_target_coordinates)
+        self._sequencer.target_resolved.connect(self._acquisition.set_catalogue_target)
 
     def _on_sequence_object_changed(self, object_name: str) -> None:
         camera = self._acquisition._camera_dock
@@ -192,6 +200,19 @@ class Shell(QMainWindow):
         quit_action.setShortcut(QKeySequence.StandardKey.Quit)
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
+
+        # Small, intentionally plain resource menu next to File: opening the
+        # manual or checking the version must not require hunting through a
+        # scientific workflow menu.
+        more_menu = bar.addMenu("More")
+        documentation = QAction("Documentation & website", self)
+        documentation.setToolTip("Open the Argos documentation and project website")
+        documentation.triggered.connect(self._open_project_website)
+        more_menu.addAction(documentation)
+        more_menu.addSeparator()
+        about = QAction("About & credits", self)
+        about.triggered.connect(self._show_about)
+        more_menu.addAction(about)
 
         view = bar.addMenu("View")
         # Derived from the sidebar's MODES tuple — one source of truth, so a
@@ -243,11 +264,6 @@ class Shell(QMainWindow):
         rerun.setToolTip("Re-run differential photometry over a folder of saved subs")
         rerun.triggered.connect(lambda: self._acquisition.rerun_subs())
         photometry.addAction(rerun)
-
-        help_menu = bar.addMenu("Help")
-        about = QAction("About Argos", self)
-        about.triggered.connect(self._show_about)
-        help_menu.addAction(about)
 
     def _open_fits_from_menu(self) -> None:
         self._sidebar.select("capture")
@@ -396,10 +412,12 @@ class Shell(QMainWindow):
         # The Capture page owns its own dockable workspace (WS9a) — persist it
         # alongside the shell's own dock state.
         self._acquisition.save_layout()
+        self._sequencer.save_layout()
 
     def _reset_layout(self) -> None:
         self._config.set(_CFG_GEOMETRY, None)
         self._config.set(_CFG_STATE, None)
+        self._config.set("ui.sequencer.layout", None)
         self.statusBar().showMessage("Window layout will reset on next launch.", 4000)
 
     # ------------------------------------------------------------------
@@ -418,10 +436,80 @@ class Shell(QMainWindow):
         dialog.exec()
 
     def _show_about(self) -> None:
-        self.statusBar().showMessage(
-            f"Argos v{self.APP_VERSION} — ZWO Seestar controller (GPL v3)",
-            4000,
+        """Show the branded About window with credits and project links."""
+        self._build_about_dialog().exec()
+
+    def _build_about_dialog(self) -> QDialog:
+        """Create the About dialog separately so it stays easy to inspect/test."""
+        dialog = QDialog(self)
+        dialog.setObjectName("about_dialog")
+        dialog.setWindowTitle("About Argos")
+        dialog.setMinimumWidth(460)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(32, 28, 32, 24)
+        layout.setSpacing(10)
+
+        logo = QLabel()
+        logo.setObjectName("about_logo")
+        logo.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        image = QPixmap(str(Path(__file__).parent / "assets" / "logo.png"))
+        if not image.isNull():
+            logo.setPixmap(
+                image.scaled(
+                    104,
+                    104,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+        layout.addWidget(logo)
+
+        title = QLabel("Argos")
+        title.setObjectName("about_title")
+        title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        title.setStyleSheet("font-size: 26px; font-weight: 700; background: transparent;")
+        layout.addWidget(title)
+
+        version = QLabel(f"Version {self.APP_VERSION}")
+        version.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        version.setStyleSheet("background: transparent;")
+        layout.addWidget(version)
+
+        description = QLabel(
+            "Scientific acquisition and differential photometry for ZWO Seestar telescopes."
         )
+        description.setWordWrap(True)
+        description.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        description.setStyleSheet("background: transparent;")
+        layout.addWidget(description)
+
+        credits = QLabel(
+            "<b>Credits</b><br>"
+            "Created and maintained by Jules Perret.<br><br>"
+            "Built with Python, PyQt6, NumPy, Astropy, pyqtgraph and ASCOM Alpaca.<br><br>"
+            "Copyright © 2026 Argos contributors · GNU GPL v3 or later."
+        )
+        credits.setObjectName("about_credits")
+        credits.setWordWrap(True)
+        credits.setTextFormat(Qt.TextFormat.RichText)
+        credits.setStyleSheet("background: transparent;")
+        layout.addWidget(credits)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        website = buttons.addButton(
+            "Documentation & website", QDialogButtonBox.ButtonRole.ActionRole
+        )
+        website.clicked.connect(self._open_project_website)
+        buttons.rejected.connect(dialog.reject)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+        return dialog
+
+    def _open_project_website(self) -> None:
+        """Open the public manual/project page in the user's web browser."""
+        if not QDesktopServices.openUrl(QUrl(_PROJECT_URL)):
+            self.statusBar().showMessage("Could not open the Argos website.", 4000)
 
     # ------------------------------------------------------------------
     # Close
@@ -430,6 +518,8 @@ class Shell(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         # Order matters: stop the capture workers first (they hold device
         # references), then the session's pollers + Stellarium server.
+        self._configuration.shutdown()
+        self._sequencer.shutdown()
         self._acquisition.shutdown()
         self._session.shutdown()
         self._network_monitor.stop()
