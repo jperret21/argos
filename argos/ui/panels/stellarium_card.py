@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QCheckBox,
     QLabel,
     QPushButton,
     QSpinBox,
@@ -39,23 +40,25 @@ class StellariumCard(QGroupBox):
 
     start_server_requested = pyqtSignal(str, int)
     stop_server_requested = pyqtSignal()
+    online_target_lookup_changed = pyqtSignal(bool)
 
     def __init__(
         self,
         host: str = "127.0.0.1",
         tcp_port: int = 10001,
+        online_target_lookup: bool = False,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__("Stellarium", parent)
         self._host = host
         self._server_running = False
-        self._build_ui(tcp_port)
+        self._build_ui(tcp_port, online_target_lookup)
 
     # ------------------------------------------------------------------
     # UI
     # ------------------------------------------------------------------
 
-    def _build_ui(self, tcp_port: int) -> None:
+    def _build_ui(self, tcp_port: int, online_target_lookup: bool) -> None:
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 12, 8, 8)
         outer.setSpacing(8)
@@ -92,10 +95,20 @@ class StellariumCard(QGroupBox):
         status_row.addWidget(self._client_lbl)
         outer.addLayout(status_row)
 
+        self._online_lookup_chk = QCheckBox("Look up target names online after a GoTo")
+        self._online_lookup_chk.setChecked(online_target_lookup)
+        self._online_lookup_chk.setToolTip(
+            "When no local catalogue match exists, send the GoTo coordinates to CDS/SIMBAD "
+            "to suggest a target name. Argos always asks before changing FITS metadata."
+        )
+        self._online_lookup_chk.toggled.connect(self.online_target_lookup_changed)
+        outer.addWidget(self._online_lookup_chk)
+
         hint = _muted(
             "In Stellarium: Telescope Control plugin → add a telescope "
             "“External software or remote computer (TCP)” on this host/port, "
-            "then select an object and press Ctrl+1 (⌘+1) to slew."
+            "then select an object and press Ctrl+1 (⌘+1) to slew. A cached target name is "
+            "suggested locally; online lookup is optional."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet(

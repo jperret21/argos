@@ -78,3 +78,18 @@ appear in the completion menu without a network connection. A new planet or a
 partial first search still needs the NASA archive; repeat an online search to
 refresh a cached ephemeris. Settings → Local diagnostics lists the local cache
 locations and the online/offline behaviour of CDS, NASA and AAVSO catalogues.
+
+### Target naming and Stellarium
+
+The FITS `OBJECT` value identifies the imaged target, not the observing
+session. Selecting a Scientific source supplies its canonical catalogue name
+to Capture and the acquisition plan. For a planet, it is the **host star**
+(`HD 189733`), while the planet designation (`HD 189733 b`) and ephemeris are
+kept in `observation.json`.
+
+Stellarium's telescope protocol sends only ICRS coordinates. After a GoTo,
+Argos may offer nearby locally cached catalogue names, but it never changes
+`OBJECT` automatically: the observer must choose the intended candidate. In
+the Stellarium connection card, **Look up target names online after a GoTo**
+explicitly permits a CDS/SIMBAD query only when no local match exists; it is
+off by default and no session data are uploaded.

@@ -34,6 +34,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -57,6 +58,7 @@ class MountDock(design.Card):
     goto_clicked = pyqtSignal(float, float)  # ra_hours, dec_degrees
     object_lookup_requested = pyqtSignal(str)
     resolved_goto_clicked = pyqtSignal(float, float, str)
+    target_suggestion_accepted = pyqtSignal(object)
     sync_to_current_clicked = pyqtSignal()
     tracking_toggled = pyqtSignal(bool)
     tracking_rate_changed = pyqtSignal(int)
@@ -152,6 +154,33 @@ class MountDock(design.Card):
         self._resolved_slew_btn.setToolTip("Send the selected catalogue coordinates to the mount")
         self._resolved_slew_btn.clicked.connect(self._on_resolved_slew)
         outer.addLayout(design.button_row(self._resolved_slew_btn))
+
+        # A Stellarium GoTo carries coordinates but not the selected object's
+        # name.  A nearby catalogue result is only a proposal: changing FITS
+        # OBJECT/paths requires this explicit observer action.
+        self._target_suggestion = QWidget()
+        suggestion_l = QVBoxLayout(self._target_suggestion)
+        suggestion_l.setContentsMargins(0, design.SPACING_SM, 0, 0)
+        suggestion_l.setSpacing(design.SPACING_SM)
+        self._suggestion_label = design.MutedLabel(
+            "Catalogue candidate after a Stellarium GoTo — confirm before using it."
+        )
+        self._suggestion_label.setWordWrap(True)
+        suggestion_l.addWidget(self._suggestion_label)
+        self._suggestion_combo = QComboBox()
+        suggestion_l.addWidget(self._suggestion_combo)
+        self._use_suggestion_btn = design.SecondaryButton("Use as target name")
+        self._use_suggestion_btn.setToolTip(
+            "Use this canonical catalogue name for Capture, the plan and FITS OBJECT"
+        )
+        self._use_suggestion_btn.clicked.connect(self._accept_target_suggestion)
+        self._dismiss_suggestion_btn = design.SecondaryButton("Ignore")
+        self._dismiss_suggestion_btn.clicked.connect(self._target_suggestion.hide)
+        suggestion_l.addLayout(
+            design.button_row(self._use_suggestion_btn, self._dismiss_suggestion_btn)
+        )
+        self._target_suggestion.hide()
+        outer.addWidget(self._target_suggestion)
 
         outer.addWidget(design.horizontal_divider())
 
@@ -312,6 +341,37 @@ class MountDock(design.Card):
         self._lookup_result.setText(message)
         self._resolved_slew_btn.setEnabled(False)
 
+    def set_target_suggestion_busy(self, busy: bool) -> None:
+        """Show the small non-blocking state used after a Stellarium GoTo."""
+        if busy:
+            self._suggestion_label.setText("Checking a local catalogue match…")
+            self._suggestion_combo.hide()
+            self._use_suggestion_btn.hide()
+            self._dismiss_suggestion_btn.hide()
+            self._target_suggestion.show()
+
+    def set_target_suggestions(self, candidates) -> None:
+        """Present coordinate-near catalogue candidates for explicit selection."""
+        self._suggestion_combo.clear()
+        if not candidates:
+            self._target_suggestion.hide()
+            return
+        for candidate in candidates:
+            item = candidate.object
+            type_suffix = f" · {item.object_type}" if item.object_type else ""
+            self._suggestion_combo.addItem(
+                f"{item.name}{type_suffix} — {candidate.separation_arcsec:.1f}″ away", item
+            )
+        plural = "s" if len(candidates) != 1 else ""
+        self._suggestion_label.setText(
+            f"{len(candidates)} catalogue candidate{plural} near the Stellarium GoTo. "
+            "Choose one only if it is the intended target."
+        )
+        self._suggestion_combo.show()
+        self._use_suggestion_btn.show()
+        self._dismiss_suggestion_btn.show()
+        self._target_suggestion.show()
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
@@ -329,6 +389,12 @@ class MountDock(design.Card):
                 self._resolved_object.dec_degrees,
                 self._resolved_object.name,
             )
+
+    def _accept_target_suggestion(self) -> None:
+        result = self._suggestion_combo.currentData()
+        if result is not None:
+            self.target_suggestion_accepted.emit(result)
+            self._target_suggestion.hide()
 
     def _on_park_clicked(self) -> None:
         """Confirm before parking — it physically closes the Seestar arm and

@@ -320,6 +320,9 @@ class Shell(QMainWindow):
         card = self._connection.stellarium_card
         card.start_server_requested.connect(self._session.start_stellarium)
         card.stop_server_requested.connect(self._session.stop_stellarium)
+        card.online_target_lookup_changed.connect(
+            lambda enabled: self._config.set("stellarium.online_target_lookup", enabled)
+        )
         self._session.stellarium_state.connect(card.set_server_state)
         self._session.stellarium_clients.connect(card.set_client_count)
         self._session.stellarium_target.connect(self._on_stellarium_target)
@@ -332,6 +335,11 @@ class Shell(QMainWindow):
     def _on_stellarium_target(self, ra_hours: float, dec_degrees: float) -> None:
         self._connection.stellarium_card.flash_goto(ra_hours, dec_degrees)
         self._acquisition.goto_target(ra_hours, dec_degrees, label="goto")
+        self._acquisition.suggest_target_from_coordinates(
+            ra_hours,
+            dec_degrees,
+            allow_network=bool(self._config.get("stellarium.online_target_lookup", False)),
+        )
 
     def _on_stellarium_error(self, message: str) -> None:
         self._connection.stellarium_card.set_server_state(False, "✗  error")

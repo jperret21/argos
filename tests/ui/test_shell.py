@@ -57,6 +57,7 @@ def test_shell_three_mode_walkthrough() -> None:
         assert not hasattr(connection, "_profile_combo")
         assert connection._host_edit.placeholderText() == "192.168.x.x"
         assert connection._port_spin.minimum() == 1
+        assert not connection.stellarium_card._online_lookup_chk.isChecked()
 
         # The planner mirrors Capture's modular workspace: the centre table is
         # stable while search, visibility and controls are true movable docks.
@@ -238,6 +239,12 @@ def test_shell_three_mode_walkthrough() -> None:
         assert seq_page.panel.to_plan().object_name == "T CrB"
         seq_page.panel.set_object_name("RR Lyr", emit=True)
         assert page._camera_dock.params().object_name == "RR Lyr"
+        page._mount_dock.set_target_suggestions(
+            [type("Candidate", (), {"object": resolved, "separation_arcsec": 0.2})()]
+        )
+        page._mount_dock._use_suggestion_btn.click()
+        assert page._camera_dock.params().object_name == "HD 189733"
+        assert seq_page.panel.to_plan().object_name == "HD 189733"
         plan = seq_page.panel.to_plan()
         assert len(plan.steps) >= 1
         assert plan.steps[0].count > 0

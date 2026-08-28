@@ -14,7 +14,10 @@ when used by the UI.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import csv
+from io import StringIO
 import json
+import math
 from pathlib import Path
 import re
 from urllib.parse import quote
@@ -23,6 +26,7 @@ import xml.etree.ElementTree as ET
 import requests
 
 _SESAME_URL = "https://cds.unistra.fr/cgi-bin/nph-sesame/-oxp/SNV?"
+_SIMBAD_TAP_URL = "https://simbad.cds.unistra.fr/simbad/sim-tap/sync"
 _CACHE_PATH = Path.home() / "Argos" / "cache" / "object_resolver.json"
 
 
@@ -43,6 +47,14 @@ class ResolvedObject:
     @property
     def ra_hours(self) -> float:
         return self.ra_degrees / 15.0
+
+
+@dataclass(frozen=True)
+class NearbyObject:
+    """A catalogue candidate near a requested ICRS coordinate."""
+
+    object: ResolvedObject
+    separation_arcsec: float
 
 
 def _cache_key(query: str) -> str:
@@ -76,6 +88,124 @@ def _write_cache(path: Path, cache: dict[str, dict]) -> None:
     except OSError:
         # A read-only home directory must not make an otherwise valid lookup fail.
         pass
+
+
+def _angular_separation_arcsec(
+    ra_a_deg: float, dec_a_deg: float, ra_b_deg: float, dec_b_deg: float
+) -> float:
+    """Great-circle separation, robust close to the poles."""
+    ra_a, dec_a, ra_b, dec_b = map(math.radians, (ra_a_deg, dec_a_deg, ra_b_deg, dec_b_deg))
+    cosine = math.sin(dec_a) * math.sin(dec_b) + math.cos(dec_a) * math.cos(dec_b) * math.cos(
+        ra_a - ra_b
+    )
+    return math.degrees(math.acos(max(-1.0, min(1.0, cosine)))) * 3600.0
+
+
+def nearby_cached_objects(
+    ra_degrees: float,
+    dec_degrees: float,
+    *,
+    radius_arcsec: float = 90.0,
+    cache_path: Path = _CACHE_PATH,
+) -> list[NearbyObject]:
+    """Return cached catalogue objects around a coordinate, nearest first."""
+    matches: list[NearbyObject] = []
+    seen: set[tuple[str, float, float]] = set()
+    for row in _read_cache(cache_path).values():
+        if not isinstance(row, dict):
+            continue
+        try:
+            resolved = ResolvedObject(**row)
+        except (TypeError, ValueError):
+            continue
+        key = (resolved.name, resolved.ra_degrees, resolved.dec_degrees)
+        if key in seen:
+            continue
+        seen.add(key)
+        separation = _angular_separation_arcsec(
+            ra_degrees, dec_degrees, resolved.ra_degrees, resolved.dec_degrees
+        )
+        if separation <= radius_arcsec:
+            matches.append(NearbyObject(resolved, separation))
+    return sorted(matches, key=lambda item: item.separation_arcsec)
+
+
+def _nearby_from_simbad(
+    ra_degrees: float, dec_degrees: float, radius_arcsec: float, timeout_s: float
+) -> list[NearbyObject]:
+    """Query a small SIMBAD cone through its documented TAP service."""
+    radius_deg = radius_arcsec / 3600.0
+    query = (
+        "SELECT TOP 12 main_id, ra, dec, otype FROM basic "
+        "WHERE CONTAINS(POINT('ICRS', ra, dec), "
+        f"CIRCLE('ICRS', {ra_degrees:.9f}, {dec_degrees:.9f}, {radius_deg:.9f})) = 1"
+    )
+    try:
+        response = requests.get(
+            _SIMBAD_TAP_URL,
+            params={"request": "doQuery", "lang": "adql", "format": "csv", "query": query},
+            timeout=timeout_s,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise ObjectResolutionError("Catalogue unavailable for target-name suggestion.") from exc
+
+    matches: list[NearbyObject] = []
+    try:
+        rows = csv.DictReader(StringIO(response.text))
+        for row in rows:
+            name = (row.get("main_id") or "").strip()
+            if not name:
+                continue
+            resolved = ResolvedObject(
+                name=name,
+                ra_degrees=float(row["ra"]),
+                dec_degrees=float(row["dec"]),
+                object_type=(row.get("otype") or "").strip(),
+                source="SIMBAD coordinate search",
+            )
+            separation = _angular_separation_arcsec(
+                ra_degrees, dec_degrees, resolved.ra_degrees, resolved.dec_degrees
+            )
+            matches.append(NearbyObject(resolved, separation))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ObjectResolutionError(
+            "Catalogue returned an invalid target-name suggestion."
+        ) from exc
+    return sorted(matches, key=lambda item: item.separation_arcsec)
+
+
+def resolve_nearby_objects(
+    ra_degrees: float,
+    dec_degrees: float,
+    *,
+    radius_arcsec: float = 90.0,
+    allow_network: bool = True,
+    timeout_s: float = 8.0,
+    cache_path: Path = _CACHE_PATH,
+) -> list[NearbyObject]:
+    """Find names near a Stellarium target, preferring the local cache.
+
+    The caller must show the returned candidates and let the observer choose.
+    A coordinate is not a unique object designation, particularly in a dense
+    stellar field.  If online lookup was not explicitly allowed, this is a
+    strictly offline cache lookup.
+    """
+    if not (0.0 <= ra_degrees < 360.0 and -90.0 <= dec_degrees <= 90.0):
+        raise ObjectResolutionError("Invalid ICRS coordinates for target-name suggestion.")
+    cached = nearby_cached_objects(
+        ra_degrees, dec_degrees, radius_arcsec=radius_arcsec, cache_path=cache_path
+    )
+    if cached or not allow_network:
+        return cached
+    matches = _nearby_from_simbad(ra_degrees, dec_degrees, radius_arcsec, timeout_s)
+    # Preserve a successful reverse lookup for a later offline session.
+    cache = _read_cache(cache_path)
+    for match in matches:
+        cache[_cache_key(match.object.name)] = asdict(match.object)
+    if matches:
+        _write_cache(cache_path, cache)
+    return matches
 
 
 def cached_object_suggestions(

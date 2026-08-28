@@ -102,7 +102,12 @@ class ConnectionPage(QWidget):
         advanced.addWidget(design.SectionLabel("Planetarium"))
         host = str(self._config.get("stellarium.host", "127.0.0.1"))
         port = int(self._config.get("stellarium.port", 10001))
-        self._stellarium_card = StellariumCard(host=host, tcp_port=port)
+        online_target_lookup = bool(self._config.get("stellarium.online_target_lookup", False))
+        self._stellarium_card = StellariumCard(
+            host=host,
+            tcp_port=port,
+            online_target_lookup=online_target_lookup,
+        )
         advanced.addWidget(self._stellarium_card)
         self._advanced.hide()
         body.addWidget(self._advanced)

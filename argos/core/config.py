@@ -104,6 +104,14 @@ _DEFAULTS: dict[str, Any] = {
         # sent anywhere; observers explicitly choose whether to create it.
         "enabled": False,
     },
+    "stellarium": {
+        "host": "127.0.0.1",
+        "port": 10001,
+        # A Stellarium goto contains a sky coordinate.  Never send that
+        # coordinate to a remote catalogue without an explicit opt-in; local
+        # cached target matches remain available regardless of this setting.
+        "online_target_lookup": False,
+    },
 }
 
 

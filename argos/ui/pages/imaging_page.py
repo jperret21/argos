@@ -102,7 +102,7 @@ from argos.ui.widgets.star_info_card import StarInfoCard
 from argos.ui.widgets.statistics_dock import StatisticsDock
 from argos.workers.camera_service import CameraState
 from argos.workers.preview_processor import PreviewProcessor
-from argos.workers.object_resolver_worker import ObjectResolverWorker
+from argos.workers.object_resolver_worker import NearbyObjectResolverWorker, ObjectResolverWorker
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +173,7 @@ class ImagingPage(QWidget):
         self._batch_worker = None  # WS7 batch re-run (QThread) + its progress dialog
         self._batch_dialog: QProgressDialog | None = None
         self._object_resolver_worker: ObjectResolverWorker | None = None
+        self._nearby_object_resolver_worker: NearbyObjectResolverWorker | None = None
 
         self._build_ui()
         # The engine reads capture parameters through these providers — the
@@ -554,6 +555,7 @@ class ImagingPage(QWidget):
         self._mount_dock.goto_clicked.connect(self._on_goto)
         self._mount_dock.object_lookup_requested.connect(self._lookup_object)
         self._mount_dock.resolved_goto_clicked.connect(self._goto_resolved_object)
+        self._mount_dock.target_suggestion_accepted.connect(self.set_catalogue_target)
         self._mount_dock.sync_to_current_clicked.connect(self._session.sync_current)
         self._mount_dock.tracking_toggled.connect(self._session.set_tracking)
         self._mount_dock.tracking_rate_changed.connect(self._session.set_tracking_rate)
@@ -1625,6 +1627,40 @@ class ImagingPage(QWidget):
         self._mount_dock.set_lookup_busy(False)
         worker = self._object_resolver_worker
         self._object_resolver_worker = None
+        if worker is not None:
+            worker.deleteLater()
+
+    def suggest_target_from_coordinates(
+        self, ra_h: float, dec_d: float, *, allow_network: bool = False
+    ) -> None:
+        """Offer, but never impose, a name for a Stellarium coordinate GoTo."""
+        if self._nearby_object_resolver_worker is not None:
+            return
+        self._mount_dock.set_target_suggestion_busy(True)
+        worker = NearbyObjectResolverWorker(ra_h, dec_d, allow_network, self)
+        self._nearby_object_resolver_worker = worker
+        worker.resolved.connect(self._on_nearby_objects_resolved)
+        worker.failed.connect(self._on_nearby_object_lookup_failed)
+        worker.finished.connect(self._finish_nearby_object_lookup)
+        worker.start()
+
+    @pyqtSlot(object)
+    def _on_nearby_objects_resolved(self, candidates) -> None:
+        self._mount_dock.set_target_suggestions(candidates)
+        if candidates:
+            self.log_message.emit(
+                "INFO",
+                f"Stellarium target-name suggestion: {len(candidates)} nearby catalogue candidate(s).",
+            )
+
+    @pyqtSlot(str)
+    def _on_nearby_object_lookup_failed(self, message: str) -> None:
+        self._mount_dock.set_target_suggestions([])
+        self.log_message.emit("WARN", f"Target-name suggestion: {message}")
+
+    def _finish_nearby_object_lookup(self) -> None:
+        worker = self._nearby_object_resolver_worker
+        self._nearby_object_resolver_worker = None
         if worker is not None:
             worker.deleteLater()
 

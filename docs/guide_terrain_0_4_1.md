@@ -73,8 +73,13 @@ au centre.
 4. Construire les étapes dans le tableau : type (Light/Dark/Flat/Bias), filtre,
    exposition, gain, nombre d'images et intervalle. Le temps estimé est une
    estimation ; prévoir une marge pour les téléchargements et l'autofocus.
-5. **Plan settings** permet les répétitions, la cadence d'autofocus, l'action de
-   fin et le nom d'objet. **Presets** enregistre/recharge un plan JSON.
+5. **Acquisition options** regroupe les réglages facultatifs : répétition,
+   cadence d'autofocus et action de fin. Le champ **Target name (FITS)** est
+   l'identifiant scientifique écrit dans `OBJECT`, les noms de fichiers et les
+   cibles de photométrie — ce n'est pas le nom de la session. Une recherche de
+   source le remplit ; pour un pointage Stellarium manuel, le renseigner ou
+   accepter une suggestion catalogue après vérification. **Presets**
+   enregistre/recharge un plan JSON.
 6. Lancer avec **Start sequence**. Pause termine l'image en cours puis bloque la
    suivante ; Stop interrompt la suite. La progression reste visible en haut et
    les images/courbes restent dans **Observe**.

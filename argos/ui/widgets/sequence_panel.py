@@ -283,24 +283,34 @@ class SequencePanel(QWidget):
         opts.setHorizontalSpacing(design.SPACING_MD)
         opts.setVerticalSpacing(design.SPACING_SM)
         opts.setColumnStretch(1, 1)
-        opts.addWidget(design.MutedLabel("Object"), 0, 0)
+        plan_l.addWidget(
+            design.MutedLabel(
+                "Optional run controls. A Scientific source fills the target name; "
+                "transit preparation also sets safe defaults here."
+            )
+        )
+        opts.addWidget(design.MutedLabel("Target name (FITS)"), 0, 0)
         self._object_edit = QLineEdit()
         self._object_edit.setPlaceholderText("M42, T CrB…")
+        self._object_edit.setToolTip(
+            "Target identifier written to FITS OBJECT and used for this run's target set. "
+            "It is not the observation-session name."
+        )
         self._object_edit.editingFinished.connect(self._on_object_edited)
         opts.addWidget(self._object_edit, 0, 1)
-        opts.addWidget(design.MutedLabel("Repeat ×"), 1, 0)
+        opts.addWidget(design.MutedLabel("Repeat plan"), 1, 0)
         self._repeat_spin = QSpinBox()
         self._repeat_spin.setRange(1, 999)
         self._repeat_spin.valueChanged.connect(self._refresh_estimate)
         opts.addWidget(self._repeat_spin, 1, 1)
-        opts.addWidget(design.MutedLabel("AF every"), 2, 0)
+        opts.addWidget(design.MutedLabel("Autofocus every"), 2, 0)
         self._af_spin = QSpinBox()
         self._af_spin.setRange(0, 999)
         self._af_spin.setSuffix(" frames (0=off)")
         opts.addWidget(self._af_spin, 2, 1)
-        self._af_filter_chk = QCheckBox("AF on filter change")
+        self._af_filter_chk = QCheckBox("Autofocus on filter change")
         opts.addWidget(self._af_filter_chk, 3, 0, 1, 2)
-        opts.addWidget(design.MutedLabel("When done"), 4, 0)
+        opts.addWidget(design.MutedLabel("End of run"), 4, 0)
         self._on_complete_combo = QComboBox()
         self._on_complete_combo.addItems(ON_COMPLETE_CHOICES)
         self._on_complete_combo.setToolTip(
@@ -461,7 +471,7 @@ class SequencePanel(QWidget):
 
         self._docks = {
             "source": make_dock("Scientific source", source_panel, object_name="sequencer.source"),
-            "plan": make_dock("Plan settings", plan_panel, object_name="sequencer.plan"),
+            "plan": make_dock("Acquisition options", plan_panel, object_name="sequencer.plan"),
             "visibility": make_dock(
                 "Target visibility",
                 visibility_panel,
@@ -489,7 +499,7 @@ class SequencePanel(QWidget):
         )
         for key, label in (
             ("source", "Scientific source"),
-            ("plan", "Plan settings"),
+            ("plan", "Acquisition options"),
             ("visibility", "Visibility"),
             ("presets", "Presets"),
             ("run", "Sequence control"),
