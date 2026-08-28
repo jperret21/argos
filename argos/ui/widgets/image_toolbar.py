@@ -31,6 +31,7 @@ class ImageToolbar(QWidget):
     """
 
     channel_changed = pyqtSignal(str)
+    palette_changed = pyqtSignal(str)
     open_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -77,6 +78,23 @@ class ImageToolbar(QWidget):
             lambda _index: self.channel_changed.emit(str(self._channel_combo.currentData()))
         )
         layout.addWidget(self._channel_combo)
+
+        layout.addWidget(_lbl("Palette:"))
+        self._palette_combo = QComboBox()
+        for label, key in (
+            ("Neutral", "neutral"),
+            ("Negative", "negative"),
+            ("Fire", "fire"),
+            ("Ice", "ice"),
+        ):
+            self._palette_combo.addItem(label, key)
+        self._palette_combo.setToolTip(
+            "False-colour display palette for inspecting faint detail and saturation."
+        )
+        self._palette_combo.currentIndexChanged.connect(
+            lambda _index: self.palette_changed.emit(str(self._palette_combo.currentData()))
+        )
+        layout.addWidget(self._palette_combo)
 
         layout.addStretch()
         layout.addWidget(_lbl("Preview only · FITS unchanged"))

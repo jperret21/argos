@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QPlainTextEdit,
     QPushButton,
     QSplitter,
     QVBoxLayout,
@@ -75,6 +76,17 @@ def read_fits_meta(path: str) -> dict:
         "CRVAL2",
         "CD1_1",
         "CD2_2",
+        "CCD-TEMP",
+        "HFD",
+        "FWHM",
+        "NSTARS",
+        "SKYLEVEL",
+        "PEAKADU",
+        "ECCENT",
+        "EGAIN",
+        "RDNOISE",
+        "AIRMASS",
+        "MOONSEP",
     )
     meta = {}
     try:
@@ -94,6 +106,16 @@ def read_fits_meta(path: str) -> dict:
     except Exception:
         pass
     return meta
+
+
+def read_fits_header_text(path: str) -> str:
+    """Return the complete primary FITS header for the read-only inspector."""
+    try:
+        from astropy.io import fits
+
+        return str(fits.getheader(path, 0))
+    except Exception:
+        return "FITS header unavailable"
 
 
 class AnalysisWindow(QMainWindow):
@@ -120,6 +142,7 @@ class AnalysisWindow(QMainWindow):
         self._solver: SolveWorker | None = None
         self._wcs = None  # platesolve.FrameWCS once solved
         self._meta: dict = {}  # header keywords
+        self._header_text = ""
 
         self._build_ui()
         self._wire()
@@ -157,6 +180,13 @@ class AnalysisWindow(QMainWindow):
         info_layout.addWidget(self._info_label)
         info_layout.addStretch()
 
+        self._header_panel = QPlainTextEdit()
+        self._header_panel.setReadOnly(True)
+        self._header_panel.setPlaceholderText("No FITS header loaded")
+        self._header_panel.setStyleSheet(
+            f"color:{theme.FG_MUTED}; font-family:{theme.FONT_MONO}; font-size:11px;"
+        )
+
         # Details stay available but do not compete with the image by default.
         self._right_tabs = QWidget()
         tab_layout = QVBoxLayout(self._right_tabs)
@@ -166,6 +196,7 @@ class AnalysisWindow(QMainWindow):
 
         self._tab_widget = QTabWidget()
         self._tab_widget.addTab(self._info_panel, "Image information")
+        self._tab_widget.addTab(self._header_panel, "FITS header")
         self._tab_widget.addTab(self._histogram, "Adjust image")
         tab_layout.addWidget(self._tab_widget)
 
@@ -218,6 +249,7 @@ class AnalysisWindow(QMainWindow):
 
     def _wire(self) -> None:
         self._toolbar.channel_changed.connect(self._on_channel)
+        self._toolbar.palette_changed.connect(self._viewer.set_palette)
         self._toolbar.open_requested.connect(self._on_open)
         self._histogram.stretch_changed.connect(self._viewer.set_stretch)
         self._histogram.auto_requested.connect(self._viewer.auto_stretch)
@@ -251,6 +283,8 @@ class AnalysisWindow(QMainWindow):
             return False
         self._raw = arr
         self._meta = read_fits_meta(path)
+        self._header_text = read_fits_header_text(path)
+        self._header_panel.setPlainText(self._header_text)
         self._selected_green = None
         self._viewer.clear_selection()
         self._wcs = None
@@ -289,6 +323,17 @@ class AnalysisWindow(QMainWindow):
             "OBSERVER",
             "SITENAME",
             "ORIGIN",
+            "CCD-TEMP",
+            "HFD",
+            "FWHM",
+            "NSTARS",
+            "SKYLEVEL",
+            "PEAKADU",
+            "ECCENT",
+            "EGAIN",
+            "RDNOISE",
+            "AIRMASS",
+            "MOONSEP",
         ):
             v = self._meta.get(k)
             if v:

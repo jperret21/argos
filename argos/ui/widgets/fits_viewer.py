@@ -105,6 +105,7 @@ class FitsViewer(QWidget):
         self._view.ui.menuBtn.hide()
         self._view.ui.histogram.hide()
         layout.addWidget(self._view)
+        self.set_palette("neutral")
 
         # Crosshair (toggleable) — only shown while the cursor is over the image
         # (it never parks in the centre at rest).
@@ -272,6 +273,16 @@ class FitsViewer(QWidget):
             autoHistogramRange=False,
             levels=(0, 255),
         )
+
+    def set_palette(self, palette: str) -> None:
+        """Apply a display-only mono/false-colour palette."""
+        colors = {
+            "neutral": [(0, 0, 0), (255, 255, 255)],
+            "negative": [(255, 255, 255), (0, 0, 0)],
+            "fire": [(0, 0, 0), (50, 0, 80), (190, 20, 20), (255, 150, 0), (255, 255, 210)],
+            "ice": [(0, 0, 0), (0, 20, 90), (0, 150, 220), (160, 240, 255), (255, 255, 210)],
+        }.get(palette, [(0, 0, 0), (255, 255, 255)])
+        self._view.setColorMap(pg.ColorMap(np.linspace(0.0, 1.0, len(colors)), colors))
 
     def _overlay_saturation(self, disp_u8: np.ndarray) -> np.ndarray:
         """Paint pixels at/above the full-well threshold red (display only)."""
