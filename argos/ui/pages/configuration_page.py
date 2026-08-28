@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -55,6 +55,8 @@ _DOWNSAMPLE = (("Auto", 0), ("1×", 1), ("2×", 2), ("3×", 3), ("4×", 4))
 
 class ConfigurationPage(QWidget):
     """Settings page. Each field writes straight back into ``Config``."""
+
+    telescope_profile_requested = pyqtSignal(str)
 
     def __init__(self, config: Config, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -516,11 +518,10 @@ class ConfigurationPage(QWidget):
         key = self._scope_combo.currentData()
         if not key:
             return
-        self._config.set(active.CFG_PROFILE, key)
-        entry = catalog.get(key)
-        if entry is not None:
-            overrides = self._config.get(active.CFG_OVERRIDES, {})
-            active.set_profile(active.apply_overrides(entry, overrides))
+        self.telescope_profile_requested.emit(str(key))
+
+    def sync_telescope_profile(self) -> None:
+        """Reflect the shared active instrument after a Connection/Settings change."""
         self._refresh_telescope_card()
 
     def _build_camera_card(self) -> "design.Card":

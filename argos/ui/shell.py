@@ -313,6 +313,10 @@ class Shell(QMainWindow):
         self._connection.disconnect_requested.connect(self._session.disconnect_device)
         self._connection.connect_all_requested.connect(self._session.connect_all)
         self._connection.disconnect_all_requested.connect(self._session.disconnect_all)
+        self._connection.telescope_profile_requested.connect(self._on_telescope_profile_requested)
+        self._configuration.telescope_profile_requested.connect(
+            self._on_telescope_profile_requested
+        )
         self._session.discovered_address.connect(self._connection.set_discovered_address)
         self._session.mount_mode.connect(self._status.set_mount_mode)
 
@@ -340,6 +344,11 @@ class Shell(QMainWindow):
             dec_degrees,
             allow_network=bool(self._config.get("stellarium.online_target_lookup", False)),
         )
+
+    def _on_telescope_profile_requested(self, key: str) -> None:
+        """Apply one telescope profile for all views, or restore both selectors."""
+        self._connection.apply_telescope_profile(key)
+        self._configuration.sync_telescope_profile()
 
     def _on_stellarium_error(self, message: str) -> None:
         self._connection.stellarium_card.set_server_state(False, "✗  error")

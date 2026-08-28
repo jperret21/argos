@@ -71,6 +71,18 @@ def test_shell_three_mode_walkthrough() -> None:
         assert connection._telescope_combo.count() >= 3
         assert connection._telescope_combo.currentData() == "s30pro"
         assert "f/5.3" in connection._telescope_specs.text()
+        s50_index = settings._scope_combo.findData("s50")
+        settings._scope_combo.setCurrentIndex(s50_index)
+        assert connection._telescope_combo.currentData() == "s50"
+        assert connection._telescope_specs.text().startswith("50")
+        s30pro_index = connection._telescope_combo.findData("s30pro")
+        connection._telescope_combo.setCurrentIndex(s30pro_index)
+        assert settings._scope_combo.currentData() == "s30pro"
+        connection.set_device_state("camera", "connected")
+        settings._scope_combo.setCurrentIndex(s50_index)
+        assert connection._telescope_combo.currentData() == "s30pro"
+        assert settings._scope_combo.currentData() == "s30pro"
+        connection.set_device_state("camera", "disconnected")
         # Connection intentionally has one physical endpoint, not opaque
         # network modes. Discovery fills the same IP/port fields.
         assert not hasattr(connection, "_profile_combo")

@@ -54,6 +54,7 @@ class ConnectionPage(QWidget):
     disconnect_requested = pyqtSignal(str)  # device_id
     connect_all_requested = pyqtSignal(str, int)
     disconnect_all_requested = pyqtSignal()
+    telescope_profile_requested = pyqtSignal(str)
 
     def __init__(self, config: Config, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -235,6 +236,29 @@ class ConnectionPage(QWidget):
         self._host_edit.setText(host)
         self._port_spin.setValue(port)
 
+    def apply_telescope_profile(self, key: str) -> bool:
+        """Make *key* the one active instrument, if equipment is idle.
+
+        Both Connection and Settings request a change through the Shell.  This
+        is the only mutation path so their controls cannot silently diverge.
+        """
+        profile = catalog.get(key)
+        if profile is None:
+            return False
+        if key != active.profile().key and any(
+            card._state in {"connected", "busy"} for card in self._cards.values()
+        ):
+            self._set_telescope_combo(active.profile().key)
+            logger.warning("Refused telescope profile change while equipment is connected")
+            return False
+
+        self._set_telescope_combo(key)
+        self._config.set(active.CFG_PROFILE, key)
+        overrides = self._config.get(active.CFG_OVERRIDES, {})
+        active.set_profile(active.apply_overrides(profile, overrides))
+        self._refresh_telescope_summary()
+        return True
+
     def _toggle_advanced(self) -> None:
         visible = not self._advanced.isVisible()
         self._advanced.setVisible(visible)
@@ -281,18 +305,22 @@ class ConnectionPage(QWidget):
             )
 
     def _on_telescope_changed(self) -> None:
-        """Persist and activate the physical instrument selected before connection."""
+        """Ask the Shell to apply the shared physical-instrument selection."""
         if self._loading:
             return
         key = self._telescope_combo.currentData()
-        profile = catalog.get(key)
-        if profile is None:
+        if not key:
             return
-        self._config.set(active.CFG_PROFILE, key)
-        overrides = self._config.get(active.CFG_OVERRIDES, {})
-        active.set_profile(active.apply_overrides(profile, overrides))
-        self._config.save()
-        self._refresh_telescope_summary()
+        self.telescope_profile_requested.emit(str(key))
+
+    def _set_telescope_combo(self, key: str) -> None:
+        """Reflect the active profile without feeding the shared-change signal."""
+        index = self._telescope_combo.findData(key)
+        if index < 0:
+            return
+        self._telescope_combo.blockSignals(True)
+        self._telescope_combo.setCurrentIndex(index)
+        self._telescope_combo.blockSignals(False)
 
     def _refresh_telescope_summary(self) -> None:
         """Show the scientific consequences of the selected instrument."""
