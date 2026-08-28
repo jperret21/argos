@@ -283,12 +283,7 @@ class SequencePanel(QWidget):
         opts.setHorizontalSpacing(design.SPACING_MD)
         opts.setVerticalSpacing(design.SPACING_SM)
         opts.setColumnStretch(1, 1)
-        plan_l.addWidget(
-            design.MutedLabel(
-                "Optional run controls. A Scientific source fills the target name; "
-                "transit preparation also sets safe defaults here."
-            )
-        )
+        plan_l.addWidget(design.MutedLabel("Optional run controls"))
         opts.addWidget(design.MutedLabel("Target name (FITS)"), 0, 0)
         self._object_edit = QLineEdit()
         self._object_edit.setPlaceholderText("M42, T CrB…")
