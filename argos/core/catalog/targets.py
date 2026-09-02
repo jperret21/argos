@@ -1,4 +1,4 @@
-"""Persistent target / comparison set for a session (docs/photometry_plan.md §5 B4).
+"""Persistent target / comparison set for a session (docsrc/photometry_plan.md §5 B4).
 
 Qt-free. The set is the night's selection: the variable target(s), the comparison
 stars, and any check stars, each with RA/Dec + catalog id so they can be projected

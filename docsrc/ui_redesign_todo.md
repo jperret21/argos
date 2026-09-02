@@ -136,11 +136,11 @@ NINA-inspired customization — the user composes their own night cockpit:
       stopped by explicit user disconnect or shutdown
 - [ ] Storage / battery / thermal indicators — DEFERRED to the hardware
       session: the NativeClient is not integrated anywhere yet and the
-      telemetry events aren't in docs/seestar_protocol.md; needs the real
+      telemetry events aren't in docsrc/seestar_protocol.md; needs the real
       Seestar to observe what the firmware actually sends
 - [x] theme.py alias layer retained intentionally (WS9c rebinds it from the
       Palette — it is now the compat surface, not dead code)
-- [ ] Update `docs/STATUS.md` + `docs/ui_design.md` to the session-layer
+- [ ] Update `docsrc/STATUS.md` + `docsrc/ui_design.md` to the session-layer
       architecture (docs pass)
 
 ### Screens polish (can ride along WS6–8)

@@ -1,6 +1,6 @@
 """The canonical green plane — one definition for the whole science stack.
 
-See ``docs/photometry_plan.md`` §1.4. Star detection, FWHM/HFD, ``measure_star_at``
+See ``docsrc/photometry_plan.md`` §1.4. Star detection, FWHM/HFD, ``measure_star_at``
 and the plate-solver all measure on the **green half-res plane**. Historically two
 slightly different greens were used (``metrics`` sampled G1 only, the solver used
 ``debayer.extract_plane(VIEW_G)`` = (G1+G2)/2). They shared the same pixel grid but

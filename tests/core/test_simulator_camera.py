@@ -3,7 +3,7 @@
 Exercises the real :class:`Camera` wrapper end-to-end the way a live session
 does: connect, read metadata, run the exposure state machine, download the
 frame, and push it through the display pipeline. Auto-skipped when the
-simulator is not running (see ``docs/simulator_testing.md``).
+simulator is not running (see ``docsrc/simulator_testing.md``).
 """
 
 from __future__ import annotations

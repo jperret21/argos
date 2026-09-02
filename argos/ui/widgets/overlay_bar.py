@@ -1,4 +1,4 @@
-"""Slim overlay-toggle bar under the image toolbar (docs/photometry_plan.md §5 B1).
+"""Slim overlay-toggle bar under the image toolbar (docsrc/photometry_plan.md §5 B1).
 
 Checkable chips — Grid · Stars · Variables · Comparisons · Targets — that show/hide
 the matching viewer layers. Chips are disabled until their data exists (a solve for

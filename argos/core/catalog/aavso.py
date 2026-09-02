@@ -14,7 +14,7 @@ degrees, VSP returns sexagesimal, so both are handled here, once.
 (``~/.argos/cache/catalog``); a fresh entry short-circuits the network, and a
 stale one is served when the network is down — so a field previously observed
 (or pre-fetched at home) keeps its variables/comparisons with no internet in
-the field (docs/field_connectivity.md). Query coordinates are quantised to a
+the field (docsrc/field_connectivity.md). Query coordinates are quantised to a
 small grid so re-solves of the same field land on the same cache entry; the
 cone radius is padded by the worst-case quantisation shift to compensate.
 """

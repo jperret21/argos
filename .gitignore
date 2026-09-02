@@ -45,11 +45,11 @@ CLAUDE.md
 AGENTS.md
 .claude/
 handoff.md
-docs/plan_*.md
-docs/redesign_*.md
+docsrc/plan_*.md
+docsrc/redesign_*.md
 
-# Sphinx build output (regenerated from docs/ sources)
-docs/_build/
+# Sphinx build output (regenerated from docsrc/ sources)
+docsrc/_build/
 
 # Tests
 .pytest_cache/

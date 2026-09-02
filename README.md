@@ -112,7 +112,7 @@ Plate solving needs [ASTAP](https://www.hnsky.org/astap.htm) installed
 separately — Argos finds it automatically but never bundles it.
 
 Before a first observing session, read the French
-[0.4.1 field guide](docs/guide_terrain_0_4_1.md): site setup, ASTAP, connection,
+[0.4.1 field guide](docsrc/guide_terrain_0_4_1.md): site setup, ASTAP, connection,
 planning, dockable workspaces, photometry roles, exports and the field-test checklist.
 
 No telescope? Argos runs against the ASCOM Alpaca simulator:
@@ -124,7 +124,7 @@ uv run python scripts/mock_alpaca_server.py
 uv run python main.py
 ```
 
-See [`docs/simulator_testing.md`](docs/simulator_testing.md) for the full guide.
+See [`docsrc/simulator_testing.md`](docsrc/simulator_testing.md) for the full guide.
 
 ## Privacy and field diagnostics
 
@@ -173,7 +173,7 @@ uv sync --extra dev
 uv run --extra dev pytest
 ```
 
-See [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) to get started.
+See [`docsrc/CONTRIBUTING.md`](docsrc/CONTRIBUTING.md) to get started.
 
 ## License
 

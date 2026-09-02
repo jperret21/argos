@@ -1,4 +1,4 @@
-"""Aperture photometry on the green plane (docs/photometry_plan.md §6 C1).
+"""Aperture photometry on the green plane (docsrc/photometry_plan.md §6 C1).
 
 A circular aperture + a sky annulus → background-subtracted flux, instrumental
 magnitude and a CCD-equation uncertainty. Pure numpy, Qt-free; coordinates are

@@ -13,7 +13,7 @@ concurrency:
 jobs:
   test:
     # macOS is the only platform Argos is validated on today. A Linux job
-    # lands with the .deb work (see docs/release_0_4_1.md), not before —
+    # lands with the .deb work (see docsrc/release_0_4_1.md), not before —
     # a green CI on an unported platform would be a false signal.
     runs-on: macos-latest
 
@@ -52,12 +52,12 @@ jobs:
       # failures so stale API references or broken links cannot reach a
       # release unnoticed.
       - name: Build documentation
-        run: uv run --extra docs sphinx-build -W -b html docs /tmp/argos-docs
+        run: uv run --extra docs sphinx-build -W -b html docsrc /tmp/argos-docs
 
       # The Qt tests need a platform plugin; offscreen is the headless one.
       # test_photometry_window.py runs in its own process: the whole suite in
       # a single process can abort on the simulator fixtures (see
-      # docs/CONTRIBUTING.md). Simulator-gated tests self-skip when no
+      # docsrc/CONTRIBUTING.md). Simulator-gated tests self-skip when no
       # ASCOM Alpaca simulator is listening — that is expected here.
       - name: Tests
         env:

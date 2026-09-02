@@ -20,7 +20,7 @@ Match the style already in the source (see `core/catalog/aavso.py`,
   on what the module is responsible for and — crucially — its boundaries
   (Qt-free? network-isolated? display-only?). State what it does *not* do.
 - **Spec back-references.** When a module implements a spec, cite it inline:
-  `(docs/photometry_plan.md §6 C1)`. Keep these accurate; they are load-bearing.
+  `(docsrc/photometry_plan.md §6 C1)`. Keep these accurate; they are load-bearing.
 - **reST cross-references** for linking symbols: `:func:`, `:class:`, `:meth:`.
 - **Dataclass fields** documented with a trailing `#` comment on each field,
   including units (`adu`, `e-`, `px`, `deg`, `mag`).
@@ -179,7 +179,7 @@ Check off as completed. Keep changes scoped so parallel work doesn't collide.
 ## 4. Coordination
 
 - Branch: `docs/code-documentation`.
-- Documentation-only changes: prefer docstrings + Markdown under `docs/`. Do not
+- Documentation-only changes: prefer docstrings + Markdown under `docsrc/`. Do not
   alter behaviour. If a docstring reveals a bug, note it; fix it in its own commit.
 - One area per commit (e.g. "docs(photometry): module reference") to keep the
   history reviewable and reduce merge conflicts across parallel contributors.

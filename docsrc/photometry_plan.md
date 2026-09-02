@@ -10,7 +10,7 @@ reference for what currently exists.
 > session brief. This is written to be handed to an implementing agent: it states
 > the target UX, the coordinate conventions, the exact files/functions/signals to
 > touch, the data shapes, and a phased sequencing. The non-negotiable science
-> principle remains `docs/capture_panel.md` §0 (**display pipeline ≠ data
+> principle remains `docsrc/capture_panel.md` §0 (**display pipeline ≠ data
 > pipeline**: saved FITS stays raw, linear, 16-bit, CFA `GRBG`).
 
 ---
@@ -143,7 +143,7 @@ ui/
                                share all astrometry/catalog code with the live page
 ```
 
-**Layer rules unchanged** (`docs/ARCHITECTURE.md`): `core/` no PyQt; `workers/` bridge;
+**Layer rules unchanged** (`docsrc/ARCHITECTURE.md`): `core/` no PyQt; `workers/` bridge;
 `ui/` no network/subprocess. New subprocess stays in `core/imaging/platesolve.py`.
 
 ---
@@ -466,7 +466,7 @@ already shares config keys with the config page — extend, don't fork.)
 - **End-to-end on the simulator**: per the "test, don't ask" rule, replay a saved FITS
   as a live stream (mock Alpaca) → auto-solve → catalog → assign a target + 2 comps →
   verify a light-curve point with finite error bar is produced. See
-  `docs/simulator_testing.md`.
+  `docsrc/simulator_testing.md`.
 
 ---
 
@@ -524,5 +524,5 @@ Each phase ends **green** (`uv run --extra dev pytest`) and is independently shi
   preview with scientifically-honest error bars, plus a metrics panel (temp/airmass/
   FWHM/sky vs time), with `photometry.csv` written per target.
 - Everything Qt-free in `core/` is unit-tested; the simulator end-to-end passes.
-- `docs/capture_panel.md` §0 still holds: saved FITS remain raw, linear, CFA.
+- `docsrc/capture_panel.md` §0 still holds: saved FITS remain raw, linear, CFA.
 ```

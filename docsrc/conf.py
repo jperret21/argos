@@ -1,13 +1,16 @@
 """Sphinx configuration for Argos documentation.
 
+The Sphinx sources live in ``docsrc/``; ``docs/`` is the published website
+(GitHub Pages serves it from the ``main`` branch) and is not part of this build.
+
 Build with::
 
-    cd docs
+    cd docsrc
     sphinx-build -M html . _build
 
 Or from the project root::
 
-    uv run sphinx-build -b html docs docs/_build
+    uv run sphinx-build -b html docsrc docsrc/_build
 """
 
 from __future__ import annotations

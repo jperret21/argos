@@ -64,7 +64,7 @@ _DEFAULTS: dict[str, Any] = {
         "profile": "s30pro",
         "overrides": {},
     },
-    # Sensor characteristics — confirm against hardware (see docs/capture_panel.md §8).
+    # Sensor characteristics — confirm against hardware (see docsrc/capture_panel.md §8).
     # IMX585 Starvis 2: 12-bit ADC scaled to 16-bit; "full_well_adu" is the
     # saturation/linearity threshold used by the display clipping indicator.
     #
@@ -78,7 +78,7 @@ _DEFAULTS: dict[str, Any] = {
         "egain_table": {},  # {gain_value: e-/ADU}; empty → driver/sensor reference lookup
     },
     # Plate-solving (ASTAP) + the live auto-solve policy. See
-    # docs/photometry_plan.md §4/§8. Empty astap_path/database → auto-detect.
+    # docsrc/photometry_plan.md §4/§8. Empty astap_path/database → auto-detect.
     "astrometry": {
         "astap_path": "",
         "database": "",
@@ -92,13 +92,13 @@ _DEFAULTS: dict[str, Any] = {
         "live_resolve_arcmin": 2,  # re-solve once the mount moves this far
         "live_timeout_s": 25,  # bound the live solve so the cadence never stalls
     },
-    # VSX/VSP variable-star catalog cone search (docs/photometry_plan.md §5).
+    # VSX/VSP variable-star catalog cone search (docsrc/photometry_plan.md §5).
     "catalog": {
         "mag_limit": 15.0,
         "max_results": 250,
         "include_suspected": True,
     },
-    # Differential-photometry preview (docs/photometry_plan.md §6).
+    # Differential-photometry preview (docsrc/photometry_plan.md §6).
     "photometry": {
         "aperture_fwhm_mult": 2.5,
         "aperture_min_px": 4,

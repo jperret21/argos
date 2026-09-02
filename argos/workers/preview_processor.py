@@ -4,7 +4,7 @@ The heavy per-frame work (debayer/render, star-detection metrics, per-channel
 histograms) runs here on a QThread instead of the UI thread; the UI applies only
 the cheap final stretch (kept on the UI thread so the sliders stay instant).
 Latest-frame-wins: if frames arrive faster than they can be processed, stale
-ones are dropped. See ``docs/capture_panel.md`` (threading note).
+ones are dropped. See ``docsrc/capture_panel.md`` (threading note).
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """Bayer demosaicing, CFA channel split and focus metrics for the IMX585 (GRBG).
 
-**Data pipeline ≠ display pipeline** (see ``docs/capture_panel.md`` §0): every
+**Data pipeline ≠ display pipeline** (see ``docsrc/capture_panel.md`` §0): every
 function here takes the raw linear CFA array and returns a *new* display or
 measurement array. The raw array is never mutated — it is what gets written to
 FITS (linear, 16-bit, ``BAYERPAT='GRBG'``).

@@ -1,13 +1,13 @@
 """Shared astrometry helpers — one code path for the live page and Open-FITS.
 
-See ``docs/photometry_plan.md`` §4 (Workstream A). Both the live acquisition page
+See ``docsrc/photometry_plan.md`` §4 (Workstream A). Both the live acquisition page
 and the floating analysis window used to carry their own copies of "build the
 ASTAP settings", "halve the green-plane scale to full-res", "build the grid
 overlay" and "project catalog RA/Dec to green pixels" — with subtle divergences
 (different hints, grid spacing applied on one side only, the ÷2 convention
 duplicated). This module is the single, Qt-free, unit-tested home for all of it.
 
-Conventions (``docs/photometry_plan.md`` §1):
+Conventions (``docsrc/photometry_plan.md`` §1):
 
 - pixel coordinates are **green px** ``(H//2, W//2)`` everywhere;
 - ``cfg_get`` is a ``callable(key, default) -> value`` (the page's ``self._cfg``),

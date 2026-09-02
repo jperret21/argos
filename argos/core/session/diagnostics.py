@@ -9,7 +9,7 @@ the evidence.
 
 Record shape: ``{"t": iso8601-utc, "kind": ..., ["frame": n,] **fields}``.
 Kinds in use: ``star``, ``ensemble``, ``tracking``, ``frame``, ``event``
-(see docs/photometry_hardening_plan.md §P11).
+(see docsrc/photometry_hardening_plan.md §P11).
 
 Failure-safe by design: the recorder must never take a session down. Any
 write error disables it with a single warning; every method is a no-op when
