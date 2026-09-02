@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hardware — Argos</title>
+    <meta name="description" content="Telescope profiles for the ZWO Seestar family: apertures, sensors, plate scales and fields of view — and an explicit statement of which profiles are validated for precision photometry and which are not." />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+    <link rel="stylesheet" href="css/style.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+    <nav class="navbar navbar-solid" id="navbar">
+        <div class="container container-wide nav-container">
+            <div class="nav-left">
+                <a href="index.html" class="nav-logo">
+                    <svg width="16" height="16" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="50" cy="50" r="42"/>
+                        <circle cx="50" cy="50" r="5" fill="currentColor" stroke="none"/>
+                        <g transform="translate(50 50) scale(0.95) translate(-50 -50)">
+                            <path d="M50 6 Q70 24 82 24 Q88 24 86 32 Q82 42 74 44"/>
+                            <path d="M50 94 Q30 76 18 76 Q12 76 14 68 Q18 58 26 56"/>
+                            <path d="M6 50 Q24 36 22 20 Q21 14 30 16 Q40 18 44 28"/>
+                            <path d="M94 50 Q76 64 78 80 Q79 86 70 84 Q60 82 56 72"/>
+                        </g>
+                    </svg>
+                    Argos
+                </a>
+                <span class="nav-sep" aria-hidden="true"></span>
+                <ul class="nav-pages">
+                    <li><a href="science.html">Science</a></li>
+                    <li><a href="hardware.html" class="active" aria-current="page">Hardware</a></li>
+                </ul>
+            </div>
+            <ul class="nav-links">
+                <li><a href="#profiles">Profiles</a></li>
+                <li><a href="#unvalidated">Unvalidated</a></li>
+                <li><a href="#alpaca">Alpaca</a></li>
+                <li><a href="#requirements">Requirements</a></li>
+                <li><a href="#download">Download</a></li>
+                <li><a href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <header class="page-hero">
+        <div class="container container-wide">
+            <p class="page-eyebrow">Hardware</p>
+            <h1>Which numbers we&rsquo;ll stand behind</h1>
+            <p class="page-lead">
+                0.4.1 opens Argos to the Seestar family. That raises a question worth answering
+                directly rather than in a footnote: the software will <em>run</em> on more than one
+                telescope, but it will only <strong>vouch for</strong> one of them &mdash; and it
+                says which, in the interface, in the logs, and here.
+            </p>
+        </div>
+    </header>
+
+    <section class="section" id="profiles">
+        <div class="container container-wide">
+            <div class="section-header align-left">
+                <div class="h-rule"><h2>Telescope profiles</h2></div>
+                <p>Every number below is either measured on the instrument or taken from the manufacturer&rsquo;s published specification. Nothing is interpolated to fill a gap.</p>
+            </div>
+
+            <div class="table-wrap">
+                <table class="spec-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">Model</th>
+                            <th scope="col">Aperture</th>
+                            <th scope="col">Focal</th>
+                            <th scope="col">f/</th>
+                            <th scope="col">Sensor</th>
+                            <th scope="col">Array</th>
+                            <th scope="col">Scale</th>
+                            <th scope="col">Field</th>
+                            <th scope="col">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr class="ref-row">
+                            <th scope="row">Seestar S30&nbsp;Pro</th>
+                            <td>30&nbsp;mm</td>
+                            <td>160&nbsp;mm</td>
+                            <td>5.3</td>
+                            <td>IMX585</td>
+                            <td>3840&times;2160</td>
+                            <td>3.74&Prime;/px</td>
+                            <td>3.99&deg;&times;2.24&deg;</td>
+                            <td><span class="pill pill-ok">Reference</span></td>
+                        </tr>
+                        <tr>
+                            <th scope="row">Seestar S30</th>
+                            <td>30&nbsp;mm</td>
+                            <td>150&nbsp;mm</td>
+                            <td>5.0</td>
+                            <td>IMX662</td>
+                            <td>1920&times;1080</td>
+                            <td>3.99&Prime;/px</td>
+                            <td>2.13&deg;&times;1.20&deg;</td>
+                            <td><span class="pill pill-warn">Unvalidated</span></td>
+                        </tr>
+                        <tr>
+                            <th scope="row">Seestar S50</th>
+                            <td>50&nbsp;mm</td>
+                            <td>250&nbsp;mm</td>
+                            <td>5.0</td>
+                            <td>IMX462</td>
+                            <td>1920&times;1080</td>
+                            <td>2.39&Prime;/px</td>
+                            <td>1.28&deg;&times;0.72&deg;</td>
+                            <td><span class="pill pill-warn">Unvalidated</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <p class="prose" style="margin-top: 22px;">
+                Plate scales are per <strong>raw sensor pixel</strong>. Measurements happen on the
+                green half-resolution plane, so the effective sampling for photometry and
+                astrometry is twice these figures &mdash; 7.48&Prime; per green pixel on the
+                S30&nbsp;Pro. Resolution is read from the driver at connect; the array sizes above
+                are only the fallback. And the scales the published optics imply match ZWO&rsquo;s
+                own field-of-view figures, which is a genuine cross-check on the S30 and S50 optics
+                even though their sensors remain unconfirmed.
+            </p>
+        </div>
+    </section>
+
+    <section class="section section-dark" id="unvalidated">
+        <div class="container container-wide">
+            <div class="section-header align-left">
+                <div class="h-rule"><h2>What &ldquo;unvalidated&rdquo; actually means</h2></div>
+                <p>Not a disclaimer. A list of three specific unknowns, each of which would corrupt a magnitude in a specific way.</p>
+            </div>
+
+            <div class="callout warn">
+                <div class="callout-title">Unconfirmed on the S30 and S50</div>
+                <ul>
+                    <li><strong>Bayer pattern assumed GRBG.</strong> This is the one that matters most, because a wrong CFA layout <em>does not fail loudly</em> &mdash; it quietly measures the wrong photosites and poisons every magnitude derived from them.</li>
+                    <li><strong>Seestar gain scale and EGAIN curve.</strong> Converting ADU to electrons requires a photon-transfer calibration on the actual instrument. Without it the CCD-equation error budget is scaled by an unknown factor.</li>
+                    <li><strong>ADC depth and saturation thresholds</strong> are inherited from the S30&nbsp;Pro, which means the linearity limit that guards against saturated measurements has not been checked on these bodies.</li>
+                </ul>
+            </div>
+
+            <p class="prose" style="margin-top: 26px;">
+                The consequence is enforced in code rather than left to the observer&rsquo;s memory.
+                Selecting an unvalidated profile is allowed &mdash; framing, sequencing, plate
+                solving and FITS writing all work &mdash; but the software surfaces the caveats in
+                the interface and logs each one on activation. Where a photometric quantity would
+                have to be invented, <strong>it is left out of the header instead</strong>: when the
+                sensor is unknown, Argos prefers the driver&rsquo;s own electron gain, and failing
+                that writes no <span class="inline-code">EGAIN</span> at all rather than a
+                plausible-looking number. An empty header field is recoverable. A confidently wrong
+                one is not.
+            </p>
+
+            <p class="prose">
+                At connect, the camera name and the driver&rsquo;s reported resolution are compared
+                against the active profile. On mismatch Argos warns in the status bar and logs it
+                &mdash; it never switches profile silently in the middle of a session.
+            </p>
+
+            <div class="callout" style="margin-top: 26px;">
+                <div class="callout-title">The S50&nbsp;Pro is deliberately absent</div>
+                <p>
+                    Its optics are published &mdash; 50&nbsp;mm, 260&nbsp;mm, f/5.2 &mdash; but its
+                    sensor is described only as &ldquo;1/1.2-inch 4K&rdquo;. Without a confirmed
+                    pixel pitch there is no plate scale, and the plate scale is the one number the
+                    entire astrometry path depends on.
+                </p>
+                <p>
+                    A profile that cannot be filled honestly is worse than a missing one, so it
+                    ships when the specification does.
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <section class="section" id="alpaca">
+        <div class="container container-wide">
+            <div class="section-header align-left">
+                <div class="h-rule"><h2>Beyond the Seestar</h2></div>
+                <p>The device layer is generic. The Seestar is simply the instrument it was built and validated against.</p>
+            </div>
+
+            <div class="def-list">
+                <dl class="item">
+                    <dt>ASCOM Alpaca<small>the transport</small></dt>
+                    <dd>
+                        Argos talks to the telescope over Wi-Fi through the Alpaca protocol, and the
+                        same code path serves any Alpaca-compatible camera, focuser or filter wheel.
+                        Nothing in that layer is Seestar-specific.
+                    </dd>
+                </dl>
+                <dl class="item">
+                    <dt>Simulator<small>no telescope needed</small></dt>
+                    <dd>
+                        The ASCOM Alpaca simulator (OmniSim) runs in Docker and exercises the entire
+                        application &mdash; connection, sequencing, capture and the photometry
+                        workflow &mdash; without any hardware. It is how most of Argos is developed
+                        and tested.
+                    </dd>
+                </dl>
+                <dl class="item">
+                    <dt>Stellarium<small>optional</small></dt>
+                    <dd>
+                        The telescope protocol is supported for pointing. It carries ICRS
+                        coordinates only, so Argos never rewrites the FITS
+                        <span class="inline-code">OBJECT</span> value from a GoTo &mdash; the
+                        observer chooses the intended target.
+                    </dd>
+                </dl>
+                <dl class="item">
+                    <dt>ASTAP<small>external, required for solving</small></dt>
+                    <dd>
+                        Plate solving is delegated to ASTAP and its star database. Argos never
+                        bundles either: you install them, and point Settings&nbsp;&rarr;&nbsp;Astrometry
+                        at the executable and the database folder. Everything else works without
+                        them; only the WCS-dependent features do not.
+                    </dd>
+                </dl>
+            </div>
+        </div>
+    </section>
+
+    <section class="section section-dark" id="requirements">
+        <div class="container container-wide">
+            <div class="section-header align-left">
+                <div class="h-rule"><h2>Requirements</h2></div>
+                <p>Argos runs on your laptop, beside the telescope, and sends nothing anywhere.</p>
+            </div>
+
+            <div class="table-wrap">
+                <table class="spec-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">Platform</th>
+                            <th scope="col">Delivery</th>
+                            <th scope="col">Status</th>
+                            <th scope="col">Notes</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr class="ref-row">
+                            <th scope="row">macOS</th>
+                            <td>.dmg / from source</td>
+                            <td><span class="pill pill-ok">Developed on</span></td>
+                            <td class="t-name">The reference platform. The 0.4.1 disk image is unsigned &mdash; Gatekeeper will need an explicit override.</td>
+                        </tr>
+                        <tr>
+                            <th scope="row">Debian / Ubuntu</th>
+                            <td>.deb (x86_64)</td>
+                            <td><span class="pill pill-warn">Technical preview</span></td>
+                            <td class="t-name">Builds and smoke-tests in CI on every tag. It has never been through a real observing night on Linux.</td>
+                        </tr>
+                        <tr>
+                            <th scope="row">Windows</th>
+                            <td>&mdash;</td>
+                            <td><span class="pill pill-warn">Not yet</span></td>
+                            <td class="t-name">No package and no validation. Running from source is untested rather than known-broken.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="callout" style="margin-top: 26px;">
+                <div class="callout-title">Also needed</div>
+                <ul>
+                    <li><strong>ASTAP and a star database</strong> for plate solving &mdash; installed separately, detected at startup, configurable by hand.</li>
+                    <li><strong>Disk space for raw subs.</strong> Argos keeps every frame; that is the point.</li>
+                    <li><strong>Internet, occasionally.</strong> Catalogue lookups (AAVSO, CDS, NASA) are cached locally, so a field session works offline once you have resolved your targets at home.</li>
+                    <li><strong>Siril</strong> for the reduction half of the workflow, if you want a publishable curve.</li>
+                </ul>
+            </div>
+
+            <p class="prose" style="margin-top: 26px;">
+                Argos sends no telemetry and never uploads session data. Catalogue queries happen
+                only when you ask for one.
+            </p>
+        </div>
+    </section>
+
+    <section class="section" id="download">
+        <div class="container container-wide">
+            <div class="section-header align-left">
+                <div class="h-rule"><h2>Get it</h2></div>
+                <p><strong>0.4.1 is an alpha</strong> for technically confident observers who keep their raw FITS and check the results independently. Installers are attached to the GitHub release; the source path works everywhere the dependencies do.</p>
+            </div>
+
+            <div class="code-wrap">
+                <div class="code-bar">
+                    <span class="code-dot"></span><span class="code-dot"></span><span class="code-dot"></span>
+                    <span class="code-label">from source</span>
+                </div>
+                <pre><code><span class="hl">brew</span> install uv
+<span class="hl">git clone</span> https://github.com/jperret21/argos.git
+<span class="hl">cd</span> argos
+uv sync --extra dev
+uv run python main.py</code></pre>
+            </div>
+
+            <div class="start-links">
+                <a href="https://github.com/jperret21/argos/releases" class="btn btn-primary" target="_blank" rel="noopener">Releases &amp; installers &rarr;</a>
+                <a href="https://github.com/jperret21/argos/blob/main/docs/guide_terrain_0_4_1.md" class="btn btn-ghost" target="_blank" rel="noopener">0.4.1 field guide &rarr;</a>
+                <a href="index.html#start" class="btn btn-ghost">Run the simulator &rarr;</a>
+            </div>
+        </div>
+    </section>
+
+    <section class="section section-dark">
+        <div class="container container-wide">
+            <div class="next-links">
+                <a class="next-card" href="science.html">
+                    <div class="nc-kicker">Next</div>
+                    <b>Science &rarr;</b>
+                    <span>The measurement chain, the four equations behind a magnitude, and what they are worth.</span>
+                </a>
+                <a class="next-card" href="index.html#siril">
+                    <div class="nc-kicker">Workflow</div>
+                    <b>Hand-off to Siril &rarr;</b>
+                    <span>Where the quick-look ends and the publishable light curve begins.</span>
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <footer class="footer">
+        <div class="container container-wide footer-content">
+            <div class="footer-brand">
+                <svg width="14" height="14" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="50" cy="50" r="42"/>
+                    <circle cx="50" cy="50" r="5" fill="currentColor" stroke="none"/>
+                    <g transform="translate(50 50) scale(0.95) translate(-50 -50)">
+                        <path d="M50 6 Q70 24 82 24 Q88 24 86 32 Q82 42 74 44"/>
+                        <path d="M50 94 Q30 76 18 76 Q12 76 14 68 Q18 58 26 56"/>
+                        <path d="M6 50 Q24 36 22 20 Q21 14 30 16 Q40 18 44 28"/>
+                        <path d="M94 50 Q76 64 78 80 Q79 86 70 84 Q60 82 56 72"/>
+                    </g>
+                </svg>
+                Argos
+            </div>
+            <div class="footer-links">
+                <a href="science.html">Science</a>
+                <a href="hardware.html">Hardware</a>
+                <a href="index.html#start">Start</a>
+                <a href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub</a>
+            </div>
+            <div class="footer-copy">GNU GPL v3+ &middot; Jules Perret - built under Californian skies</div>
+        </div>
+    </footer>
+
+    <script>
+        // In-page anchors only — cross-page links must navigate normally.
+        document.querySelectorAll('a[href^="#"]').forEach(a => {
+            a.addEventListener('click', e => {
+                const h = a.getAttribute('href');
+                if (h === '#') return;
+                const t = document.querySelector(h);
+                if (!t) return;
+                e.preventDefault();
+                t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
+        });
+    </script>
+</body>
+</html>

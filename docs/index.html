@@ -15,20 +15,27 @@
 <body>
 
     <nav class="navbar" id="navbar">
-        <div class="container nav-container">
-            <a href="#" class="nav-logo">
-                <svg width="16" height="16" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="50" cy="50" r="42"/>
-                    <circle cx="50" cy="50" r="5" fill="currentColor" stroke="none"/>
-                    <g transform="translate(50 50) scale(0.95) translate(-50 -50)">
-                        <path d="M50 6 Q70 24 82 24 Q88 24 86 32 Q82 42 74 44"/>
-                        <path d="M50 94 Q30 76 18 76 Q12 76 14 68 Q18 58 26 56"/>
-                        <path d="M6 50 Q24 36 22 20 Q21 14 30 16 Q40 18 44 28"/>
-                        <path d="M94 50 Q76 64 78 80 Q79 86 70 84 Q60 82 56 72"/>
-                    </g>
-                </svg>
-                Argos
-            </a>
+        <div class="container container-wide nav-container">
+            <div class="nav-left">
+                <a href="#" class="nav-logo">
+                    <svg width="16" height="16" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="50" cy="50" r="42"/>
+                        <circle cx="50" cy="50" r="5" fill="currentColor" stroke="none"/>
+                        <g transform="translate(50 50) scale(0.95) translate(-50 -50)">
+                            <path d="M50 6 Q70 24 82 24 Q88 24 86 32 Q82 42 74 44"/>
+                            <path d="M50 94 Q30 76 18 76 Q12 76 14 68 Q18 58 26 56"/>
+                            <path d="M6 50 Q24 36 22 20 Q21 14 30 16 Q40 18 44 28"/>
+                            <path d="M94 50 Q76 64 78 80 Q79 86 70 84 Q60 82 56 72"/>
+                        </g>
+                    </svg>
+                    Argos
+                </a>
+                <span class="nav-sep" aria-hidden="true"></span>
+                <ul class="nav-pages">
+                    <li><a href="science.html">Science</a></li>
+                    <li><a href="hardware.html">Hardware</a></li>
+                </ul>
+            </div>
             <ul class="nav-links">
                 <li><a href="#about">About</a></li>
                 <li><a href="#preview">Preview</a></li>
@@ -77,6 +84,27 @@
                 Argos Panoptes, the giant of a hundred eyes, was set to watch and never sleep —
                 a fitting name for software that keeps watch over the sky.
             </p>
+        </div>
+    </section>
+
+    <section class="release-band" id="release">
+        <div class="container container-wide rel-inner">
+            <div class="rel-head">
+                <div class="rel-kicker">Release 0.4.1</div>
+                <h2>Now speaking to the whole Seestar family</h2>
+                <p>
+                    Telescope profiles, signed-off plate scales and shipped binaries &mdash; with an
+                    explicit line between the model that is validated and the ones that are not.
+                </p>
+            </div>
+            <div class="rel-chips">
+                <span class="chip chip-ok"><b>S30&nbsp;Pro</b> reference</span>
+                <span class="chip"><b>S30</b> unvalidated</span>
+                <span class="chip"><b>S50</b> unvalidated</span>
+                <span class="chip"><b>macOS</b> .dmg</span>
+                <span class="chip"><b>Debian</b> .deb preview</span>
+                <a href="hardware.html" class="btn btn-ghost">Hardware details &rarr;</a>
+            </div>
         </div>
     </section>
 
@@ -187,6 +215,7 @@
             </figure>
 
             <div class="start-links">
+                <a href="science.html" class="btn btn-ghost">The science behind the curve &rarr;</a>
                 <a href="https://github.com/jperret21/star_var_script" class="btn btn-ghost" target="_blank" rel="noopener">star_var_script on GitHub &rarr;</a>
             </div>
         </div>
@@ -275,7 +304,7 @@ uv run --extra dev pytest</code></pre>
     </section>
 
     <footer class="footer">
-        <div class="container footer-content">
+        <div class="container container-wide footer-content">
             <div class="footer-brand">
                 <svg width="14" height="14" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="50" cy="50" r="42"/>
@@ -290,7 +319,8 @@ uv run --extra dev pytest</code></pre>
                 Argos
             </div>
             <div class="footer-links">
-                <a href="#capabilities">Pipeline</a>
+                <a href="science.html">Science</a>
+                <a href="hardware.html">Hardware</a>
                 <a href="#start">Start</a>
                 <a href="#contribute">Contribute</a>
                 <a href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub</a>
