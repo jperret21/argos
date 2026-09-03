@@ -35,6 +35,10 @@ _DEFAULTS: dict[str, Any] = {
         "object_catalogue_cache": str(Path.home() / "Argos" / "cache" / "object_resolver.json"),
         "exoplanet_cache": str(Path.home() / "Argos" / "cache" / "exoplanets.json"),
         "aavso_cache_directory": str(Path.home() / ".argos" / "cache" / "catalog"),
+        "gaia_cache_directory": str(Path.home() / ".argos" / "cache" / "gaia"),
+        "field_catalogue_cache_directory": str(
+            Path.home() / ".argos" / "cache" / "field_catalogue"
+        ),
     },
     "observer": {
         "name": "",
@@ -97,6 +101,37 @@ _DEFAULTS: dict[str, Any] = {
         "mag_limit": 15.0,
         "max_results": 250,
         "include_suspected": True,
+        # Named sources for the solved field; this is visual identification,
+        # not a calibrated comparison-star catalogue.
+        "field_stars_enabled": True,
+        # ``Field`` is the useful default on a modern wide-field camera.  A
+        # shallow list makes a solved image look as though most stars are
+        # unknown; observers can switch to Quick/Deep in Field catalogue.
+        # Cache a deeper Gaia field once, then let the live image slider filter
+        # it locally without a network round-trip on every movement.
+        "field_stars_mag_limit": 18.0,
+        "field_stars_max_results": 2000,
+        # Total online identity budget shared between Gaia and SIMBAD. VSX,
+        # VSP and the tiny NASA result remain independent science catalogues.
+        "identification_max_objects": 400,
+        "display_mag_limit": 18.0,
+        "display_limit_version": 2,
+        # WCS is the source of truth for an identification overlay.  The local
+        # peak detector is intentionally optional: it can miss faint or
+        # colour-dependent sources in a raw CFA preview.
+        "field_stars_detected_only": False,
+        # These are local/cache-backed context layers.  They never initiate a
+        # network request during a capture.
+        "show_essential_objects": True,
+        "show_cached_exoplanets": True,
+        # Every explicit Field → Identify field operation can enrich the
+        # solved field from these authoritative services.  Disable either
+        # control for cache-only/offline observing.
+        "named_objects_enabled": True,
+        "named_objects_max_results": 500,
+        "named_objects_allow_network": True,
+        "exoplanet_hosts_enabled": True,
+        "exoplanet_hosts_allow_network": True,
     },
     # Differential-photometry preview (docs/photometry_plan.md §6).
     "photometry": {
@@ -108,6 +143,18 @@ _DEFAULTS: dict[str, Any] = {
         "default_band": "TG",
         "min_comparisons": 2,
         "auto_comparisons": 5,  # comps auto-picked when a target is chosen
+        # Pilot-frame quality gate for automatic VSP comparison selection.
+        # Proximity alone is insufficient in a wide Seestar field: faint
+        # stars close to the target can have unusable differential errors.
+        "comparison_min_snr": 10.0,
+        "comparison_max_delta_mag": 1.5,
+        # References across a very wide raw field are vulnerable to flat-field
+        # residuals and differential tracking error. A smaller, validated
+        # ensemble is preferable to filling a requested count with remote stars.
+        "comparison_max_separation_arcmin": 25.0,
+        "comparison_validation_min_points": 10,
+        "comparison_validation_max_scatter_mag": 0.10,
+        "comparison_validation_max_formal_error_mag": 0.10,
         # ``star_var_script``-compatible run-level error floor. ``None``
         # derives it from the light curve after ten valid points; a numeric
         # value is an observer-approved systematic floor in magnitudes.
@@ -164,6 +211,7 @@ class Config:
             _migrate_legacy_site(data, on_disk)
             _migrate_alpaca_profiles(data, on_disk)
             _migrate_diagnostics_opt_in(data, on_disk)
+            _migrate_catalogue_display_limit(data, on_disk)
             logger.debug("Config loaded from %s", _CONFIG_FILE)
             return cls(data)
         except Exception as exc:
@@ -292,6 +340,23 @@ def _migrate_legacy_site(data: dict, on_disk: dict) -> None:
         site = data.setdefault("site", {})
         site.update(values)
         logger.info("Migrated legacy observer coordinates to site settings")
+
+
+def _migrate_catalogue_display_limit(data: dict, on_disk: dict) -> None:
+    """Adopt the G=18 field-identification default once on upgrade.
+
+    Earlier builds persisted a shallow 14–15.5 display value, which made a
+    dense solved field look mostly unidentified even after its deeper Gaia
+    catalogue had been downloaded.  A version marker preserves every later
+    observer adjustment.
+    """
+    saved = on_disk.get("catalog") or {}
+    if int(saved.get("display_limit_version", 0) or 0) >= 2:
+        return
+    catalog = data.setdefault("catalog", {})
+    catalog["display_mag_limit"] = 18.0
+    catalog["display_limit_version"] = 2
+    logger.info("Migrated solved-field Gaia display limit to G=18")
 
 
 def _migrate_diagnostics_opt_in(data: dict, on_disk: dict) -> None:

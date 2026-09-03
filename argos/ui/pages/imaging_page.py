@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import math
 import time
 from pathlib import Path
 
@@ -71,7 +72,10 @@ from argos.core.session.types import (
     FocuserState,
     LiveFrame,
 )
+from argos.core.catalog import PointSourceIdentity, cached_exoplanet_hosts_in_cone
+from argos.core.catalog.offline import essential_catalogue_objects
 from argos.core.catalog.photometry import separation_arcmin
+from argos.core.catalog.object_resolver import is_variable_object_type
 from argos.core.catalog.targets import TargetStar
 from argos.core.imaging.astrometry_session import field_geometry, project_points
 from argos.core.imaging.debayer import VIEW_SUPERPIXEL
@@ -88,7 +92,7 @@ from argos.ui import design, theme
 from argos.ui.panels.log_panel import LogPanel
 from argos.ui.panels.manual_control_dialog import ManualControlDialog
 from argos.ui.widgets.camera_dock import CameraDock
-from argos.ui.widgets.dock_host import make_dock, style_toggle_action
+from argos.ui.widgets.dock_host import make_dock, panel_toolbar_qss, style_toggle_action
 from argos.ui.widgets.fits_viewer import FitsViewer
 from argos.ui.widgets.focuser_dock import FocuserDock
 from argos.ui.widgets.hfd_history_dock import HfdHistoryDock
@@ -98,11 +102,16 @@ from argos.ui.widgets.lightcurve_panel import LightCurvePanel
 from argos.ui.widgets.mount_dock import MountDock
 from argos.ui.panels.photometry_window import PhotometryWindow
 from argos.ui.widgets.overlay_bar import OverlayBar
+from argos.ui.widgets.astrometry_settings import AstrometrySettingsDialog, SECTION_CATALOG
 from argos.ui.widgets.star_info_card import StarInfoCard
 from argos.ui.widgets.statistics_dock import StatisticsDock
 from argos.workers.camera_service import CameraState
 from argos.workers.preview_processor import PreviewProcessor
-from argos.workers.object_resolver_worker import NearbyObjectResolverWorker, ObjectResolverWorker
+from argos.workers.object_resolver_worker import (
+    NearbyObjectResolverWorker,
+    ObjectResolverWorker,
+    PointIdentityWorker,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -163,9 +172,25 @@ class ImagingPage(QWidget):
         self._astrometry = engine.astrometry
         # Green-px projections of the engine's cached catalog + target set.
         self._var_green: list = []  # parallel to engine.variables (None = off-frame)
+        self._visible_variable_indices: set[int] | None = None
+        self._field_catalogue_green: list = []  # parallel to engine.field_stars
+        self._field_catalogue_names: list = []  # nearest SIMBAD identity, parallel to Gaia
+        self._field_catalogue_match_key: tuple | None = None
+        self._matched_named_indices: set[int] = set()
+        self._point_identities: list[PointSourceIdentity] = []
+        self._point_identity_green: list = []
+        self._named_objects: list = []
+        self._named_objects_green: list = []
+        self._deep_sky_objects: list = []
+        self._deep_sky_green: list = []
+        self._exoplanet_hosts: list = []
+        self._exoplanet_green: list = []
+        self._display_mag_limit = float(self._config.get("catalog.display_mag_limit", 18.0))
         self._comp_green: list = []
         self._target_green: list = []
+        self._detected_green: list[tuple[float, float]] = []
         self._pending_star: dict | None = None  # the clicked star awaiting a role
+        self._pending_green: tuple[float, float] | None = None
         self._armed: set = set()  # overlays auto-shown once when first available
         # §6 P4: live photometry preview (light curve + metrics window).
         self._photometry_window: PhotometryWindow | None = None
@@ -174,6 +199,8 @@ class ImagingPage(QWidget):
         self._batch_dialog: QProgressDialog | None = None
         self._object_resolver_worker: ObjectResolverWorker | None = None
         self._nearby_object_resolver_worker: NearbyObjectResolverWorker | None = None
+        self._point_identity_worker: PointIdentityWorker | None = None
+        self._point_identity_request: tuple[float, float, object | None] | None = None
 
         self._build_ui()
         # The engine reads capture parameters through these providers — the
@@ -279,6 +306,10 @@ class ImagingPage(QWidget):
 
         # Slim overlay-toggle chips under the panel strip (Grid/Stars/…).
         self._overlay_bar = OverlayBar()
+        self._overlay_bar.set_magnitude_range(
+            float(self._config.get("catalog.field_stars_mag_limit", 18.0))
+        )
+        self._overlay_bar.set_magnitude_limit(self._display_mag_limit)
         root.addWidget(self._overlay_bar)
 
         root.addWidget(self._workspace, 1)
@@ -309,13 +340,7 @@ class ImagingPage(QWidget):
         """A slim strip of checkable dock-toggle chips + a Reset-layout action."""
         bar = QToolBar()
         bar.setMovable(False)
-        bar.setStyleSheet(
-            f"QToolBar {{ background-color: {theme.SURFACE_3};"
-            f" border-bottom: 1px solid {theme.SURFACE_4}; padding: 2px 6px; spacing: 4px; }}"
-            f" QToolBar QToolButton {{ color: {theme.FG_MUTED}; font-size: 11px;"
-            f" padding: 1px 8px; }}"
-            f" QToolBar QToolButton:checked {{ color: {theme.FG}; }}"
-        )
+        bar.setStyleSheet(panel_toolbar_qss())
         self._panel_actions: dict[str, QAction] = {}
         for key, label in self._PANEL_ORDER:
             action = style_toggle_action(self._docks[key].toggleViewAction(), label)
@@ -330,7 +355,7 @@ class ImagingPage(QWidget):
             bar.addAction(action)
 
         panels = QToolButton()
-        panels.setText("Panels")
+        panels.setText("Panels ▾")
         panels.setToolTip("Show optional diagnostics and the activity log")
         panels.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self._panels_menu = QMenu(panels)
@@ -344,7 +369,7 @@ class ImagingPage(QWidget):
         # trackpad users a reliable way to detach panels to a second screen.
         bar.addSeparator()
         arrange = QToolButton()
-        arrange.setText("Arrange panels")
+        arrange.setText("Arrange ▾")
         arrange.setToolTip("Float, re-dock or reset any panel")
         arrange.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self._arrange_menu = QMenu(arrange)
@@ -518,6 +543,9 @@ class ImagingPage(QWidget):
         self._toolbar.open_requested.connect(self._on_open_fits)
         # Overlay chips + the on-image star-info card.
         self._overlay_bar.toggled.connect(self._on_overlay_toggled)
+        self._overlay_bar.configure_requested.connect(self._open_field_catalogue)
+        self._overlay_bar.magnitude_changed.connect(self._on_catalogue_magnitude_changed)
+        self._overlay_bar.magnitude_committed.connect(self._save_catalogue_magnitude)
         self._info_card.role_selected.connect(self._on_card_role)
         self._info_card.remove_selected.connect(self._on_card_remove)
         self._info_card.cleared.connect(self._on_card_cleared)
@@ -557,6 +585,7 @@ class ImagingPage(QWidget):
         self._mount_dock.resolved_goto_clicked.connect(self._goto_resolved_object)
         self._mount_dock.target_suggestion_accepted.connect(self.set_catalogue_target)
         self._mount_dock.sync_to_current_clicked.connect(self._session.sync_current)
+        self._mount_dock.center_target_clicked.connect(self._center_selected_target)
         self._mount_dock.tracking_toggled.connect(self._session.set_tracking)
         self._mount_dock.tracking_rate_changed.connect(self._session.set_tracking_rate)
         self._mount_dock.abort_clicked.connect(self._session.abort_slew)
@@ -712,6 +741,7 @@ class ImagingPage(QWidget):
         self._histogram_dock.set_histogram(pf.centers, pf.r, pf.g, pf.b, pf.lo, pf.hi)
         self._viewer.set_frame_geometry(pf.green_shape)
         self._viewer.display(pf.display)
+        self._detected_green = [(float(star.x), float(star.y)) for star in pf.stars.stars]
         # Keep a clicked star's FWHM readout live as new frames arrive.
         self._remeasure_selection()
         self._feed_metrics(pf)  # session metrics (when the photometry window is open)
@@ -732,6 +762,12 @@ class ImagingPage(QWidget):
         # Per-frame engine bookkeeping + the auto-solve policy (the engine
         # skips half-quality previews — their plate scale would poison a solve).
         self._engine.on_processed(pf.green_shape, pf.metrics, pf.stars.mean_fwhm)
+        if self._astrometry.wcs is not None:
+            # The detected-source set is frame-specific, so use it immediately
+            # to distinguish a validated marker from an empty-sky coordinate.
+            self._project_catalog()
+        if self._photometry_window is not None and self._photometry_window.isVisible():
+            self._sync_photometry_setup()
 
     # ------------------------------------------------------------------
     # Star measurement on click (§5)
@@ -794,20 +830,122 @@ class ImagingPage(QWidget):
             c = self._engine.comparisons[i]
             self._present_card(
                 self._comp_green[i],
-                f"Comparison · {c.label or c.auid}",
+                f"VSP reference · {c.auid}",
                 self._comparison_body(c),
                 dict(
                     ra_deg=c.ra_deg,
                     dec_deg=c.dec_deg,
                     auid=c.auid,
-                    name=c.label,
+                    name=c.auid,
                     source="vsp",
                     mags={b.band: b.mag for b in c.bands},
                 ),
             )
             return
-        # 4) a measured field star
+        # 4) SIMBAD name/type information for the solved field.
+        i = self._nearest(self._named_objects_green, gx, gy)
+        if i is not None:
+            item = self._named_objects[i]
+            self._present_card(
+                self._named_objects_green[i],
+                f"Identified object · {item.name}",
+                self._named_object_tooltip(item),
+                dict(
+                    ra_deg=item.ra_deg,
+                    dec_deg=item.dec_deg,
+                    auid=None,
+                    name=item.name,
+                    source="simbad",
+                    mags=dict(getattr(item, "mags", ())),
+                ),
+            )
+            return
+        # 5) local deep-sky context (Messier/NGC/IC).
+        i = self._nearest(self._deep_sky_green, gx, gy)
+        if i is not None:
+            item = self._deep_sky_objects[i]
+            self._present_card(
+                self._deep_sky_green[i],
+                f"Deep-sky object · {item.name}",
+                self._deep_sky_tooltip(item),
+                dict(
+                    ra_deg=item.ra_degrees,
+                    dec_deg=item.dec_degrees,
+                    auid=None,
+                    name=item.name,
+                    source="argos_essential",
+                    mags={"V": item.magnitude} if item.magnitude is not None else {},
+                ),
+            )
+            return
+        # 6) an exoplanet host from NASA (or its field cache).
+        i = self._nearest(self._exoplanet_green, gx, gy)
+        if i is not None:
+            host = self._exoplanet_hosts[i]
+            self._present_card(
+                self._exoplanet_green[i],
+                f"Exoplanet host · {host.host_name}",
+                self._exoplanet_tooltip(host),
+                dict(
+                    ra_deg=host.ra_degrees,
+                    dec_deg=host.dec_degrees,
+                    auid=None,
+                    name=host.host_name,
+                    source="nasa_exoplanet_cache",
+                    mags=dict(getattr(host, "mags", ())),
+                ),
+            )
+            return
+        # 7) a named Gaia source.
+        i = self._nearest(self._field_catalogue_green, gx, gy)
+        if i is not None:
+            star = self._engine.field_stars[i]
+            identity = self._field_catalogue_names[i]
+            magnitudes = {
+                band: value
+                for band, value in (
+                    ("G", star.g_mag),
+                    ("BP", star.bp_mag),
+                    ("RP", star.rp_mag),
+                )
+                if value is not None
+            }
+            self._present_card(
+                self._field_catalogue_green[i],
+                (
+                    f"Identified star · {identity.name}"
+                    if identity is not None
+                    else f"Gaia DR3 · {star.source_id}"
+                ),
+                self._field_catalogue_body(star, identity),
+                dict(
+                    ra_deg=star.ra_deg,
+                    dec_deg=star.dec_deg,
+                    auid=None,
+                    name=identity.name if identity is not None else star.display_name,
+                    source="gaia_dr3+simbad" if identity is not None else "gaia_dr3",
+                    mags=magnitudes,
+                ),
+            )
+            return
+        # 8) an identity acquired by an earlier point lookup.  These markers
+        # complement the budgeted field list and remain available while the
+        # current field is tracked.
+        i = self._nearest(self._point_identity_green, gx, gy)
+        if i is not None:
+            identity = self._point_identities[i]
+            self._present_point_identity(identity, self._point_identity_green[i])
+            return
+
+        # 9) an unmarked field source.  Measure/snap its image centroid, then
+        # run a tiny Gaia/SIMBAD cone query off the UI thread.  If no catalogue
+        # match exists, retain the current manual-photometry fallback.
         meas = measure_star_at(self._last_raw, gx, gy, self._star_radius)
+        if self._astrometry.wcs is not None:
+            px = meas.x if meas is not None else gx
+            py = meas.y if meas is not None else gy
+            self._start_point_identification(px, py, meas)
+            return
         if meas is None:
             self._viewer.clear_selection()
             self._info_card.hide()
@@ -837,17 +975,26 @@ class ImagingPage(QWidget):
         """Ring a catalog/target pick and show its info card (roles enabled)."""
         self._selected_green = None  # a catalog pick, not a measured field star
         self._pending_star = pending
+        self._pending_green = (float(green_pos[0]), float(green_pos[1]))
         dp = self._green_to_disp(green_pos[0], green_pos[1])
+        aperture, _annulus_in, _annulus_out = self._engine.photometry_geometry()
         if dp is not None:
-            self._viewer.mark_selection(dp[0], dp[1], "", show_label=False)
+            self._viewer.mark_selection(
+                dp[0], dp[1], "", self._green_len_to_disp(aperture), show_label=False
+            )
         # Remove is offered iff the clicked star is already in the target set —
         # symmetric with adding it from the image.
         key = TargetStar(role="target", **pending).key()
         saved = {s.key() for s in self._engine.target_set().stars}
-        self._info_card.show_star(title, body, roles_enabled=True, removable=key in saved)
+        self._info_card.show_star(
+            title,
+            f"{body}\nPhotometry aperture {aperture:.1f} green px",
+            roles_enabled=True,
+            removable=key in saved,
+        )
         self._info_card.reposition()
 
-    def _present_field_card(self, meas) -> None:
+    def _present_field_card(self, meas, *, catalogue_note: str = "") -> None:
         """Ring a measured field star; role buttons need a solve for its RA/Dec."""
         wcs = self._astrometry.wcs
         pending = None
@@ -857,16 +1004,175 @@ class ImagingPage(QWidget):
                 ra_deg=ra_h * 15.0, dec_deg=dec_d, auid=None, name=None, source="manual", mags={}
             )
         self._pending_star = pending
+        self._pending_green = None
         dp = self._green_to_disp(meas.x, meas.y)
         if dp is not None:
             self._viewer.mark_selection(
                 dp[0], dp[1], "", self._green_len_to_disp(meas.radius), show_label=False
             )
-        title = "Unidentified field star" if wcs is not None else "Field star"
+        title = "Manual image measurement"
+        identity_line = (
+            catalogue_note
+            or "No loaded catalogue marker. Gaia/SIMBAD point identification is available."
+        )
         self._info_card.show_star(
-            title, self._format_star_text(meas), roles_enabled=pending is not None
+            title,
+            f"{identity_line}\n" + self._format_star_text(meas),
+            roles_enabled=pending is not None,
         )
         self._info_card.reposition()
+
+    def _start_point_identification(self, gx: float, gy: float, meas) -> None:
+        """Identify one unmarked click using a narrow, cache-backed cone."""
+        if self._point_identity_worker is not None:
+            self.log_message.emit(
+                "INFO", "Point identification already in progress; wait for its result."
+            )
+            return
+        wcs = self._astrometry.wcs
+        if wcs is None:
+            if meas is not None:
+                self._present_field_card(meas)
+            return
+        ra_h, dec_d = wcs.pixel_to_radec(gx, gy)
+        self._point_identity_request = (float(gx), float(gy), meas)
+        self._pending_star = None
+        self._pending_green = None
+        dp = self._green_to_disp(gx, gy)
+        aperture, _annulus_in, _annulus_out = self._engine.photometry_geometry()
+        if dp is not None:
+            self._viewer.mark_selection(
+                dp[0], dp[1], "", self._green_len_to_disp(aperture), show_label=False
+            )
+        self._info_card.show_star(
+            "Identifying catalogue source…",
+            f"Point lookup within 10″\nRA {format_ra_hms(ra_h)}  Dec {format_dec_dms(dec_d)}\n"
+            "Gaia astrometry · SIMBAD identity",
+            roles_enabled=False,
+        )
+        self._info_card.reposition()
+
+        use_gaia = bool(self._cfg("catalog.field_stars_enabled", True))
+        use_simbad = bool(self._cfg("catalog.named_objects_enabled", True))
+        worker = PointIdentityWorker(
+            ra_h * 15.0,
+            dec_d,
+            use_gaia=use_gaia,
+            use_simbad=use_simbad,
+            allow_gaia_network=use_gaia,
+            allow_simbad_network=use_simbad
+            and bool(self._cfg("catalog.named_objects_allow_network", True)),
+            parent=self,
+        )
+        self._point_identity_worker = worker
+        worker.resolved.connect(self._on_point_identity_resolved)
+        worker.failed.connect(self._on_point_identity_failed)
+        worker.finished.connect(self._finish_point_identification)
+        worker.start()
+
+    @pyqtSlot(object)
+    def _on_point_identity_resolved(self, identity) -> None:
+        request = self._point_identity_request
+        if request is None:
+            return
+        gx, gy, meas = request
+        if identity is None:
+            if meas is not None:
+                self._present_field_card(
+                    meas,
+                    catalogue_note="No Gaia or SIMBAD source matched within 10″.",
+                )
+            else:
+                self._viewer.clear_selection()
+                self._info_card.show_star(
+                    "No catalogue match",
+                    "No measured stellar centroid or Gaia/SIMBAD identity was found within 10″.",
+                    roles_enabled=False,
+                )
+                self._info_card.reposition()
+            self.log_message.emit("INFO", "Point identification: no catalogue match within 10″.")
+            return
+
+        existing = next(
+            (
+                item
+                for item in self._point_identities
+                if separation_arcmin(item.ra_deg, item.dec_deg, identity.ra_deg, identity.dec_deg)
+                <= 1.0 / 60.0
+            ),
+            None,
+        )
+        if existing is None:
+            self._point_identities.append(identity)
+        else:
+            identity = existing
+        self._project_catalog()
+        try:
+            index = self._point_identities.index(identity)
+            green_pos = self._point_identity_green[index]
+        except (ValueError, IndexError):
+            green_pos = None
+        self._present_point_identity(identity, green_pos or (gx, gy))
+        self.log_message.emit(
+            "OK",
+            f"Point identified: {identity.name} ({identity.source}, "
+            f"offset {identity.separation_arcsec:.1f}″).",
+        )
+
+    @pyqtSlot(str)
+    def _on_point_identity_failed(self, message: str) -> None:
+        request = self._point_identity_request
+        if request is not None and request[2] is not None:
+            self._present_field_card(
+                request[2], catalogue_note="Point catalogue lookup unavailable."
+            )
+        elif request is not None:
+            self._viewer.clear_selection()
+            self._info_card.show_star(
+                "Point identification unavailable",
+                message,
+                roles_enabled=False,
+            )
+            self._info_card.reposition()
+        self.log_message.emit("WARN", f"Point identification: {message}")
+
+    def _finish_point_identification(self) -> None:
+        worker = self._point_identity_worker
+        self._point_identity_worker = None
+        self._point_identity_request = None
+        if worker is not None:
+            worker.deleteLater()
+
+    def _present_point_identity(self, identity: PointSourceIdentity, green_pos) -> None:
+        category = self._object_category(identity.object_type)
+        title_kind = "star" if category == "star" else "object"
+        lines = [
+            f"Source  {identity.source}",
+            f"Object type  {identity.object_type or '—'}",
+        ]
+        if identity.gaia_source_id:
+            lines.append(f"Gaia DR3 source  {identity.gaia_source_id}")
+        lines.extend(f"{band} magnitude  {value:.3f}" for band, value in identity.mags)
+        lines.extend(
+            (
+                f"RA {format_ra_hms(identity.ra_deg / 15.0)}  "
+                f"Dec {format_dec_dms(identity.dec_deg)}",
+                f"WCS match offset  {identity.separation_arcsec:.1f}″",
+            )
+        )
+        self._present_card(
+            green_pos,
+            f"Identified {title_kind} · {identity.name}",
+            "\n".join(lines),
+            dict(
+                ra_deg=identity.ra_deg,
+                dec_deg=identity.dec_deg,
+                auid=None,
+                name=identity.name,
+                source="point_catalogue",
+                mags=dict(identity.mags),
+            ),
+        )
 
     def _variable_body(self, v) -> str:
         lines = []
@@ -887,12 +1193,19 @@ class ImagingPage(QWidget):
         return "\n".join(lines)
 
     def _comparison_body(self, c) -> str:
-        lines = []
+        lines = [f"AAVSO VSP reference  {c.auid}"]
+        gaia_matches = [
+            star
+            for star in self._engine.field_stars
+            if separation_arcmin(c.ra_deg, c.dec_deg, star.ra_deg, star.dec_deg) <= 0.05
+        ]
+        if gaia_matches:
+            lines.append(f"Gaia DR3 source  {gaia_matches[0].source_id}")
         mags = [f"{b.band} {b.mag:.3f}" for b in c.bands]
         if mags:
             lines.append("  ".join(mags))
         if c.label:
-            lines.append(f"chart label {c.label}")
+            lines.append(f"VSP chart code {c.label}  (magnitude code, not a name)")
         lines.append(f"RA {format_ra_hms(c.ra_deg / 15.0)}  Dec {format_dec_dms(c.dec_deg)}")
         return "\n".join(lines)
 
@@ -954,7 +1267,7 @@ class ImagingPage(QWidget):
         if wcs is not None:  # plate-solved → the star's true celestial position
             ra_h, dec_d = wcs.pixel_to_radec(meas.x, meas.y)
             text += f"\nstar   RA {format_ra_hms(ra_h)}  Dec {format_dec_dms(dec_d)}"
-            text += "\ncatalogue identifier   no VSX/VSP match"
+            text += "\ncatalogue identifier   no loaded marker"
         else:
             text += "\ncatalogue identifier   identify the field first"
         return text
@@ -1068,6 +1381,7 @@ class ImagingPage(QWidget):
             )
             return
         self.log_message.emit("OK", summary)
+        self._mount_dock.set_center_available(True)
         self._viewer.set_astrometry_overlay(overlay, self._green_shape)
         self._arm_overlay("grid", True, self._viewer.set_astrometry_enabled)
         self._histogram_dock.set_astrometry_available(True)
@@ -1084,10 +1398,45 @@ class ImagingPage(QWidget):
     def _on_overlay_toggled(self, name: str, on: bool) -> None:
         {
             "grid": self._viewer.set_astrometry_enabled,
+            "catalogue": self._viewer.set_field_catalogue_enabled,
             "variables": self._viewer.set_catalog_enabled,
+            "galaxies": lambda enabled: self._viewer.set_context_enabled("galaxies", enabled),
+            "nebulae_clusters": lambda enabled: self._viewer.set_context_enabled(
+                "nebulae_clusters", enabled
+            ),
+            "exoplanets": lambda enabled: self._viewer.set_context_enabled("exoplanets", enabled),
+            "other_objects": lambda enabled: self._viewer.set_context_enabled(
+                "other_objects", enabled
+            ),
             "comparisons": self._viewer.set_comparison_enabled,
             "targets": self._viewer.set_target_enabled,
+            "labels": self._viewer.set_marker_labels_enabled,
         }[name](on)
+
+    def _open_field_catalogue(self) -> None:
+        """Open the per-field catalogue controls at their point of use."""
+        dialog = AstrometrySettingsDialog(self._config, self, section=SECTION_CATALOG)
+        dialog.saved.connect(self._engine.refetch_catalog)
+        dialog.saved.connect(self._project_catalog)
+        dialog.saved.connect(self._sync_catalogue_depth)
+        dialog.exec()
+
+    def _sync_catalogue_depth(self) -> None:
+        maximum = float(self._cfg("catalog.field_stars_mag_limit", 18.0))
+        self._overlay_bar.set_magnitude_range(maximum)
+        self._display_mag_limit = min(self._display_mag_limit, maximum)
+        self._overlay_bar.set_magnitude_limit(self._display_mag_limit)
+
+    @pyqtSlot(float)
+    def _on_catalogue_magnitude_changed(self, value: float) -> None:
+        """Apply the faint limit immediately from already cached field data."""
+        self._display_mag_limit = float(value)
+        self._project_catalog()
+
+    @pyqtSlot(float)
+    def _save_catalogue_magnitude(self, value: float) -> None:
+        self._config.set("catalog.display_mag_limit", float(value))
+        self._config.save()
 
     def _arm_overlay(self, name: str, has: bool, setter) -> None:
         """Enable a chip when its data exists; auto-show it the first time only."""
@@ -1111,29 +1460,499 @@ class ImagingPage(QWidget):
         the stars instead of freezing at the solve position.
         """
         variables = self._engine.variables
+        field_stars = self._engine.field_stars
+        named_objects = self._engine.named_objects
         comparisons = self._engine.comparisons
         wcs, gs = self._engine.tracked_wcs(), self._green_shape
-        self._var_green = project_points(wcs, gs, ((v.ra_deg, v.dec_deg) for v in variables))
-        var_pts = [(p[0], p[1], v.is_suspected) for p, v in zip(self._var_green, variables) if p]
+        raw_var_green = project_points(wcs, gs, ((v.ra_deg, v.dec_deg) for v in variables))
+        # The VSX table and its overlay share this projection exactly. A local
+        # detector is not used as an arbitrary visibility gate: faint, valid
+        # catalogue variables still deserve to be shown and can be filtered by
+        # their catalogue magnitude in the Variables table.
+        self._var_green = raw_var_green
+        var_pts = [
+            (
+                p[0],
+                p[1],
+                v.is_suspected,
+                v.name,
+                f"Variable star\n{v.name}\n{self._variable_body(v)}",
+            )
+            for source_index, (p, v) in enumerate(zip(self._var_green, variables))
+            if p and self._variable_is_visible(source_index)
+        ]
         self._viewer.set_catalog_markers(var_pts, gs)
+
+        # Cross-match SIMBAD identities onto Gaia before drawing.  One physical
+        # source gets one circle and one information card; a second cyan circle
+        # at the same coordinate only made the field look duplicated.
+        self._named_objects = list(named_objects)
+        match_key = (id(field_stars), id(named_objects), len(field_stars), len(named_objects))
+        if match_key != self._field_catalogue_match_key:
+            self._field_catalogue_match_key = match_key
+            self._matched_named_indices = set()
+            self._field_catalogue_names = []
+            for star in field_stars:
+                candidates = [
+                    (
+                        separation_arcmin(star.ra_deg, star.dec_deg, item.ra_deg, item.dec_deg),
+                        index,
+                        item,
+                    )
+                    for index, item in enumerate(self._named_objects)
+                ]
+                match = min(candidates, default=None)
+                if match is not None and match[0] <= 3.0 / 60.0:
+                    self._matched_named_indices.add(match[1])
+                    self._field_catalogue_names.append(match[2])
+                else:
+                    self._field_catalogue_names.append(None)
+        raw_field_catalogue_green = project_points(
+            wcs, gs, ((star.ra_deg, star.dec_deg) for star in field_stars)
+        )
+        detected_only = bool(self._cfg("catalog.field_stars_detected_only", False))
+        self._field_catalogue_green = [
+            (
+                point
+                if point is not None
+                and self._magnitude_is_visible(star.g_mag)
+                and (not detected_only or self._is_detected_near(point))
+                else None
+            )
+            for point, star in zip(raw_field_catalogue_green, field_stars)
+        ]
+        field_pts = [
+            (
+                point[0],
+                point[1],
+                (
+                    identity.name
+                    if identity is not None
+                    and not self._is_generic_catalogue_identifier(identity.name)
+                    else ""
+                ),
+                self._field_catalogue_tooltip(star, identity),
+            )
+            for point, star, identity in zip(
+                self._field_catalogue_green, field_stars, self._field_catalogue_names
+            )
+            if point
+        ]
+        raw_named_green = project_points(
+            wcs, gs, ((item.ra_deg, item.dec_deg) for item in self._named_objects)
+        )
+        self._named_objects_green = [
+            point if index not in self._matched_named_indices else None
+            for index, point in enumerate(raw_named_green)
+        ]
+        named_by_type: dict[str, list] = {
+            "star": [],
+            "galaxy": [],
+            "nebula_cluster": [],
+            "other": [],
+        }
+        for point, item in zip(self._named_objects_green, self._named_objects):
+            if point is None:
+                continue
+            marker = (point[0], point[1], item.name, self._named_object_tooltip(item))
+            category = self._object_category(item.object_type)
+            if category == "star":
+                named_by_type["star"].append(marker)
+            elif category == "galaxy":
+                named_by_type["galaxy"].append(marker)
+            elif category in {"nebula", "cluster"}:
+                named_by_type["nebula_cluster"].append(marker)
+            else:
+                named_by_type["other"].append(marker)
+
+        # Standalone SIMBAD stars belong to the observer-facing Stars layer.
+        # This also leaves useful identities when Gaia is temporarily offline.
+        field_pts.extend(named_by_type["star"])
+        self._point_identity_green = project_points(
+            wcs,
+            gs,
+            ((item.ra_deg, item.dec_deg) for item in self._point_identities),
+        )
+        for point, identity in zip(self._point_identity_green, self._point_identities):
+            if point is None:
+                continue
+            marker = (
+                point[0],
+                point[1],
+                identity.name,
+                self._point_identity_tooltip(identity),
+            )
+            category = self._object_category(identity.object_type)
+            if category == "star":
+                field_pts.append(marker)
+            elif category == "galaxy":
+                named_by_type["galaxy"].append(marker)
+            elif category in {"nebula", "cluster"}:
+                named_by_type["nebula_cluster"].append(marker)
+            else:
+                named_by_type["other"].append(marker)
+        field_pts = self._deduplicate_marker_points(field_pts)
+        self._viewer.set_field_catalogue_markers(field_pts, gs)
+
+        # The bundled Essential catalogue is a compact offline context layer:
+        # galaxies, nebulae and clusters are not Gaia stars and must not be
+        # hidden behind a magnitude filter intended for ordinary stars.
+        geometry = field_geometry(wcs, gs)
+        self._deep_sky_objects = []
+        self._exoplanet_hosts = list(self._engine.exoplanet_hosts)
+        if geometry is not None:
+            ra_deg, dec_deg, radius_deg, _fov_arcmin = geometry
+            if bool(self._cfg("catalog.show_essential_objects", True)):
+                self._deep_sky_objects = [
+                    item
+                    for item in essential_catalogue_objects()
+                    if separation_arcmin(ra_deg, dec_deg, item.ra_degrees, item.dec_degrees)
+                    <= radius_deg * 60.0
+                ]
+            if not self._exoplanet_hosts and bool(
+                self._cfg("catalog.show_cached_exoplanets", True)
+            ):
+                self._exoplanet_hosts = cached_exoplanet_hosts_in_cone(ra_deg, dec_deg, radius_deg)
+        raw_deep_sky_green = project_points(
+            wcs,
+            gs,
+            ((item.ra_degrees, item.dec_degrees) for item in self._deep_sky_objects),
+        )
+        self._deep_sky_green = [point for point in raw_deep_sky_green]
+        essential_by_type: dict[str, list] = {
+            "galaxy": [],
+            "nebula_cluster": [],
+            "other": [],
+        }
+        for point, item in zip(self._deep_sky_green, self._deep_sky_objects):
+            if point is None:
+                continue
+            marker = (point[0], point[1], item.name, self._deep_sky_tooltip(item))
+            category = self._object_category(item.object_type)
+            if category == "galaxy":
+                essential_by_type["galaxy"].append(marker)
+            elif category in {"nebula", "cluster"}:
+                essential_by_type["nebula_cluster"].append(marker)
+            else:
+                essential_by_type["other"].append(marker)
+
+        galaxy_pts = self._deduplicate_marker_points(
+            named_by_type["galaxy"] + essential_by_type["galaxy"]
+        )
+        nebula_cluster_pts = self._deduplicate_marker_points(
+            named_by_type["nebula_cluster"] + essential_by_type["nebula_cluster"]
+        )
+        other_pts = self._deduplicate_marker_points(
+            named_by_type["other"] + essential_by_type["other"]
+        )
+        self._viewer.set_context_markers("galaxies", galaxy_pts, gs)
+        self._viewer.set_context_markers("nebulae_clusters", nebula_cluster_pts, gs)
+        self._viewer.set_context_markers("other_objects", other_pts, gs)
+        raw_exoplanet_green = project_points(
+            wcs,
+            gs,
+            ((host.ra_degrees, host.dec_degrees) for host in self._exoplanet_hosts),
+        )
+        self._exoplanet_green = list(raw_exoplanet_green)
+        exoplanet_pts = [
+            (
+                point[0],
+                point[1],
+                host.host_name,
+                self._exoplanet_tooltip(host),
+            )
+            for point, host in zip(self._exoplanet_green, self._exoplanet_hosts)
+            if point
+        ]
+        self._viewer.set_context_markers("exoplanets", exoplanet_pts, gs)
         self._comp_green = project_points(wcs, gs, ((c.ra_deg, c.dec_deg) for c in comparisons))
-        comp_pts = [(p[0], p[1], c.label) for p, c in zip(self._comp_green, comparisons) if p]
+        # A VSP chart may contain objects below the current frame's detection
+        # threshold.  Do not draw a catalogue plus in empty sky: the optional
+        # candidate layer is for sources actually seen in this image. Selected
+        # stars remain visible separately as the observer's saved selection.
+        comp_pts = [
+            (
+                p[0],
+                p[1],
+                self._comparison_tooltip(c),
+            )
+            for p, c in zip(self._comp_green, comparisons)
+            if p and self._is_detected_near(p)
+        ]
         self._viewer.set_comparison_markers(comp_pts, gs)
+        self._arm_overlay("catalogue", bool(field_pts), self._viewer.set_field_catalogue_enabled)
         self._arm_overlay("variables", bool(var_pts), self._viewer.set_catalog_enabled)
-        self._arm_overlay("comparisons", bool(comp_pts), self._viewer.set_comparison_enabled)
+        self._arm_overlay(
+            "galaxies",
+            bool(galaxy_pts),
+            lambda enabled: self._viewer.set_context_enabled("galaxies", enabled),
+        )
+        self._arm_overlay(
+            "nebulae_clusters",
+            bool(nebula_cluster_pts),
+            lambda enabled: self._viewer.set_context_enabled("nebulae_clusters", enabled),
+        )
+        self._arm_overlay(
+            "exoplanets",
+            bool(exoplanet_pts),
+            lambda enabled: self._viewer.set_context_enabled("exoplanets", enabled),
+        )
+        self._arm_overlay(
+            "other_objects",
+            bool(other_pts),
+            lambda enabled: self._viewer.set_context_enabled("other_objects", enabled),
+        )
+        # Once the field is solved every scientific filter remains clickable,
+        # even when its current count is zero.  The count explains an empty
+        # layer; a disabled grey button looked like a broken feature.
+        field_ready = geometry is not None
+        for name, count in (
+            ("catalogue", len(field_pts)),
+            ("variables", len(var_pts)),
+            ("galaxies", len(galaxy_pts)),
+            ("nebulae_clusters", len(nebula_cluster_pts)),
+            ("exoplanets", len(exoplanet_pts)),
+            ("other_objects", len(other_pts)),
+            ("comparisons", len(comp_pts)),
+        ):
+            self._overlay_bar.set_available(name, field_ready)
+            self._overlay_bar.set_count(name, count)
+        # Catalogue candidates are secondary context; unlike the selected
+        # ensemble, they must never flood the image by default.
+        self._overlay_bar.set_available("comparisons", field_ready)
+        if not comp_pts:
+            self._viewer.set_comparison_enabled(False)
         self._project_targets()
 
     def _project_targets(self) -> None:
         tset = self._engine.target_set()
         wcs, gs = self._engine.tracked_wcs(), self._green_shape
         self._target_green = project_points(wcs, gs, ((s.ra_deg, s.dec_deg) for s in tset.stars))
-        pts = [
-            (p[0], p[1], s.display_name, s.role)
-            for p, s in zip(self._target_green, tset.stars)
-            if p
-        ]
+        pts = []
+        for p, s in zip(self._target_green, tset.stars):
+            if p is None:
+                continue
+            pts.append((p[0], p[1], s.display_name, s.role, self._target_tooltip(s)))
         self._viewer.set_target_markers(pts, gs)
         self._arm_overlay("targets", bool(pts), self._viewer.set_target_enabled)
+        labels_available = bool(
+            pts
+            or self._var_green
+            or self._field_catalogue_green
+            or self._named_objects_green
+            or self._deep_sky_green
+            or self._exoplanet_green
+            or self._comp_green
+        )
+        self._overlay_bar.set_available("labels", labels_available)
+        if labels_available and "labels" not in self._armed:
+            # Labels are intentionally opt-in. Circles + hover/click identify
+            # the field cleanly; enabling every text label by default turns a
+            # dense Milky Way image into an unreadable wall of catalogue IDs.
+            self._armed.add("labels")
+            self._overlay_bar.set_checked("labels", False)
+            self._viewer.set_marker_labels_enabled(False)
+
+    def _variable_is_visible(self, source_index: int) -> bool:
+        return (
+            self._visible_variable_indices is None or source_index in self._visible_variable_indices
+        )
+
+    @pyqtSlot(object)
+    def _on_variable_visible_rows_changed(self, source_indices) -> None:
+        """Keep the VSX overlay identical to the filtered Variables table."""
+        self._visible_variable_indices = {int(index) for index in source_indices}
+        self._project_catalog()
+
+    def _magnitude_is_visible(self, magnitude: float | None) -> bool:
+        """Apply the observer's Gaia G limit to stellar Gaia markers only."""
+        return magnitude is None or float(magnitude) <= self._display_mag_limit
+
+    @staticmethod
+    def _deduplicate_marker_points(points, radius_px: float = 8.0) -> list:
+        """Merge catalogue overlays that identify the same image position.
+
+        SIMBAD and the bundled Messier/NGC/IC catalogue can describe one
+        physical object independently.  Keep one marker while preserving the
+        underlying catalogue rows for click identification and provenance.
+        """
+        selected = []
+        radius2 = float(radius_px) ** 2
+        for point in points:
+            if any(
+                (point[0] - existing[0]) ** 2 + (point[1] - existing[1]) ** 2 <= radius2
+                for existing in selected
+            ):
+                continue
+            selected.append(point)
+        return selected
+
+    @staticmethod
+    def _comparison_brightest_mag(comparison) -> float | None:
+        values = [band.mag for band in comparison.bands if band.mag is not None]
+        return min(values) if values else None
+
+    @staticmethod
+    def _host_brightest_mag(host) -> float | None:
+        values = [value for _band, value in getattr(host, "mags", ())]
+        return min(values) if values else None
+
+    @staticmethod
+    def _object_category(object_type: str) -> str:
+        """Map catalogue-specific object types to the observer-facing filters."""
+        value = (object_type or "").casefold()
+        if any(token in value for token in ("gal", "qso", "agn")) or value in {
+            "g",
+            "gi",
+            "gx",
+            "gic",
+        }:
+            return "galaxy"
+        if any(token in value for token in ("neb", "hii")) or value in {
+            "pn",
+            "pl",
+            "nb",
+            "snr",
+        }:
+            return "nebula"
+        if any(token in value for token in ("cluster", "cl*")) or value in {
+            "oc",
+            "gc",
+            "gb",
+            "glc",
+            "c+n",
+        }:
+            return "cluster"
+        if "*" in value or "star" in value:
+            return "star"
+        return "other"
+
+    @staticmethod
+    def _is_generic_catalogue_identifier(name: str) -> bool:
+        """Identifiers useful in a card but too verbose/redundant as labels."""
+        compact = " ".join((name or "").split()).casefold()
+        return compact.startswith(
+            (
+                "gaia ",
+                "2mass ",
+                "ucac",
+                "sdss ",
+                "pan-starrs ",
+                "ps1 ",
+                "wise ",
+                "allwise ",
+                "lamost ",
+                "ztf ",
+                "asassn ",
+                "ato ",
+            )
+        )
+
+    @staticmethod
+    def _field_catalogue_body(star, identity=None) -> str:
+        lines = []
+        if identity is not None:
+            lines.extend(
+                [
+                    f"Name  {identity.name}",
+                    f"Object type  {identity.object_type or '—'}",
+                ]
+            )
+        lines.append(f"Gaia DR3 source  {star.source_id}")
+        for label, value in (
+            ("Gaia G", star.g_mag),
+            ("Gaia BP", star.bp_mag),
+            ("Gaia RP", star.rp_mag),
+        ):
+            if value is not None:
+                lines.append(f"{label} magnitude  {value:.3f}")
+        lines.append(f"RA {format_ra_hms(star.ra_deg / 15.0)}  Dec {format_dec_dms(star.dec_deg)}")
+        lines.append("Sources  Gaia DR3" + (" · SIMBAD" if identity is not None else ""))
+        return "\n".join(lines)
+
+    @classmethod
+    def _field_catalogue_tooltip(cls, star, identity=None) -> str:
+        return cls._field_catalogue_body(star, identity)
+
+    @staticmethod
+    def _deep_sky_tooltip(item) -> str:
+        magnitude = f"\nMagnitude  {item.magnitude:.1f}" if item.magnitude is not None else ""
+        aliases = f"\nAlso  {', '.join(item.aliases[:2])}" if item.aliases else ""
+        return (
+            f"Argos Essential Catalogue\n{item.name}\n{item.object_type or 'Deep-sky object'}"
+            f"{magnitude}{aliases}\n"
+            f"RA {format_ra_hms(item.ra_degrees / 15.0)}  Dec {format_dec_dms(item.dec_degrees)}"
+        )
+
+    @staticmethod
+    def _named_object_tooltip(item) -> str:
+        magnitudes = "".join(
+            f"\nSIMBAD {band} magnitude  {value:.3f}" for band, value in getattr(item, "mags", ())
+        )
+        return (
+            f"SIMBAD identified object\n{item.name}\n{item.object_type or 'Object type unavailable'}\n"
+            f"{magnitudes.lstrip()}\n"
+            f"RA {format_ra_hms(item.ra_deg / 15.0)}  Dec {format_dec_dms(item.dec_deg)}"
+        )
+
+    @staticmethod
+    def _point_identity_tooltip(identity: PointSourceIdentity) -> str:
+        magnitudes = "".join(f"\n{band} magnitude  {value:.3f}" for band, value in identity.mags)
+        return (
+            f"Point catalogue identification\n{identity.name}\n"
+            f"{identity.object_type or 'Object type unavailable'}\n"
+            f"Source  {identity.source}{magnitudes}\n"
+            f"RA {format_ra_hms(identity.ra_deg / 15.0)}  "
+            f"Dec {format_dec_dms(identity.dec_deg)}\n"
+            f"WCS match offset  {identity.separation_arcsec:.1f}″"
+        )
+
+    @staticmethod
+    def _exoplanet_tooltip(host) -> str:
+        planets = ", ".join(host.planet_names)
+        magnitudes = "".join(
+            f"\n{band} magnitude  {value:.3f}" for band, value in getattr(host, "mags", ())
+        )
+        return (
+            f"Prepared exoplanet host\n{host.host_name}\nCached planet(s)  {planets}\n"
+            f"{magnitudes.lstrip()}\n"
+            f"RA {format_ra_hms(host.ra_degrees / 15.0)}  "
+            f"Dec {format_dec_dms(host.dec_degrees)}\n"
+            "Source: local NASA Exoplanet Archive cache"
+        )
+
+    def _is_detected_near(self, point: tuple[float, float], tolerance_px: float = 4.0) -> bool:
+        """Whether a catalogue coordinate has a local detected source nearby."""
+        if not self._detected_green:
+            return True  # no current detector result: do not manufacture a warning
+        x, y = point
+        return any(math.hypot(x - dx, y - dy) <= tolerance_px for dx, dy in self._detected_green)
+
+    @staticmethod
+    def _comparison_tooltip(comparison) -> str:
+        mags = "  ".join(f"{band.band} {band.mag:.3f}" for band in comparison.bands) or "—"
+        return (
+            "VSP reference candidate\n"
+            f"AUID {comparison.auid}\n"
+            f"Catalogue magnitudes  {mags}\n"
+            f"RA {format_ra_hms(comparison.ra_deg / 15.0)}  "
+            f"Dec {format_dec_dms(comparison.dec_deg)}"
+        )
+
+    @staticmethod
+    def _target_tooltip(star: TargetStar) -> str:
+        role = {
+            "target": "Photometry target",
+            "comparison": "Selected reference star",
+            "check": "Check star",
+        }.get(star.role, star.role.capitalize())
+        mags = "  ".join(f"{band} {mag:.3f}" for band, mag in star.mags.items()) or "—"
+        return (
+            f"{role}\n{star.display_name}\n"
+            f"AUID {star.auid or '—'}\n"
+            f"Catalogue magnitudes  {mags}\n"
+            f"RA {format_ra_hms(star.ra_deg / 15.0)}  Dec {format_dec_dms(star.dec_deg)}"
+        )
 
     # ------------------------------------------------------------------
     # Target roles (the engine owns the persistent target set)
@@ -1171,20 +1990,52 @@ class ImagingPage(QWidget):
         self._viewer.clear_selection()
         self._selected_green = None
         self._pending_star = None
+        self._pending_green = None
+
+    @pyqtSlot(str)
+    def _on_photometry_star_selected(self, key: str) -> None:
+        """Focus the image on the exact saved-star row selected in Photometry.
+
+        The tables are not a second source of truth: they select a star from the
+        engine-owned target set and the image receives the same aperture and
+        display label used for a direct click.
+        """
+        stars = self._engine.target_set().stars
+        index = next((i for i, star in enumerate(stars) if star.key() == key), None)
+        if index is None or index >= len(self._target_green):
+            return
+        pos = self._target_green[index]
+        if pos is None:
+            self.log_message.emit("WARN", "Selected star is outside the solved image.")
+            return
+        star = stars[index]
+        aperture, _inner, _outer = self._engine.photometry_geometry()
+        display_pos = self._green_to_disp(pos[0], pos[1])
+        if display_pos is None:
+            return
+        self._overlay_bar.set_checked("targets", True)
+        self._viewer.set_target_enabled(True)
+        self._viewer.mark_selection(
+            display_pos[0],
+            display_pos[1],
+            f"{star.role.capitalize()} · {star.display_name}",
+            self._green_len_to_disp(aperture),
+            show_label=True,
+        )
 
     # ------------------------------------------------------------------
     # Live photometry preview (§6 P4)
     # ------------------------------------------------------------------
 
-    def open_photometry(self) -> None:
-        """Shell menu entry point (Photometry ▸ Light curve…)."""
-        self._open_photometry()
+    def open_photometry(self, *, select_variable: bool = False) -> None:
+        """Shell entry point for field-star selection or live diagnostics."""
+        self._open_photometry(select_variable=select_variable)
 
     def rerun_subs(self) -> None:
         """Shell menu entry point (Photometry ▸ Re-run subs…)."""
         self._on_rerun_subs()
 
-    def _open_photometry(self) -> None:
+    def _open_photometry(self, *, select_variable: bool = False) -> None:
         if self._photometry_window is None:
             self._photometry_window = PhotometryWindow(self)
             self._photometry_window.lightcurves = self._engine.lightcurves
@@ -1195,8 +2046,27 @@ class ImagingPage(QWidget):
             )
             self._photometry_window.targets.remove_requested.connect(self._engine.remove_target)
             self._photometry_window.comparisons.remove_requested.connect(self._engine.remove_target)
+            self._photometry_window.targets.star_selected.connect(self._on_photometry_star_selected)
+            self._photometry_window.comparisons.star_selected.connect(
+                self._on_photometry_star_selected
+            )
             self._photometry_window.variables.target_requested.connect(
                 self._on_variable_target_requested
+            )
+            self._photometry_window.variables.visible_rows_changed.connect(
+                self._on_variable_visible_rows_changed
+            )
+            self._photometry_window.comparisons.refresh_requested.connect(
+                self._engine.refetch_catalog
+            )
+            self._photometry_window.comparisons.recommend_requested.connect(
+                self._recommend_comparison_stars
+            )
+            self._photometry_window.comparisons.auto_count_changed.connect(
+                self._on_auto_comparison_count_changed
+            )
+            self._photometry_window.setup.setting_changed.connect(
+                self._on_photometry_setting_changed
             )
         # Backfill the window with the curve so far (points accrue in the dock).
         self._photometry_window.load_curves(
@@ -1208,9 +2078,61 @@ class ImagingPage(QWidget):
         # AAVSO/CSV export reflects points (and targets) added after this open.
         self._photometry_window.lightcurves = self._engine.lightcurves
         self._refresh_target_table()
+        self._photometry_window.comparisons.set_auto_count(
+            int(self._cfg("photometry.auto_comparisons", 5))
+        )
         self._refresh_variable_table()
+        self._sync_photometry_setup()
+        if select_variable:
+            self._photometry_window.show_variable_stars()
         self._photometry_window.show()
         self._photometry_window.raise_()
+
+    def _sync_photometry_setup(self) -> None:
+        """Keep the visible measurement geometry tied to the active engine."""
+        if self._photometry_window is not None:
+            self._photometry_window.setup.set_values(self._cfg, self._engine.photometry_geometry())
+
+    @pyqtSlot(str, object)
+    def _on_photometry_setting_changed(self, key: str, value: object) -> None:
+        self._config.set(key, value)
+        self._sync_photometry_setup()
+        # If a catalogue star is selected, redraw its aperture ring immediately
+        # so the control gives direct, unambiguous visual feedback.
+        if self._pending_green is not None:
+            dp = self._green_to_disp(*self._pending_green)
+            if dp is not None:
+                aperture, _annulus_in, _annulus_out = self._engine.photometry_geometry()
+                self._viewer.mark_selection(
+                    dp[0], dp[1], "", self._green_len_to_disp(aperture), show_label=False
+                )
+        self.log_message.emit("INFO", "Photometry measurement geometry updated.")
+
+    @pyqtSlot(int)
+    def _on_auto_comparison_count_changed(self, count: int) -> None:
+        self._config.set("photometry.auto_comparisons", int(count))
+        added = self._engine.reselect_comparison_stars()
+        if added:
+            self.log_message.emit(
+                "OK", f"Photometry: selected {added} pilot-qualified comparison(s)."
+            )
+        else:
+            self.log_message.emit(
+                "INFO", f"Photometry: comparison proposal set to {count} calibrated star(s)."
+            )
+
+    def _recommend_comparison_stars(self) -> None:
+        """Explicitly replace VSP suggestions with pilot-frame quality picks."""
+        added = self._engine.reselect_comparison_stars()
+        if added:
+            self.log_message.emit(
+                "OK", f"Photometry: replaced the VSP ensemble with {added} pilot-qualified star(s)."
+            )
+        else:
+            self.log_message.emit(
+                "WARN",
+                "Photometry: no pilot-qualified comparison found — solve a full-resolution frame first.",
+            )
 
     def _refresh_target_table(self) -> None:
         if self._photometry_window is not None:
@@ -1223,7 +2145,10 @@ class ImagingPage(QWidget):
         centre = field_geometry(self._astrometry.wcs, self._green_shape)
         saved = {s.key() for s in self._engine.target_set().stars}
         rows = []
-        for v in self._engine.variables:
+        source_indices = []
+        for source_index, (v, point) in enumerate(zip(self._engine.variables, self._var_green)):
+            if point is None:
+                continue  # outside the solved rectangular image
             sep = (
                 separation_arcmin(centre[0], centre[1], v.ra_deg, v.dec_deg)
                 if centre is not None
@@ -1232,7 +2157,8 @@ class ImagingPage(QWidget):
             mag = " – ".join(m for m in (v.max_mag, v.min_mag) if m)
             key = f"auid:{v.auid}" if v.auid else f"pos:{v.ra_deg:.5f},{v.dec_deg:.5f}"
             rows.append((v.name, v.var_type, mag, v.period, sep, key in saved, v.is_suspected))
-        self._photometry_window.variables.set_variables(rows)
+            source_indices.append(source_index)
+        self._photometry_window.variables.set_variables(rows, source_indices=source_indices)
 
     def _on_variable_target_requested(self, row: int) -> None:
         """Variables-tab pick — the same action as the star-card Target button."""
@@ -1441,20 +2367,62 @@ class ImagingPage(QWidget):
     def _clear_astrometry(self) -> None:
         """Drop the WCS + catalog overlays — a slew/goto changes the field."""
         self._engine.invalidate_astrometry()  # WCS + the engine's catalog cache
+        self._mount_dock.set_center_available(False)
         self._viewer.set_astrometry_overlay(None)
         self._histogram_dock.set_astrometry_available(False)
         self._histogram_dock.set_astrometry_checked(False)
         # The field changed → drop the projections (re-fetched on the next
         # solve) and re-arm so the overlays auto-show again for the new field.
         self._var_green = []
+        self._visible_variable_indices = None
+        self._field_catalogue_green = []
+        self._field_catalogue_names = []
+        self._field_catalogue_match_key = None
+        self._matched_named_indices = set()
+        self._point_identities = []
+        self._point_identity_green = []
+        self._point_identity_request = None
+        self._named_objects = []
+        self._named_objects_green = []
+        self._deep_sky_objects = []
+        self._deep_sky_green = []
+        self._exoplanet_hosts = []
+        self._exoplanet_green = []
         self._comp_green = []
         self._target_green = []
+        self._detected_green = []
         self._armed.clear()
         self._viewer.set_catalog_markers((), self._green_shape)
+        self._viewer.set_field_catalogue_markers((), self._green_shape)
+        self._viewer.set_context_markers("galaxies", (), self._green_shape)
+        self._viewer.set_context_markers("nebulae_clusters", (), self._green_shape)
+        self._viewer.set_context_markers("exoplanets", (), self._green_shape)
+        self._viewer.set_context_markers("other_objects", (), self._green_shape)
         self._viewer.set_comparison_markers((), self._green_shape)
         self._viewer.set_target_markers((), self._green_shape)
-        for name in ("grid", "variables", "comparisons", "targets"):
+        for name in (
+            "grid",
+            "catalogue",
+            "variables",
+            "galaxies",
+            "nebulae_clusters",
+            "exoplanets",
+            "other_objects",
+            "comparisons",
+            "targets",
+            "labels",
+        ):
             self._overlay_bar.set_available(name, False)
+            if name in {
+                "catalogue",
+                "variables",
+                "galaxies",
+                "nebulae_clusters",
+                "exoplanets",
+                "other_objects",
+                "comparisons",
+            }:
+                self._overlay_bar.set_count(name, 0)
 
     # ------------------------------------------------------------------
     # Driver-backed camera parameters (offset / binning)
@@ -1556,10 +2524,46 @@ class ImagingPage(QWidget):
             pos.tracking,
             pos.slewing,
         )
+        # A slew initiated outside Argos (e.g. the Seestar app or Stellarium)
+        # does not emit DeviceSession.slewed.  Never retain the previous
+        # solution in that case: after a failed re-solve it would project a
+        # scientifically invalid target ring onto the new image.
+        if self._astrometry.mount_moved_since_solution((pos.ra, pos.dec)):
+            self._clear_astrometry()
+            self.log_message.emit(
+                "INFO",
+                "Mount pointing changed outside Argos — stale astrometry overlays cleared. "
+                "Plate-solve the current full-resolution frame.",
+            )
 
     def _on_goto(self, ra_h: float, dec_d: float) -> None:
         # The session emits ``slewed`` on success → _clear_astrometry.
         self._session.goto(ra_h, dec_d)
+
+    def _center_selected_target(self) -> None:
+        """Use the visible solved frame for one explicit centering correction."""
+        wcs, shape = self._astrometry.wcs, self._green_shape
+        if wcs is None or shape is None:
+            self.log_message.emit("WARN", "Center target: plate-solve the current frame first.")
+            return
+        targets = self._engine.target_set().by_role("target")
+        if targets:
+            target = targets[0]
+            target_ra_h, target_dec_d = target.ra_deg / 15.0, target.dec_deg
+            label = target.display_name
+        elif self._session.target_radec is not None:
+            target_ra_h, target_dec_d = self._session.target_radec
+            label = "current GoTo target"
+        else:
+            self.log_message.emit("WARN", "Center target: select a target or issue a GoTo first.")
+            return
+        height, width = shape
+        solved_ra_h, solved_dec_d = wcs.pixel_to_radec((width - 1) / 2, (height - 1) / 2)
+        self._mount_dock.set_goto_fields(target_ra_h, target_dec_d)
+        self.log_message.emit("INFO", f"Centering {label} from the current plate solution…")
+        self._session.center_target_from_solution(
+            solved_ra_h, solved_dec_d, target_ra_h, target_dec_d
+        )
 
     def _lookup_object(self, query: str) -> None:
         """Resolve a designation in a disposable worker; never freeze Capture."""
@@ -1590,6 +2594,43 @@ class ImagingPage(QWidget):
             "INFO",
             f"Catalogue target: {result.name} — RA {result.ra_hours:.5f}h Dec {result.dec_degrees:+.5f}°",
         )
+        # A regular catalogue lookup is deliberately only an observation
+        # identity: pointing at M 42 must not silently start a photometry
+        # target set.  SIMBAD's ``V*`` type is different: the observer has
+        # selected a variable star such as XX Cyg, for which Target + automatic
+        # VSP comparison selection is the expected scientific workflow.
+        if self._is_variable_star(result):
+            self._set_photometry_target("variable_catalogue", result, announce=False)
+
+    @staticmethod
+    def _is_variable_star(result) -> bool:
+        """Whether a resolver result is explicitly classified as variable."""
+        return is_variable_object_type(str(getattr(result, "object_type", "") or ""))
+
+    def _set_photometry_target(self, source: str, result, *, announce: bool = True) -> None:
+        """Save one resolved source as the active differential target."""
+        star = TargetStar(
+            role="target",
+            ra_deg=result.ra_degrees,
+            dec_deg=result.dec_degrees,
+            name=result.name,
+            source=source,
+            mags={},
+        )
+        self._engine.set_target_role(star)
+        if self._astrometry.wcs is None:
+            self.log_message.emit(
+                "INFO",
+                "Photometry target saved — solve a full-resolution frame to draw its marker "
+                "and select field comparison stars.",
+            )
+        if announce:
+            label = "Exoplanet host" if source == "exoplanet_host" else "Variable star"
+            self.log_message.emit(
+                "OK",
+                f"{label} selected for photometry: {star.display_name}. "
+                "Identify the field, then review the comparison ensemble.",
+            )
 
     @pyqtSlot(str, object)
     def set_science_source(self, programme: str, result) -> None:
@@ -1602,21 +2643,7 @@ class ImagingPage(QWidget):
         comparison stars.
         """
         source = "exoplanet_host" if programme == "exoplanet" else "variable_catalogue"
-        star = TargetStar(
-            role="target",
-            ra_deg=result.ra_degrees,
-            dec_deg=result.dec_degrees,
-            name=result.name,
-            source=source,
-            mags={},
-        )
-        self._engine.set_target_role(star)
-        label = "Exoplanet host" if programme == "exoplanet" else "Variable star"
-        self.log_message.emit(
-            "OK",
-            f"{label} selected for photometry: {star.display_name}. "
-            "Identify the field, then review the comparison ensemble.",
-        )
+        self._set_photometry_target(source, result)
 
     @pyqtSlot(str)
     def _on_object_lookup_failed(self, message: str) -> None:
@@ -1770,6 +2797,10 @@ class ImagingPage(QWidget):
         if self._object_resolver_worker is not None:
             self._object_resolver_worker.wait(9000)  # resolver request timeout is 8 seconds
             self._object_resolver_worker = None
+        if self._point_identity_worker is not None:
+            # Gaia and SIMBAD have independent bounded requests (20 s + 15 s).
+            self._point_identity_worker.wait(38000)
+            self._point_identity_worker = None
         self._engine.shutdown()
         self._processor.stop()
         self._processor.wait(2000)

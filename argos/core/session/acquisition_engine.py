@@ -34,7 +34,7 @@ import numpy as np
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal, pyqtSlot
 
 from argos import SOFTWARE_ID
-from argos.core.catalog.photometry import auto_comparison_stars
+from argos.core.catalog.photometry import ComparisonQuality, auto_comparison_stars
 from argos.core.catalog.targets import (
     ROLE_CHECK,
     ROLE_COMPARISON,
@@ -48,11 +48,14 @@ from argos.core.imaging import sensor_models
 from argos.core.imaging.astrometry_session import field_geometry
 from argos.core.imaging.fits_writer import FITSWriter, FrameContext
 from argos.core.imaging.green import green_plane
+from argos.core.imaging.metrics import measure_star_at
 from argos.core.imaging.platesolve import angular_separation_deg
 from argos.core.photometry.airmass import airmass_from_altitude, bjd_tdb, julian_date
+from argos.core.photometry.aperture import measure_aperture
 from argos.core.photometry.lightcurve import LcPoint, LightCurve
 from argos.core.photometry.params import DEFAULT_FWHM, PhotometryParams, measure_frame
-from argos.core.photometry.tracking import ApertureTracker, TrackedWCS
+from argos.core.photometry.quality import comparison_quality_report, save_comparison_quality_report
+from argos.core.photometry.tracking import ApertureTracker, TrackedWCS, select_tracking_anchors
 from argos.core.photometry.uncertainty import apply_systematic_floor, estimate_systematic_floor
 from argos.core.session.device_session import DeviceSession
 from argos.core.session.diagnostics import SessionDiagnostics
@@ -154,6 +157,9 @@ class AcquisitionEngine(QObject):
         self._catalog_worker: CatalogWorker | None = None
         self._variables: list = []
         self._comparisons: list = []
+        self._field_stars: list = []
+        self._named_objects: list = []
+        self._exoplanet_hosts: list = []
         self._catalog_centre: tuple[float, float] | None = None  # (ra_deg, dec_deg)
         self._target_set: TargetSet | None = None
 
@@ -217,6 +223,21 @@ class AcquisitionEngine(QObject):
     def comparisons(self) -> list:
         """Cached VSP comparison stars for the current field."""
         return self._comparisons
+
+    @property
+    def field_stars(self) -> list:
+        """Cached named Gaia DR3 sources for the current solved field."""
+        return self._field_stars
+
+    @property
+    def named_objects(self) -> list:
+        """Cached SIMBAD names/types for the current solved field."""
+        return self._named_objects
+
+    @property
+    def exoplanet_hosts(self) -> list:
+        """Cached NASA confirmed exoplanet hosts for the current solved field."""
+        return self._exoplanet_hosts
 
     @property
     def lightcurves(self) -> dict[str, LightCurve]:
@@ -505,7 +526,9 @@ class AcquisitionEngine(QObject):
             self._diag = None
             self._diag_object = None
             try:
-                self.target_set().save(run_root / "targets.json")
+                target_set = self.target_set()
+                target_set.save(run_root / "targets.json")
+                self._write_active_selection(target_set)
             except OSError as exc:
                 self.log_message.emit("WARN", f"Save run targets: {exc}")
         if record is not None and getattr(record, "timestamp", None):
@@ -765,6 +788,9 @@ class AcquisitionEngine(QObject):
         self._astrometry.invalidate()
         self._variables = []
         self._comparisons = []
+        self._field_stars = []
+        self._named_objects = []
+        self._exoplanet_hosts = []
         self._catalog_centre = None
         self._reset_tracker()
 
@@ -785,6 +811,9 @@ class AcquisitionEngine(QObject):
         """
         self._variables = []
         self._comparisons = []
+        self._field_stars = []
+        self._named_objects = []
+        self._exoplanet_hosts = []
         self._catalog_centre = None
         self.maybe_fetch_catalog()
 
@@ -796,13 +825,39 @@ class AcquisitionEngine(QObject):
         if geom is None:
             return
         ra_deg, dec_deg, radius_deg, fov_arcmin = geom
-        if self._catalog_centre is not None and (self._variables or self._comparisons):
+        if self._catalog_centre is not None and (
+            self._variables
+            or self._comparisons
+            or self._field_stars
+            or self._named_objects
+            or self._exoplanet_hosts
+        ):
             moved = angular_separation_deg(
                 ra_deg / 15.0, dec_deg, self._catalog_centre[0] / 15.0, self._catalog_centre[1]
             )
             if moved < radius_deg:
                 return  # same field → reuse the cached catalog
         self._catalog_centre = (ra_deg, dec_deg)
+        # VSX must be queried at the solved field centre (all variables that
+        # are actually on the detector). VSP, however, supplies a calibrated
+        # *sequence for a scientific target*; querying the mount/field centre
+        # instead loses that sequence whenever a goto is offset.
+        targets = self.target_set().by_role(ROLE_TARGET)
+        source = targets[0] if targets else None
+        want_field_stars = bool(self._cfg("catalog.field_stars_enabled", True))
+        want_named_objects = bool(self._cfg("catalog.named_objects_enabled", True))
+        identity_budget = max(
+            50, min(5000, int(self._cfg("catalog.identification_max_objects", 400)))
+        )
+        if want_field_stars and want_named_objects:
+            # Gaia supplies the stellar backbone; SIMBAD enriches it with
+            # physical types and conventional names.  Sharing one budget keeps
+            # the observer's speed choice honest instead of spending it twice.
+            field_star_budget = max(25, round(identity_budget * 0.7))
+            named_object_budget = max(25, identity_budget - field_star_budget)
+        else:
+            field_star_budget = identity_budget
+            named_object_budget = identity_budget
         req = CatalogRequest(
             ra_deg=ra_deg,
             dec_deg=dec_deg,
@@ -811,6 +866,21 @@ class AcquisitionEngine(QObject):
             mag_limit=float(self._cfg("catalog.mag_limit", 15.0)),
             max_results=int(self._cfg("catalog.max_results", 250)),
             include_suspected=bool(self._cfg("catalog.include_suspected", True)),
+            comparison_target_name=source.display_name if source else None,
+            comparison_ra_deg=source.ra_deg if source else None,
+            comparison_dec_deg=source.dec_deg if source else None,
+            want_field_stars=want_field_stars,
+            field_star_mag_limit=float(self._cfg("catalog.field_stars_mag_limit", 18.0)),
+            field_star_max_results=field_star_budget,
+            want_named_objects=want_named_objects,
+            named_object_max_results=named_object_budget,
+            named_objects_allow_network=bool(
+                self._cfg("catalog.named_objects_allow_network", True)
+            ),
+            want_exoplanet_hosts=bool(self._cfg("catalog.exoplanet_hosts_enabled", True)),
+            exoplanet_hosts_allow_network=bool(
+                self._cfg("catalog.exoplanet_hosts_allow_network", True)
+            ),
         )
         self._catalog_worker = CatalogWorker(req, parent=self)
         self._catalog_worker.fetched.connect(self._on_catalog)
@@ -823,9 +893,47 @@ class AcquisitionEngine(QObject):
             return
         self._variables = list(result.variables)
         self._comparisons = list(result.comparisons)
+        self._field_stars = list(result.field_stars)
+        self._named_objects = list(result.named_objects)
+        self._exoplanet_hosts = list(result.exoplanet_hosts)
         self.catalog_ready.emit(result)  # the page re-projects onto the WCS
         if self._variables:
             self.log_message.emit("OK", f"Catalog: {len(self._variables)} variable(s) in field")
+        if self._field_stars:
+            self.log_message.emit(
+                "OK", f"Catalog: {len(self._field_stars)} Gaia DR3 source(s) in field"
+            )
+            if result.field_star_limit and len(self._field_stars) >= result.field_star_limit:
+                self.log_message.emit(
+                    "INFO",
+                    "Catalog: Gaia identification budget reached; the displayed list is "
+                    "not necessarily complete to the requested G limit.",
+                )
+        if self._named_objects:
+            self.log_message.emit(
+                "OK", f"Catalog: {len(self._named_objects)} named SIMBAD object(s) in field"
+            )
+            if result.named_object_limit and len(self._named_objects) >= result.named_object_limit:
+                self.log_message.emit(
+                    "INFO",
+                    "Catalog: SIMBAD identification budget reached; increase it in Settings "
+                    "only when a more detailed field inventory is useful.",
+                )
+        if self._exoplanet_hosts:
+            self.log_message.emit(
+                "OK", f"Catalog: {len(self._exoplanet_hosts)} confirmed exoplanet host(s) in field"
+            )
+        if self._comparisons:
+            self.log_message.emit(
+                "OK",
+                f"Catalog: {len(self._comparisons)} calibrated VSP comparison star(s) available",
+            )
+        else:
+            self.log_message.emit(
+                "WARN",
+                "Catalog: no calibrated VSP comparison stars returned for this field. "
+                "Refresh the field catalogue or choose calibrated comparisons manually.",
+            )
         # A target assigned before the VSP answer arrived got no auto-selected
         # comparisons (the set stayed comp-less and every differential measure
         # would say "no valid comparisons") — backfill now that the field's
@@ -833,7 +941,7 @@ class AcquisitionEngine(QObject):
         if self._comparisons:
             tset = self.target_set()
             targets = tset.by_role(ROLE_TARGET)
-            if targets and not tset.by_role(ROLE_COMPARISON):
+            if targets:
                 self._auto_select_comparisons(tset, targets[0])
                 if tset.by_role(ROLE_COMPARISON):
                     self._save_target_set(tset)
@@ -864,8 +972,24 @@ class AcquisitionEngine(QObject):
     def _save_target_set(self, tset: TargetSet) -> None:
         try:
             tset.save(self._target_path(tset.object_name))
+            self._write_active_selection(tset)
         except OSError as exc:
             self.log_message.emit("ERROR", f"Save targets: {exc}")
+
+    def _write_active_selection(self, target_set: TargetSet) -> None:
+        """Snapshot an in-run target-set edit without rewriting its history."""
+        if (
+            self._active_run_root is None
+            or self._sequence is None
+            or not self._sequence.isRunning()
+        ):
+            return
+        target_set.save_selection_manifest(
+            self._active_run_root / "photometry_selection.json", generated_by=_SOFTWARE
+        )
+        target_set.append_selection_history(
+            self._active_run_root / "photometry_selection_history.jsonl", generated_by=_SOFTWARE
+        )
 
     def on_object_changed(self) -> None:
         """The Object name changed — re-key and re-sync every dependent view.
@@ -890,31 +1014,207 @@ class AcquisitionEngine(QObject):
         self._reset_tracker()  # the anchor constellation changed
         self.targets_changed.emit(tset)
 
-    def _auto_select_comparisons(self, tset: TargetSet, target: TargetStar) -> None:
+    def propose_comparison_stars(self) -> int:
+        """Complete the active target with the configured VSP ensemble size.
+
+        Used when the observer changes the requested comparison count in the
+        photometry panel. Existing manual choices are preserved; only missing
+        calibrated VSP members are added.
+        """
+        tset = self.target_set()
+        targets = tset.by_role(ROLE_TARGET)
+        if not targets:
+            return 0
+        before = len(tset.by_role(ROLE_COMPARISON))
+        self._auto_select_comparisons(tset, targets[0])
+        added = len(tset.by_role(ROLE_COMPARISON)) - before
+        if added:
+            self._save_target_set(tset)
+            self._reset_tracker()
+            self.targets_changed.emit(tset)
+        return added
+
+    def reselect_comparison_stars(self) -> int:
+        """Replace VSP suggestions with the best stars from the pilot frame.
+
+        This is an explicit observer action.  Manual comparison choices stay
+        intact; VSP suggestions, including ones made before pilot-quality
+        ranking existed, are replaced as one coherent ensemble.
+        """
+        tset = self.target_set()
+        targets = tset.by_role(ROLE_TARGET)
+        if not targets:
+            return 0
+        before = len(tset.by_role(ROLE_COMPARISON))
+        tset.stars = [
+            star
+            for star in tset.stars
+            if not (star.role == ROLE_COMPARISON and star.source in {"vsp", "vsp_auto"})
+        ]
+        added = self._auto_select_comparisons(tset, targets[0])
+        if added or len(tset.by_role(ROLE_COMPARISON)) != before:
+            self._save_target_set(tset)
+            self._reset_tracker()
+            self.targets_changed.emit(tset)
+        return added
+
+    def _auto_select_comparisons(self, tset: TargetSet, target: TargetStar) -> int:
         """Fill an empty comparison set from the field's VSP stars (W2).
 
         Only when the set has none yet — a manual selection is never
         clobbered, and a second target reuses the same ensemble (it serves
         the whole field). Off-frame stars are excluded via the current WCS.
         """
-        if tset.by_role(ROLE_COMPARISON) or not self._comparisons:
-            return
+        if not self._comparisons:
+            return 0
+        # Do not treat an arbitrary manually-clicked star as a calibrated
+        # ensemble.  It has no AUID or catalogue magnitude, and therefore
+        # cannot supply a differential zero point.  Preserve it for the user,
+        # but complement it with the VSP proposal rather than leaving the
+        # target scientifically unusable.
+        band = str(self._cfg("photometry.default_band", "TG") or "TG")
+        existing = tset.by_role(ROLE_COMPARISON)
+        calibrated = [
+            s for s in existing if s.mags.get(band) is not None or s.mags.get("V") is not None
+        ]
+        wanted = max(0, int(self._cfg("photometry.auto_comparisons", 5)) - len(calibrated))
+        if wanted <= 0:
+            return 0
+        target_inst_mag, quality = self._pilot_comparison_quality(target)
+        min_snr = float(self._cfg("photometry.comparison_min_snr", 10.0))
+        max_delta = float(self._cfg("photometry.comparison_max_delta_mag", 1.5))
+        max_separation = float(self._cfg("photometry.comparison_max_separation_arcmin", 25.0))
         picks = auto_comparison_stars(
             target.ra_deg,
             target.dec_deg,
             self._comparisons,
             wcs=self._astrometry.wcs,
             green_shape=self._green_shape,
-            count=int(self._cfg("photometry.auto_comparisons", 5)),
+            count=wanted + len(existing),
+            candidate_quality=quality,
+            target_inst_mag=target_inst_mag,
+            min_snr=min_snr,
+            max_delta_inst_mag=max_delta,
+            max_separation_arcmin=max_separation,
         )
+
+        # A manual click and its VSP record use different keys (position vs
+        # AUID).  Keep a single physical star in the target set even in that
+        # case, favouring the VSP record because it carries calibrated mags.
+        def already_present(candidate: TargetStar) -> bool:
+            for saved in tuple(existing):
+                if saved.auid and candidate.auid and saved.auid == candidate.auid:
+                    return True
+                if (
+                    angular_separation_deg(
+                        saved.ra_deg / 15.0,
+                        saved.dec_deg,
+                        candidate.ra_deg / 15.0,
+                        candidate.dec_deg,
+                    )
+                    < 1.0 / 3600.0
+                ):
+                    if not saved.mags:
+                        # Replace the uncalibrated manual identity with its
+                        # authoritative VSP counterpart at the same position.
+                        tset.remove(saved.key())
+                        existing.remove(saved)
+                        return False
+                    return True
+            return False
+
+        picks = [p for p in picks if not already_present(p)][:wanted]
         for comp in picks:
             tset.set_role(comp)
         if picks:
             self.log_message.emit(
                 "OK",
-                f"Photometry: {len(picks)} comparison(s) auto-selected "
+                f"Photometry: {len(picks)} pilot-qualified comparison(s) selected "
                 f"for {target.display_name}",
             )
+        if quality is not None and len(picks) < wanted:
+            self.log_message.emit(
+                "WARN",
+                f"Photometry: only {len(picks)} of {wanted} requested comparisons pass "
+                f"the pilot quality gate (SNR ≥ {min_snr:g}, Δmag ≤ {max_delta:g}, "
+                f"distance ≤ {max_separation:g}′).",
+            )
+        return len(picks)
+
+    def _pilot_comparison_quality(
+        self, target: TargetStar
+    ) -> tuple[float | None, dict[str, ComparisonQuality] | None]:
+        """Measure target and VSP candidates on the solved pilot frame.
+
+        The catalogue sees the whole sky but cannot know which calibrated star
+        is measurable through the active filter.  A single full-resolution,
+        solved image gives the relevant SNR, saturation and brightness match.
+        """
+        wcs = self._astrometry.wcs
+        if wcs is None or self._last_raw is None or self._last_raw_decimated:
+            return None, None
+        green = green_plane(self._last_raw)
+        params = PhotometryParams.from_config(self._cfg, egain=self._egain())
+        fwhm = self._phot_fwhm or self._last_fwhm or DEFAULT_FWHM
+        r_ap = params.aperture_px(fwhm)
+        r_in = max(params.annulus_in_px, r_ap + 1.0)
+        r_out = max(params.annulus_out_px, r_in + 2.0)
+
+        def measure(ra_deg: float, dec_deg: float):
+            x, y = wcs.world_to_pixel_deg(ra_deg, dec_deg)
+            # A catalogue coordinate must land on a real local source before it
+            # is allowed to enter the automatic comparison ensemble.  Aperture
+            # flux alone can look plausible when a WCS marker is displaced onto
+            # a neighbour or background structure; the centroid agreement is a
+            # separate, stricter identity check.
+            centroid = measure_star_at(
+                self._last_raw,
+                float(x),
+                float(y),
+                radius=max(2, int(round(r_ap))),
+                search=3,
+            )
+            if centroid is None or math.hypot(centroid.x - float(x), centroid.y - float(y)) > 3.0:
+                return None
+            return measure_aperture(
+                green,
+                centroid.x,
+                centroid.y,
+                r_ap,
+                r_in,
+                r_out,
+                egain=params.egain,
+                read_noise_e=params.read_noise_e,
+                sat_adu=params.sat_adu,
+            )
+
+        target_phot = measure(target.ra_deg, target.dec_deg)
+        if target_phot is None or target_phot.inst_mag is None:
+            return None, None
+        quality: dict[str, ComparisonQuality] = {}
+        for star in self._comparisons:
+            phot = measure(star.ra_deg, star.dec_deg)
+            if phot is not None:
+                quality[star.auid] = ComparisonQuality(
+                    snr=phot.snr,
+                    inst_mag=phot.inst_mag,
+                    saturated=phot.saturated,
+                    suspect=phot.suspect,
+                )
+        return target_phot.inst_mag, quality
+
+    def photometry_geometry(self) -> tuple[float, float, float]:
+        """Return the active aperture and sky-annulus radii in green pixels.
+
+        This is intentionally public for the capture UI: the ring shown around
+        a selected source must describe the same FWHM-adaptive aperture used by
+        :func:`measure_frame`, not the independent focus-inspection radius.
+        """
+        params = PhotometryParams.from_config(self._cfg, egain=self._egain())
+        aperture = params.aperture_px(self._phot_fwhm or self._last_fwhm)
+        inner = max(params.annulus_in_px, aperture + 1.0)
+        outer = max(params.annulus_out_px, inner + 2.0)
+        return aperture, inner, outer
 
     def remove_target(self, key: str) -> None:
         tset = self.target_set()
@@ -959,14 +1259,14 @@ class AcquisitionEngine(QObject):
         first measured frame, anchors on the set's stable stars, and keeps its
         last good transform when a frame has no usable anchor (clouds). Every
         refit is signalled so the page re-projects the catalog markers — the
-        fix for the field bug where the variable-star diamonds froze at the
+        fix for the field bug where the variable-star markers froze at the
         solve position while the alt-az field rotated under them.
         """
         wcs = self._astrometry.wcs
         if not params.track_apertures:
             return wcs
         if self._tracker is None:
-            self._tracker = self._build_live_tracker(green.shape, wcs, tset, params)
+            self._tracker = self._build_live_tracker(green, wcs, tset, params)
         self._tracker.update(green)
         if not self._tracker.anchors_used:
             self.log_message.emit("WARN", "Photometry: no anchor star found — apertures unguided")
@@ -975,13 +1275,14 @@ class AcquisitionEngine(QObject):
 
     @staticmethod
     def _build_live_tracker(
-        shape: tuple[int, int], wcs, tset: TargetSet, params: PhotometryParams
+        green, wcs, tset: TargetSet, params: PhotometryParams
     ) -> ApertureTracker:
-        anchors = tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK)
+        candidates = tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK)
+        anchors = select_tracking_anchors(green, wcs, candidates, params)
         if not anchors:  # a variable near minimum is a poor centroid
             anchors = list(tset.stars)
         xy = [wcs.world_to_pixel_deg(s.ra_deg, s.dec_deg) for s in anchors]
-        h, w = shape
+        h, w = green.shape
         return ApertureTracker(
             [(float(x), float(y)) for x, y in xy],
             frame_center=(w / 2.0, h / 2.0),
@@ -1053,6 +1354,34 @@ class AcquisitionEngine(QObject):
             if res.relative is None or res.relative.flux_ratio is None:
                 continue
             self._emit_live_point(res, jd, air, fwhm, (lat, lon, elev))
+        self._write_live_quality_report(tset)
+
+    def _write_live_quality_report(self, target_set: TargetSet) -> None:
+        """Persist non-destructive leave-one-out comparison diagnostics.
+
+        The report deliberately never drops or substitutes a comparison during
+        a run. It gives the observer a clear quality state and preserves the
+        exact selection already recorded in ``photometry_selection.json``.
+        """
+        if self._active_run_root is None:
+            return
+        report = comparison_quality_report(
+            target_set,
+            self._lightcurves,
+            min_points=int(self._cfg("photometry.comparison_validation_min_points", 10)),
+            max_scatter_mag=float(
+                self._cfg("photometry.comparison_validation_max_scatter_mag", 0.10)
+            ),
+            max_formal_error_mag=float(
+                self._cfg("photometry.comparison_validation_max_formal_error_mag", 0.10)
+            ),
+        )
+        try:
+            save_comparison_quality_report(
+                self._active_run_root / "photometry_quality.json", report
+            )
+        except OSError as exc:
+            self.log_message.emit("WARN", f"Save photometry quality: {exc}")
 
     def _emit_live_point(self, res, jd: float, air, fwhm, site) -> None:
         """Append one measured star to its live curve + CSV and signal it."""

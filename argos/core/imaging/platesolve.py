@@ -221,15 +221,26 @@ def solve_array(green: np.ndarray, settings: SolveSettings) -> SolveResult:
         fits.PrimaryHDU(data=green.astype(np.uint16)).writeto(fits_path, overwrite=True)
 
         result = _run_astap(astap, fits_path, eff)
+        # A binning factor which is generally beneficial on large frames can
+        # make an already well-sampled but small-star field *under*sampled.
+        # ASTAP then rejects the stars (its practical lower limit is about
+        # 1.5 px).  Retry at native green-plane sampling before widening the
+        # sky search: it is faster than a blind solve and retains the mount
+        # position as a useful constraint.
+        attempt = eff
+        if not result.solved and eff.downsample > 1:
+            attempt = replace(eff, downsample=1)
+            logger.info("ASTAP: downsampled solve failed — retrying at native sampling")
+            result = _run_astap(astap, fits_path, attempt)
         # A hinted (local-radius) solve trusts the pointing hint. If it failed,
         # the hint may be wrong or stale (mount not actually on target), so the
         # local radius scanned the wrong patch of sky — retry once whole-sky.
-        local = eff.search_radius_deg and eff.search_radius_deg > 0
-        hinted = eff.ra_hint_hours is not None and eff.dec_hint_deg is not None
+        local = attempt.search_radius_deg and attempt.search_radius_deg > 0
+        hinted = attempt.ra_hint_hours is not None and attempt.dec_hint_deg is not None
         if not result.solved and hinted and local and eff.allow_blind_retry:
             logger.info("ASTAP: hinted solve failed — retrying blind (whole-sky)")
             result = _run_astap(
-                astap, fits_path, replace(eff, ra_hint_hours=None, dec_hint_deg=None)
+                astap, fits_path, replace(attempt, ra_hint_hours=None, dec_hint_deg=None)
             )
         return result
 

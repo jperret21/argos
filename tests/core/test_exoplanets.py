@@ -7,6 +7,7 @@ import pytest
 from argos.core.catalog import exoplanets
 from argos.core.catalog.exoplanets import (
     ExoplanetLookupError,
+    cached_exoplanet_hosts_in_cone,
     lookup_exoplanet,
     normalize_exoplanet_designation,
 )
@@ -58,6 +59,28 @@ def test_lookup_parses_and_caches_nasa_ephemeris(tmp_path: Path, monkeypatch) ->
 def test_lookup_requires_planet_name(tmp_path: Path) -> None:
     with pytest.raises(ExoplanetLookupError, match="planet designation"):
         lookup_exoplanet(" ", cache_path=tmp_path / "exoplanets.json")
+
+
+def test_cached_hosts_in_cone_is_offline_and_groups_planets(tmp_path: Path, monkeypatch) -> None:
+    """A solved-field overlay only reads previously prepared ephemerides."""
+    cache = tmp_path / "exoplanets.json"
+    monkeypatch.setattr(exoplanets.requests, "get", lambda *_a, **_kw: None)
+    first = dict(_ROW)
+    second = dict(_ROW, pl_name="HD 189733 c")
+    second["pl_orbper"] = 10.0
+    second["pl_tranmid"] = 2454280.0
+    exoplanets._write_cache(
+        cache,
+        {
+            "b": exoplanets.asdict(exoplanets._from_row(first, "HD 189733 b")),
+            "c": exoplanets.asdict(exoplanets._from_row(second, "HD 189733 c")),
+        },
+    )
+    hosts = cached_exoplanet_hosts_in_cone(300.18, 22.71, 0.1, cache_path=cache)
+    assert len(hosts) == 1
+    assert hosts[0].host_name == "HD 189733"
+    assert hosts[0].planet_names == ("HD 189733 b", "HD 189733 c")
+    assert cached_exoplanet_hosts_in_cone(120.0, 22.71, 0.1, cache_path=cache) == []
 
 
 def test_compact_designation_is_normalised_and_falls_back_to_prefix(

@@ -8,6 +8,7 @@ Public surface:
     Signals
         goto_clicked(ra_hours, dec_degrees)
         sync_to_current_clicked()
+        center_target_clicked()
         tracking_toggled(enabled: bool)
         tracking_rate_changed(rate: int)        # 0=Sidereal, 1=Lunar, 2=Solar
         abort_clicked()
@@ -39,6 +40,7 @@ from PyQt6.QtWidgets import (
 )
 
 from argos.ui import design, theme
+from argos.core.catalog.object_resolver import object_type_label
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,7 @@ class MountDock(design.Card):
     resolved_goto_clicked = pyqtSignal(float, float, str)
     target_suggestion_accepted = pyqtSignal(object)
     sync_to_current_clicked = pyqtSignal()
+    center_target_clicked = pyqtSignal()
     tracking_toggled = pyqtSignal(bool)
     tracking_rate_changed = pyqtSignal(int)
     abort_clicked = pyqtSignal()
@@ -74,6 +77,7 @@ class MountDock(design.Card):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Mount", parent)
         self._connected = False
+        self._center_available = False
         self._resolved_object = None
         self._build_ui()
         self.set_enabled(False)
@@ -145,14 +149,14 @@ class MountDock(design.Card):
         lookup_wrap.setLayout(lookup_row)
         lookup_form.addRow(design.MutedLabel("Object"), lookup_wrap)
         outer.addLayout(lookup_form)
-        self._lookup_result = design.MutedLabel(
-            "Search a catalogue object; the mount will not move until you confirm."
-        )
+        self._lookup_result = design.MutedLabel("")
         self._lookup_result.setWordWrap(True)
+        self._lookup_result.hide()
         outer.addWidget(self._lookup_result)
         self._resolved_slew_btn = design.PrimaryButton("Slew to selected object")
         self._resolved_slew_btn.setToolTip("Send the selected catalogue coordinates to the mount")
         self._resolved_slew_btn.clicked.connect(self._on_resolved_slew)
+        self._resolved_slew_btn.hide()
         outer.addLayout(design.button_row(self._resolved_slew_btn))
 
         # A Stellarium GoTo carries coordinates but not the selected object's
@@ -208,6 +212,12 @@ class MountDock(design.Card):
         self._abort_btn = design.DangerButton("■  Abort")
         self._abort_btn.clicked.connect(self.abort_clicked)
         outer.addLayout(design.button_row(self._slew_btn, self._abort_btn))
+        self._center_btn = design.SecondaryButton("Center selected target")
+        self._center_btn.setToolTip(
+            "Correct the mount model from the current plate solution, then slew to the selected target"
+        )
+        self._center_btn.clicked.connect(self.center_target_clicked)
+        outer.addLayout(design.button_row(self._center_btn))
 
         outer.addWidget(design.horizontal_divider())
 
@@ -280,6 +290,7 @@ class MountDock(design.Card):
             self._rate_combo,
             self._slew_btn,
             self._abort_btn,
+            self._center_btn,
             self._sync_btn,
             self._park_btn,
             self._jog_btn,
@@ -288,7 +299,13 @@ class MountDock(design.Card):
         ):
             w.setEnabled(connected)
         self._connected = connected
+        self._center_btn.setEnabled(connected and self._center_available)
         self._resolved_slew_btn.setEnabled(connected and self._resolved_object is not None)
+
+    def set_center_available(self, available: bool) -> None:
+        """A centering correction needs a current plate solution."""
+        self._center_available = bool(available)
+        self._center_btn.setEnabled(self._connected and self._center_available)
 
     def set_position(
         self,
@@ -325,20 +342,26 @@ class MountDock(design.Card):
         self._find_btn.setEnabled(not busy)
         if busy:
             self._lookup_result.setText("Searching catalogue…")
+            self._lookup_result.show()
 
     def set_resolved_object(self, result) -> None:
         """Show a resolved object and arm the explicit confirmation action."""
         self._resolved_object = result
         self.set_goto_fields(result.ra_hours, result.dec_degrees)
-        type_suffix = f" · {result.object_type}" if result.object_type else ""
+        object_type = object_type_label(result.object_type)
+        type_suffix = f" · {object_type}" if object_type else ""
         self._lookup_result.setText(
             f"{result.name}{type_suffix}\nRA {result.ra_hours:.5f} h · Dec {result.dec_degrees:+.5f}°"
         )
+        self._lookup_result.show()
+        self._resolved_slew_btn.show()
         self._resolved_slew_btn.setEnabled(self._connected)
 
     def set_lookup_error(self, message: str) -> None:
         self._resolved_object = None
         self._lookup_result.setText(message)
+        self._lookup_result.show()
+        self._resolved_slew_btn.hide()
         self._resolved_slew_btn.setEnabled(False)
 
     def set_target_suggestion_busy(self, busy: bool) -> None:
@@ -358,7 +381,8 @@ class MountDock(design.Card):
             return
         for candidate in candidates:
             item = candidate.object
-            type_suffix = f" · {item.object_type}" if item.object_type else ""
+            object_type = object_type_label(item.object_type)
+            type_suffix = f" · {object_type}" if object_type else ""
             self._suggestion_combo.addItem(
                 f"{item.name}{type_suffix} — {candidate.separation_arcsec:.1f}″ away", item
             )

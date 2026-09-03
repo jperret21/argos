@@ -77,15 +77,6 @@ class ConnectionPage(QWidget):
         root.addWidget(scroll)
 
         body.addWidget(design.HeadingLabel("Connection"))
-        intro = QLabel(
-            "Enter the Seestar Alpaca IP address, connect the equipment, then move on to framing "
-            "and observing."
-        )
-        intro.setWordWrap(True)
-        intro.setStyleSheet(
-            f"color:{theme.FG_MUTED}; font-size:{design.FONT_SIZE_BODY}px; background:transparent;"
-        )
-        body.addWidget(intro)
         body.addWidget(self._build_start_card())
 
         self._advanced_toggle = QPushButton("Show connection and device details")
@@ -117,8 +108,9 @@ class ConnectionPage(QWidget):
 
     def _build_start_card(self) -> "design.Card":
         """Build the normal observer-facing equipment entry point."""
-        card = design.Card("Telescope & equipment")
+        card = design.Card("Telescope · equipment")
         layout = design.card_layout(card)
+        layout.setSpacing(design.SPACING_SM)
 
         # This is deliberately part of Connection, not hidden under Settings:
         # the model sets plate scale, sensor geometry and FITS identity before
@@ -148,25 +140,31 @@ class ConnectionPage(QWidget):
 
         layout.addWidget(design.horizontal_divider())
         layout.addLayout(self._build_endpoint_row())
-        layout.addWidget(
-            design.MutedLabel(
-                "Use Discover on a new network; Argos remembers the last successful address."
-            )
-        )
         layout.addWidget(design.horizontal_divider())
         self._summary_labels: dict[str, QLabel] = {}
-        for device_id, label, _hint in _DEVICES:
+        status_grid = QGridLayout()
+        status_grid.setHorizontalSpacing(design.SPACING_LG)
+        status_grid.setVerticalSpacing(design.SPACING_XS)
+        status_grid.setColumnStretch(0, 1)
+        status_grid.setColumnStretch(1, 1)
+        for index, (device_id, label, _hint) in enumerate(_DEVICES):
             status = QLabel()
             status.setStyleSheet(
                 f"color:{theme.FG_MUTED}; font-size:{design.FONT_SIZE_BODY}px; "
                 "background:transparent;"
             )
             self._summary_labels[device_id] = status
-            layout.addWidget(status)
+            status_grid.addWidget(status, index // 2, index % 2)
+        layout.addLayout(status_grid)
         self._start_connect_btn = design.SuccessButton("Connect equipment")
         self._start_connect_btn.setToolTip("Connect telescope, camera, filter wheel and focuser")
         self._start_connect_btn.clicked.connect(self._on_connect_all)
-        layout.addWidget(self._start_connect_btn)
+        self._start_disconnect_btn = design.DangerButton("Disconnect equipment")
+        self._start_disconnect_btn.setToolTip(
+            "Disconnect telescope, camera, filter wheel and focuser from Argos"
+        )
+        self._start_disconnect_btn.clicked.connect(self.disconnect_all_requested)
+        layout.addLayout(design.button_row(self._start_connect_btn, self._start_disconnect_btn))
         self._refresh_summary()
         return card
 
@@ -294,8 +292,10 @@ class ConnectionPage(QWidget):
         if hasattr(self, "_start_connect_btn"):
             self._start_connect_btn.setText("Equipment ready" if all_ready else "Connect equipment")
             self._start_connect_btn.setEnabled(not all_ready)
+        any_connected = any(state in {"connected", "busy"} for state in states.values())
+        if hasattr(self, "_start_disconnect_btn"):
+            self._start_disconnect_btn.setEnabled(any_connected)
         if hasattr(self, "_telescope_combo"):
-            any_connected = any(state in {"connected", "busy"} for state in states.values())
             self._telescope_combo.setEnabled(not any_connected)
             self._telescope_combo.setToolTip(
                 "Disconnect equipment before changing telescope model. The model controls "

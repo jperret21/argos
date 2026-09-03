@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from argos.core.imaging.session_log import SESSION_FILENAME
+from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet
 from argos.core.photometry.lightcurve import LightCurve, read_curves_csv
 
 
@@ -163,15 +164,72 @@ def load_session(path: Path | str, *, read_temperature: bool = True) -> Reviewed
 
 
 def load_session_curves(review: ReviewedSession) -> dict[str, LightCurve]:
-    """Load all per-star preview curves saved alongside a run, losslessly."""
+    """Load all per-star curves with their scientific roles and identities.
+
+    Per-star CSVs deliberately contain only measurement columns so they remain
+    simple inputs for external tools.  Their filename and the session's
+    ``targets.json`` therefore provide the missing role/identity at Review
+    time.  Older Review incorrectly treated every such file as a target,
+    making calibration stars appear in the source-light-curve panel.
+    """
     curves: dict[str, LightCurve] = {}
+    targets = TargetSet.load(review.root / "targets.json")
     for path in sorted((review.root / "photometry").glob("*.csv")):
         try:
+            role, identity, name, auid = _curve_identity(path, targets)
             for key, curve in read_curves_csv(path).items():
-                curves[f"{path.stem}:{key}"] = curve
+                # A multi-curve CSV already carries identity metadata.  The
+                # one-star session CSVs use the sidecar data reconstructed
+                # above.  Filename role always wins for those legacy files.
+                if key == f"target:{path.stem}" or key == path.stem:
+                    curve.role = role
+                    curve.name = name
+                    curve.auid = auid
+                    key = identity
+                elif not curve.name:
+                    curve.name = name
+                curves_key = str(key)
+                existing = curves.get(curves_key)
+                # The same physical target may have an AUID and a catalogue
+                # alias recorded in one session. Keep the more complete curve
+                # rather than plotting a duplicate science source.
+                if existing is None or len(curve.points) > len(existing.points):
+                    curves[curves_key] = curve
         except (OSError, ValueError):
             review.warnings.append(f"Could not read preview curve: {path.name}")
     return curves
+
+
+def _curve_identity(path: Path, targets: TargetSet) -> tuple[str, str, str, str]:
+    """Recover ``(role, key, label, auid)`` for a per-star curve CSV."""
+    stem = path.stem
+    role = ROLE_COMPARISON if stem.startswith("comparison_") else ROLE_TARGET
+    candidates = [star for star in targets.stars if star.role == role]
+    # AUID suffix is unambiguous and takes precedence over display names.
+    star = next((item for item in candidates if item.auid and stem.endswith(item.auid)), None)
+    if star is None:
+        star = next(
+            (
+                item
+                for item in candidates
+                if item.name and stem.endswith(_safe_component(item.name))
+            ),
+            None,
+        )
+    if star is None:
+        return role, f"{role}:{stem}", stem, ""
+
+    # Targets are deduplicated by sky position, not AUID: a catalogue alias
+    # and the user-selected name can legitimately describe the same star.
+    if role == ROLE_TARGET:
+        identity = f"{role}:pos:{star.ra_deg:.4f},{star.dec_deg:.4f}"
+    else:
+        identity = star.auid or f"{role}:pos:{star.ra_deg:.5f},{star.dec_deg:.5f}"
+    return role, identity, star.display_name, star.auid or ""
+
+
+def _safe_component(value: str) -> str:
+    return "".join(char if char.isalnum() or char in "-_" else "_" for char in value)
 
 
 def _parse_timestamp(value: Any) -> datetime | None:

@@ -28,6 +28,48 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+def select_tracking_anchors(
+    green,
+    wcs,
+    candidates,
+    params,
+    *,
+    min_snr: float = 10.0,
+    max_anchors: int = 6,
+):
+    """Return only bright, clean stars suitable for geometric tracking.
+
+    The tracking constellation is deliberately distinct from the photometric
+    ensemble.  A reference can be meaningful after offline calibration yet be
+    too weak to centroid in a raw live sub; such a source must never steer the
+    WCS transform.
+    """
+    from argos.core.photometry.aperture import measure_aperture
+
+    r_ap = params.aperture_px(None)
+    r_in = max(params.annulus_in_px, r_ap + 1.0)
+    r_out = max(params.annulus_out_px, r_in + 2.0)
+    qualified: list[tuple[float, object]] = []
+    for star in candidates:
+        x, y = wcs.world_to_pixel_deg(star.ra_deg, star.dec_deg)
+        phot = measure_aperture(
+            green,
+            float(x),
+            float(y),
+            r_ap,
+            r_in,
+            r_out,
+            egain=params.egain,
+            read_noise_e=params.read_noise_e,
+            sat_adu=params.sat_adu,
+        )
+        if phot is None or phot.saturated or phot.suspect or phot.snr < min_snr:
+            continue
+        qualified.append((phot.snr, star))
+    qualified.sort(key=lambda item: item[0], reverse=True)
+    return [star for _snr, star in qualified[:max_anchors]]
+
+
 def refine_centroid(green: np.ndarray, x: float, y: float, r: float) -> tuple[float, float] | None:
     """Flux-weighted centroid within radius ``r`` of ``(x, y)``, or None.
 
@@ -37,6 +79,23 @@ def refine_centroid(green: np.ndarray, x: float, y: float, r: float) -> tuple[fl
     outside the search radius (no star there — clouds, or the prediction is
     already lost).
     """
+    measurement = _refine_centroid_measurement(green, x, y, r)
+    return (measurement.x, measurement.y) if measurement is not None else None
+
+
+@dataclass(frozen=True)
+class _CentroidMeasurement:
+    """Centroid plus its local background-subtracted signal (internal)."""
+
+    x: float
+    y: float
+    signal: float
+
+
+def _refine_centroid_measurement(
+    green: np.ndarray, x: float, y: float, r: float
+) -> _CentroidMeasurement | None:
+    """Centroid with the signal used to reject a lost anchor locking on noise."""
     h, w = green.shape
     px, py = int(round(x)), int(round(y))
     ri = max(2, int(math.ceil(r)))
@@ -64,7 +123,7 @@ def refine_centroid(green: np.ndarray, x: float, y: float, r: float) -> tuple[fl
     cy = float((yy * sub).sum() / flux)
     if (cx - x) ** 2 + (cy - y) ** 2 > r * r:
         return None
-    return cx, cy
+    return _CentroidMeasurement(cx, cy, flux)
 
 
 @dataclass(frozen=True)
@@ -164,6 +223,10 @@ class ApertureTracker:
     #: error over *all* anchors, so with 3-4 anchors the outlier's own residual
     #: never stands out. The leave-worst-out improvement is decisive instead.
     REJECT_IMPROVEMENT = 0.3
+    #: A real guide star can dim in cloud, but not by an order of magnitude
+    #: between consecutive science frames.  Below this fraction of its first
+    #: measured signal, a centroid is almost certainly a noise/hot-pixel lock.
+    MIN_SIGNAL_FRACTION = 0.20
 
     def __init__(
         self,
@@ -172,10 +235,12 @@ class ApertureTracker:
         search_r: float = 8.0,
     ) -> None:
         self._anchors = [(float(x), float(y)) for x, y in anchors_xy]
+        self._reference_signal: list[float | None] = [None] * len(self._anchors)
         self._search_r = float(search_r)
         self.transform = RigidTransform.identity(*frame_center)
         self.anchors_used = 0
         self.anchors_rejected = 0  # dropped by the last residual clip
+        self.anchors_signal_rejected = 0  # measurements rejected as a lost anchor
         self.residual_px = 0.0  # median |fit − measured| of the kept anchors
         self.frames_lost = 0  # consecutive frames with no anchor found
 
@@ -191,12 +256,18 @@ class ApertureTracker:
         """
         matched_ref: list[tuple[float, float]] = []
         matched_meas: list[tuple[float, float]] = []
-        for ref in self._anchors:
+        for index, ref in enumerate(self._anchors):
             pred = self.transform.apply(*ref)
-            meas = refine_centroid(green, pred[0], pred[1], self._search_r)
+            meas = _refine_centroid_measurement(green, pred[0], pred[1], self._search_r)
             if meas is not None:
+                baseline = self._reference_signal[index]
+                if baseline is None:
+                    self._reference_signal[index] = meas.signal
+                elif meas.signal < baseline * self.MIN_SIGNAL_FRACTION:
+                    self.anchors_signal_rejected += 1
+                    continue
                 matched_ref.append(ref)
-                matched_meas.append(meas)
+                matched_meas.append((meas.x, meas.y))
 
         self.anchors_rejected = 0
         if not matched_ref:

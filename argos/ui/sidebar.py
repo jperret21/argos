@@ -111,13 +111,14 @@ def _draw_icon(mode: str, color: str, px: int = _ICON_PX) -> QPixmap:
     return pm
 
 
-#: Phase-state dot colours (``set_mode_state``). ``none`` shows no dot.
-_STATE_DOT_COLORS: dict[str, str | None] = {
-    "none": None,
-    "ready": theme.SUCCESS,
-    "active": theme.ACCENT,
-    "blocked": theme.WARNING,
-}
+def _state_dot_color(state: str) -> str | None:
+    """Resolve state colour after the user-selected palette is active."""
+    return {
+        "none": None,
+        "ready": theme.SUCCESS,
+        "active": theme.ACCENT,
+        "blocked": theme.WARNING,
+    }.get(state)
 
 
 class _NavButton(QWidget):
@@ -175,7 +176,7 @@ class _NavButton(QWidget):
 
     def set_state(self, state: str) -> None:
         """Show the phase-state dot: 'none' | 'ready' | 'active' | 'blocked'."""
-        color = _STATE_DOT_COLORS.get(state)
+        color = _state_dot_color(state)
         if color is None:
             self._dot.hide()
             return

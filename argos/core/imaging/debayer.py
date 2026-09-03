@@ -26,7 +26,7 @@ import numpy as np
 BAYER_PATTERN = "GRBG"
 
 # --------------------------------------------------------------------------- #
-# View identifiers (UI-facing). Grouped: 3 debayer modes, then CFA channels.   #
+# View identifiers. Only the five observer-facing views belong in ``VIEWS``.  #
 # --------------------------------------------------------------------------- #
 
 VIEW_SUPERPIXEL = "Super-pixel"
@@ -39,17 +39,15 @@ VIEW_G1 = "G1"
 VIEW_G2 = "G2"
 VIEW_LUM = "Luminance"
 
-#: Ordered for the image toolbar.
+#: Ordered for the image toolbar.  Every one is rendered onto the *full sensor
+#: geometry*, so changing display mode never changes the annotation coordinate
+#: frame or the apparent field size.
 VIEWS: tuple[str, ...] = (
     VIEW_SUPERPIXEL,
-    VIEW_INTERP,
     VIEW_RAW,
     VIEW_R,
     VIEW_G,
     VIEW_B,
-    VIEW_G1,
-    VIEW_G2,
-    VIEW_LUM,
 )
 
 #: Views that return a real-pixel single plane (valid for measurement).
@@ -128,6 +126,84 @@ def superpixel_rgb(arr: np.ndarray) -> np.ndarray:
     return np.stack([r[:h, :w], g[:h, :w], b[:h, :w]], axis=2)
 
 
+def expand_cfa_cells(plane: np.ndarray, sensor_shape: tuple[int, int]) -> np.ndarray:
+    """Magnify a CFA-cell view onto the original sensor geometry.
+
+    ``superpixel_rgb`` and individual CFA planes naturally live at half the
+    sensor dimensions.  Showing them at that size made the image jump whenever
+    the observer switched to Raw CFA or back, and invited overlay-coordinate
+    mistakes.  Nearest-neighbour expansion is intentional: it introduces no
+    synthetic image detail; each 2×2 sensor cell simply occupies its original
+    on-screen footprint.
+    """
+    h, w = (int(sensor_shape[0]), int(sensor_shape[1]))
+    if plane.size == 0:
+        shape = (h, w) + plane.shape[2:]
+        return np.zeros(shape, dtype=plane.dtype)
+    expanded = np.repeat(np.repeat(plane, 2, axis=0), 2, axis=1)
+    # A raw FITS can have an odd trailing row/column. split_cfa rightly drops
+    # an incomplete Bayer cell; repeat the final complete cell for display so
+    # all view modes still retain the exact same outer geometry.
+    if expanded.shape[0] < h:
+        expanded = np.concatenate((expanded, expanded[-1:, ...]), axis=0)
+    if expanded.shape[1] < w:
+        expanded = np.concatenate((expanded, expanded[:, -1:, ...]), axis=1)
+    return expanded[:h, :w, ...]
+
+
+def downsample_cfa(arr: np.ndarray, factor: int = 2) -> np.ndarray:
+    """Reduce a raw CFA frame while preserving its Bayer tile.
+
+    A plain ``arr[::2, ::2]`` retains only one Bayer colour (for GRBG, G1),
+    then wrongly presents those samples as a complete colour mosaic.  Instead,
+    downsample each like-colour plane and interleave the four results back into
+    a smaller GRBG mosaic.  This is display-only; saved FITS and photometry
+    continue to use the untouched full-resolution frame.
+    """
+    factor = max(1, int(factor))
+    if factor == 1:
+        return arr
+    r, g1, g2, b = split_cfa(arr)
+    h = (r.shape[0] // factor) * factor
+    w = (r.shape[1] // factor) * factor
+    if h == 0 or w == 0:
+        return arr
+
+    def reduce_plane(plane: np.ndarray) -> np.ndarray:
+        cropped = plane[:h, :w].astype(np.uint64)
+        reduced = cropped.reshape(h // factor, factor, w // factor, factor).mean(axis=(1, 3))
+        return np.rint(reduced).astype(arr.dtype)
+
+    rr, gg1, gg2, bb = (reduce_plane(plane) for plane in (r, g1, g2, b))
+    out = np.empty((rr.shape[0] * 2, rr.shape[1] * 2), dtype=arr.dtype)
+    out[0::2, 0::2] = gg1
+    out[0::2, 1::2] = rr
+    out[1::2, 0::2] = bb
+    out[1::2, 1::2] = gg2
+    return out
+
+
+def neutralise_rgb_for_display(rgb: np.ndarray) -> np.ndarray:
+    """Apply a background-neutral display balance to a linear RGB preview.
+
+    OSC sensors and light-pollution filters commonly leave the green background
+    brighter than red/blue.  The balance is deliberately confined to preview
+    RGB values: raw data, per-channel histograms and photometry are unchanged.
+    """
+    if rgb.ndim != 3 or rgb.shape[-1] != 3:
+        return rgb
+    values = rgb.astype(np.float32, copy=False)
+    backgrounds = np.median(values.reshape(-1, 3), axis=0)
+    valid = backgrounds > 0
+    if not np.any(valid):
+        return rgb
+    reference = float(np.median(backgrounds[valid]))
+    gains = np.ones(3, dtype=np.float32)
+    gains[valid] = np.clip(reference / backgrounds[valid], 0.25, 4.0)
+    balanced = values * gains
+    return np.clip(balanced, 0, np.iinfo(rgb.dtype).max).astype(rgb.dtype)
+
+
 def bilinear_rgb(arr: np.ndarray) -> np.ndarray:
     """Full-resolution bilinear demosaic — COSMETIC ONLY.
 
@@ -163,17 +239,20 @@ def bilinear_rgb(arr: np.ndarray) -> np.ndarray:
 def render_view(arr: np.ndarray, view: str) -> np.ndarray:
     """Render the raw array for a given display view (see ``VIEWS``).
 
-    Returns a **linear** array — 2-D uint16 (raw / single channel) or 3-D uint16
-    RGB (colour modes). The stretch stage (see ``imaging.stretch``) maps it to
-    the screen; the input ``arr`` is never mutated.
+    Returns a **linear** array on the original sensor geometry — 2-D uint16
+    (raw / single channel) or 3-D uint16 RGB (colour modes). CFA-cell views are
+    nearest-neighbour expanded rather than interpolated, preserving their
+    native samples while keeping marker coordinates identical in every mode.
+    The stretch stage (see ``imaging.stretch``) maps it to the screen; the
+    input ``arr`` is never mutated.
     """
     if view == VIEW_RAW:
         return arr
     if view == VIEW_SUPERPIXEL:
-        return superpixel_rgb(arr)
+        return expand_cfa_cells(superpixel_rgb(arr), arr.shape[:2])
     if view == VIEW_INTERP:
         return bilinear_rgb(arr)
-    return extract_plane(arr, view)
+    return expand_cfa_cells(extract_plane(arr, view), arr.shape[:2])
 
 
 # --------------------------------------------------------------------------- #

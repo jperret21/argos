@@ -16,37 +16,63 @@ from PyQt6.QtWidgets import QCheckBox, QLabel, QSplitter, QVBoxLayout, QWidget
 
 from argos.ui import theme
 
-_PALETTE = (theme.SUCCESS, theme.CYAN, theme.WARNING, theme.VARIABLE, theme.ACCENT, theme.DANGER)
+
+def _series_palette() -> tuple[str, ...]:
+    """Read colours at widget construction time, after the palette loads."""
+    return (theme.SUCCESS, theme.CYAN, theme.WARNING, theme.VARIABLE, theme.ACCENT, theme.DANGER)
 
 
 class LightCurvePanel(QWidget):
-    """Two X-linked plots for science curves and comparison diagnostics."""
+    """Science and comparison curves, together or as independent panels.
+
+    ``view`` lets a workspace keep the source curve and the comparison-star
+    diagnostics in separate, simultaneously visible docks.  The default
+    ``"both"`` retains the compact live-acquisition view.
+    """
 
     point_hovered = pyqtSignal(str, float, float, float)
     point_clicked = pyqtSignal(str, float, float, float)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, view: str = "both") -> None:
         super().__init__(parent)
+        if view not in {"both", "target", "comparison"}:
+            raise ValueError("view must be 'both', 'target', or 'comparison'")
+        self._view = view
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
 
-        header = QLabel("Target and check star")
+        header_text = {
+            "both": "Source and comparison stars",
+            "target": "Source light curve",
+            "comparison": "Comparison-star diagnostics",
+        }[view]
+        header = QLabel(header_text)
         header.setStyleSheet(
             f"color:{theme.FG_MUTED}; font-size:12px; font-weight:600; "
             "background:transparent; padding:2px 4px;"
         )
         layout.addWidget(header)
 
-        self._target_plot = self._make_plot("Differential mag", "Time (JD UTC)")
-        self._comparison_plot = self._make_plot("Δmag from own median", "Time (JD UTC)")
-        self._comparison_plot.setXLink(self._target_plot)
-
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        splitter.addWidget(self._target_plot)
-        splitter.addWidget(self._comparison_plot)
-        splitter.setSizes([260, 150])
-        layout.addWidget(splitter, 1)
+        self._target_plot = (
+            self._make_plot("Differential mag", "Time (JD UTC)")
+            if view in {"both", "target"}
+            else None
+        )
+        self._comparison_plot = (
+            self._make_plot("Δmag from own median", "Time (JD UTC)")
+            if view in {"both", "comparison"}
+            else None
+        )
+        if self._target_plot is not None and self._comparison_plot is not None:
+            self._comparison_plot.setXLink(self._target_plot)
+            splitter = QSplitter(Qt.Orientation.Vertical)
+            splitter.addWidget(self._target_plot)
+            splitter.addWidget(self._comparison_plot)
+            splitter.setSizes([260, 150])
+            layout.addWidget(splitter, 1)
+        else:
+            layout.addWidget(self._target_plot or self._comparison_plot, 1)
 
         self._errors = QCheckBox("Show uncertainties")
         self._errors.setChecked(True)
@@ -94,9 +120,15 @@ class LightCurvePanel(QWidget):
             return
         s = self._series.get(name)
         if s is None:
-            color = _PALETTE[len(self._series) % len(_PALETTE)]
+            palette = _series_palette()
+            color = palette[len(self._series) % len(palette)]
             comparison = role == "comparison"
+            if comparison and self._comparison_plot is None:
+                return
+            if not comparison and self._target_plot is None:
+                return
             plot = self._comparison_plot if comparison else self._target_plot
+            assert plot is not None
             curve = plot.plot(
                 [],
                 [],
@@ -107,9 +139,7 @@ class LightCurvePanel(QWidget):
                 symbolPen=color,
                 name=name,
             )
-            errbar = pg.ErrorBarItem(
-                x=np.array([]), y=np.array([]), pen=pg.mkPen(color, width=1), beam=3.0
-            )
+            errbar = pg.ErrorBarItem(x=np.array([]), y=np.array([]), pen=pg.mkPen(color, width=1))
             plot.addItem(errbar)
             sat = plot.plot(
                 [],
@@ -195,7 +225,11 @@ class LightCurvePanel(QWidget):
             y = y - baseline
             sat_y = sat_y - baseline
         s["curve"].setData(x, y, data=[{"err": value} for value in e])
-        s["errbar"].setData(x=x, y=y, top=e, bottom=e, beam=3.0)
+        # Keep photometric uncertainty legible without horizontal caps.
+        # ``ErrorBarItem.beam`` is measured in Julian days, so even a
+        # cadence-derived cap is visually misleading when the user zooms. A
+        # thin vertical interval is the standard, unambiguous representation.
+        s["errbar"].setData(x=x, y=y, top=e, bottom=e, beam=None)
         s["sat"].setData(np.asarray(s["sat_jd"], dtype=float), sat_y)
         s["errbar"].setVisible(self._errors.isChecked())
 
@@ -246,18 +280,21 @@ class LightCurvePanel(QWidget):
             s["errbar"].setVisible(bool(visible))
 
     def _set_relative_flux(self, enabled: bool) -> None:
-        self._target_plot.setLabel(
-            "left", "Relative flux (median-normalised)" if enabled else "Differential mag"
-        )
-        self._comparison_plot.setLabel(
-            "left", "Δ relative flux" if enabled else "Δmag from own median"
-        )
-        self._target_plot.getViewBox().invertY(not enabled)
-        self._comparison_plot.getViewBox().invertY(not enabled)
+        if self._target_plot is not None:
+            self._target_plot.setLabel(
+                "left", "Relative flux (median-normalised)" if enabled else "Differential mag"
+            )
+            self._target_plot.getViewBox().invertY(not enabled)
+        if self._comparison_plot is not None:
+            self._comparison_plot.setLabel(
+                "left", "Δ relative flux" if enabled else "Δmag from own median"
+            )
+            self._comparison_plot.getViewBox().invertY(not enabled)
         for name in self._series:
             self._refresh_series(name)
         self._auto_range()
 
     def _auto_range(self) -> None:
         for plot in (self._target_plot, self._comparison_plot):
-            plot.getViewBox().autoRange()
+            if plot is not None:
+                plot.getViewBox().autoRange()

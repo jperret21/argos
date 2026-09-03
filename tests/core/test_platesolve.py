@@ -193,12 +193,37 @@ def test_solve_array_retries_blind_when_hint_is_wrong(monkeypatch, tmp_path) -> 
         return SolveResult(not hinted, message="solved" if not hinted else "Not enough stars.")
 
     monkeypatch.setattr(platesolve, "_run_astap", fake_run)
-    settings = SolveSettings(search_radius_deg=30, ra_hint_hours=2.5, dec_hint_deg=89.0)
+    settings = SolveSettings(
+        search_radius_deg=30, downsample=1, ra_hint_hours=2.5, dec_hint_deg=89.0
+    )
     r = solve_array(np.zeros((600, 800), np.uint16), settings)
     assert r.solved  # recovered via the whole-sky retry
     assert len(calls) == 2
     assert calls[0].ra_hint_hours is not None  # first: hinted
     assert calls[1].ra_hint_hours is None  # retry: blind
+
+
+def test_solve_array_retries_native_sampling_before_blind(monkeypatch, tmp_path) -> None:
+    fake = tmp_path / "astap"
+    fake.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(platesolve, "find_astap", lambda _p: str(fake))
+
+    calls: list[SolveSettings] = []
+
+    def fake_run(_astap, _path, s):
+        calls.append(s)
+        # Model a field whose stars become too small after ASTAP's -z 2 binning.
+        return SolveResult(s.downsample == 1, message="solved" if s.downsample == 1 else "")
+
+    monkeypatch.setattr(platesolve, "_run_astap", fake_run)
+    settings = SolveSettings(
+        search_radius_deg=5, downsample=2, ra_hint_hours=20.0, dec_hint_deg=59.0
+    )
+    result = solve_array(np.zeros((600, 800), np.uint16), settings)
+
+    assert result.solved
+    assert [call.downsample for call in calls] == [2, 1]
+    assert all(call.ra_hint_hours is not None for call in calls)
 
 
 def test_solve_array_rejects_non_2d(monkeypatch, tmp_path) -> None:

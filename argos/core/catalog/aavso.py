@@ -40,6 +40,13 @@ _VSP_URL = "https://app.aavso.org/vsp/api/chart/"
 
 _DEFAULT_TIMEOUT = 20.0
 
+# VSP rejects a chart wider than 180 arcmin when its faint limit is fainter
+# than magnitude 12.  The S30/S50 field can be wider than that, but a 180′
+# chart around the selected target still supplies a dense, on-sensor ensemble
+# without sacrificing the useful V≈12–15 comparison stars.
+_VSP_WIDE_FOV_MAG_LIMIT = 12.0
+_VSP_WIDE_FOV_MAX_ARCMIN = 180.0
+
 # Offline cache (see module docstring). Tests monkeypatch _CACHE_DIR.
 _CACHE_DIR = Path.home() / ".argos" / "cache" / "catalog"
 _CACHE_FRESH_S = 7 * 86400.0  # younger than this → no network round-trip
@@ -317,28 +324,50 @@ def vsp_chart(
     fov_arcmin: float,
     *,
     maglimit: float = 16.0,
+    target_name: str | None = None,
     timeout: float = _DEFAULT_TIMEOUT,
     session: Any = None,
 ) -> list[ComparisonStar]:
-    """Comparison stars from the VSP photometry chart for this field."""
+    """Comparison stars from a VSP photometry chart.
+
+    ``target_name`` asks VSP for the comparison sequence of a known variable
+    target, rather than a generic chart around its coordinates. This matters
+    when the mount is offset from the requested target: VSX still describes
+    the actually imaged field, while VSP must retain the observer's selected
+    scientific target to return its calibrated sequence.
+    """
     # Quantised like the VSX cone (shared cache entries across re-solves); the
     # fov is padded by the centre grid step (0.05° = 3′) and snapped up to 5′.
     fov_padded = math.ceil((fov_arcmin + 3.0) / 5.0) * 5.0
+    if fov_padded > _VSP_WIDE_FOV_MAX_ARCMIN and maglimit > _VSP_WIDE_FOV_MAG_LIMIT:
+        logger.info(
+            "VSP: limiting %.0f′ field to %.0f′ for maglimit %.1f",
+            fov_padded,
+            _VSP_WIDE_FOV_MAX_ARCMIN,
+            maglimit,
+        )
+        fov_padded = _VSP_WIDE_FOV_MAX_ARCMIN
     params = {
-        "ra": f"{_quantize_deg(ra_deg):.4f}",
-        "dec": f"{_quantize_deg(dec_deg):.4f}",
         "fov": f"{fov_padded:.1f}",
         "maglimit": f"{maglimit:.1f}",
         "format": "json",
+        # Ask VSP for every available calibrated band/sequence entry. Without
+        # this, valid entries can be omitted by the service's default chart
+        # selection for a wide field.
+        "all": "on",
     }
+    if target_name and target_name.strip():
+        params["star"] = target_name.strip()
+    else:
+        params["ra"] = f"{_quantize_deg(ra_deg):.4f}"
+        params["dec"] = f"{_quantize_deg(dec_deg):.4f}"
     data = _get_json(_VSP_URL, params, timeout, session)
     rows = (data or {}).get("photometry") or []
     stars = [_parse_vsp_star(o) for o in rows]
     logger.info(
-        "VSP: %d comparison star(s) for %.4f,%+.4f (fov %.0f')",
+        "VSP: %d comparison star(s) for %s (fov %.0f')",
         len(stars),
-        ra_deg,
-        dec_deg,
+        target_name or f"{ra_deg:.4f},{dec_deg:+.4f}",
         fov_arcmin,
     )
     return stars

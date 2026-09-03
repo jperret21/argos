@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -32,7 +32,8 @@ from PyQt6.QtWidgets import (
 )
 
 from argos import __version__
-from argos.core.catalog import aavso, exoplanets, object_resolver
+from argos.core.catalog import aavso, exoplanets, gaia, object_resolver
+from argos.core.catalog import field_objects
 from argos.core.catalog.offline import essential_catalogue_info
 from argos.core.config import Config
 from argos.core.hardware import active, catalog
@@ -78,12 +79,6 @@ class ConfigurationPage(QWidget):
         root.addWidget(scroll)
 
         body.addWidget(design.HeadingLabel("Settings"))
-        intro = design.MutedLabel(
-            "Configure the observatory, equipment, local libraries and optional catalogue caches. "
-            "Only explicit search or refresh actions contact online services."
-        )
-        intro.setWordWrap(True)
-        body.addWidget(intro)
 
         # One topic at a time is easier to scan at the telescope than two long
         # unrelated columns. QToolBox behaves as a compact accordion and keeps
@@ -95,13 +90,13 @@ class ConfigurationPage(QWidget):
         )
         self._settings_sections.addItem(
             self._section_page(self._build_telescope_card(), self._build_camera_card()),
-            "Equipment & camera",
+            "Equipment · camera",
         )
         self._settings_sections.addItem(
             self._section_page(self._build_astrometry_card()), "Astrometry"
         )
         self._settings_sections.addItem(
-            self._section_page(self._build_data_card()), "Catalogues & data"
+            self._section_page(self._build_data_card()), "Catalogues · data"
         )
         self._settings_sections.addItem(
             self._section_page(
@@ -109,11 +104,25 @@ class ConfigurationPage(QWidget):
                 self._build_appearance_card(),
                 self._build_about_card(),
             ),
-            "Files & application",
+            "Files · application",
         )
         self._settings_sections.setCurrentIndex(0)
-        body.addWidget(self._settings_sections)
-        body.addStretch()
+        self._settings_sections.currentChanged.connect(self._sync_settings_height)
+        body.addWidget(self._settings_sections, 1)
+        QTimer.singleShot(0, self._sync_settings_height)
+
+    def _sync_settings_height(self, _index: int = -1) -> None:
+        """Fit the accordion to its current page; the outer page owns scrolling."""
+        page = self._settings_sections.currentWidget()
+        if page is None:
+            return
+        # QToolBox.sizeHint() accounts for only one tab header on some Qt
+        # styles.  Reserve every visible section header explicitly so the
+        # bottom of a form is never clipped.
+        headers = self._settings_sections.count() * design.INPUT_HEIGHT
+        height = page.sizeHint().height() + headers + design.SPACING_SM
+        self._settings_sections.setMaximumHeight(16_777_215)
+        self._settings_sections.setMinimumHeight(height)
 
     @staticmethod
     def _section_page(*cards: QWidget) -> QWidget:
@@ -130,7 +139,7 @@ class ConfigurationPage(QWidget):
         return page
 
     def _build_observer_card(self) -> "design.Card":
-        card = design.Card("Observer & Site")
+        card = design.Card("Observer · Site")
         layout = design.card_layout(card)
 
         grid = QGridLayout()
@@ -309,7 +318,7 @@ class ConfigurationPage(QWidget):
 
     def _build_data_card(self) -> "design.Card":
         """Controls for the small, durable data products of an observing run."""
-        card = design.Card("Data & catalogues")
+        card = design.Card("Data · catalogues")
         layout = design.card_layout(card)
 
         essential = essential_catalogue_info()
@@ -377,6 +386,34 @@ class ConfigurationPage(QWidget):
         )
         layout.addWidget(design.horizontal_divider())
 
+        layout.addWidget(design.SectionLabel("Field identification performance"))
+        layout.addWidget(
+            design.MutedLabel(
+                "Limit online identities in dense fields. This budget is shared between "
+                "Gaia stars and SIMBAD names/types; VSX/VSP science results are independent."
+            )
+        )
+        self._field_identity_budget_combo = QComboBox()
+        for label, value in (
+            ("Fast · 100 objects", 100),
+            ("Fast · 200 objects", 200),
+            ("Balanced · 400 objects", 400),
+            ("Detailed · 800 objects", 800),
+            ("Dense field · 1,600 objects", 1600),
+        ):
+            self._field_identity_budget_combo.addItem(label, value)
+        self._field_identity_budget_combo.currentIndexChanged.connect(
+            self._save_field_identity_budget
+        )
+        layout.addWidget(self._field_identity_budget_combo)
+        layout.addWidget(
+            design.MutedLabel(
+                "The magnitude depth and provider switches are available from Capture → "
+                "Catalogues & depth…"
+            )
+        )
+        layout.addWidget(design.horizontal_divider())
+
         layout.addWidget(design.SectionLabel("Online catalogues and local caches"))
         layout.addWidget(
             design.MutedLabel(
@@ -424,6 +461,34 @@ class ConfigurationPage(QWidget):
         )
         layout.addWidget(design.MutedLabel("Variables & comparison stars · AAVSO VSX / VSP"))
         layout.addWidget(aavso_row)
+
+        self._gaia_cache_edit = QLineEdit()
+        self._gaia_cache_edit.setToolTip("Gaia DR3 solved-field identifier cache folder")
+        self._gaia_cache_edit.editingFinished.connect(self._save_catalogue_paths)
+        gaia_row = self._catalogue_path_row(
+            self._gaia_cache_edit,
+            browse=lambda: self._browse_catalogue_directory(
+                self._gaia_cache_edit, "Choose Gaia field-cache folder"
+            ),
+            clear=lambda: self._clear_catalogue_cache("gaia"),
+        )
+        layout.addWidget(design.MutedLabel("Field-star identifiers · Gaia DR3"))
+        layout.addWidget(gaia_row)
+
+        self._field_catalogue_cache_edit = QLineEdit()
+        self._field_catalogue_cache_edit.setToolTip(
+            "SIMBAD and NASA solved-field identification cache folder"
+        )
+        self._field_catalogue_cache_edit.editingFinished.connect(self._save_catalogue_paths)
+        field_catalogue_row = self._catalogue_path_row(
+            self._field_catalogue_cache_edit,
+            browse=lambda: self._browse_catalogue_directory(
+                self._field_catalogue_cache_edit, "Choose field-identification cache folder"
+            ),
+            clear=lambda: self._clear_catalogue_cache("field_catalogue"),
+        )
+        layout.addWidget(design.MutedLabel("Whole-field identities · SIMBAD / NASA"))
+        layout.addWidget(field_catalogue_row)
 
         self._catalogue_cache_status = design.MutedLabel("")
         self._catalogue_cache_status.setWordWrap(True)
@@ -740,6 +805,21 @@ class ConfigurationPage(QWidget):
         self._aavso_cache_edit.setText(
             str(self._config.get("data_paths.aavso_cache_directory", aavso._CACHE_DIR))
         )
+        self._gaia_cache_edit.setText(
+            str(self._config.get("data_paths.gaia_cache_directory", gaia._CACHE_DIR))
+        )
+        self._field_catalogue_cache_edit.setText(
+            str(
+                self._config.get(
+                    "data_paths.field_catalogue_cache_directory",
+                    Path.home() / ".argos" / "cache" / "field_catalogue",
+                )
+            )
+        )
+        self._select_combo_data(
+            self._field_identity_budget_combo,
+            int(self._config.get("catalog.identification_max_objects", 400)),
+        )
         self._apply_catalogue_paths(save=False)
         self._apply_local_data_paths(save=False)
         self._refresh_telescope_card()
@@ -768,7 +848,7 @@ class ConfigurationPage(QWidget):
         self._loading = False
 
     @staticmethod
-    def _select_combo_data(combo: QComboBox, value: str) -> None:
+    def _select_combo_data(combo: QComboBox, value: object) -> None:
         idx = combo.findData(value)
         if idx >= 0:
             combo.setCurrentIndex(idx)
@@ -962,7 +1042,15 @@ class ConfigurationPage(QWidget):
         object_path = Path(self._object_cache_edit.text().strip()).expanduser()
         exoplanet_path = Path(self._exoplanet_cache_edit.text().strip()).expanduser()
         aavso_path = Path(self._aavso_cache_edit.text().strip()).expanduser()
-        if not object_path.name or not exoplanet_path.name or not aavso_path.name:
+        gaia_path = Path(self._gaia_cache_edit.text().strip()).expanduser()
+        field_catalogue_path = Path(self._field_catalogue_cache_edit.text().strip()).expanduser()
+        if (
+            not object_path.name
+            or not exoplanet_path.name
+            or not aavso_path.name
+            or not gaia_path.name
+            or not field_catalogue_path.name
+        ):
             self._catalogue_cache_status.setText(
                 "Choose a valid file or folder for each catalogue cache."
             )
@@ -970,10 +1058,17 @@ class ConfigurationPage(QWidget):
         object_resolver.configure_cache_path(object_path)
         exoplanets.configure_cache_path(exoplanet_path)
         aavso.configure_cache_directory(aavso_path)
+        gaia.configure_cache_directory(gaia_path)
+        field_objects.configure_cache_directory(field_catalogue_path)
+        exoplanets.configure_field_cache_directory(field_catalogue_path)
         if save:
             self._config.set("data_paths.object_catalogue_cache", str(object_path))
             self._config.set("data_paths.exoplanet_cache", str(exoplanet_path))
             self._config.set("data_paths.aavso_cache_directory", str(aavso_path))
+            self._config.set("data_paths.gaia_cache_directory", str(gaia_path))
+            self._config.set(
+                "data_paths.field_catalogue_cache_directory", str(field_catalogue_path)
+            )
         self._refresh_catalogue_cache_status()
 
     def _apply_local_data_paths(self, *, save: bool) -> None:
@@ -998,14 +1093,27 @@ class ConfigurationPage(QWidget):
             return
         self._apply_catalogue_paths(save=True)
 
+    def _save_field_identity_budget(self) -> None:
+        if self._loading:
+            return
+        self._config.set(
+            "catalog.identification_max_objects",
+            int(self._field_identity_budget_combo.currentData() or 400),
+        )
+
     def _refresh_catalogue_cache_status(self) -> None:
         object_path = Path(self._object_cache_edit.text().strip()).expanduser()
         exoplanet_path = Path(self._exoplanet_cache_edit.text().strip()).expanduser()
         aavso_path = Path(self._aavso_cache_edit.text().strip()).expanduser()
+        gaia_path = Path(self._gaia_cache_edit.text().strip()).expanduser()
+        field_catalogue_path = Path(self._field_catalogue_cache_edit.text().strip()).expanduser()
         parts = [
             f"CDS: {'cached' if object_path.exists() else 'empty'}",
             f"NASA: {'cached' if exoplanet_path.exists() else 'empty'}",
             f"AAVSO: {len(list(aavso_path.glob('*.json'))) if aavso_path.is_dir() else 0} field file(s)",
+            f"Gaia: {len(list(gaia_path.glob('*.csv'))) if gaia_path.is_dir() else 0} field file(s)",
+            "Field identities: "
+            f"{len(list(field_catalogue_path.rglob('*.json'))) if field_catalogue_path.is_dir() else 0} field file(s)",
         ]
         self._catalogue_cache_status.setText(" · ".join(parts))
 
@@ -1015,6 +1123,8 @@ class ConfigurationPage(QWidget):
             "object": "CDS/SIMBAD target-name cache",
             "exoplanet": "NASA exoplanet ephemeris cache",
             "aavso": "AAVSO VSX/VSP field cache",
+            "gaia": "Gaia DR3 field-star cache",
+            "field_catalogue": "SIMBAD / NASA field-identification cache",
         }
         label = labels[kind]
         answer = QMessageBox.question(
@@ -1032,9 +1142,17 @@ class ConfigurationPage(QWidget):
                 Path(self._object_cache_edit.text().strip()).expanduser().unlink(missing_ok=True)
             elif kind == "exoplanet":
                 Path(self._exoplanet_cache_edit.text().strip()).expanduser().unlink(missing_ok=True)
-            else:
+            elif kind == "aavso":
                 folder = Path(self._aavso_cache_edit.text().strip()).expanduser()
                 for entry in folder.glob("*.json") if folder.is_dir() else ():
+                    entry.unlink(missing_ok=True)
+            elif kind == "gaia":
+                folder = Path(self._gaia_cache_edit.text().strip()).expanduser()
+                for entry in folder.glob("*.csv") if folder.is_dir() else ():
+                    entry.unlink(missing_ok=True)
+            elif kind == "field_catalogue":
+                folder = Path(self._field_catalogue_cache_edit.text().strip()).expanduser()
+                for entry in folder.rglob("*.json") if folder.is_dir() else ():
                     entry.unlink(missing_ok=True)
         except OSError as exc:
             self._catalogue_cache_status.setText(f"Could not clear {label}: {exc}")

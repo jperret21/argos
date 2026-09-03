@@ -9,6 +9,10 @@ from argos.core.catalog.object_resolver import (
     resolve_nearby_objects,
     resolve_object,
 )
+from argos.core.catalog.point_identity import (
+    PointIdentityLookupError,
+    identify_point_source,
+)
 
 
 class ObjectResolverWorker(QThread):
@@ -57,3 +61,46 @@ class NearbyObjectResolverWorker(QThread):
             self.failed.emit(str(exc))
         except Exception:
             self.failed.emit("Target-name lookup failed unexpectedly. See the log for details.")
+
+
+class PointIdentityWorker(QThread):
+    """Identify one clicked WCS coordinate without blocking live capture."""
+
+    resolved = pyqtSignal(object)  # PointSourceIdentity | None
+    failed = pyqtSignal(str)
+
+    def __init__(
+        self,
+        ra_deg: float,
+        dec_deg: float,
+        *,
+        use_gaia: bool,
+        use_simbad: bool,
+        allow_gaia_network: bool,
+        allow_simbad_network: bool,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self._ra_deg = float(ra_deg)
+        self._dec_deg = float(dec_deg)
+        self._use_gaia = bool(use_gaia)
+        self._use_simbad = bool(use_simbad)
+        self._allow_gaia_network = bool(allow_gaia_network)
+        self._allow_simbad_network = bool(allow_simbad_network)
+
+    def run(self) -> None:
+        try:
+            self.resolved.emit(
+                identify_point_source(
+                    self._ra_deg,
+                    self._dec_deg,
+                    use_gaia=self._use_gaia,
+                    use_simbad=self._use_simbad,
+                    allow_gaia_network=self._allow_gaia_network,
+                    allow_simbad_network=self._allow_simbad_network,
+                )
+            )
+        except PointIdentityLookupError as exc:
+            self.failed.emit(str(exc))
+        except Exception:
+            self.failed.emit("Point identification failed unexpectedly. See the log for details.")

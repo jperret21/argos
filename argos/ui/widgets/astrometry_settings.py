@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLineEdit,
+    QLabel,
     QPushButton,
     QSpinBox,
     QTabWidget,
@@ -69,8 +70,8 @@ class AstrometrySettingsDialog(QDialog):
 
         layout = QVBoxLayout(self)
         self._tabs = QTabWidget()
-        self._tabs.addTab(self._build_astrometry_tab(), "Field identification")
-        self._tabs.addTab(self._build_catalog_tab(), "Catalogues")
+        self._tabs.addTab(self._build_astrometry_tab(), "Plate solving")
+        self._tabs.addTab(self._build_catalog_tab(), "Field catalogue")
         layout.addWidget(self._tabs)
 
         buttons = QDialogButtonBox(
@@ -97,7 +98,7 @@ class AstrometrySettingsDialog(QDialog):
         path_row = QHBoxLayout()
         path_row.addWidget(self._astap_edit, 1)
         path_row.addWidget(browse)
-        form.addRow("ASTAP binary", path_row)
+        form.addRow("ASTAP executable", path_row)
 
         self._db_combo = QComboBox()
         self._db_combo.addItems(_ASTAP_DATABASES)
@@ -107,20 +108,20 @@ class AstrometrySettingsDialog(QDialog):
         self._radius_spin.setRange(0, 180)
         self._radius_spin.setSuffix("°")
         self._radius_spin.setToolTip("Search radius around the pointing hint (0 = whole-sky blind)")
-        form.addRow("Search radius", self._radius_spin)
+        form.addRow("Pointing search radius", self._radius_spin)
 
         self._down_combo = QComboBox()
         for label, _v in _DOWNSAMPLE:
             self._down_combo.addItem(label)
-        form.addRow("Downsample", self._down_combo)
+        form.addRow("Solve-image downsampling", self._down_combo)
 
         self._grid_spin = QSpinBox()
         self._grid_spin.setRange(0, 120)
         self._grid_spin.setSuffix("′")
         self._grid_spin.setToolTip("RA/Dec grid spacing in arcminutes (0 = auto, adaptive)")
-        form.addRow("Grid spacing", self._grid_spin)
+        form.addRow("Coordinate-grid spacing", self._grid_spin)
 
-        self._scale_hint_chk = QCheckBox("Use the camera scale as a field-of-view hint")
+        self._scale_hint_chk = QCheckBox("Use camera plate scale as a field-of-view hint")
         form.addRow("", self._scale_hint_chk)
         return tab
 
@@ -128,21 +129,132 @@ class AstrometrySettingsDialog(QDialog):
         tab = QWidget()
         form = QFormLayout(tab)
 
+        help_label = QLabel(
+            "These controls define what is fetched and displayed for a solved image. "
+            "They do not change a FITS frame or the scientific photometry."
+        )
+        help_label.setWordWrap(True)
+        form.addRow(help_label)
+
         self._mag_spin = QDoubleSpinBox()
         self._mag_spin.setRange(5.0, 20.0)
         self._mag_spin.setSingleStep(0.5)
         self._mag_spin.setDecimals(1)
         self._mag_spin.setToolTip("Drop catalog objects fainter than this (a dense field is huge)")
-        form.addRow("Magnitude limit", self._mag_spin)
+        form.addRow("VSX faint-end magnitude limit", self._mag_spin)
 
         self._max_spin = QSpinBox()
         self._max_spin.setRange(10, 2000)
         self._max_spin.setSingleStep(10)
         self._max_spin.setToolTip("Cap on variable stars drawn (brightest kept)")
-        form.addRow("Max variables", self._max_spin)
+        form.addRow("Maximum VSX variables in field", self._max_spin)
 
         self._suspected_chk = QCheckBox("Include suspected variables")
         form.addRow("", self._suspected_chk)
+
+        self._identification_budget = QComboBox()
+        for label, value in (
+            ("Fast · 100 objects", 100),
+            ("Fast · 200 objects", 200),
+            ("Balanced · 400 objects", 400),
+            ("Detailed · 800 objects", 800),
+            ("Dense field · 1,600 objects", 1600),
+        ):
+            self._identification_budget.addItem(label, value)
+        self._identification_budget.setToolTip(
+            "Maximum online field identities shared between Gaia and SIMBAD. "
+            "A smaller budget is faster. Scientific VSX/VSP results are not truncated by it."
+        )
+        self._identification_budget.currentIndexChanged.connect(self._apply_identification_budget)
+        form.addRow("Field identification budget", self._identification_budget)
+
+        self._field_catalogue_chk = QCheckBox("Identify ordinary field stars with Gaia DR3")
+        self._field_catalogue_chk.setToolTip(
+            "Queries Gaia after a field solve and uses the local cache when available. "
+            "Gaia identifiers are for field recognition, not calibrated photometry."
+        )
+        form.addRow("", self._field_catalogue_chk)
+
+        self._field_mag_spin = QDoubleSpinBox()
+        self._field_mag_spin.setRange(3.0, 20.0)
+        self._field_mag_spin.setSingleStep(0.5)
+        self._field_mag_spin.setDecimals(1)
+        self._field_mag_spin.setToolTip(
+            "Only Gaia sources brighter than this G magnitude are shown"
+        )
+        form.addRow("Gaia cached-depth G limit", self._field_mag_spin)
+
+        self._field_max_spin = QSpinBox()
+        self._field_max_spin.setRange(10, 5000)
+        self._field_max_spin.setSingleStep(10)
+        self._field_max_spin.setToolTip("Cap on named Gaia source markers in the solved field")
+        self._field_max_spin.hide()  # legacy key; controlled by the shared budget above
+
+        self._field_depth = QComboBox()
+        self._field_depth.addItem("Bright field · Gaia G ≤ 15", 15.0)
+        self._field_depth.addItem("Standard field · Gaia G ≤ 18", 18.0)
+        self._field_depth.addItem("Deep field · Gaia G ≤ 20", 20.0)
+        self._field_depth.addItem("Custom", None)
+        self._field_depth.currentIndexChanged.connect(self._apply_field_depth)
+        form.addRow("Gaia cache depth", self._field_depth)
+
+        self._field_detected_only_chk = QCheckBox(
+            "Only draw Gaia sources with a local image detection"
+        )
+        self._field_detected_only_chk.setToolTip(
+            "Off by default: after a good plate solve, Gaia/WCS coordinates are the "
+            "identification reference. Enable only to declutter a noisy preview."
+        )
+        form.addRow("", self._field_detected_only_chk)
+
+        self._essential_objects_chk = QCheckBox(
+            "Show bundled Messier, NGC and IC objects in the solved field"
+        )
+        self._essential_objects_chk.setToolTip(
+            "Works offline. This compact catalogue identifies deep-sky objects, not every star."
+        )
+        form.addRow("", self._essential_objects_chk)
+
+        self._cached_exoplanets_chk = QCheckBox(
+            "Show previously prepared exoplanet hosts from the local cache"
+        )
+        self._cached_exoplanets_chk.setToolTip(
+            "Does not query the network and is not a complete exoplanet-field catalogue."
+        )
+        form.addRow("", self._cached_exoplanets_chk)
+
+        self._named_objects_chk = QCheckBox(
+            "Identify named objects and types with SIMBAD for every solved field"
+        )
+        self._named_objects_chk.setToolTip(
+            "Uses the local field cache first, then SIMBAD after Field → Identify field. "
+            "Gaia remains the complete star layer."
+        )
+        form.addRow("", self._named_objects_chk)
+
+        self._named_max_spin = QSpinBox()
+        self._named_max_spin.setRange(50, 2000)
+        self._named_max_spin.setSingleStep(50)
+        self._named_max_spin.setToolTip("Cap for named SIMBAD objects returned for a crowded field")
+        self._named_max_spin.hide()  # legacy key; controlled by the shared budget above
+
+        self._named_network_chk = QCheckBox("Allow SIMBAD lookup when this field is not cached")
+        self._named_network_chk.setToolTip("Disable for a cache-only / offline observing session.")
+        form.addRow("", self._named_network_chk)
+
+        self._exoplanet_hosts_chk = QCheckBox(
+            "Find confirmed exoplanet hosts for every solved field"
+        )
+        self._exoplanet_hosts_chk.setToolTip(
+            "Uses the local field cache first, then NASA Exoplanet Archive when permitted."
+        )
+        form.addRow("", self._exoplanet_hosts_chk)
+
+        self._exoplanet_network_chk = QCheckBox("Allow NASA lookup when this field is not cached")
+        self._exoplanet_network_chk.setToolTip(
+            "Disable for a cache-only / offline observing session."
+        )
+        form.addRow("", self._exoplanet_network_chk)
 
         # Photometry knob that belongs with the catalog: when a target is picked
         # the engine auto-fills the comparison ensemble from the field's VSP
@@ -152,7 +264,7 @@ class AstrometrySettingsDialog(QDialog):
         self._autocomp_spin.setToolTip(
             "How many comparison stars are auto-picked when a target is chosen"
         )
-        form.addRow("Auto comparison stars", self._autocomp_spin)
+        form.addRow("Automatic reference stars", self._autocomp_spin)
         return tab
 
     # ------------------------------------------------------------------
@@ -172,6 +284,34 @@ class AstrometrySettingsDialog(QDialog):
         self._mag_spin.setValue(float(self._g("catalog.mag_limit", 15.0)))
         self._max_spin.setValue(int(self._g("catalog.max_results", 250)))
         self._suspected_chk.setChecked(bool(self._g("catalog.include_suspected", True)))
+        self._field_catalogue_chk.setChecked(bool(self._g("catalog.field_stars_enabled", True)))
+        self._field_mag_spin.setValue(float(self._g("catalog.field_stars_mag_limit", 18.0)))
+        self._field_max_spin.setValue(int(self._g("catalog.field_stars_max_results", 2000)))
+        budget = int(self._g("catalog.identification_max_objects", 400))
+        budget_index = self._identification_budget.findData(budget)
+        self._identification_budget.setCurrentIndex(
+            budget_index if budget_index >= 0 else self._identification_budget.findData(400)
+        )
+        self._field_detected_only_chk.setChecked(
+            bool(self._g("catalog.field_stars_detected_only", False))
+        )
+        self._essential_objects_chk.setChecked(
+            bool(self._g("catalog.show_essential_objects", True))
+        )
+        self._cached_exoplanets_chk.setChecked(
+            bool(self._g("catalog.show_cached_exoplanets", True))
+        )
+        self._named_objects_chk.setChecked(bool(self._g("catalog.named_objects_enabled", True)))
+        self._named_max_spin.setValue(int(self._g("catalog.named_objects_max_results", 500)))
+        self._apply_identification_budget(self._identification_budget.currentIndex())
+        self._named_network_chk.setChecked(
+            bool(self._g("catalog.named_objects_allow_network", True))
+        )
+        self._exoplanet_hosts_chk.setChecked(bool(self._g("catalog.exoplanet_hosts_enabled", True)))
+        self._exoplanet_network_chk.setChecked(
+            bool(self._g("catalog.exoplanet_hosts_allow_network", True))
+        )
+        self._select_field_depth()
         self._autocomp_spin.setValue(int(self._g("photometry.auto_comparisons", 5)))
 
     def _select_downsample(self, value: int) -> None:
@@ -180,6 +320,26 @@ class AstrometrySettingsDialog(QDialog):
                 self._down_combo.setCurrentIndex(i)
                 return
         self._down_combo.setCurrentIndex(0)
+
+    def _select_field_depth(self) -> None:
+        desired = float(self._field_mag_spin.value())
+        for index in range(self._field_depth.count() - 1):
+            if self._field_depth.itemData(index) == desired:
+                self._field_depth.setCurrentIndex(index)
+                return
+        self._field_depth.setCurrentIndex(self._field_depth.count() - 1)
+
+    def _apply_field_depth(self, _index: int) -> None:
+        preset = self._field_depth.currentData()
+        if preset is None:
+            return
+        self._field_mag_spin.setValue(float(preset))
+
+    def _apply_identification_budget(self, _index: int) -> None:
+        """Keep legacy per-provider limits coherent with the shared budget."""
+        budget = int(self._identification_budget.currentData() or 400)
+        self._field_max_spin.setValue(budget)
+        self._named_max_spin.setValue(budget)
 
     def _browse_astap(self) -> None:
         from PyQt6.QtWidgets import QFileDialog
@@ -191,6 +351,7 @@ class AstrometrySettingsDialog(QDialog):
     def _on_save(self) -> None:
         if self._config is not None:
             db = self._db_combo.currentText()
+            identification_budget = int(self._identification_budget.currentData() or 400)
             self._config.set("astrometry.astap_path", self._astap_edit.text().strip())
             self._config.set("astrometry.database", "" if db == "Auto" else db)
             self._config.set("astrometry.search_radius_deg", int(self._radius_spin.value()))
@@ -202,6 +363,33 @@ class AstrometrySettingsDialog(QDialog):
             self._config.set("catalog.mag_limit", float(self._mag_spin.value()))
             self._config.set("catalog.max_results", int(self._max_spin.value()))
             self._config.set("catalog.include_suspected", self._suspected_chk.isChecked())
+            self._config.set("catalog.field_stars_enabled", self._field_catalogue_chk.isChecked())
+            self._config.set("catalog.field_stars_mag_limit", float(self._field_mag_spin.value()))
+            self._config.set(
+                "catalog.identification_max_objects",
+                identification_budget,
+            )
+            self._config.set("catalog.field_stars_max_results", identification_budget)
+            self._config.set(
+                "catalog.field_stars_detected_only", self._field_detected_only_chk.isChecked()
+            )
+            self._config.set(
+                "catalog.show_essential_objects", self._essential_objects_chk.isChecked()
+            )
+            self._config.set(
+                "catalog.show_cached_exoplanets", self._cached_exoplanets_chk.isChecked()
+            )
+            self._config.set("catalog.named_objects_enabled", self._named_objects_chk.isChecked())
+            self._config.set("catalog.named_objects_max_results", identification_budget)
+            self._config.set(
+                "catalog.named_objects_allow_network", self._named_network_chk.isChecked()
+            )
+            self._config.set(
+                "catalog.exoplanet_hosts_enabled", self._exoplanet_hosts_chk.isChecked()
+            )
+            self._config.set(
+                "catalog.exoplanet_hosts_allow_network", self._exoplanet_network_chk.isChecked()
+            )
             self._config.set("photometry.auto_comparisons", int(self._autocomp_spin.value()))
             self._config.save()
         self.saved.emit()

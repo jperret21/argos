@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from argos.core.imaging.debayer import render_view
+from argos.core.imaging.debayer import neutralise_rgb_for_display, render_view
 from argos.core.imaging.green import green_shape as _green_shape
 from argos.core.imaging.metrics import (
     DEFAULT_STAR_RADIUS,
@@ -66,6 +66,8 @@ def build_processed_frame(
     histograms.
     """
     display = render_view(raw, view)
+    if display.ndim == 3:
+        display = neutralise_rgb_for_display(display)
     metrics = frame_metrics(raw)
     stars = detect_stars(raw, radius=radius)
     green_shape = _green_shape(raw)

@@ -13,6 +13,7 @@ for the ROI statistics.
 
 from __future__ import annotations
 
+import html
 import logging
 
 import numpy as np
@@ -40,6 +41,24 @@ _LOUPE_SRC = 42
 #: display-only: the public API (star_clicked, mark_selection, set_*_markers)
 #: keeps speaking un-rotated frame coordinates, and saved FITS are untouched.
 ROTATION_MODES = ("auto", "0", "90", "180", "270")
+
+
+def _short_marker_label(value: object, limit: int = 18) -> str:
+    """Shorten an on-image catalogue label without losing its identity."""
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return f"{text[: max(6, limit - 7)]}…{text[-6:]}"
+
+
+def _marker_tip(*_args: object, data: object = None, **_kwargs: object) -> str:
+    """Render PyQtGraph marker data safely as a hover tooltip.
+
+    PyQtGraph invokes custom tips with keyword arguments (``x``, ``y`` and
+    ``data``); accepting both calling conventions keeps this callback valid
+    across supported PyQtGraph releases.
+    """
+    return html.escape(str(data or ""))
 
 
 def _to_qimage(arr: np.ndarray) -> QImage:
@@ -83,6 +102,21 @@ class FitsViewer(QWidget):
         # §6 catalog overlay: VSX variable-star markers (green-plane coords).
         self._catalog: tuple = ()  # (x_green, y_green, suspected) per object
         self._catalog_on: bool = False
+        self._catalog_labels: list = []
+        # Named, non-variable Gaia DR3 sources in the solved field. This is a
+        # catalogue identity layer, deliberately separate from image detection.
+        self._field_catalogue: tuple = ()  # (x_green, y_green, name, tooltip)
+        self._field_catalogue_on: bool = False
+        self._field_catalogue_labels: list = []
+        # Local/cached non-stellar context is rendered in independent layers:
+        # an observer can ask for galaxies without drowning the image in Gaia
+        # source identifiers, and vice versa.
+        self._context_layers: dict[str, dict] = {
+            "galaxies": {"points": (), "enabled": False, "labels": [], "item": None},
+            "nebulae_clusters": {"points": (), "enabled": False, "labels": [], "item": None},
+            "exoplanets": {"points": (), "enabled": False, "labels": [], "item": None},
+            "other_objects": {"points": (), "enabled": False, "labels": [], "item": None},
+        }
         # §6 R5: VSP comparison-star markers (green px) + their chart labels.
         self._comparisons: tuple = ()  # (x_green, y_green, label) per object
         self._comparisons_on: bool = False
@@ -91,6 +125,7 @@ class FitsViewer(QWidget):
         self._targets: tuple = ()  # (x_green, y_green, name) per saved target
         self._targets_on: bool = False
         self._target_labels: list = []
+        self._marker_labels_on: bool = False
         self._grid_labels: list = []  # RA/Dec edge labels (pooled)
         self._build_ui()
 
@@ -165,11 +200,31 @@ class FitsViewer(QWidget):
         self._target_item.setVisible(False)
         self._view.getView().addItem(self._target_item, ignoreBounds=True)
 
-        # §6 catalog overlay — VSX variable stars as hollow diamonds (purple).
+        # §6 catalog overlay — VSX variable stars as hollow blue circles.
         # Per-spot pen lets suspected variables render dashed/dimmer.
-        self._catalog_item = pg.ScatterPlotItem(brush=None, pxMode=True, size=18, symbol="d")
+        self._catalog_item = pg.ScatterPlotItem(brush=None, pxMode=True, size=28, symbol="o")
         self._catalog_item.setVisible(False)
         self._view.getView().addItem(self._catalog_item, ignoreBounds=True)
+        self._field_catalogue_item = pg.ScatterPlotItem(
+            pen=pg.mkPen(theme.FG_MUTED, width=2), brush=None, pxMode=True, size=18, symbol="o"
+        )
+        self._field_catalogue_item.setVisible(False)
+        self._view.getView().addItem(self._field_catalogue_item, ignoreBounds=True)
+        self._context_layers["galaxies"]["item"] = pg.ScatterPlotItem(
+            pen=pg.mkPen(theme.CYAN, width=2), brush=None, pxMode=True, size=28, symbol="o"
+        )
+        self._context_layers["nebulae_clusters"]["item"] = pg.ScatterPlotItem(
+            pen=pg.mkPen(theme.WARNING, width=2), brush=None, pxMode=True, size=30, symbol="s"
+        )
+        self._context_layers["exoplanets"]["item"] = pg.ScatterPlotItem(
+            pen=pg.mkPen(theme.SUCCESS, width=2), brush=None, pxMode=True, size=26, symbol="star"
+        )
+        self._context_layers["other_objects"]["item"] = pg.ScatterPlotItem(
+            pen=pg.mkPen(theme.FG_MUTED, width=2), brush=None, pxMode=True, size=24, symbol="o"
+        )
+        for layer in self._context_layers.values():
+            layer["item"].setVisible(False)
+            self._view.getView().addItem(layer["item"], ignoreBounds=True)
         # §6 R5 — VSP comparison stars as hollow cyan squares (chart labels added
         # as TextItems in _refresh_comparisons).
         self._comparison_item = pg.ScatterPlotItem(
@@ -252,6 +307,11 @@ class FitsViewer(QWidget):
         self._render()
         self._refresh_astrometry()
         self._refresh_catalog()
+        self._refresh_field_catalogue()
+        self._refresh_context_layer("galaxies")
+        self._refresh_context_layer("nebulae_clusters")
+        self._refresh_context_layer("exoplanets")
+        self._refresh_context_layer("other_objects")
         self._refresh_comparisons()
         self._refresh_targets()
         if rotated:
@@ -503,8 +563,68 @@ class FitsViewer(QWidget):
         self._catalog_on = bool(enabled)
         self._refresh_catalog()
 
+    def set_field_catalogue_markers(
+        self, points, green_shape: tuple[int, int] | None = None
+    ) -> None:
+        """Set named Gaia DR3 source positions in green-plane coordinates."""
+        self._field_catalogue = tuple(points or ())
+        if green_shape is not None:
+            self._green_shape = green_shape
+        self._refresh_field_catalogue()
+
+    def set_field_catalogue_enabled(self, enabled: bool) -> None:
+        self._field_catalogue_on = bool(enabled)
+        self._refresh_field_catalogue()
+
+    def set_context_markers(
+        self, name: str, points, green_shape: tuple[int, int] | None = None
+    ) -> None:
+        """Set local/cached contextual objects for a named context layer.
+
+        Each point is ``(x_green, y_green, short_label, tooltip)``.  This
+        generic surface deliberately prevents the two optional catalogues from
+        becoming ad-hoc special cases in the image viewer.
+        """
+        if name not in self._context_layers:
+            raise ValueError(f"unknown context layer: {name}")
+        self._context_layers[name]["points"] = tuple(points or ())
+        if green_shape is not None:
+            self._green_shape = green_shape
+        self._refresh_context_layer(name)
+
+    def set_context_enabled(self, name: str, enabled: bool) -> None:
+        if name not in self._context_layers:
+            raise ValueError(f"unknown context layer: {name}")
+        self._context_layers[name]["enabled"] = bool(enabled)
+        self._refresh_context_layer(name)
+
+    def set_marker_labels_enabled(self, enabled: bool) -> None:
+        """Show or hide labels for catalogue and saved photometry markers."""
+        self._marker_labels_on = bool(enabled)
+        self._refresh_catalog()
+        self._refresh_field_catalogue()
+        self._refresh_context_layer("galaxies")
+        self._refresh_context_layer("nebulae_clusters")
+        self._refresh_context_layer("exoplanets")
+        self._refresh_context_layer("other_objects")
+        self._refresh_comparisons()
+        self._refresh_targets()
+
+    @staticmethod
+    def _claim_label_slot(occupied: set[tuple[int, int]], x: float, y: float) -> bool:
+        """Reserve one smart-label cell and reject overlapping neighbours."""
+        cell = (int(x // 150), int(y // 42))
+        if any((cell[0] + dx, cell[1] + dy) in occupied for dx in (-1, 0, 1) for dy in (-1, 0, 1)):
+            return False
+        occupied.add(cell)
+        return True
+
     def _refresh_catalog(self) -> None:
-        """Redraw variable-star diamonds, scaled green-plane → active view."""
+        """Redraw variable-star circles, scaled green-plane → active view."""
+        view = self._view.getView()
+        for t in self._catalog_labels:
+            view.removeItem(t)
+        self._catalog_labels = []
         if not (self._catalog_on and self._catalog and self._last_arr is not None):
             self._catalog_item.setVisible(False)
             return
@@ -516,22 +636,121 @@ class FitsViewer(QWidget):
         sx, sy = dw / gw, dh / gh  # green-plane px → display px
         confirmed = pg.mkPen(theme.VARIABLE, width=2)
         suspected = pg.mkPen(theme.VARIABLE, width=1, style=Qt.PenStyle.DashLine)
-        spots = [
-            {"pos": self._rot_pt(x * sx, y * sy), "pen": (suspected if s else confirmed)}
-            for (x, y, s) in self._catalog
-        ]
-        self._catalog_item.setData(spots)
+        spots = []
+        label_slots: set[tuple[int, int]] = set()
+        for point in self._catalog:
+            x, y, suspected_flag, *details = point
+            name = details[0] if details else ""
+            tip = details[1] if len(details) > 1 else name
+            px, py = self._rot_pt(x * sx, y * sy)
+            spots.append(
+                {
+                    "pos": (px, py),
+                    "pen": (suspected if suspected_flag else confirmed),
+                    "symbol": "o",
+                    "size": 30,
+                    "data": tip,
+                }
+            )
+            if self._marker_labels_on and name and self._claim_label_slot(label_slots, px, py):
+                text = pg.TextItem(
+                    text=_short_marker_label(name), color=theme.VARIABLE, anchor=(0.0, 1.3)
+                )
+                text.setPos(px, py)
+                view.addItem(text, ignoreBounds=True)
+                self._catalog_labels.append(text)
+        self._catalog_item.setData(spots, hoverable=True, tip=_marker_tip, hoverSize=36)
         self._catalog_item.setVisible(True)
 
+    def _refresh_field_catalogue(self) -> None:
+        """Redraw named Gaia sources, scaled green-plane → active view."""
+        view = self._view.getView()
+        for text in self._field_catalogue_labels:
+            view.removeItem(text)
+        self._field_catalogue_labels = []
+        if not (self._field_catalogue_on and self._field_catalogue and self._last_arr is not None):
+            self._field_catalogue_item.setVisible(False)
+            return
+        gh, gw = self._green_shape or (0, 0)
+        if gh <= 0 or gw <= 0:
+            self._field_catalogue_item.setVisible(False)
+            return
+        dh, dw = self._arr0.shape[:2]
+        sx, sy = dw / gw, dh / gh
+        spots = []
+        label_slots: set[tuple[int, int]] = set()
+        for point in self._field_catalogue:
+            x, y, name, *details = point
+            tooltip = details[0] if details else name
+            px, py = self._rot_pt(x * sx, y * sy)
+            spots.append(
+                {
+                    "pos": (px, py),
+                    "symbol": "o",
+                    "size": 18,
+                    "pen": pg.mkPen(theme.FG_MUTED, width=2),
+                    "data": tooltip,
+                }
+            )
+            if self._marker_labels_on and name and self._claim_label_slot(label_slots, px, py):
+                text = pg.TextItem(
+                    text=_short_marker_label(name), color=theme.FG_MUTED, anchor=(0.0, 1.35)
+                )
+                text.setPos(px, py)
+                view.addItem(text, ignoreBounds=True)
+                self._field_catalogue_labels.append(text)
+        self._field_catalogue_item.setData(spots, hoverable=True, tip=_marker_tip, hoverSize=24)
+        self._field_catalogue_item.setVisible(True)
+
+    def _refresh_context_layer(self, name: str) -> None:
+        """Render one optional solved-field context layer."""
+        layer = self._context_layers[name]
+        view = self._view.getView()
+        for text in layer["labels"]:
+            view.removeItem(text)
+        layer["labels"] = []
+        item = layer["item"]
+        points = layer["points"]
+        if not (layer["enabled"] and points and self._last_arr is not None):
+            item.setVisible(False)
+            return
+        gh, gw = self._green_shape or (0, 0)
+        if gh <= 0 or gw <= 0:
+            item.setVisible(False)
+            return
+        dh, dw = self._arr0.shape[:2]
+        sx, sy = dw / gw, dh / gh
+        colour = {
+            "galaxies": theme.CYAN,
+            "nebulae_clusters": theme.WARNING,
+            "exoplanets": theme.SUCCESS,
+            "other_objects": theme.FG_MUTED,
+        }[name]
+        spots = []
+        label_slots: set[tuple[int, int]] = set()
+        for point in points:
+            x, y, label, *details = point
+            tooltip = details[0] if details else label
+            px, py = self._rot_pt(x * sx, y * sy)
+            spots.append({"pos": (px, py), "data": tooltip})
+            if self._marker_labels_on and label and self._claim_label_slot(label_slots, px, py):
+                text = pg.TextItem(text=_short_marker_label(label), color=colour, anchor=(0.0, 1.3))
+                text.setPos(px, py)
+                view.addItem(text, ignoreBounds=True)
+                layer["labels"].append(text)
+        item.setData(spots, hoverable=True, tip=_marker_tip, hoverSize=36)
+        item.setVisible(True)
+
     # ------------------------------------------------------------------
-    # Comparison-star overlay (§6, R5): VSP squares + chart-magnitude labels
+    # Comparison-star overlay: optional VSP catalogue candidates.
     # ------------------------------------------------------------------
 
     def set_comparison_markers(self, points, green_shape: tuple[int, int] | None = None) -> None:
         """Receive comparison-star markers (green-plane coords).
 
-        ``points`` is an iterable of ``(x_green, y_green, label)`` tuples, where
-        ``label`` is the VSP chart label (magnitude×10) drawn beside the square.
+        ``points`` is an iterable of ``(x_green, y_green, tooltip)`` tuples.
+        VSP chart labels (e.g. ``114`` for V≈11.4) are deliberately not drawn:
+        they are magnitudes, not meaningful star names.
         """
         self._comparisons = tuple(points or ())
         if green_shape is not None:
@@ -549,7 +768,7 @@ class FitsViewer(QWidget):
         self._comp_labels = []
 
     def _refresh_comparisons(self) -> None:
-        """Redraw comparison squares + magnitude labels, green-plane → view."""
+        """Redraw optional VSP candidates without pseudo-name labels."""
         self._clear_comp_labels()
         if not (self._comparisons_on and self._comparisons and self._last_arr is not None):
             self._comparison_item.setVisible(False)
@@ -560,29 +779,31 @@ class FitsViewer(QWidget):
             return
         dh, dw = self._arr0.shape[:2]
         sx, sy = dw / gw, dh / gh  # green-plane px → display px
-        view = self._view.getView()
         spots = []
-        for x, y, label in self._comparisons:
+        for point in self._comparisons:
+            x, y, *details = point
             px, py = self._rot_pt(x * sx, y * sy)
-            spots.append({"pos": (px, py)})
-            if label:
-                t = pg.TextItem(text=str(label), color=theme.CYAN, anchor=(0.0, 1.2))
-                t.setPos(px, py)
-                view.addItem(t, ignoreBounds=True)
-                self._comp_labels.append(t)
-        self._comparison_item.setData(spots)
+            spots.append(
+                {
+                    "pos": (px, py),
+                    "symbol": "+",
+                    "size": 20,
+                    "data": details[0] if details else "VSP reference candidate",
+                }
+            )
+        self._comparison_item.setData(spots, hoverable=True, tip=_marker_tip, hoverSize=26)
         self._comparison_item.setVisible(True)
 
     # ------------------------------------------------------------------
     # Target overlay (§6 P1): the night's selected stars (amber ring + name)
     # ------------------------------------------------------------------
 
-    #: Per-role marker styles: (theme colour attr, symbol, size, pen width,
-    #: labelled). The target must dominate; comps/checks stay quieter.
+    #: Per-role marker styles: colour, shape, diameter (screen px), pen width.
+    #: Shapes carry meaning in colour and night-red modes alike.
     _ROLE_STYLES = {
-        "target": ("SUCCESS", "o", 26, 3, True),
-        "comparison": ("CYAN", "s", 18, 3, False),
-        "check": ("ACCENT", "o", 20, 2, True),
+        "target": ("ACCENT", "o", 34, 3),
+        "comparison": ("CYAN", "s", 30, 3),
+        "check": ("SUCCESS", "t", 30, 3),
     }
 
     def set_target_markers(self, points, green_shape: tuple[int, int] | None = None) -> None:
@@ -611,8 +832,10 @@ class FitsViewer(QWidget):
         dh, dw = self._arr0.shape[:2]
         sx, sy = dw / gw, dh / gh
         spots = []
-        for x, y, name, role in self._targets:
-            colour_attr, symbol, size, width, labelled = self._ROLE_STYLES.get(
+        for point in self._targets:
+            x, y, name, role, *details = point
+            tooltip = details[0] if details else name
+            colour_attr, symbol, size, width = self._ROLE_STYLES.get(
                 role, self._ROLE_STYLES["target"]
             )
             colour = getattr(theme, colour_attr)
@@ -623,14 +846,17 @@ class FitsViewer(QWidget):
                     "pen": pg.mkPen(colour, width=width),
                     "symbol": symbol,
                     "size": size,
+                    "data": tooltip,
                 }
             )
-            if labelled and name:
-                t = pg.TextItem(text=str(name), color=colour, anchor=(0.0, 1.4))
+            # Comparison stars are recognized by the cyan square; VSP's
+            # numeric chart labels are magnitude codes, not identities.
+            if self._marker_labels_on and role != "comparison" and name:
+                t = pg.TextItem(text=_short_marker_label(name), color=colour, anchor=(0.0, 1.45))
                 t.setPos(px, py)
                 view.addItem(t, ignoreBounds=True)
                 self._target_labels.append(t)
-        self._targets_item.setData(spots)
+        self._targets_item.setData(spots, hoverable=True, tip=_marker_tip, hoverSize=40)
         self._targets_item.setVisible(True)
 
     def set_loupe_enabled(self, enabled: bool) -> None:
@@ -748,6 +974,11 @@ class FitsViewer(QWidget):
         self._refresh_astrometry()
         self._catalog = ()
         self._refresh_catalog()
+        self._field_catalogue = ()
+        self._refresh_field_catalogue()
+        for name in self._context_layers:
+            self._context_layers[name]["points"] = ()
+            self._refresh_context_layer(name)
         self._comparisons = ()
         self._refresh_comparisons()
         self._targets = ()

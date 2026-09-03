@@ -55,6 +55,15 @@ def test_due_on_mount_move(qapp) -> None:
     assert c._due((5.0, 22.2)) is True  # 0.2° ≈ 12′ move > 2′ threshold
 
 
+def test_mount_move_marks_an_existing_wcs_unsafe(qapp) -> None:
+    """External telescope slews must not leave target apertures on old pixels."""
+    c = AstrometryController(_cfg({"astrometry.live_resolve_arcmin": 2.0}))
+    c._wcs = object()
+    c._last_solve_radec = (5.0, 22.0)
+    assert not c.mount_moved_since_solution((5.0, 22.01))
+    assert c.mount_moved_since_solution((5.0, 22.2))
+
+
 def test_invalidate_clears_wcs(qapp) -> None:
     c = AstrometryController(_cfg({}))
     c._wcs = object()

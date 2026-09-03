@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from argos.core.imaging.debayer import downsample_cfa
 from argos.core.alpaca.camera import Camera
 from argos.core.alpaca.client import AlpacaError
 
@@ -132,9 +133,11 @@ class LivePreviewWorker(QThread):
                 self.status_updated.emit("Downloading…")
                 full_arr = self._camera.get_image_array()
 
-                # Create preview via stride decimation (zero-copy numpy view)
+                # Create a reduced CFA preview without discarding three Bayer
+                # colours. A raw stride would make a green-looking false RGB
+                # image at half resolution.
                 s = self._preview_scale
-                preview_arr = full_arr[::s, ::s] if s > 1 else full_arr
+                preview_arr = downsample_cfa(full_arr, s) if s > 1 else full_arr
                 logger.debug(
                     "Preview scale=%dx: full=%s preview=%s",
                     s,

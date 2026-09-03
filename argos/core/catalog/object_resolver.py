@@ -95,6 +95,73 @@ def normalize_designation(query: str) -> str:
     return value
 
 
+def display_designation(name: str, *, fallback: str = "") -> str:
+    """Return a human/FITS-ready catalogue designation.
+
+    SIMBAD commonly prefixes the primary identifier of a variable star with
+    ``V*`` (for example ``V* XX Cyg``).  That prefix is an *object type*, not
+    part of the star's designation; retaining it made Argos look as if it had
+    resolved a different object and produced needlessly awkward FITS OBJECT
+    values.  Keep the type separately in :attr:`ResolvedObject.object_type`
+    and present the conventional designation everywhere else.
+
+    ``fallback`` is deliberately normalised too, so an older cached result is
+    repaired as soon as it is read.
+    """
+    value = " ".join((name or fallback).strip().split())
+    value = re.sub(r"^V\*\s*", "", value, flags=re.IGNORECASE)
+    return value or " ".join(fallback.strip().split())
+
+
+def object_type_label(object_type: str) -> str:
+    """Expand terse catalogue type codes for an observer-facing interface."""
+    value = " ".join((object_type or "").strip().split())
+    labels = {
+        "v*": "Variable star",
+        "sx*": "SX Phoenicis variable",
+        "rr*": "RR Lyrae variable",
+        "ce*": "Cepheid variable",
+        "ds*": "Delta Scuti variable",
+        "lp*": "Long-period variable",
+        "er*": "Eruptive variable",
+        "or*": "Orion variable",
+        "rv*": "RV Tauri variable",
+        "wv*": "W Virginis variable",
+    }
+    if value.casefold() in labels:
+        return labels[value.casefold()]
+    return value
+
+
+def is_variable_object_type(object_type: str) -> bool:
+    """Whether a SIMBAD object type denotes a photometric variable star."""
+    return " ".join((object_type or "").strip().split()).casefold() in {
+        "v*",
+        "sx*",
+        "rr*",
+        "ce*",
+        "ds*",
+        "lp*",
+        "er*",
+        "or*",
+        "rv*",
+        "wv*",
+        # Further SIMBAD variable-star families which share the same target
+        # + VSP-comparison workflow.  Keep this explicit: a bare ``*`` is a
+        # normal star, not a request to start photometry.
+        "a2*",
+        "bc*",
+        "cc*",
+        "gd*",
+        "mi*",
+        "pa*",
+        "pu*",
+        "rc*",
+        "ro*",
+        "w*",
+    }
+
+
 def _read_cache(path: Path) -> dict[str, dict]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -138,7 +205,14 @@ def nearby_cached_objects(
         if not isinstance(row, dict):
             continue
         try:
-            resolved = ResolvedObject(**row)
+            raw = ResolvedObject(**row)
+            resolved = ResolvedObject(
+                name=display_designation(raw.name),
+                ra_degrees=raw.ra_degrees,
+                dec_degrees=raw.dec_degrees,
+                object_type=raw.object_type,
+                source=raw.source,
+            )
         except (TypeError, ValueError):
             continue
         key = (resolved.name, resolved.ra_degrees, resolved.dec_degrees)
@@ -191,7 +265,7 @@ def _nearby_from_simbad(
     try:
         rows = csv.DictReader(StringIO(response.text))
         for row in rows:
-            name = (row.get("main_id") or "").strip()
+            name = display_designation(row.get("main_id") or "")
             if not name:
                 continue
             resolved = ResolvedObject(
@@ -258,7 +332,7 @@ def cached_object_suggestions(
     if not needle:
         return []
     names = {
-        str(row.get("name", "")).strip()
+        display_designation(str(row.get("name", "")))
         for row in _read_cache(cache_path).values()
         if isinstance(row, dict) and needle in _cache_key(str(row.get("name", "")))
     }
@@ -285,7 +359,7 @@ def _from_xml(text: str, query: str) -> ResolvedObject:
     if not (0.0 <= ra < 360.0 and -90.0 <= dec <= 90.0):
         raise ObjectResolutionError(f"The catalogue returned invalid coordinates for ‘{query}’.")
     return ResolvedObject(
-        name=values.get("oname") or query.strip(),
+        name=display_designation(values.get("oname", ""), fallback=query),
         ra_degrees=ra,
         dec_degrees=dec,
         object_type=values.get("otype", ""),
@@ -321,7 +395,17 @@ def resolve_object(
     cached = _read_cache(cache_path).get(key)
     if isinstance(cached, dict):
         try:
-            return ResolvedObject(**cached)
+            # Caches written by earlier Argos versions may still contain the
+            # SIMBAD ``V*`` type prefix in ``name``.  Normalise at the read
+            # boundary as well as when writing new results.
+            result = ResolvedObject(**cached)
+            return ResolvedObject(
+                name=display_designation(result.name, fallback=query),
+                ra_degrees=result.ra_degrees,
+                dec_degrees=result.dec_degrees,
+                object_type=result.object_type,
+                source=result.source,
+            )
         except (TypeError, ValueError):
             pass
 

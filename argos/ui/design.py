@@ -116,10 +116,10 @@ def card_layout(card: Card) -> QVBoxLayout:
 
 
 def horizontal_divider(parent: QWidget | None = None) -> QFrame:
-    """1-px horizontal separator in the theme's border color."""
+    """Clear but quiet horizontal separator shared by every form/card."""
     line = QFrame(parent)
     line.setFrameShape(QFrame.Shape.HLine)
-    line.setStyleSheet(f"color:{theme.BORDER}; background:{theme.BORDER};")
+    line.setStyleSheet(f"color:{theme.BORDER}; background:{theme.BORDER}; " "margin:2px 0;")
     line.setFixedHeight(1)
     return line
 

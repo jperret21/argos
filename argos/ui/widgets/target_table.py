@@ -7,7 +7,7 @@ removal (persist + re-project) on the ``remove_requested`` signal.
 
 from __future__ import annotations
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import QSignalBlocker, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -28,6 +28,7 @@ class TargetTable(QWidget):
     """Table of the saved target set, with remove + copy-TSV."""
 
     remove_requested = pyqtSignal(str)  # the TargetStar.key() of the row to drop
+    star_selected = pyqtSignal(str)  # the TargetStar.key() selected in the table
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -37,6 +38,8 @@ class TargetTable(QWidget):
         self._table.setHorizontalHeaderLabels(list(_HEADERS))
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._table.itemSelectionChanged.connect(self._on_selection_changed)
         self._table.verticalHeader().setVisible(False)
         layout.addWidget(self._table)
 
@@ -53,6 +56,8 @@ class TargetTable(QWidget):
 
     def set_targets(self, stars) -> None:
         self._keys = [s.key() for s in stars]
+        blocker = QSignalBlocker(self._table)
+        self._table.clearSelection()
         self._table.setRowCount(len(stars))
         for r, s in enumerate(stars):
             mags = "  ".join(f"{b} {m:.2f}" for b, m in s.mags.items())
@@ -65,6 +70,12 @@ class TargetTable(QWidget):
             )
             for c, v in enumerate(values):
                 self._table.setItem(r, c, QTableWidgetItem(v))
+        del blocker
+
+    def _on_selection_changed(self) -> None:
+        row = self._table.currentRow()
+        if 0 <= row < len(self._keys):
+            self.star_selected.emit(self._keys[row])
 
     def _on_remove(self) -> None:
         r = self._table.currentRow()
