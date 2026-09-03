@@ -18,7 +18,7 @@ import logging
 from pathlib import Path
 
 import pyqtgraph as pg
-from PyQt6.QtCore import QByteArray, Qt, QStringListModel, pyqtSignal
+from PyQt6.QtCore import QByteArray, QSize, Qt, QTimer, QStringListModel, pyqtSignal
 from PyQt6.QtGui import QAction, QColor
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -53,7 +53,8 @@ from argos.core.imaging.sky_geometry import upcoming_night_altitudes
 from argos.core.catalog.exoplanets import cached_exoplanet_suggestions
 from argos.core.catalog.object_resolver import cached_object_suggestions
 from argos.ui import design, theme
-from argos.ui.widgets.dock_host import make_dock, style_toggle_action
+from argos.core.catalog.object_resolver import object_type_label
+from argos.ui.widgets.dock_host import make_dock, panel_toolbar_qss, style_toggle_action
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,23 @@ _COLUMNS = ("✓", "Type", "Filter", "Exp (s)", "Gain", "Count", "Interval (s)",
 _DEFAULT_GAIN_RANGE = (0, 600)
 _DEFAULT_EXPOSURE_RANGE = (0.01, 600.0)
 _CFG_LAYOUT = "ui.sequencer.layout"
+
+
+class _CurrentPageStack(QStackedWidget):
+    """Report only the visible page's size instead of the largest page.
+
+    The variable-star search is intentionally much shorter than the transit
+    form.  QStackedWidget normally reserves the transit form's height in both
+    modes, leaving a large blank panel below the variable-star search.
+    """
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt API
+        current = self.currentWidget()
+        return current.sizeHint() if current is not None else super().sizeHint()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt API
+        current = self.currentWidget()
+        return current.minimumSizeHint() if current is not None else super().minimumSizeHint()
 
 
 def _format_duration(seconds: float) -> str:
@@ -113,8 +131,9 @@ class TargetVisibilityPlot(QWidget):
         self._plot.addItem(self._horizon)
         self._plot.setYRange(-15, 90, padding=0)
         layout.addWidget(self._plot)
-        self._summary = design.MutedLabel("Resolve a target to preview its altitude.")
+        self._summary = design.MutedLabel("")
         self._summary.setWordWrap(True)
+        self._summary.hide()
         layout.addWidget(self._summary)
 
     def set_target(
@@ -137,15 +156,14 @@ class TargetVisibilityPlot(QWidget):
         self._plot.setXRange(x[0], x[-1], padding=0.02)
         peak = max(range(len(y)), key=y.__getitem__)
         peak_when, peak_alt = samples[peak]
-        self._summary.setText(
-            f"{name}: highest {peak_alt:.1f}° at {peak_when.strftime('%H:%M')} local time. "
-            "Dashed line: 30° altitude."
-        )
+        self._summary.setText(f"Peak {peak_alt:.1f}° · {peak_when.strftime('%H:%M')} local")
+        self._summary.show()
 
     def clear(self) -> None:
         self._curve.setData([], [])
         self._transit_region.hide()
-        self._summary.setText("Resolve a target to preview its altitude.")
+        self._summary.clear()
+        self._summary.hide()
 
     def set_transit_coverage(self, start, end) -> None:
         """Shade an exoplanet's full requested coverage on the altitude plot."""
@@ -220,8 +238,10 @@ class SequencePanel(QWidget):
         for col in range(3, len(_COLUMNS)):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         self._table.setMinimumHeight(120)
+        self._table.setMaximumHeight(120)
+        self._table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._table.setHorizontalScrollMode(QTableWidget.ScrollMode.ScrollPerPixel)
-        left.addWidget(self._table, 1)
+        left.addWidget(self._table)
 
         edit_row = QHBoxLayout()
         edit_row.setSpacing(design.SPACING_SM)
@@ -233,6 +253,9 @@ class SequencePanel(QWidget):
             ("↓", self._move_down, "Move step down"),
         ):
             btn = design.SecondaryButton(label)
+            btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+            if label in {"↑", "↓"}:
+                btn.setMinimumWidth(42)
             btn.setToolTip(tip)
             btn.clicked.connect(slot)
             edit_row.addWidget(btn)
@@ -243,6 +266,7 @@ class SequencePanel(QWidget):
             "Exposures + intervals + per-frame overhead; autofocus passes not counted"
         )
         edit_row.addWidget(self._estimate_lbl)
+        left.addStretch(1)
         left.addLayout(edit_row)
         self._workspace.setCentralWidget(steps)
 
@@ -270,10 +294,9 @@ class SequencePanel(QWidget):
         self._search_btn.clicked.connect(self._request_object_lookup)
         search_row.addWidget(self._search_btn)
         search_l.addLayout(search_row)
-        self._search_result = design.MutedLabel(
-            "Select the variable star. Argos will add it as the photometry target; pointing stays manual."
-        )
+        self._search_result = design.MutedLabel("")
         self._search_result.setWordWrap(True)
+        self._search_result.hide()
         search_l.addWidget(self._search_result)
 
         plan_panel = QWidget()
@@ -283,7 +306,6 @@ class SequencePanel(QWidget):
         opts.setHorizontalSpacing(design.SPACING_MD)
         opts.setVerticalSpacing(design.SPACING_SM)
         opts.setColumnStretch(1, 1)
-        plan_l.addWidget(design.MutedLabel("Optional run controls"))
         opts.addWidget(design.MutedLabel("Target name (FITS)"), 0, 0)
         self._object_edit = QLineEdit()
         self._object_edit.setPlaceholderText("M42, T CrB…")
@@ -346,10 +368,9 @@ class SequencePanel(QWidget):
         self._transit_search_btn.clicked.connect(self._request_exoplanet_lookup)
         transit_search.addWidget(self._transit_search_btn)
         transit_l.addLayout(transit_search)
-        self._transit_result = design.MutedLabel(
-            "Find a confirmed planet to prepare a stable, single-filter transit sequence."
-        )
+        self._transit_result = design.MutedLabel("")
         self._transit_result.setWordWrap(True)
+        self._transit_result.hide()
         transit_l.addWidget(self._transit_result)
         transit_opts = QGridLayout()
         transit_opts.setHorizontalSpacing(design.SPACING_MD)
@@ -409,7 +430,6 @@ class SequencePanel(QWidget):
         source_l = QVBoxLayout(source_panel)
         source_l.setContentsMargins(0, 0, 0, 0)
         source_l.setSpacing(design.SPACING_SM)
-        source_l.addWidget(design.MutedLabel("Observing programme"))
         self._source_kind = QComboBox()
         self._source_kind.addItem("Variable star", "variable")
         self._source_kind.addItem("Exoplanet transit", "exoplanet")
@@ -417,10 +437,14 @@ class SequencePanel(QWidget):
             "Both programmes use the same target and comparison-star workflow"
         )
         source_l.addWidget(self._source_kind)
-        self._source_stack = QStackedWidget()
+        self._source_stack = _CurrentPageStack()
+        self._source_stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self._source_stack.addWidget(search_panel)
         self._source_stack.addWidget(transit_panel)
         self._source_kind.currentIndexChanged.connect(self._source_stack.setCurrentIndex)
+        self._source_kind.currentIndexChanged.connect(
+            lambda _index: self._source_stack.updateGeometry()
+        )
         source_l.addWidget(self._source_stack)
 
         presets_panel = QWidget()
@@ -456,12 +480,10 @@ class SequencePanel(QWidget):
         run_l.addWidget(self._progress)
         self._status_lbl = design.MutedLabel("")
         self._status_lbl.setWordWrap(True)
+        self._status_lbl.hide()
         run_l.addWidget(self._status_lbl)
-        self._readiness_lbl = design.MutedLabel()
-        self._readiness_lbl.setWordWrap(True)
-        self._readiness_lbl.setToolTip(
-            "A compact pre-flight check. Argos still validates the hardware when you start."
-        )
+        self._readiness_lbl = design.MutedLabel("Camera required")
+        self._readiness_lbl.setToolTip("Sequence readiness")
         run_l.addWidget(self._readiness_lbl)
 
         self._docks = {
@@ -476,6 +498,11 @@ class SequencePanel(QWidget):
             "presets": make_dock("Presets", presets_panel, object_name="sequencer.presets"),
             "run": make_dock("Sequence control", run_panel, object_name="sequencer.run"),
         }
+        # These are compact forms, but they still need enough height to avoid
+        # showing a scrollbar in the default layout.  The observer can give
+        # them more room; the visibility plot remains the elastic panel.
+        self._docks["source"].setMinimumHeight(118)
+        self._docks["plan"].setMinimumHeight(215)
         self._apply_default_layout()
         self._restore_layout()
         body.addWidget(self._build_panel_bar())
@@ -486,12 +513,7 @@ class SequencePanel(QWidget):
         """Reveal/recover planning panels after the observer rearranges them."""
         bar = QToolBar()
         bar.setMovable(False)
-        bar.setStyleSheet(
-            f"QToolBar {{ background-color: {theme.SURFACE_3};"
-            f" border-bottom: 1px solid {theme.SURFACE_4}; padding: 2px 6px; spacing: 4px; }}"
-            f" QToolBar QToolButton {{ color: {theme.FG_MUTED}; font-size: 11px;"
-            f" padding: 1px 8px; }} QToolBar QToolButton:checked {{ color: {theme.FG}; }}"
-        )
+        bar.setStyleSheet(panel_toolbar_qss())
         for key, label in (
             ("source", "Scientific source"),
             ("plan", "Acquisition options"),
@@ -523,6 +545,21 @@ class SequencePanel(QWidget):
         workspace.addDockWidget(bottom, self._docks["presets"])
         workspace.tabifyDockWidget(self._docks["run"], self._docks["presets"])
         self._docks["run"].raise_()
+        # Forms keep a compact share of the rail; the visibility graph receives
+        # the useful elastic space.  Defer until Qt has laid out the workspace.
+        QTimer.singleShot(0, self._balance_default_docks)
+
+    def _balance_default_docks(self) -> None:
+        self._workspace.resizeDocks(
+            [self._docks["source"], self._docks["visibility"], self._docks["plan"]],
+            [115, 330, 250],
+            Qt.Orientation.Vertical,
+        )
+        self._workspace.resizeDocks(
+            [self._docks["run"]],
+            [108],
+            Qt.Orientation.Vertical,
+        )
 
     def _restore_layout(self) -> None:
         """Restore the observer's panel arrangement if it was saved previously."""
@@ -570,23 +607,26 @@ class SequencePanel(QWidget):
         self._search_btn.setEnabled(not busy)
         if busy:
             self._search_result.setText("Searching catalogue…")
+            self._search_result.show()
 
     def set_lookup_result(self, result) -> None:
-        type_suffix = f" · {result.object_type}" if result.object_type else ""
+        object_type = object_type_label(result.object_type)
+        type_suffix = f" · {object_type}" if object_type else ""
         self._search_result.setText(
-            f"{result.name}{type_suffix}\nRA {result.ra_hours:.5f} h · Dec {result.dec_degrees:+.5f}°\n"
-            "Selected as the variable-star target. Identify the field, then review comparisons; "
-            "telescope pointing remains manual."
+            f"{result.name}{type_suffix}\nRA {result.ra_hours:.5f} h · Dec {result.dec_degrees:+.5f}°"
         )
+        self._search_result.show()
 
     def set_lookup_error(self, message: str) -> None:
         self._search_result.setText(message)
+        self._search_result.show()
 
     def set_exoplanet_lookup_busy(self, busy: bool) -> None:
         self._transit_edit.setEnabled(not busy)
         self._transit_search_btn.setEnabled(not busy)
         if busy:
             self._transit_result.setText("Searching NASA Exoplanet Archive…")
+            self._transit_result.show()
 
     def set_exoplanet_result(self, target, window=None, local_mid=None) -> None:
         """Show a published ephemeris and its current coverage window."""
@@ -611,13 +651,14 @@ class SequencePanel(QWidget):
             if local_mid is not None:
                 text += f"\nApprox. local midpoint: {local_mid.strftime('%Y-%m-%d %H:%M %Z')}."
         else:
-            text += "\nSet the observing site to calculate the next coverage window."
-        text += "\nNASA ephemeris: verify close to the observing night."
+            text += "\nObserving site required for coverage."
         self._transit_result.setText(text)
+        self._transit_result.show()
         self._prepare_transit_btn.setEnabled(window is not None)
 
     def set_exoplanet_error(self, message: str) -> None:
         self._transit_result.setText(message)
+        self._transit_result.show()
         self._prepare_transit_btn.setEnabled(False)
 
     def transit_settings(self) -> dict[str, float | int | str]:
@@ -696,6 +737,7 @@ class SequencePanel(QWidget):
         self._table.setCellWidget(r, 7, dither)
 
         self._table.selectRow(r)
+        self._sync_table_height()
         self._refresh_estimate()
 
     def _selected_row(self) -> int:
@@ -714,7 +756,17 @@ class SequencePanel(QWidget):
         r = self._selected_row()
         if r >= 0 and self._table.rowCount() > 1:
             self._table.removeRow(r)
+            self._sync_table_height()
             self._refresh_estimate()
+
+    def _sync_table_height(self) -> None:
+        """Fit short plans without turning the empty table into the main UI."""
+        content_height = self._table.horizontalHeader().height()
+        content_height += sum(self._table.rowHeight(row) for row in range(self._table.rowCount()))
+        content_height += 2 * self._table.frameWidth() + design.SPACING_SM
+        height = max(120, min(420, content_height))
+        self._table.setMinimumHeight(height)
+        self._table.setMaximumHeight(height)
 
     def _move_up(self) -> None:
         self._swap_rows(self._selected_row(), self._selected_row() - 1)
@@ -931,7 +983,7 @@ class SequencePanel(QWidget):
         self._table.setEnabled(not running)
         self._progress.setVisible(running)
         if not running:
-            self._status_lbl.setText("")
+            self.set_status("")
             self.set_paused(False)
             self.set_active_step(-1)
 
@@ -950,7 +1002,7 @@ class SequencePanel(QWidget):
         self._paused = paused
         self._pause_btn.setText("▶  Resume" if paused else "⏸  Pause")
         if paused:
-            self._status_lbl.setText("Paused — the current frame was saved.")
+            self.set_status("Paused")
 
     def set_active_step(self, index: int) -> None:
         """Highlight the running step's row (-1 clears)."""
@@ -969,6 +1021,7 @@ class SequencePanel(QWidget):
 
     def set_status(self, text: str) -> None:
         self._status_lbl.setText(text)
+        self._status_lbl.setVisible(bool(text))
 
     # ------------------------------------------------------------------
     # Internals
@@ -986,16 +1039,15 @@ class SequencePanel(QWidget):
         camera_state = self._device_states.get("camera")
         object_name = self._object_edit.text().strip()
         if camera_state != "connected":
-            message = "Pre-flight: connect the camera before starting."
+            message = "Camera required"
             color = theme.WARNING
         elif not object_name:
-            message = "Pre-flight: add an object name to organise this run."
+            message = "Object name required"
             color = theme.WARNING
         else:
             mount_state = self._device_states.get("mount")
-            suffix = " Telescope is not connected." if mount_state != "connected" else ""
-            message = f"Pre-flight: ready to start.{suffix}"
-            color = theme.SUCCESS if not suffix else theme.WARNING
+            message = "Ready" if mount_state == "connected" else "Ready · telescope offline"
+            color = theme.SUCCESS if mount_state == "connected" else theme.WARNING
         self._readiness_lbl.setText(message)
         self._readiness_lbl.setStyleSheet(
             f"color:{color}; font-size:{design.FONT_SIZE_SMALL}px; background:transparent;"
@@ -1010,7 +1062,7 @@ class SequencePanel(QWidget):
     def _on_start(self) -> None:
         plan = self.to_plan()
         if not any(s.enabled and s.count > 0 for s in plan.steps):
-            self._status_lbl.setText("Add at least one enabled step.")
+            self.set_status("Add an enabled step")
             self._status_lbl.setStyleSheet(f"color:{theme.WARNING};")
             return
         self._status_lbl.setStyleSheet("")

@@ -222,6 +222,18 @@ def test_vsp_parses_comparison_stars() -> None:
     assert stars[1].mag("V") == 11.401
 
 
+def test_vsp_can_request_a_sequence_by_target_name() -> None:
+    session = _FakeSession(_VSP_JSON)
+    stars = vsp_chart(300.5, 58.75, 240.0, target_name="XX Cyg", session=session)
+    assert len(stars) == 2
+    assert session.last_params["star"] == "XX Cyg"
+    assert session.last_params["all"] == "on"
+    # VSP rejects >180′ charts at maglimit 15; preserve useful faint
+    # comparison stars by constraining the chart rather than failing silently.
+    assert session.last_params["fov"] == "180.0"
+    assert "ra" not in session.last_params and "dec" not in session.last_params
+
+
 def test_vsp_empty_chart() -> None:
     assert vsp_chart(0, 0, 10, session=_FakeSession({"photometry": []})) == []
     assert vsp_chart(0, 0, 10, session=_FakeSession({})) == []

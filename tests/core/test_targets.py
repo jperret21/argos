@@ -54,6 +54,49 @@ def test_json_round_trip(tmp_path) -> None:
     assert back.by_role(ROLE_TARGET)[0].name == "NU Ori"
 
 
+def test_catalogue_enriched_target_replaces_manual_same_position() -> None:
+    ts = TargetSet(object_name="XX Cyg")
+    ts.set_role(TargetStar(role=ROLE_TARGET, ra_deg=300.815175, dec_deg=58.954590, name="XX Cyg"))
+    ts.set_role(
+        TargetStar(
+            role=ROLE_TARGET,
+            ra_deg=300.815170,
+            dec_deg=58.954580,
+            auid="000-BCK-301",
+            name="XX Cyg",
+            source="vsx",
+        )
+    )
+    targets = ts.by_role(ROLE_TARGET)
+    assert len(targets) == 1
+    assert targets[0].auid == "000-BCK-301"
+
+
+def test_selection_manifest_is_explicit_and_saved(tmp_path) -> None:
+    ts = TargetSet(object_name="XX Cyg")
+    ts.set_role(
+        _star(role=ROLE_TARGET, auid="000-BCK-301", ra=300.81517, dec=58.95458, name="XX Cyg")
+    )
+    ts.set_role(
+        _star(role=ROLE_COMPARISON, auid="000-BJV-170", ra=300.70292, dec=59.00994, name="104")
+    )
+    ts.set_role(_star(role=ROLE_CHECK, auid="000-BJV-171", ra=300.89913, dec=58.92267, name="106"))
+    path = tmp_path / "photometry_selection.json"
+    ts.save_selection_manifest(path, generated_by="Argos test")
+    saved = __import__("json").loads(path.read_text())
+    assert saved["selection_status"] == "provisional_live_preview"
+    assert saved["targets"][0]["auid"] == "000-BCK-301"
+    assert saved["comparison_stars"][0]["name"] == "104"
+    assert saved["check_stars"][0]["ra_deg_j2000"] == 300.89913
+
+    history = tmp_path / "photometry_selection_history.jsonl"
+    ts.append_selection_history(history, generated_by="Argos test")
+    ts.append_selection_history(history, generated_by="Argos test")
+    records = [__import__("json").loads(line) for line in history.read_text().splitlines()]
+    assert len(records) == 2
+    assert all(record["targets"][0]["name"] == "XX Cyg" for record in records)
+
+
 def test_load_missing_returns_empty(tmp_path) -> None:
     assert TargetSet.load(tmp_path / "nope.json").stars == []
 
@@ -68,6 +111,17 @@ def test_from_dict_ignores_unknown_keys() -> None:
 def test_display_name_prefers_name_then_auid() -> None:
     assert _star(name="NU Ori").display_name == "NU Ori"
     assert TargetStar(role="check", ra_deg=1, dec_deg=2, auid="Z").display_name == "Z"
+    assert (
+        TargetStar(
+            role=ROLE_COMPARISON,
+            ra_deg=1,
+            dec_deg=2,
+            auid="000-ABC-123",
+            name="114",  # VSP chart magnitude code, not an object name
+            source="vsp_auto",
+        ).display_name
+        == "000-ABC-123"
+    )
 
 
 def test_summary_counts_roles_and_readiness() -> None:

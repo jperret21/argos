@@ -55,10 +55,10 @@ def test_shell_three_mode_walkthrough() -> None:
             for i in range(settings._settings_sections.count())
         ] == [
             "Observatory",
-            "Equipment & camera",
+            "Equipment · camera",
             "Astrometry",
-            "Catalogues & data",
-            "Files & application",
+            "Catalogues · data",
+            "Files · application",
         ]
         assert settings._sessions_edit.isEnabled()
         assert settings._presets_dir_edit.isEnabled()
@@ -67,6 +67,9 @@ def test_shell_three_mode_walkthrough() -> None:
         assert settings._object_cache_edit.isEnabled()
         assert settings._exoplanet_cache_edit.isEnabled()
         assert settings._aavso_cache_edit.isEnabled()
+        assert settings._gaia_cache_edit.isEnabled()
+        assert settings._field_catalogue_cache_edit.isEnabled()
+        assert settings._field_identity_budget_combo.currentData() == 400
         connection = shell._pages["connect"]
         assert connection._telescope_combo.count() >= 3
         assert connection._telescope_combo.currentData() == "s30pro"
@@ -79,10 +82,12 @@ def test_shell_three_mode_walkthrough() -> None:
         connection._telescope_combo.setCurrentIndex(s30pro_index)
         assert settings._scope_combo.currentData() == "s30pro"
         connection.set_device_state("camera", "connected")
+        assert connection._start_disconnect_btn.isEnabled()
         settings._scope_combo.setCurrentIndex(s50_index)
         assert connection._telescope_combo.currentData() == "s30pro"
         assert settings._scope_combo.currentData() == "s30pro"
         connection.set_device_state("camera", "disconnected")
+        assert not connection._start_disconnect_btn.isEnabled()
         # Connection intentionally has one physical endpoint, not opaque
         # network modes. Discovery fills the same IP/port fields.
         assert not hasattr(connection, "_profile_combo")
@@ -119,16 +124,23 @@ def test_shell_three_mode_walkthrough() -> None:
         )
         assert sequence_panel._prepare_transit_btn.isEnabled()
         assert "HD 189733 b" in sequence_panel._transit_result.text()
-        assert "connect the camera" in sequence_panel._readiness_lbl.text().lower()
+        assert "camera required" in sequence_panel._readiness_lbl.text().lower()
         sequence_panel.set_device_state("camera", "connected")
         assert "object name" in sequence_panel._readiness_lbl.text().lower()
         sequence_panel.set_object_name("M42")
-        assert "ready to start" in sequence_panel._readiness_lbl.text().lower()
+        assert sequence_panel._readiness_lbl.text().lower().startswith("ready")
 
         # Capture is a true dockable cockpit: panels can still be floated to a
         # second screen and returned to the workspace, independent of their
         # default right/bottom arrangement.
         capture = shell._pages["capture"]
+        assert {"catalogue", "labels"} <= set(capture._overlay_bar._chips)
+        # Visible docks are not commands: their toggle buttons use the neutral
+        # toolbar style, and menu arrows are explicit text rather than the
+        # platform indicator that misaligned on compact toolbars.
+        panel_qss = capture._panel_bar.styleSheet()
+        assert "QToolBar QToolButton:checked" in panel_qss
+        assert "QToolBar QToolButton::menu-indicator" in panel_qss
         log_dock = capture._docks["log"]
         capture._toggle_dock_floating(log_dock)
         assert log_dock.isFloating()
@@ -159,7 +171,11 @@ def test_shell_three_mode_walkthrough() -> None:
             "Configure catalogues…",
         } <= set(astro_actions)
         phot_labels = [act.text() for act in menus["Photometry"].actions()]
-        assert "Light curve…" in phot_labels and "Re-run subs…" in phot_labels
+        assert {
+            "Photometry setup…",
+            "Live curves & diagnostics…",
+            "Re-run subs…",
+        } <= set(phot_labels)
 
         # The checkable automatic-identification action is the single UI for the policy: the
         # page's sequence-arming signal routes through it into the controller.
@@ -200,7 +216,7 @@ def test_shell_three_mode_walkthrough() -> None:
         from pathlib import Path as _Path
 
         from argos.core.catalog.aavso import Band, ComparisonStar
-        from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetStar
+        from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
         from argos.workers.catalog_worker import CatalogResult
 
         with _tempfile.TemporaryDirectory() as _td:
@@ -225,6 +241,26 @@ def test_shell_three_mode_walkthrough() -> None:
             # The persisted set carries the backfilled ensemble too.
             reloaded = type(tset).load(engine._target_path(tset.object_name))
             assert len(reloaded.by_role(ROLE_COMPARISON)) == 2
+
+            # A user may have clicked a plausible comparison before VSP arrived.
+            # It lacks catalogue magnitudes and must not block the calibrated
+            # VSP ensemble from being proposed afterwards.
+            target = tset.by_role(ROLE_TARGET)[0]
+            manual = TargetStar(
+                role=ROLE_COMPARISON, ra_deg=300.2, dec_deg=22.3, name="Manual comp"
+            )
+            engine._target_set = TargetSet(object_name=tset.object_name, stars=[target, manual])
+            engine._on_catalog(
+                CatalogResult(
+                    comparisons=[
+                        ComparisonStar("000-AAA-001", 300.1, 22.4, "114", (Band("V", 11.4),)),
+                        ComparisonStar("000-AAA-002", 299.9, 22.6, "121", (Band("V", 12.1),)),
+                    ]
+                )
+            )
+            comps = engine.target_set().by_role(ROLE_COMPARISON)
+            assert any(comp.source == "manual" for comp in comps)
+            assert sum(comp.source == "vsp_auto" for comp in comps) == 2
             engine._target_set = None  # drop the tempdir-backed set
 
         # ── Status bar device states ─────────────────────────────────────
@@ -276,6 +312,12 @@ def test_shell_three_mode_walkthrough() -> None:
         page._mount_dock._use_suggestion_btn.click()
         assert page._camera_dock.params().object_name == "HD 189733"
         assert seq_page.panel.to_plan().object_name == "HD 189733"
+        # A SIMBAD V* lookup is a variable-star target, not a different name:
+        # it enters the same target/comparison workflow as a Variables-tab pick.
+        xx_cyg = ResolvedObject("XX Cyg", 300.81517513, 58.95459035, "SX*")
+        page.set_catalogue_target(xx_cyg)
+        selected = shell._engine.target_set().by_role("target")
+        assert selected and selected[0].display_name == "XX Cyg"
         plan = seq_page.panel.to_plan()
         assert len(plan.steps) >= 1
         assert plan.steps[0].count > 0
@@ -295,6 +337,13 @@ def test_shell_three_mode_walkthrough() -> None:
         page._mount_dock.set_goto_fields(7.5, -12.5)
         page._mount_dock._slew_btn.click()
         assert goto == [(7.5, -12.5)]
+        centered: list[bool] = []
+        page._mount_dock.center_target_clicked.connect(lambda: centered.append(True))
+        assert not page._mount_dock._center_btn.isEnabled()
+        page._mount_dock.set_center_available(True)
+        assert page._mount_dock._center_btn.isEnabled()
+        page._mount_dock._center_btn.click()
+        assert centered == [True]
 
         # Filter control lives in the Camera dock (no separate wheel dock):
         # a user pick emits filter_selected, and the moving cue greys the combo.
@@ -338,9 +387,60 @@ def test_shell_three_mode_walkthrough() -> None:
         analyze._refresh_export_info()
         assert analyze._obscode_value.text() == "ABC"
         assert analyze._band_value.text() == "TG"
+        # Review exposes independently selectable comparison diagnostics;
+        # adding one must create another real movable dock, not replace the
+        # first graph.
+        assert len(analyze._comparison_panels) == 1
+        initial_review_height = analyze._workspace.minimumHeight()
+        analyze._add_comparison_plot()
+        assert len(analyze._comparison_panels) == 2
+        assert len(analyze._comparison_docks) == 2
+        # The default is a two-column tile grid: panels fill a row in pairs.
+        # A further pair creates a new scrollable row instead of squeezing the
+        # plots into the initial workspace (FWHM may be hidden in this test).
+        assert analyze._workspace.minimumHeight() == initial_review_height
+        analyze._add_comparison_plot()
+        assert len(analyze._comparison_panels) >= 3
+        analyze._add_comparison_plot()
+        assert len(analyze._comparison_panels) == 4
+        assert analyze._workspace.minimumHeight() > initial_review_height
+
+        # A finished multi-target session opens one movable source panel per
+        # scientific target, rather than mixing calibration curves into it.
+        from argos.core.photometry.lightcurve import LcPoint, LightCurve
+
+        t1 = LightCurve(name="XX Cyg", role="target")
+        t1.append(LcPoint(jd_utc=2451545.0, mag=11.6, mag_err=0.02))
+        t2 = LightCurve(name="V0372 Ori", role="target")
+        t2.append(LcPoint(jd_utc=2451545.0, mag=12.2, mag_err=0.03))
+        c1 = LightCurve(name="106", role="comparison")
+        c1.append(LcPoint(jd_utc=2451545.0, mag=10.6, mag_err=0.02))
+        c2 = LightCurve(name="104", role="comparison")
+        c2.append(LcPoint(jd_utc=2451545.0, mag=10.4, mag_err=0.02))
+        c3 = LightCurve(name="103", role="comparison")
+        c3.append(LcPoint(jd_utc=2451545.0, mag=10.3, mag_err=0.02))
+        analyze._review_curves = {"t1": t1, "t2": t2, "c1": c1, "c2": c2, "c3": c3}
+        analyze._sync_target_plots()
+        analyze._sync_comparison_plots()
+        assert len(analyze._source_panels) == 2
+        assert analyze._source_panels[0].selected_key() == "t1"
+        assert analyze._source_panels[1].selected_key() == "t2"
+        assert "XX Cyg" in analyze._source_docks[0].windowTitle()
+        # Opening a session gives each comparison its own default panel rather
+        # than one shared plot that the observer has to reconfigure manually.
+        assert len(analyze._comparison_panels) >= 3
+        assert [panel.selected_key() for panel in analyze._comparison_panels[:3]] == [
+            "c1",
+            "c2",
+            "c3",
+        ]
+        # The Review page itself is not necessarily active in this Shell test;
+        # non-hidden means the panels will appear together when it is shown.
+        assert all(not dock.isHidden() for dock in analyze._comparison_docks[:3])
+        assert all(dock.isHidden() for dock in analyze._comparison_docks[3:])
+        assert analyze._workspace.minimumHeight() >= 840
 
         # Analyze → PhotometryWindow: a reloaded curve plots and carries the stamp.
-        from argos.core.photometry.lightcurve import LcPoint, LightCurve
         from argos.ui.panels.photometry_window import PhotometryWindow
 
         lc = LightCurve(name="NU Ori")
@@ -373,8 +473,12 @@ def test_shell_three_mode_walkthrough() -> None:
             try:
                 assert awin.load(fpath) is True
                 assert awin._green_shape == (48, 48)
+                assert awin._histogram._auto_btn.text() == "Auto stretch"
+                assert not hasattr(awin._histogram, "_roi_chk")
+                assert "SELECTED STAR" in awin._info_label.text()
                 awin._on_star_clicked(40.0, 40.0)  # click the star → measured
                 assert awin._selected_green is not None
+                assert "FWHM:" in awin._info_label.text()
 
                 # §6 astrometry: a synthetic WCS drives the grid + per-star RA/Dec.
                 from argos.core.imaging.platesolve import frame_wcs, wcs_grid
@@ -409,6 +513,52 @@ def test_shell_three_mode_walkthrough() -> None:
                 awin._remeasure_selection()  # clicked star now reports RA/Dec
                 assert "RA" in awin._viewer._sel_label.text()
 
+                # Review FITS identification uses the same catalogue layers as
+                # Observe, including passband-qualified magnitudes at click.
+                from argos.core.catalog.aavso import VariableStar
+                from argos.core.catalog.field_objects import NamedFieldObject
+                from argos.core.catalog.gaia import GaiaStar
+                from argos.workers.catalog_worker import CatalogResult
+
+                awin._catalog_result = CatalogResult(
+                    variables=[
+                        VariableStar(
+                            name="V* TEST",
+                            ra_deg=83.62,
+                            dec_deg=22.0,
+                            max_mag="12.3 V",
+                        )
+                    ],
+                    field_stars=[
+                        GaiaStar(
+                            source_id="123456",
+                            ra_deg=83.6,
+                            dec_deg=22.0,
+                            g_mag=11.2,
+                            bp_mag=11.5,
+                            rp_mag=10.8,
+                        )
+                    ],
+                    named_objects=[
+                        NamedFieldObject(
+                            name="HD TEST",
+                            ra_deg=83.6,
+                            dec_deg=22.0,
+                            object_type="Star",
+                            mags=(("V", 11.1),),
+                        )
+                    ],
+                )
+                awin._project_field_catalogues()
+                assert awin._overlay_bar.is_checked("catalogue")
+                assert awin._overlay_bar.is_checked("variables")
+                assert len(awin._catalog_sources) >= 2
+                gx, gy = awin._wcs.world_to_pixel_deg(83.6, 22.0)
+                dx, dy = awin._green_to_disp(gx, gy)
+                awin._on_star_clicked(dx, dy)
+                assert "CATALOGUE SOURCE" in awin._info_label.text()
+                assert "Gaia G magnitude  11.200" in awin._info_label.text()
+
                 # Astrometry settings popup loads from + writes to the (shared) config.
                 # (Standalone widget — exercised here with the viewer as a parent.)
                 from argos.ui.widgets.astrometry_settings import (
@@ -436,13 +586,24 @@ def test_shell_three_mode_walkthrough() -> None:
                 assert dlg._tabs.currentIndex() == 1  # opened on the Catalog tab
                 assert dlg._db_combo.currentText() == "D05"  # loaded from config
                 assert dlg._mag_spin.value() == 14.0
+                assert dlg._field_catalogue_chk.isChecked()
+                assert dlg._field_mag_spin.value() == 18.0
+                assert dlg._identification_budget.currentData() == 400
                 assert dlg._autocomp_spin.value() == 5  # default when unset in config
                 dlg._mag_spin.setValue(16.0)
+                dlg._field_catalogue_chk.setChecked(False)
+                dlg._field_mag_spin.setValue(12.0)
+                dlg._identification_budget.setCurrentIndex(dlg._identification_budget.findData(200))
                 dlg._db_combo.setCurrentText("D80")
                 dlg._autocomp_spin.setValue(8)
                 dlg._on_save()  # persists every key + emits saved
                 assert fake.saved
                 assert fake.d["catalog.mag_limit"] == 16.0
+                assert fake.d["catalog.field_stars_enabled"] is False
+                assert fake.d["catalog.field_stars_mag_limit"] == 12.0
+                assert fake.d["catalog.identification_max_objects"] == 200
+                assert fake.d["catalog.field_stars_max_results"] == 200
+                assert fake.d["catalog.named_objects_max_results"] == 200
                 assert fake.d["astrometry.database"] == "D80"
                 assert fake.d["photometry.auto_comparisons"] == 8
             finally:
@@ -497,9 +658,15 @@ def test_shell_three_mode_walkthrough() -> None:
         # Simulate a controller solve: seed its last-good WCS and apply the overlay
         # the way the AstrometryController.solved signal does on the page.
         page._astrometry._wcs = wcs
+        page._astrometry._last_solve_radec = (83.6 / 15.0, 22.0)
         page._on_astrometry_solved(wcs, overlay_for(wcs, (48, 48), page._cfg), "Solved — test")
         assert page._astrometry.wcs is not None
-        page._clear_astrometry()  # a goto/slew invalidates the solve
+        # An external slew (Seestar app/Stellarium) is visible in mount polling
+        # even though it never emitted Argos's ``slewed`` signal. It must clear
+        # this WCS before a target can be drawn on the new frame.
+        from argos.core.alpaca.telescope import MountPosition
+
+        page._on_mount_position(MountPosition(6.0, 22.0, 45.0, 180.0, True, False))
         assert page._astrometry.wcs is None
 
         # Imaging upward signals reach the global status bar.

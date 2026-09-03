@@ -19,9 +19,9 @@ _METRICS = (
 
 
 class SessionQualityPlot(QWidget):
-    """One metric selector over complete, persisted session samples."""
+    """One selectable, persisted frame-quality diagnostic."""
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, *, metric: str = "fwhm") -> None:
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -30,6 +30,9 @@ class SessionQualityPlot(QWidget):
         self._metric = QComboBox()
         for key, label in _METRICS:
             self._metric.addItem(label, key)
+        index = self._metric.findData(metric)
+        if index >= 0:
+            self._metric.setCurrentIndex(index)
         self._metric.currentIndexChanged.connect(self._refresh)
         row.addWidget(self._metric)
         row.addStretch(1)

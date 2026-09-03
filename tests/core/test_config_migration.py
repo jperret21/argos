@@ -15,6 +15,7 @@ from argos.core.config import (
     _DEFAULTS,
     _migrate_alpaca_profiles,
     _migrate_camera_keys,
+    _migrate_catalogue_display_limit,
     _migrate_diagnostics_opt_in,
     _migrate_legacy_site,
 )
@@ -119,3 +120,16 @@ def test_active_legacy_alpaca_profile_becomes_the_single_endpoint():
     _migrate_alpaca_profiles(data, old)
 
     assert data["alpaca"] == {"host": "10.0.0.1", "port": 41234}
+
+
+def test_shallow_legacy_catalogue_display_limit_moves_to_gaia_g18():
+    data = {"catalog": {"display_mag_limit": 14.0}}
+    _migrate_catalogue_display_limit(data, on_disk={"catalog": {"display_mag_limit": 14.0}})
+    assert data["catalog"]["display_mag_limit"] == 18.0
+    assert data["catalog"]["display_limit_version"] == 2
+
+
+def test_versioned_catalogue_display_choice_is_preserved():
+    data = {"catalog": {"display_mag_limit": 12.0, "display_limit_version": 2}}
+    _migrate_catalogue_display_limit(data, on_disk={"catalog": dict(data["catalog"])})
+    assert data["catalog"]["display_mag_limit"] == 12.0

@@ -560,6 +560,39 @@ class DeviceSession(QObject):
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Sync: {exc}")
 
+    def center_target_from_solution(
+        self,
+        solved_ra_h: float,
+        solved_dec_d: float,
+        target_ra_h: float,
+        target_dec_d: float,
+    ) -> None:
+        """Correct the mount model from a solved field, then repeat the GoTo.
+
+        This is intentionally observer-invoked: a background plate solve must
+        never move the telescope.  ASTAP supplies the current field's J2000
+        coordinates (RA hours, Dec degrees), which are synchronised before the
+        requested target is slewed to again.
+        """
+        if not self._telescope:
+            self.log_message.emit("WARN", "Center target: mount not connected")
+            return
+        try:
+            self._telescope.set_tracking(True)
+            self._telescope.sync_to(solved_ra_h, solved_dec_d)
+            self.log_message.emit(
+                "CMD",
+                f"Center: synced solved field RA {solved_ra_h:.4f}h Dec {solved_dec_d:+.4f}°",
+            )
+            self._telescope.slew_to(target_ra_h, target_dec_d)
+            self._target_radec = (target_ra_h, target_dec_d)
+            self.slewed.emit()  # the pre-centering solution is now stale
+            self.log_message.emit(
+                "CMD", f"Center: slewing to target RA {target_ra_h:.4f}h Dec {target_dec_d:+.4f}°"
+            )
+        except AlpacaError as exc:
+            self.log_message.emit("ERROR", f"Center target: {exc}")
+
     def set_tracking(self, enabled: bool) -> None:
         if not self._telescope:
             return

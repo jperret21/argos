@@ -264,10 +264,19 @@ class Shell(QMainWindow):
         catalog.triggered.connect(lambda: self._open_astrometry_settings(SECTION_CATALOG))
         astrometry.addAction(catalog)
 
-        # Photometry — the live window + the batch re-run over saved subs.
+        # Photometry owns field-star selection and the live diagnostics. Field
+        # identification/ASTAP setup stays in the separate Field menu.
         photometry = bar.addMenu("Photometry")
-        curve = QAction("Light curve…", self)
-        curve.setToolTip("Open the live differential light-curve window (targets + metrics)")
+        select_stars = QAction("Photometry setup…", self)
+        select_stars.setToolTip(
+            "Choose a variable-star target and review the comparison-star ensemble in this field"
+        )
+        select_stars.triggered.connect(
+            lambda: self._acquisition.open_photometry(select_variable=True)
+        )
+        photometry.addAction(select_stars)
+        curve = QAction("Live curves & diagnostics…", self)
+        curve.setToolTip("Open live differential light curves, image quality and selected stars")
         curve.triggered.connect(lambda: self._acquisition.open_photometry())
         photometry.addAction(curve)
         rerun = QAction("Re-run subs…", self)
@@ -438,11 +447,13 @@ class Shell(QMainWindow):
         # alongside the shell's own dock state.
         self._acquisition.save_layout()
         self._sequencer.save_layout()
+        self._analyze.save_layout()
 
     def _reset_layout(self) -> None:
         self._config.set(_CFG_GEOMETRY, None)
         self._config.set(_CFG_STATE, None)
         self._config.set("ui.sequencer.layout", None)
+        self._config.set("ui.review.layout", None)
         self.statusBar().showMessage("Window layout will reset on next launch.", 4000)
 
     # ------------------------------------------------------------------

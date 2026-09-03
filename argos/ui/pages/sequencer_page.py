@@ -43,12 +43,6 @@ class SequencerPage(QWidget):
         )
         outer.setSpacing(design.SPACING_MD)
         outer.addWidget(design.HeadingLabel("Sequencer"))
-        intro = design.MutedLabel(
-            "Plan the night's frames, then start the run — progress stays visible "
-            "in the top strip, frames and the live light curve on the Capture page."
-        )
-        intro.setWordWrap(True)
-        outer.addWidget(intro)
         self.panel = SequencePanel()
         self.panel.set_config(config)
         outer.addWidget(self.panel, 1)

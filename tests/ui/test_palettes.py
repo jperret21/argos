@@ -3,7 +3,7 @@
 Checks:
 1. Every Palette preset has all required fields set (non-empty strings).
 2. Observatory (the default palette) retains its deliberately restrained
-   graphite/steel colour tokens.
+   graphite-and-brass colour tokens.
 3. Night (Red) contains no green-dominant or blue-dominant colours — every hex
    triplet (R, G, B) must have R >= G and R >= B (i.e. red channel dominates
    or ties with both others).
@@ -64,22 +64,22 @@ def test_palette_complete(palette: Palette) -> None:
 # ---------------------------------------------------------------------------
 
 _OBSERVATORY = {
-    "bg": "#1c2026",
-    "bg2": "#15191e",
-    "surface": "#252b33",
-    "border": "#343c47",
-    "border_soft": "#282f38",
-    "fg": "#e2e6ea",
-    "fg_muted": "#9da8b5",
-    "fg_disabled": "#626d78",
-    "accent": "#7d9bb8",
-    "accent_hover": "#91aec9",
-    "accent_deep": "#5e7d9b",
-    "cyan": "#7f9ead",
-    "success": "#85a58a",
-    "warning": "#b79a6a",
-    "danger": "#b97979",
-    "variable": "#a895bc",
+    "bg": "#191b1f",
+    "bg2": "#121417",
+    "surface": "#22262c",
+    "border": "#47515c",
+    "border_soft": "#343c45",
+    "fg": "#e8e5df",
+    "fg_muted": "#aaa8a2",
+    "fg_disabled": "#6d7278",
+    "accent": "#c49a3c",
+    "accent_hover": "#d6b25d",
+    "accent_deep": "#8d6b2b",
+    "cyan": "#7da8b2",
+    "success": "#83a68b",
+    "warning": "#d0a85a",
+    "danger": "#bf7772",
+    "variable": "#8fb7ca",
 }
 
 
@@ -143,6 +143,8 @@ def test_get_stylesheet_reflects_palette() -> None:
         qss = theme.get_stylesheet()
         assert NIGHT_RED.bg in qss, "QSS should contain the new bg color"
         assert NIGHT_RED.accent in qss, "QSS should contain the new accent color"
+        assert "QToolBox#settings_sections" in qss
+        assert "border-top: 2px solid" in qss
         # The default Observatory accent should NOT appear (they differ).
         assert EQUILUX.accent not in qss
     finally:

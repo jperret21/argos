@@ -100,6 +100,7 @@ What this documentation covers
 
    capture_panel.md
    photometry_plan.md
+   field_identification.md
    acquisition_sequence.md
 
 .. toctree::

@@ -177,3 +177,20 @@ def test_tracker_keeps_all_clean_anchors() -> None:
     assert tracker.update(_green_with_stars(pos)) == 3
     assert tracker.anchors_rejected == 0
     assert tracker.residual_px < 0.3
+
+
+def test_tracker_rejects_anchor_that_fades_to_noise() -> None:
+    """A lost guide star must not be re-centred on a weak background feature."""
+    anchors = [(30.0, 30.0), (90.0, 35.0), (60.0, 95.0), (95.0, 85.0)]
+    tracker = ApertureTracker(anchors, _CENTER, search_r=8.0)
+    assert tracker.update(_green_with_stars(anchors, peak=8000.0)) == 4
+
+    angle = 1.0
+    positions = [_rotate(x, y, *_CENTER, angle) for x, y in anchors]
+    # The last source is replaced by a feature with 5% of its guide signal:
+    # it remains centroidable but is not a reliable anchor.
+    frame = _green_with_stars(positions[:3], peak=8000.0)
+    frame += _green_with_stars([positions[3]], peak=400.0, sky=0.0)
+    assert tracker.update(frame) == 3
+    assert tracker.anchors_signal_rejected == 1
+    assert abs(tracker.transform.rotation_deg - angle) < 0.2

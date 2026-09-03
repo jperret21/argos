@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QSignalBlocker, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QFileDialog,
+    QDoubleSpinBox,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -30,13 +32,177 @@ from argos.ui.widgets.target_table import TargetTable
 from argos.ui.widgets.variable_table import VariableTable
 
 
+class PhotometrySetupPanel(QWidget):
+    """Visible controls for the live aperture-photometry geometry.
+
+    The values describe the exact FWHM-adaptive aperture used by the engine,
+    rather than the unrelated click/FWHM inspection circle in the display dock.
+    """
+
+    setting_changed = pyqtSignal(str, object)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 8, 8, 8)
+
+        intro = QLabel(
+            "Live preview only: Argos measures circular apertures on the raw subs and "
+            "estimates the local sky in a surrounding annulus. The aperture follows the "
+            "measured FWHM; final calibrated reduction remains in Siril."
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet(f"color:{theme.FG_MUTED}; font-size:11px; padding:2px 0 8px;")
+        root.addWidget(intro)
+
+        form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(8)
+
+        self._fwhm_mult = QDoubleSpinBox()
+        self._fwhm_mult.setRange(1.0, 6.0)
+        self._fwhm_mult.setDecimals(2)
+        self._fwhm_mult.setSingleStep(0.25)
+        self._fwhm_mult.setSuffix(" × FWHM")
+        self._fwhm_mult.setToolTip("Photometric aperture radius; 2–3 × FWHM is a typical start.")
+        self._fwhm_mult.valueChanged.connect(
+            lambda value: self.setting_changed.emit("photometry.aperture_fwhm_mult", float(value))
+        )
+        form.addRow("Aperture radius (adaptive)", self._fwhm_mult)
+
+        self._minimum = self._radius_spin(2.0, 30.0)
+        self._minimum.setToolTip("Lower limit for the aperture radius in green-plane pixels.")
+        self._minimum.valueChanged.connect(
+            lambda value: self.setting_changed.emit("photometry.aperture_min_px", float(value))
+        )
+        form.addRow("Aperture radius floor", self._minimum)
+
+        self._annulus_in = self._radius_spin(3.0, 60.0)
+        self._annulus_in.setToolTip("Inner radius of the local-sky annulus.")
+        self._annulus_in.valueChanged.connect(
+            lambda value: self.setting_changed.emit("photometry.annulus_in_px", float(value))
+        )
+        form.addRow("Background annulus — inner radius", self._annulus_in)
+
+        self._annulus_out = self._radius_spin(5.0, 80.0)
+        self._annulus_out.setToolTip("Outer radius of the local-sky annulus.")
+        self._annulus_out.valueChanged.connect(
+            lambda value: self.setting_changed.emit("photometry.annulus_out_px", float(value))
+        )
+        form.addRow("Background annulus — outer radius", self._annulus_out)
+
+        self._comparison_snr = QDoubleSpinBox()
+        self._comparison_snr.setRange(3.0, 100.0)
+        self._comparison_snr.setDecimals(1)
+        self._comparison_snr.setSingleStep(1.0)
+        self._comparison_snr.setSuffix(" SNR")
+        self._comparison_snr.setToolTip(
+            "Automatic comparison candidates below this pilot-frame SNR are rejected."
+        )
+        self._comparison_snr.valueChanged.connect(
+            lambda value: self.setting_changed.emit("photometry.comparison_min_snr", float(value))
+        )
+        form.addRow("Reference-star minimum S/N", self._comparison_snr)
+
+        self._comparison_delta = QDoubleSpinBox()
+        self._comparison_delta.setRange(0.2, 5.0)
+        self._comparison_delta.setDecimals(1)
+        self._comparison_delta.setSingleStep(0.1)
+        self._comparison_delta.setSuffix(" mag")
+        self._comparison_delta.setToolTip(
+            "Maximum instrumental brightness difference from the target for automatic comparisons."
+        )
+        self._comparison_delta.valueChanged.connect(
+            lambda value: self.setting_changed.emit(
+                "photometry.comparison_max_delta_mag", float(value)
+            )
+        )
+        form.addRow("Reference-star brightness difference", self._comparison_delta)
+
+        self._comparison_distance = QDoubleSpinBox()
+        self._comparison_distance.setRange(5.0, 120.0)
+        self._comparison_distance.setDecimals(0)
+        self._comparison_distance.setSingleStep(5.0)
+        self._comparison_distance.setSuffix(" ′")
+        self._comparison_distance.setToolTip(
+            "Maximum target-to-comparison separation. Nearby references reduce "
+            "flat-field and field-rotation systematics; Argos will propose fewer "
+            "stars rather than fill the ensemble with remote candidates."
+        )
+        self._comparison_distance.valueChanged.connect(
+            lambda value: self.setting_changed.emit(
+                "photometry.comparison_max_separation_arcmin", float(value)
+            )
+        )
+        form.addRow("Reference-star maximum separation", self._comparison_distance)
+        root.addLayout(form)
+
+        self._effective = QLabel("Current live geometry: waiting for a measured FWHM")
+        self._effective.setWordWrap(True)
+        self._effective.setStyleSheet(
+            f"color:{theme.ACCENT}; font-size:11px; padding:10px 0 2px; font-weight:600;"
+        )
+        root.addWidget(self._effective)
+        note = QLabel(
+            "All radii are green-plane pixels. Argos constrains the background annulus "
+            "outside the aperture; the selected-star ring uses the current aperture."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color:{theme.FG_MUTED}; font-size:11px;")
+        root.addWidget(note)
+        root.addStretch(1)
+
+    @staticmethod
+    def _radius_spin(lower: float, upper: float) -> QDoubleSpinBox:
+        spin = QDoubleSpinBox()
+        spin.setRange(lower, upper)
+        spin.setDecimals(1)
+        spin.setSingleStep(0.5)
+        spin.setSuffix(" green px")
+        return spin
+
+    def set_values(self, cfg, geometry: tuple[float, float, float] | None = None) -> None:
+        """Synchronise controls from the configuration without writing it back."""
+        values = (
+            (self._fwhm_mult, float(cfg("photometry.aperture_fwhm_mult", 2.5))),
+            (self._minimum, float(cfg("photometry.aperture_min_px", 4.0))),
+            (self._annulus_in, float(cfg("photometry.annulus_in_px", 8.0))),
+            (self._annulus_out, float(cfg("photometry.annulus_out_px", 12.0))),
+            (self._comparison_snr, float(cfg("photometry.comparison_min_snr", 10.0))),
+            (
+                self._comparison_delta,
+                float(cfg("photometry.comparison_max_delta_mag", 1.5)),
+            ),
+            (
+                self._comparison_distance,
+                float(cfg("photometry.comparison_max_separation_arcmin", 25.0)),
+            ),
+        )
+        for widget, value in values:
+            blocker = QSignalBlocker(widget)
+            widget.setValue(value)
+            del blocker
+        self.set_geometry(geometry)
+
+    def set_geometry(self, geometry: tuple[float, float, float] | None) -> None:
+        if geometry is None:
+            self._effective.setText("Current live geometry: waiting for a measured FWHM")
+            return
+        aperture, inner, outer = geometry
+        self._effective.setText(
+            f"Current live geometry: aperture {aperture:.1f} px · "
+            f"background annulus {inner:.1f}–{outer:.1f} px"
+        )
+
+
 class PhotometryWindow(QWidget):
-    """Light curve + metrics, in a floating window."""
+    """Field-star selection, light curves and diagnostics in one window."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowFlag(Qt.WindowType.Window, True)
-        self.setWindowTitle("Photometry")
+        self.setWindowTitle("Field photometry")
         self.resize(720, 480)
 
         root = QVBoxLayout(self)
@@ -56,14 +222,16 @@ class PhotometryWindow(QWidget):
         self.metrics = MetricsPanel()
         self.targets = TargetTable()
         self.comparisons = ComparisonEnsembleTable()
-        tabs = QTabWidget()
+        self.setup = PhotometrySetupPanel()
+        self._tabs = QTabWidget()
         # Variables first: picking the target there is the workflow's entry point.
-        tabs.addTab(self.variables, "Field variables")
-        tabs.addTab(self.lightcurve, "Light curve")
-        tabs.addTab(self.metrics, "Metrics")
-        tabs.addTab(self.targets, "Targets")
-        tabs.addTab(self.comparisons, "Comparisons")
-        root.addWidget(tabs, 1)
+        self._tabs.addTab(self.variables, "Variable stars")
+        self._tabs.addTab(self.lightcurve, "Light curve")
+        self._tabs.addTab(self.metrics, "Metrics")
+        self._tabs.addTab(self.targets, "Targets")
+        self._tabs.addTab(self.comparisons, "Comparison stars")
+        self._tabs.addTab(self.setup, "Aperture · references")
+        root.addWidget(self._tabs, 1)
 
         footer = QHBoxLayout()
         footer.addStretch()
@@ -91,7 +259,11 @@ class PhotometryWindow(QWidget):
         self.obscode = obscode or "XXX"
         self.filt = filt or "TG"
         if object_name:
-            self.setWindowTitle(f"Photometry — {object_name}")
+            self.setWindowTitle(f"Field photometry — {object_name}")
+
+    def show_variable_stars(self) -> None:
+        """Make the target-selection workflow the visible entry point."""
+        self._tabs.setCurrentWidget(self.variables)
 
     def feed_point(self, point) -> None:
         """Render one differential point (a typed ``PhotometryPoint``)."""

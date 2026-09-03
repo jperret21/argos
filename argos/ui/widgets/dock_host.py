@@ -16,12 +16,16 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction
-from PyQt6.QtWidgets import QDockWidget, QScrollArea, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QDockWidget, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from argos.ui import design, theme
 
-#: All docks share this hairline-bordered, small-title look.
-_DOCK_QSS = f"""
+
+#: All docks share this hairline-bordered, small-title look.  This must be a
+#: function (not a module-level f-string): the theme palette is selected after
+#: the UI modules are imported during application startup.
+def _dock_qss() -> str:
+    return f"""
 QDockWidget {{
     color: {theme.FG};
     font-size: {design.FONT_SIZE_SMALL}px;
@@ -68,17 +72,37 @@ def make_dock(
             | QDockWidget.DockWidgetFeature.DockWidgetFloatable
         )
     dock.setFeatures(features)
-    dock.setStyleSheet(_DOCK_QSS)
+    dock.setStyleSheet(_dock_qss())
+
+    # The dock title is already the panel's visible heading.  Most Imaging
+    # controls are Cards too; keeping their QGroupBox title produced a second
+    # heading (``Focusing`` / ``Focuser``, ``Acquisition`` / ``Camera``) and a
+    # second layer of padding.  Preserve the card frame, but make dock content
+    # use the compact panel inset.
+    if isinstance(content, design.Card):
+        content.setTitle("")
+        if content.layout() is not None:
+            content.layout().setContentsMargins(
+                design.SPACING_MD,
+                design.SPACING_SM,
+                design.SPACING_MD,
+                design.SPACING_SM,
+            )
 
     if scroll:
+        policy = content.sizePolicy()
+        content.setSizePolicy(policy.horizontalPolicy(), QSizePolicy.Policy.Maximum)
         inner = QWidget()
         layout = QVBoxLayout(inner)
         layout.setContentsMargins(
             design.SPACING_MD, design.SPACING_MD, design.SPACING_MD, design.SPACING_MD
         )
         layout.setSpacing(design.SPACING_MD)
-        layout.addWidget(content)
-        # No addStretch(): stretch fights scroll when dock < content
+        layout.addWidget(content, 0, Qt.AlignmentFlag.AlignTop)
+        # A control panel should keep its natural height.  The dock's spare
+        # room belongs below it; when the dock is shorter, QScrollArea still
+        # uses the inner widget's size hint and supplies vertical scrolling.
+        layout.addStretch(1)
 
         area = QScrollArea()
         area.setWidgetResizable(True)
@@ -105,3 +129,52 @@ def style_toggle_action(action: QAction, label: str) -> QAction:
     action.setText(label)
     action.setCheckable(True)
     return action
+
+
+def panel_toolbar_qss() -> str:
+    """Return the shared, neutral toolbar treatment for dock workspaces.
+
+    A visible dock is not an active command.  Styling every checked
+    ``toggleViewAction`` with the primary accent made a normal default layout
+    look as if every control were simultaneously selected.  Keep these buttons
+    neutral; reserve Argos brass for focus, deliberate actions and real state.
+    Menu arrows are rendered as text by the caller, avoiding platform-native
+    indicators which were vertically misplaced on compact toolbars.
+    """
+    return f"""
+QToolBar {{
+    background-color: {theme.SURFACE_3};
+    border-bottom: 1px solid {theme.SURFACE_4};
+    padding: 3px 6px;
+    spacing: 5px;
+}}
+QToolBar QToolButton {{
+    color: {theme.FG_MUTED};
+    background: transparent;
+    border: 1px solid {theme.BORDER_SOFT};
+    border-radius: 2px;
+    min-height: 26px;
+    padding: 2px 10px;
+    font-family: {theme.FONT_UI};
+    font-size: 12px;
+}}
+QToolBar QToolButton:hover {{
+    color: {theme.FG};
+    background-color: {theme.SURFACE};
+    border-color: {theme.BORDER};
+}}
+QToolBar QToolButton:checked {{
+    color: {theme.FG};
+    background-color: {theme.SURFACE};
+    border-color: {theme.BORDER};
+}}
+QToolBar QToolButton::menu-indicator {{
+    image: none;
+    width: 0;
+}}
+QToolBar::separator {{
+    width: 1px;
+    background-color: {theme.BORDER};
+    margin: 5px 6px;
+}}
+"""

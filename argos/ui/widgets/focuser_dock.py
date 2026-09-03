@@ -21,9 +21,7 @@ import logging
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
-    QFormLayout,
     QGridLayout,
-    QHBoxLayout,
     QLabel,
     QSpinBox,
     QWidget,
@@ -57,8 +55,9 @@ class FocuserDock(design.Card):
 
     def _build_ui(self) -> None:
         outer = design.card_layout(self)
+        outer.setSpacing(design.SPACING_SM)
 
-        # Live status — position + temperature side-by-side
+        # Live status — compact, immediately useful context.
         status = QGridLayout()
         status.setSpacing(design.SPACING_SM)
         status.setColumnStretch(1, 1)
@@ -73,44 +72,41 @@ class FocuserDock(design.Card):
         status.addWidget(self._temp_lbl, 0, 3)
         outer.addLayout(status)
 
-        outer.addWidget(design.horizontal_divider())
-
-        # Step-size selector + In / Out buttons
-        step_form = QFormLayout()
-        step_form.setHorizontalSpacing(design.SPACING_MD)
-        step_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        # Manual adjustment is one compact grid rather than three full-width
+        # form rows.  It reads left-to-right in the order an observer uses it.
+        manual = QGridLayout()
+        manual.setHorizontalSpacing(design.SPACING_SM)
+        manual.setVerticalSpacing(design.SPACING_SM)
+        manual.setColumnStretch(1, 1)
+        manual.setColumnStretch(2, 1)
+        manual.setColumnStretch(3, 1)
         self._step_combo = QComboBox()
         for v in _STEP_PRESETS:
             self._step_combo.addItem(str(v))
         self._step_combo.setCurrentText("100")
-        step_form.addRow(design.MutedLabel("Step"), self._step_combo)
-        outer.addLayout(step_form)
-
-        jog_row = QHBoxLayout()
-        jog_row.setSpacing(design.SPACING_SM)
-        self._out_btn = design.SecondaryButton("◀  Out")
+        self._step_combo.setToolTip("Increment used for each manual focus movement")
+        self._out_btn = design.SecondaryButton("◀ Out")
         self._out_btn.setToolTip("Move focuser outward (position decreases)")
         self._out_btn.clicked.connect(self._on_step_out)
-        self._in_btn = design.SecondaryButton("In  ▶")
+        self._in_btn = design.SecondaryButton("In ▶")
         self._in_btn.setToolTip("Move focuser inward (position increases)")
         self._in_btn.clicked.connect(self._on_step_in)
-        jog_row.addWidget(self._out_btn, 1)
-        jog_row.addWidget(self._in_btn, 1)
-        outer.addLayout(jog_row)
+        manual.addWidget(design.MutedLabel("Step"), 0, 0)
+        manual.addWidget(self._step_combo, 0, 1)
+        manual.addWidget(self._out_btn, 0, 2)
+        manual.addWidget(self._in_btn, 0, 3)
 
-        # Manual go-to (absolute)
-        goto_form = QFormLayout()
-        goto_form.setHorizontalSpacing(design.SPACING_MD)
-        goto_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self._goto_spin = QSpinBox()
         self._goto_spin.setRange(0, 200_000)
         self._goto_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self._goto_spin.setMinimumHeight(design.INPUT_HEIGHT)
-        goto_form.addRow(design.MutedLabel("Go to"), self._goto_spin)
-        outer.addLayout(goto_form)
-        goto_btn = design.PrimaryButton("▶  Move to")
-        goto_btn.clicked.connect(self._on_move_to)
-        outer.addLayout(design.button_row(goto_btn))
+        move_btn = design.SecondaryButton("Move")
+        move_btn.setToolTip("Move to the specified absolute focuser position")
+        move_btn.clicked.connect(self._on_move_to)
+        manual.addWidget(design.MutedLabel("Go to"), 1, 0)
+        manual.addWidget(self._goto_spin, 1, 1, 1, 2)
+        manual.addWidget(move_btn, 1, 3)
+        outer.addLayout(manual)
 
         outer.addWidget(design.horizontal_divider())
 
@@ -146,7 +142,7 @@ class FocuserDock(design.Card):
             self._out_btn,
             self._in_btn,
             self._goto_spin,
-            goto_btn,
+            move_btn,
             self._halt_btn,
             self._af_btn,
         ]

@@ -10,20 +10,31 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
+import math
 from pathlib import Path
 import re
+import time
 
 import requests
 
 _TAP_URL = "https://exoplanetarchive.ipac.caltech.edu/TAP/sync"
 _CACHE_PATH = Path.home() / "Argos" / "cache" / "exoplanets.json"
+_FIELD_CACHE_DIR = Path.home() / ".argos" / "cache" / "field_catalogue" / "nasa"
+_FIELD_CACHE_FRESH_S = 30 * 86400.0
 
 
 def configure_cache_path(path: Path | str) -> None:
     """Set the persistent NASA ephemeris cache location for future lookups."""
     global _CACHE_PATH
     _CACHE_PATH = Path(path).expanduser()
+
+
+def configure_field_cache_directory(path: Path | str) -> None:
+    """Set the cache folder used by NASA solved-field host queries."""
+    global _FIELD_CACHE_DIR
+    _FIELD_CACHE_DIR = Path(path).expanduser() / "nasa"
 
 
 class ExoplanetLookupError(RuntimeError):
@@ -57,6 +68,196 @@ class ExoplanetTarget:
     @property
     def ra_hours(self) -> float:
         return self.ra_degrees / 15.0
+
+
+@dataclass(frozen=True)
+class CachedExoplanetHost:
+    """A host star represented by an already cached transit ephemeris.
+
+    This deliberately has no online fallback.  It lets a solved image show
+    previously prepared exoplanet systems while keeping field enrichment an
+    explicit, privacy-respecting action.
+    """
+
+    host_name: str
+    ra_degrees: float
+    dec_degrees: float
+    planet_names: tuple[str, ...]
+    mags: tuple[tuple[str, float], ...] = ()
+
+
+def _field_cache_path(ra_deg: float, dec_deg: float, radius_deg: float) -> Path:
+    key = f"{ra_deg:.6f}:{dec_deg:.6f}:{radius_deg:.6f}"
+    return _FIELD_CACHE_DIR / f"{hashlib.sha256(key.encode()).hexdigest()}.json"
+
+
+def _read_field_cache(path: Path) -> tuple[list[CachedExoplanetHost], float] | None:
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8"))
+        hosts = [
+            CachedExoplanetHost(
+                host_name=str(row["host_name"]),
+                ra_degrees=float(row["ra_degrees"]),
+                dec_degrees=float(row["dec_degrees"]),
+                planet_names=tuple(str(name) for name in row.get("planet_names", ())),
+                mags=tuple(
+                    (str(band), float(magnitude)) for band, magnitude in row.get("mags", ())
+                ),
+            )
+            for row in rows
+            if isinstance(row, dict)
+        ]
+        return hosts, time.time() - path.stat().st_mtime
+    except (OSError, KeyError, ValueError, TypeError):
+        return None
+
+
+def _write_field_cache(path: Path, hosts: list[CachedExoplanetHost]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps([asdict(host) for host in hosts], indent=2, sort_keys=True), encoding="utf-8"
+        )
+    except OSError:
+        pass
+
+
+def _angular_separation_deg(
+    ra_a_deg: float, dec_a_deg: float, ra_b_deg: float, dec_b_deg: float
+) -> float:
+    """Great-circle separation in degrees, safe around the RA wrap."""
+    import math
+
+    ra_a, dec_a, ra_b, dec_b = map(math.radians, (ra_a_deg, dec_a_deg, ra_b_deg, dec_b_deg))
+    cosine = math.sin(dec_a) * math.sin(dec_b) + math.cos(dec_a) * math.cos(dec_b) * math.cos(
+        ra_a - ra_b
+    )
+    return math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
+
+
+def cached_exoplanet_hosts_in_cone(
+    ra_degrees: float,
+    dec_degrees: float,
+    radius_deg: float,
+    *,
+    cache_path: Path | None = None,
+) -> list[CachedExoplanetHost]:
+    """Return unique cached transiting-planet hosts inside a solved field.
+
+    The small local ephemeris cache is not a complete planet catalogue.  This
+    function therefore never claims that an empty result means there are no
+    exoplanets in the field; it only exposes objects the observer has already
+    downloaded or prepared.
+    """
+    if not (0.0 <= ra_degrees < 360.0 and -90.0 <= dec_degrees <= 90.0 and radius_deg > 0):
+        return []
+    hosts: dict[tuple[str, float, float], tuple[str, list[str]]] = {}
+    for row in _read_cache(cache_path or _CACHE_PATH).values():
+        try:
+            target = ExoplanetTarget(**row)
+        except (TypeError, ValueError):
+            continue
+        if (
+            _angular_separation_deg(ra_degrees, dec_degrees, target.ra_degrees, target.dec_degrees)
+            > radius_deg
+        ):
+            continue
+        key = (target.host_name.casefold(), target.ra_degrees, target.dec_degrees)
+        if key not in hosts:
+            hosts[key] = (target.host_name, [])
+        hosts[key][1].append(target.planet_name)
+    return [
+        CachedExoplanetHost(
+            host_name=host_name,
+            ra_degrees=names_key[1],
+            dec_degrees=names_key[2],
+            planet_names=tuple(sorted(set(names))),
+        )
+        for names_key, (host_name, names) in hosts.items()
+    ]
+
+
+def exoplanet_hosts_in_cone(
+    ra_degrees: float,
+    dec_degrees: float,
+    radius_deg: float,
+    *,
+    allow_network: bool = True,
+    timeout_s: float = 15.0,
+    session=None,
+) -> list[CachedExoplanetHost]:
+    """Find confirmed exoplanet hosts in a solved field, with local caching.
+
+    A field lookup uses NASA's ``pscomppars`` table and groups its one-row-per-
+    planet results by host.  It is intentionally separate from
+    :func:`lookup_exoplanet`: a field inspection should tell the observer what
+    is there, while a prepared target needs a full transit ephemeris.
+    """
+    if not (
+        0.0 <= ra_degrees < 360.0
+        and -90.0 <= dec_degrees <= 90.0
+        and radius_deg > 0
+        and math.isfinite(radius_deg)
+    ):
+        raise ExoplanetLookupError("Invalid solved-field coordinates.")
+    radius = min(5.0, float(radius_deg))
+    path = _field_cache_path(ra_degrees, dec_degrees, radius)
+    cached = _read_field_cache(path)
+    if cached is not None and (cached[1] < _FIELD_CACHE_FRESH_S or not allow_network):
+        return cached[0]
+    if not allow_network:
+        return cached_exoplanet_hosts_in_cone(ra_degrees, dec_degrees, radius)
+    query = (
+        "select pl_name,hostname,ra,dec,sy_vmag,sy_gaiamag,sy_jmag from pscomppars where "
+        "contains(point('icrs',ra,dec),"
+        f"circle('icrs',{ra_degrees:.8f},{dec_degrees:.8f},{radius:.8f}))=1"
+    )
+    sender = session.get if session is not None else requests.get
+    try:
+        response = sender(_TAP_URL, params={"query": query, "format": "json"}, timeout=timeout_s)
+        response.raise_for_status()
+        rows = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        if cached is not None:
+            return cached[0]
+        raise ExoplanetLookupError("NASA field catalogue is unavailable.") from exc
+    hosts: dict[tuple[str, float, float], tuple[str, list[str], dict[str, float]]] = {}
+    if not isinstance(rows, list):
+        raise ExoplanetLookupError("NASA returned an invalid field catalogue.")
+    for row in rows:
+        try:
+            host = str(row["hostname"]).strip()
+            planet = str(row["pl_name"]).strip()
+            ra = float(row["ra"])
+            dec = float(row["dec"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not host or not planet:
+            continue
+        key = (host.casefold(), ra, dec)
+        if key not in hosts:
+            mags: dict[str, float] = {}
+            for band, column in (("V", "sy_vmag"), ("Gaia G", "sy_gaiamag"), ("J", "sy_jmag")):
+                try:
+                    value = float(row[column])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if math.isfinite(value):
+                    mags[band] = value
+            hosts[key] = (host, [], mags)
+        hosts[key][1].append(planet)
+    result = [
+        CachedExoplanetHost(
+            host,
+            key[1],
+            key[2],
+            tuple(sorted(set(planets))),
+            tuple(sorted(mags.items())),
+        )
+        for key, (host, planets, mags) in hosts.items()
+    ]
+    _write_field_cache(path, result)
+    return result
 
 
 def _cache_key(query: str) -> str:

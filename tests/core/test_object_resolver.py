@@ -12,6 +12,8 @@ from argos.core.catalog.object_resolver import (
     nearby_cached_objects,
     nearby_essential_objects,
     normalize_designation,
+    is_variable_object_type,
+    object_type_label,
     resolve_nearby_objects,
     resolve_object,
 )
@@ -24,6 +26,19 @@ _SESAME_XML = """<?xml version='1.0'?>
       <otype>Star</otype>
       <jradeg>300.18210000</jradeg>
       <jdedeg>22.70990000</jdedeg>
+    </Resolver>
+  </Target>
+</Sesame>
+"""
+
+_XX_CYG_XML = """<?xml version='1.0'?>
+<Sesame>
+  <Target>
+    <Resolver name='Simbad'>
+      <oname>V* XX Cyg</oname>
+      <otype>SX*</otype>
+      <jradeg>300.81517513</jradeg>
+      <jdedeg>58.95459035</jdedeg>
     </Resolver>
   </Target>
 </Sesame>
@@ -65,6 +80,34 @@ def test_resolve_object_rejects_empty_query(tmp_path: Path) -> None:
 def test_normalize_compact_designations() -> None:
     assert normalize_designation("hd189733") == "HD 189733"
     assert normalize_designation("ngc7000") == "NGC 7000"
+    assert object_type_label("V*") == "Variable star"
+    assert object_type_label("SX*") == "SX Phoenicis variable"
+    assert is_variable_object_type("SX*")
+    assert not is_variable_object_type("Star")
+
+
+def test_resolver_keeps_variable_type_out_of_the_designation(tmp_path: Path, monkeypatch) -> None:
+    """``V*`` is SIMBAD metadata, never part of the observer-facing name."""
+
+    class Response:
+        text = _XX_CYG_XML
+
+        def raise_for_status(self) -> None:
+            pass
+
+    monkeypatch.setattr(object_resolver.requests, "get", lambda *_a, **_k: Response())
+    cache = tmp_path / "resolver.json"
+    result = resolve_object("xx cyg", cache_path=cache)
+
+    assert result.name == "XX Cyg"
+    assert result.object_type == "SX*"
+    # A pre-fix cache must not preserve the misleading prefix either.
+    cache.write_text(
+        '{"xxcyg": {"name": "V* XX Cyg", "ra_degrees": 300.81517513, '
+        '"dec_degrees": 58.95459035, "object_type": "SX*"}}',
+        encoding="utf-8",
+    )
+    assert resolve_object("XX Cyg", cache_path=cache).name == "XX Cyg"
 
 
 def test_embedded_catalogue_resolves_common_deep_sky_targets_offline(

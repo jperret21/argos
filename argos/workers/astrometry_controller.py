@@ -153,6 +153,25 @@ class AstrometryController(QObject):
                 return True
         return False
 
+    def mount_moved_since_solution(self, mount_radec: RaDec | None) -> bool:
+        """Whether the reported mount position makes the current WCS unsafe.
+
+        ``DeviceSession.slewed`` covers GoTo commands issued by Argos itself,
+        but an observer may slew from Stellarium or the telescope's native app.
+        In that case retaining the former field's WCS is worse than showing no
+        overlay: a target aperture can be drawn on empty sky.  Reuse the same
+        movement threshold that arms an automatic re-solve.
+        """
+        if self._wcs is None or mount_radec is None or self._last_solve_radec is None:
+            return False
+        sep_arcmin = (
+            angular_separation_deg(
+                mount_radec[0], mount_radec[1], self._last_solve_radec[0], self._last_solve_radec[1]
+            )
+            * 60.0
+        )
+        return sep_arcmin >= float(self._cfg("astrometry.live_resolve_arcmin", 2.0))
+
     def _start(
         self,
         raw: np.ndarray,

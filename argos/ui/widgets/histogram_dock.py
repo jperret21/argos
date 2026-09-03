@@ -51,9 +51,10 @@ class HistogramDock(design.Card):
     astrometry_toggled = pyqtSignal(bool)
     rotation_changed = pyqtSignal(str)  # a fits_viewer.ROTATION_MODES token
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, show_roi: bool = True) -> None:
         super().__init__("Adjust image", parent)
         self._guard = False
+        self._show_roi = show_roi
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -62,6 +63,13 @@ class HistogramDock(design.Card):
 
     def _build_ui(self) -> None:
         outer = design.card_layout(self)
+
+        histogram_label = design.MutedLabel("Raw FITS histogram")
+        histogram_label.setToolTip(
+            "Black, white and midtones change only the display mapping; "
+            "the histogram keeps the original FITS sample values."
+        )
+        outer.addWidget(histogram_label)
 
         pg.setConfigOptions(antialias=True)
         self._plot = pg.PlotWidget()
@@ -117,7 +125,8 @@ class HistogramDock(design.Card):
         mode_form.addRow(design.MutedLabel("Rotation"), self._rot_combo)
         outer.addLayout(mode_form)
 
-        self._auto_btn = design.PrimaryButton("Improve contrast")
+        self._auto_btn = design.PrimaryButton("Auto stretch")
+        self._auto_btn.setToolTip("Automatically set a display stretch for the current image")
         self._auto_btn.clicked.connect(self.auto_requested)
         outer.addLayout(design.button_row(self._auto_btn))
 
@@ -129,9 +138,10 @@ class HistogramDock(design.Card):
         self._sat_chk = QCheckBox("Highlight saturation")
         self._sat_chk.toggled.connect(self.saturation_toggled)
         outer.addWidget(self._sat_chk)
-        self._roi_chk = QCheckBox("Region stats (drag the box on the image)")
-        self._roi_chk.toggled.connect(self.roi_toggled)
-        outer.addWidget(self._roi_chk)
+        if self._show_roi:
+            self._roi_chk = QCheckBox("Region statistics (drag the box on the image)")
+            self._roi_chk.toggled.connect(self.roi_toggled)
+            outer.addWidget(self._roi_chk)
 
         # Focus tools (§5): a 1:1 magnifier that follows the cursor.
         self._loupe_chk = QCheckBox("Loupe (100% zoom at cursor)")
@@ -159,31 +169,32 @@ class HistogramDock(design.Card):
         radius_form.addRow(design.MutedLabel("Star aperture"), self._radius)
         outer.addLayout(radius_form)
 
-        # ROI stats — compact aligned grid (filled while the ROI is active).
-        outer.addWidget(design.SectionLabel("ROI stats"))
-        rg = QGridLayout()
-        rg.setHorizontalSpacing(design.SPACING_MD)
-        rg.setVerticalSpacing(design.SPACING_XS)
-        rg.setColumnStretch(1, 1)
-        rg.setColumnStretch(3, 1)
-        self._rg_mean = design.MetricLabel("—")
-        self._rg_median = design.MetricLabel("—")
-        self._rg_std = design.MetricLabel("—")
-        self._rg_min = design.MetricLabel("—")
-        self._rg_max = design.MetricLabel("—")
-        self._rg_n = design.MetricLabel("—")
-        for r, (k1, w1, k2, w2) in enumerate(
-            (
-                ("Mean", self._rg_mean, "Median", self._rg_median),
-                ("Std", self._rg_std, "N", self._rg_n),
-                ("Min", self._rg_min, "Max", self._rg_max),
-            )
-        ):
-            rg.addWidget(design.MutedLabel(k1), r, 0)
-            rg.addWidget(w1, r, 1)
-            rg.addWidget(design.MutedLabel(k2), r, 2)
-            rg.addWidget(w2, r, 3)
-        outer.addLayout(rg)
+        if self._show_roi:
+            # ROI stats — compact aligned grid (filled while the ROI is active).
+            outer.addWidget(design.SectionLabel("ROI statistics"))
+            rg = QGridLayout()
+            rg.setHorizontalSpacing(design.SPACING_MD)
+            rg.setVerticalSpacing(design.SPACING_XS)
+            rg.setColumnStretch(1, 1)
+            rg.setColumnStretch(3, 1)
+            self._rg_mean = design.MetricLabel("—")
+            self._rg_median = design.MetricLabel("—")
+            self._rg_std = design.MetricLabel("—")
+            self._rg_min = design.MetricLabel("—")
+            self._rg_max = design.MetricLabel("—")
+            self._rg_n = design.MetricLabel("—")
+            for r, (k1, w1, k2, w2) in enumerate(
+                (
+                    ("Mean", self._rg_mean, "Median", self._rg_median),
+                    ("Std", self._rg_std, "N", self._rg_n),
+                    ("Min", self._rg_min, "Max", self._rg_max),
+                )
+            ):
+                rg.addWidget(design.MutedLabel(k1), r, 0)
+                rg.addWidget(w1, r, 1)
+                rg.addWidget(design.MutedLabel(k2), r, 2)
+                rg.addWidget(w2, r, 3)
+            outer.addLayout(rg)
 
     @staticmethod
     def _slider(lo: int, hi: int, value: int) -> QSlider:
@@ -225,6 +236,8 @@ class HistogramDock(design.Card):
         self._guard = False
 
     def set_region_info(self, stats) -> None:
+        if not self._show_roi:
+            return
         if not stats:
             for lbl in (
                 self._rg_mean,

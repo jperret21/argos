@@ -112,7 +112,12 @@ class StarInfoCard(QFrame):
         self.hide()
 
     def show_star(
-        self, title: str, body: str, *, roles_enabled: bool, removable: bool = False
+        self,
+        title: str,
+        body: str,
+        *,
+        roles_enabled: bool,
+        removable: bool = False,
     ) -> None:
         """Populate + show the card. ``roles_enabled`` gates the role buttons
         (off until a plate-solve gives the star a real RA/Dec); ``removable``

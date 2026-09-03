@@ -62,59 +62,60 @@ class Palette:
 
 
 # ---------------------------------------------------------------------------
-# Observatory — restrained neutral default for a scientific instrument.
+# Observatory — Argos' restrained graphite-and-brass default.
 #
-# The previous blue/green/purple combination made every state compete for
-# attention.  This palette reserves chroma for the active action and real
-# warnings, while the everyday workspace stays in neutral graphite.
+# The interface borrows the brass from the Argos mark (#c49a3c), then reserves
+# it for focus, selection and deliberate actions.  The workspace itself stays
+# neutral graphite: a scientific cockpit should not read like a dashboard of
+# unrelated blue/green/purple status colours.
 # ---------------------------------------------------------------------------
 
 EQUILUX = Palette(
     name="Observatory",
-    bg="#1c2026",
-    bg2="#15191e",
-    surface="#252b33",
-    border="#343c47",
-    border_soft="#282f38",
-    fg="#e2e6ea",
-    fg_muted="#9da8b5",
-    fg_disabled="#626d78",
-    accent="#7d9bb8",
-    accent_hover="#91aec9",
-    accent_deep="#5e7d9b",
-    cyan="#7f9ead",
-    success="#85a58a",
-    warning="#b79a6a",
-    danger="#b97979",
-    variable="#a895bc",
-    font_ui='"Avenir Next", "SF Pro Text", "Segoe UI Variable", "Noto Sans", "Helvetica Neue", sans-serif',
-    font_mono='"SF Mono", "Cascadia Mono", "Noto Sans Mono", "Menlo", "Consolas", monospace',
+    bg="#191b1f",
+    bg2="#121417",
+    surface="#22262c",
+    border="#47515c",
+    border_soft="#343c45",
+    fg="#e8e5df",
+    fg_muted="#aaa8a2",
+    fg_disabled="#6d7278",
+    accent="#c49a3c",
+    accent_hover="#d6b25d",
+    accent_deep="#8d6b2b",
+    cyan="#7da8b2",
+    success="#83a68b",
+    warning="#d0a85a",
+    danger="#bf7772",
+    variable="#8fb7ca",
+    font_ui='"Helvetica Neue", "Segoe UI", "Noto Sans", sans-serif',
+    font_mono='"SF Mono", "Cascadia Mono", "JetBrains Mono", "Noto Sans Mono", "Menlo", "Consolas", monospace',
 )
 
 # ---------------------------------------------------------------------------
-# Charcoal — NINA-like charcoal + teal accent
+# Charcoal — higher-contrast graphite variant, still within Argos' brass family
 # ---------------------------------------------------------------------------
 
 CHARCOAL = Palette(
     name="Charcoal",
-    bg="#222629",
-    bg2="#161a1d",
-    surface="#2e3236",
-    border="#3d4347",
-    border_soft="#303539",
-    fg="#e0e3e6",
-    fg_muted="#8c9198",
-    fg_disabled="#505457",
-    accent="#00b4d8",
-    accent_hover="#48cae4",
-    accent_deep="#0077b6",
-    cyan="#52b8c8",
-    success="#6aab5e",
-    warning="#c4933a",
-    danger="#d45c6e",
-    variable="#b07cd4",
-    font_ui='"Avenir Next", "SF Pro Text", "Segoe UI Variable", "Noto Sans", "Helvetica Neue", sans-serif',
-    font_mono='"SF Mono", "Cascadia Mono", "Noto Sans Mono", "Menlo", "Consolas", monospace',
+    bg="#232529",
+    bg2="#181a1d",
+    surface="#2c3035",
+    border="#545c65",
+    border_soft="#3d444c",
+    fg="#ece9e2",
+    fg_muted="#b0aea7",
+    fg_disabled="#73777b",
+    accent="#c49a3c",
+    accent_hover="#d8b75f",
+    accent_deep="#977331",
+    cyan="#86a9af",
+    success="#8ca58c",
+    warning="#d1aa5e",
+    danger="#c57b76",
+    variable="#9abfcd",
+    font_ui='"Helvetica Neue", "Segoe UI", "Noto Sans", sans-serif',
+    font_mono='"SF Mono", "Cascadia Mono", "JetBrains Mono", "Noto Sans Mono", "Menlo", "Consolas", monospace',
 )
 
 # ---------------------------------------------------------------------------
@@ -133,24 +134,24 @@ CHARCOAL = Palette(
 
 NIGHT_RED = Palette(
     name="Night (Red)",
-    bg="#120405",
-    bg2="#0c0303",
-    surface="#1d0809",
-    border="#351315",
-    border_soft="#240c0d",
-    fg="#d9a6a6",  # enough contrast to read, deliberately not white
-    fg_muted="#9b6263",
-    fg_disabled="#4b292a",
-    accent="#a83a3d",  # restrained: preserve night vision, avoid alarm-red UI
-    accent_hover="#bd4b4e",
-    accent_deep="#752528",
-    cyan="#b56a6b",  # informational tint, still strictly red-dominant
-    success="#743033",  # state is communicated by label/icon as well as luminance
-    warning="#9b4547",
-    danger="#d05d60",
-    variable="#854044",
-    font_ui='"Avenir Next", "SF Pro Text", "Segoe UI Variable", "Noto Sans", "Helvetica Neue", sans-serif',
-    font_mono='"SF Mono", "Cascadia Mono", "Noto Sans Mono", "Menlo", "Consolas", monospace',
+    bg="#1a0304",
+    bg2="#100102",
+    surface="#2b080a",
+    border="#501719",
+    border_soft="#350c0e",
+    fg="#d88f8f",  # readable, but deliberately well below white luminance
+    fg_muted="#a65758",
+    fg_disabled="#5a2829",
+    accent="#c14d50",
+    accent_hover="#df6264",
+    accent_deep="#7d2327",
+    cyan="#bb6667",  # informational tint, still strictly red-dominant
+    success="#8b3437",  # state is communicated by label/icon as well as luminance
+    warning="#ad494c",
+    danger="#e05e61",
+    variable="#985055",
+    font_ui='"Helvetica Neue", "Segoe UI", "Noto Sans", sans-serif',
+    font_mono='"SF Mono", "Cascadia Mono", "JetBrains Mono", "Noto Sans Mono", "Menlo", "Consolas", monospace',
 )
 
 # ---------------------------------------------------------------------------

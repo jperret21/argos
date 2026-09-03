@@ -58,21 +58,18 @@ class ImageToolbar(QWidget):
         self._channel_combo.setMinimumWidth(120)
         self._channel_combo.setStyleSheet("font-size: 11px;")
         labels = {
-            debayer.VIEW_SUPERPIXEL: "Colour",
-            debayer.VIEW_INTERP: "Smooth colour",
-            debayer.VIEW_RAW: "Raw sensor",
-            debayer.VIEW_R: "Red channel",
-            debayer.VIEW_G: "Green channel",
-            debayer.VIEW_B: "Blue channel",
-            debayer.VIEW_G1: "Green 1",
-            debayer.VIEW_G2: "Green 2",
-            debayer.VIEW_LUM: "Luminance",
+            debayer.VIEW_SUPERPIXEL: "Colour (CFA)",
+            debayer.VIEW_RAW: "Raw CFA",
+            debayer.VIEW_R: "Red (CFA)",
+            debayer.VIEW_G: "Green (CFA)",
+            debayer.VIEW_B: "Blue (CFA)",
         }
         for view in debayer.VIEWS:
             self._channel_combo.addItem(labels[view], view)
         self._channel_combo.setCurrentIndex(0)  # Super-pixel (clean colour preview)
         self._channel_combo.setToolTip(
-            "Changes only the on-screen preview; the FITS data are unchanged."
+            "Changes only the on-screen preview; every view keeps the same sensor geometry "
+            "and annotation coordinates. FITS data are unchanged."
         )
         self._channel_combo.currentIndexChanged.connect(
             lambda _index: self.channel_changed.emit(str(self._channel_combo.currentData()))

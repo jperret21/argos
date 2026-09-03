@@ -58,6 +58,22 @@ def test_superpixel_rgb_shape_and_values() -> None:
     assert rgb[0, 0, 2] == 30  # B
 
 
+def test_downsample_cfa_preserves_every_bayer_colour() -> None:
+    """Half-resolution preview must remain a GRBG mosaic, not one green plane."""
+    reduced = d.downsample_cfa(_grbg(), 2)
+    assert reduced.shape == (2, 2)
+    rgb = d.superpixel_rgb(reduced)
+    assert tuple(rgb[0, 0]) == (20, 25, 30)
+
+
+def test_display_neutralisation_only_balances_rgb_values() -> None:
+    rgb = np.zeros((4, 4, 3), dtype=np.uint16)
+    rgb[..., 0], rgb[..., 1], rgb[..., 2] = 100, 200, 50
+    balanced = d.neutralise_rgb_for_display(rgb)
+    assert balanced.dtype == np.uint16
+    assert tuple(np.median(balanced.reshape(-1, 3), axis=0)) == (100.0, 100.0, 100.0)
+
+
 def test_bilinear_full_res_keeps_known_samples() -> None:
     arr = _grbg()
     rgb = d.bilinear_rgb(arr)
@@ -75,10 +91,10 @@ def test_render_view_shapes_and_dtypes() -> None:
     assert raw.shape == (4, 4) and raw.dtype == np.uint16
 
     plane = d.render_view(arr, d.VIEW_G)
-    assert plane.shape == (2, 2) and plane.dtype == np.uint16
+    assert plane.shape == (4, 4) and plane.dtype == np.uint16
 
     sp = d.render_view(arr, d.VIEW_SUPERPIXEL)
-    assert sp.shape == (2, 2, 3) and sp.dtype == np.uint16  # linear; stretch is separate
+    assert sp.shape == (4, 4, 3) and sp.dtype == np.uint16  # linear; stretch is separate
 
     interp = d.render_view(arr, d.VIEW_INTERP)
     assert interp.shape == (4, 4, 3) and interp.dtype == np.uint16
@@ -105,6 +121,14 @@ def test_odd_dimensions_do_not_crash() -> None:
 def test_views_are_complete() -> None:
     assert d.VIEW_RAW in d.VIEWS
     assert d.VIEW_SUPERPIXEL in d.VIEWS
-    assert d.VIEW_INTERP in d.VIEWS
-    for ch in ("R", "G", "B", "G1", "G2", "Luminance"):
+    for ch in ("R", "G", "B"):
         assert ch in d.VIEWS
+    assert d.VIEW_INTERP not in d.VIEWS
+    assert d.VIEW_G1 not in d.VIEWS and d.VIEW_G2 not in d.VIEWS
+    assert d.VIEW_LUM not in d.VIEWS
+
+
+def test_every_observer_view_uses_the_same_sensor_geometry() -> None:
+    arr = np.arange(5 * 7, dtype=np.uint16).reshape(5, 7) + 10
+    for view in d.VIEWS:
+        assert d.render_view(arr, view).shape[:2] == arr.shape

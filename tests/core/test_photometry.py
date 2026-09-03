@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from argos.core.catalog import (
     Band,
+    ComparisonQuality,
     ComparisonStar,
     VariableStar,
     auto_comparison_stars,
@@ -78,10 +79,11 @@ def test_auto_comparison_stars_ranks_converts_and_caps() -> None:
     picks = auto_comparison_stars(0.0, 0.1, comps, count=5)
     assert len(picks) == 5
     assert [p.auid for p in picks] == ["C1", "C2", "C3", "C4", "C5"]  # closest first
-    assert all(p.role == ROLE_COMPARISON and p.source == "vsp" for p in picks)
+    assert all(p.role == ROLE_COMPARISON and p.source == "vsp_auto" for p in picks)
     # Catalog magnitudes ride along for the differential ensemble.
     assert picks[0].mags == {"V": 12.0}
-    assert picks[0].name == comps[0].label
+    assert picks[0].name is None
+    assert picks[0].display_name == comps[0].auid
 
 
 def test_auto_comparison_stars_drops_off_frame_stars() -> None:
@@ -95,3 +97,49 @@ def test_auto_comparison_stars_drops_off_frame_stars() -> None:
         0.95, 0.1, [off, on1, on2], wcs=_GridWCS(), green_shape=(100, 100), count=5
     )
     assert [p.auid for p in picks] == ["ON1", "ON2"]
+
+
+def test_auto_comparisons_use_pilot_quality_not_only_proximity() -> None:
+    """A faint nearest star must lose to a measurable wider-field candidate."""
+    close_faint = _comp("FAINT", 0.01, 0.1, 13.8)
+    wide_good = _comp("GOOD", 0.40, 0.1, 10.4)
+    nearer_good = _comp("GOOD2", 0.08, 0.1, 10.6)
+    quality = {
+        "FAINT": ComparisonQuality(snr=1.2, inst_mag=-5.0),
+        "GOOD": ComparisonQuality(snr=22.0, inst_mag=-9.1),
+        "GOOD2": ComparisonQuality(snr=18.0, inst_mag=-9.0),
+    }
+
+    picks = auto_comparison_stars(
+        0.0,
+        0.1,
+        [close_faint, wide_good, nearer_good],
+        candidate_quality=quality,
+        target_inst_mag=-8.2,
+        min_snr=10.0,
+        max_delta_inst_mag=1.5,
+        count=5,
+    )
+
+    assert [star.auid for star in picks] == ["GOOD", "GOOD2"]
+
+
+def test_auto_comparisons_reject_remote_stars_even_when_bright() -> None:
+    close = _comp("CLOSE", 0.08, 0.1, 10.6)
+    remote = _comp("REMOTE", 0.80, 0.1, 10.4)
+    quality = {
+        "CLOSE": ComparisonQuality(snr=18.0, inst_mag=-9.0),
+        "REMOTE": ComparisonQuality(snr=30.0, inst_mag=-9.1),
+    }
+    picks = auto_comparison_stars(
+        0.0,
+        0.1,
+        [close, remote],
+        candidate_quality=quality,
+        target_inst_mag=-8.2,
+        min_snr=10.0,
+        max_delta_inst_mag=1.5,
+        max_separation_arcmin=25.0,
+        count=5,
+    )
+    assert [star.auid for star in picks] == ["CLOSE"]

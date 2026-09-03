@@ -179,8 +179,8 @@ QMainWindow {{
 
 QMainWindow::separator {{
     background-color: {BORDER};
-    width: 1px;
-    height: 1px;
+    width: 2px;
+    height: 2px;
 }}
 
 /* ── Dock widgets ───────────────────────────────────────────────────────── */
@@ -260,7 +260,7 @@ QStatusBar::item {{
 }}
 
 /* ── Buttons — flat Siril-like ─────────────────────────────────────────── */
-QPushButton {{
+QPushButton, QToolButton {{
     background-color: transparent;
     color: {FG};
     border: 1px solid {BORDER};
@@ -271,17 +271,17 @@ QPushButton {{
     font-family: {FONT_UI};
 }}
 
-QPushButton:hover {{
+QPushButton:hover, QToolButton:hover {{
     background-color: {SURFACE};
     color: {FG};
     border-color: {BORDER};
 }}
 
-QPushButton:pressed {{
+QPushButton:pressed, QToolButton:pressed {{
     background-color: {BG2};
 }}
 
-QPushButton:disabled {{
+QPushButton:disabled, QToolButton:disabled {{
     color: {FG_DISABLED};
     background-color: {SURFACE};
     border-color: {BORDER_SOFT};
@@ -292,6 +292,12 @@ QPushButton[class="primary"] {{
     color: {FG};
     border-color: {ACCENT_DEEP};
     font-weight: 600;
+}}
+
+QToolButton:checked {{
+    background-color: {SURFACE};
+    color: {ACCENT};
+    border-color: {ACCENT};
 }}
 
 QPushButton[class="primary"]:hover {{
@@ -590,6 +596,34 @@ QTabBar::tab:hover {{
     color: {FG};
 }}
 
+/* ── Settings accordion ────────────────────────────────────────────────── */
+QToolBox#settings_sections {{
+    background-color: {BG};
+    border: 1px solid {BORDER};
+}}
+
+QToolBox#settings_sections::tab {{
+    background-color: {BG2};
+    color: {FG_MUTED};
+    border: none;
+    border-top: 2px solid {BORDER};
+    min-height: 20px;
+    padding: 5px 10px;
+    font-family: {FONT_UI};
+    font-size: 13px;
+    font-weight: 600;
+}}
+
+QToolBox#settings_sections::tab:selected {{
+    background-color: {SURFACE};
+    color: {FG};
+    border-top-color: {ACCENT};
+}}
+
+QToolBox#settings_sections::tab:hover {{
+    color: {ACCENT};
+}}
+
 /* ── Progress bar ───────────────────────────────────────────────────────── */
 QProgressBar {{
     background-color: {BG2};
@@ -656,7 +690,8 @@ QTreeView, QTableView, QHeaderView::section {{
     selection-background-color: {SURFACE};
     selection-color: {ACCENT};
     alternate-background-color: {BG};
-    font-size: 11px;
+    font-family: {FONT_MONO};
+    font-size: 12px;
 }}
 
 QHeaderView::section {{
@@ -666,5 +701,6 @@ QHeaderView::section {{
     border: none;
     border-right: 1px solid {BORDER};
     font-weight: bold;
+    font-family: {FONT_UI};
 }}
 """

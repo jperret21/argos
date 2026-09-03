@@ -30,7 +30,7 @@ from argos.core.imaging.sky_geometry import altitude_at
 from argos.core.photometry.airmass import airmass_from_altitude, bjd_tdb, julian_date
 from argos.core.photometry.lightcurve import LcPoint, LightCurve
 from argos.core.photometry.params import PhotometryParams, measure_frame
-from argos.core.photometry.tracking import ApertureTracker, TrackedWCS
+from argos.core.photometry.tracking import ApertureTracker, TrackedWCS, select_tracking_anchors
 from argos.core.photometry.uncertainty import apply_systematic_floor, estimate_systematic_floor
 from argos.core.session.diagnostics import SessionDiagnostics
 from argos.core.session.types import PhotometryPoint
@@ -225,24 +225,25 @@ class PhotometryBatchWorker(QThread):
         if not self._req.params.track_apertures:
             return self._req.wcs
         if self._tracker is None:
-            self._tracker = self._build_tracker(green.shape)
+            self._tracker = self._build_tracker(green)
         self._tracker.update(green)
         if not self._tracker.anchors_used:
             logger.warning("%s: no anchor star found — apertures unguided", fname)
         return TrackedWCS(self._req.wcs, self._tracker)
 
-    def _build_tracker(self, shape: tuple[int, int]) -> ApertureTracker:
+    def _build_tracker(self, green) -> ApertureTracker:
         """Anchor the tracker on the stable stars of the set (comps + checks).
 
         A target's *position* is as stable, but a variable near minimum makes a
         poor centroid — only fall back to targets when there is nothing else.
         """
         tset = self._req.target_set
-        anchors = tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK)
+        candidates = tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK)
+        anchors = select_tracking_anchors(green, self._req.wcs, candidates, self._req.params)
         if not anchors:
             anchors = list(tset.stars)
         xy = [self._req.wcs.world_to_pixel_deg(s.ra_deg, s.dec_deg) for s in anchors]
-        h, w = shape
+        h, w = green.shape
         search_r = max(8.0, 2.0 * self._req.params.aperture_px(None))
         return ApertureTracker(
             [(float(x), float(y)) for x, y in xy],
