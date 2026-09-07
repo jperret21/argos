@@ -227,6 +227,10 @@ def test_lightcurve_separates_comparisons_and_keeps_error_visibility(qapp) -> No
         panel._errors.setChecked(False)
         panel.add_point("C1", 2451545.2, 11.1, 0.03, role="comparison")
         assert panel._series["C1"]["errbar"].isVisible() is False
+        panel._errors.setChecked(True)
+        panel._series["C1"]["curve"].setVisible(False)
+        assert panel._series["C1"]["errbar"].isVisible() is False
+        assert panel._series["C1"]["sat"].isVisible() is False
     finally:
         win.close()
         win.deleteLater()
