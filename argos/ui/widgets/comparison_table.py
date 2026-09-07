@@ -27,6 +27,28 @@ from argos.core.imaging.platesolve import format_dec_dms, format_ra_hms
 from argos.ui import theme
 
 _ENSEMBLE_HEADERS = ("Name", "AUID", "RA (J2000)", "Dec (J2000)", "Catalogue mags", "Source")
+_QUALITY_HEADERS = ("Samples", "Scatter (mag)", "Formal error (mag)", "Live status")
+
+
+def _quality_values(entry: dict | None) -> tuple[str, str, str, str]:
+    """Format one persisted leave-one-out result for an observer-facing table."""
+    if not entry:
+        return ("—", "—", "—", "Waiting for data")
+    status = str(entry.get("status") or "insufficient_data")
+    labels = {
+        "stable": "Stable",
+        "unstable": "Unstable",
+        "noisy": "Noisy",
+        "insufficient_data": "Waiting for 10 points",
+    }
+    scatter = entry.get("scatter_mag")
+    formal = entry.get("median_formal_error_mag")
+    return (
+        str(entry.get("n_valid") if entry.get("n_valid") is not None else "—"),
+        "—" if scatter is None else f"{float(scatter):.4f}",
+        "—" if formal is None else f"{float(formal):.4f}",
+        labels.get(status, status.replace("_", " ").capitalize()),
+    )
 
 
 class ComparisonEnsembleTable(QWidget):
@@ -68,15 +90,15 @@ class ComparisonEnsembleTable(QWidget):
         proposal.addStretch(1)
         layout.addLayout(proposal)
 
-        self._table = QTableWidget(0, len(_ENSEMBLE_HEADERS))
-        self._table.setHorizontalHeaderLabels(list(_ENSEMBLE_HEADERS))
+        self._table = QTableWidget(0, len(_ENSEMBLE_HEADERS) + len(_QUALITY_HEADERS))
+        self._table.setHorizontalHeaderLabels(list(_ENSEMBLE_HEADERS + _QUALITY_HEADERS))
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
         self._table.verticalHeader().setVisible(False)
         self._table.horizontalHeader().setSectionResizeMode(
-            len(_ENSEMBLE_HEADERS) - 1, QHeaderView.ResizeMode.Stretch
+            len(_ENSEMBLE_HEADERS) + len(_QUALITY_HEADERS) - 1, QHeaderView.ResizeMode.Stretch
         )
         layout.addWidget(self._table, 1)
 
@@ -105,6 +127,8 @@ class ComparisonEnsembleTable(QWidget):
         row.addWidget(copy_btn)
         layout.addLayout(row)
         self._keys: list[str] = []
+        self._stars: list = []
+        self._quality_by_key: dict[str, dict] = {}
 
     def set_auto_count(self, count: int) -> None:
         """Synchronise the user preference without emitting a new request."""
@@ -115,6 +139,7 @@ class ComparisonEnsembleTable(QWidget):
     def set_targets(self, stars) -> None:
         """Populate from a full target set — filters to the comparison stars."""
         comps = [s for s in stars if s.role == "comparison"]
+        self._stars = list(stars)
         self._keys = [s.key() for s in comps]
         blocker = QSignalBlocker(self._table)
         self._table.clearSelection()
@@ -129,6 +154,8 @@ class ComparisonEnsembleTable(QWidget):
                 mags,
                 s.source or "manual",
             )
+            quality = self._quality_by_key.get(s.auid or s.display_name)
+            values += _quality_values(quality)
             for c, v in enumerate(values):
                 self._table.setItem(r, c, QTableWidgetItem(v))
         del blocker
@@ -145,10 +172,20 @@ class ComparisonEnsembleTable(QWidget):
         else:
             self._count.setText(f"{len(calibrated)} calibrated comparison star(s)")
 
+    def set_quality_report(self, report: dict | None) -> None:
+        """Show the latest non-destructive leave-one-out assessment."""
+        entries = (report or {}).get("comparison_stars") or []
+        self._quality_by_key = {
+            str(entry.get("auid") or entry.get("name")): entry
+            for entry in entries
+            if isinstance(entry, dict) and (entry.get("auid") or entry.get("name"))
+        }
+        self.set_targets(self._stars)
+
     def _on_remove(self) -> None:
-        r = self._table.currentRow()
-        if 0 <= r < len(self._keys):
-            self.remove_requested.emit(self._keys[r])
+        row = self._table.currentRow()
+        if 0 <= row < len(self._keys):
+            self.remove_requested.emit(self._keys[row])
 
     def _on_selection_changed(self) -> None:
         row = self._table.currentRow()
@@ -156,12 +193,70 @@ class ComparisonEnsembleTable(QWidget):
             self.star_selected.emit(self._keys[row])
 
     def _on_copy(self) -> None:
-        lines = ["\t".join(_ENSEMBLE_HEADERS)]
-        for r in range(self._table.rowCount()):
+        headers = _ENSEMBLE_HEADERS + _QUALITY_HEADERS
+        lines = ["\t".join(headers)]
+        for row in range(self._table.rowCount()):
             lines.append(
                 "\t".join(
-                    (self._table.item(r, c).text() if self._table.item(r, c) else "")
-                    for c in range(len(_ENSEMBLE_HEADERS))
+                    (self._table.item(row, column).text() if self._table.item(row, column) else "")
+                    for column in range(len(headers))
                 )
             )
         QApplication.clipboard().setText("\n".join(lines))
+
+
+class ComparisonQualityTable(QWidget):
+    """Read-only per-comparison quality report for Review.
+
+    It intentionally reads the durable report created during acquisition rather
+    than recomputing a result from a potentially incomplete CSV import.
+    """
+
+    star_selected = pyqtSignal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._hint = QLabel("No comparison-quality report in this session.")
+        self._hint.setWordWrap(True)
+        self._hint.setStyleSheet(f"color:{theme.FG_MUTED}; font-size:11px; padding:2px 0;")
+        layout.addWidget(self._hint)
+        self._table = QTableWidget(0, 5)
+        self._table.setHorizontalHeaderLabels(["Name", *_QUALITY_HEADERS])
+        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._table.verticalHeader().setVisible(False)
+        self._table.horizontalHeader().setStretchLastSection(True)
+        self._table.itemSelectionChanged.connect(self._on_selection_changed)
+        layout.addWidget(self._table, 1)
+        self._keys: list[str] = []
+
+    def set_quality_report(self, report: dict | None) -> None:
+        entries = (report or {}).get("comparison_stars") or []
+        criteria = (report or {}).get("criteria") or {}
+        if not entries:
+            self._hint.setText("No comparison-quality report in this session.")
+        else:
+            min_points = criteria.get("min_points", 10)
+            self._hint.setText(
+                f"Leave-one-out live-preview diagnostic · minimum {min_points} valid points. "
+                "Select a row to show its curve."
+            )
+        blocker = QSignalBlocker(self._table)
+        self._table.clearSelection()
+        self._table.setRowCount(len(entries))
+        self._keys = []
+        for row, entry in enumerate(entries):
+            key = str(entry.get("auid") or entry.get("name") or "")
+            self._keys.append(key)
+            values = (str(entry.get("name") or key), *_quality_values(entry))
+            for column, value in enumerate(values):
+                self._table.setItem(row, column, QTableWidgetItem(value))
+        del blocker
+
+    def _on_selection_changed(self) -> None:
+        row = self._table.currentRow()
+        if 0 <= row < len(self._keys) and self._keys[row]:
+            self.star_selected.emit(self._keys[row])

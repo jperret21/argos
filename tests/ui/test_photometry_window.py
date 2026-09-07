@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QApplication
 from argos.core.photometry.lightcurve import LcPoint, LightCurve
 from argos.ui.panels.photometry_window import PhotometryWindow
 from argos.ui.widgets.comparison_curve_panel import ComparisonCurvePanel
+from argos.ui.widgets.comparison_table import ComparisonEnsembleTable
 from argos.ui.widgets.lightcurve_panel import LightCurvePanel
 from argos.ui.widgets.target_curve_panel import TargetCurvePanel
 from argos.ui.widgets.variable_table import VariableTable
@@ -142,6 +143,45 @@ def test_comparison_proposal_count_is_a_user_preference(qapp) -> None:
     finally:
         win.close()
         win.deleteLater()
+        qapp.processEvents()
+
+
+def test_comparison_table_surfaces_live_quality(qapp) -> None:
+    from argos.core.catalog.targets import TargetStar
+
+    table = ComparisonEnsembleTable()
+    try:
+        table.set_targets(
+            [
+                TargetStar(
+                    role="comparison",
+                    ra_deg=300.0,
+                    dec_deg=22.0,
+                    auid="000-AAA-001",
+                    name="106",
+                    mags={"V": 10.6},
+                )
+            ]
+        )
+        table.set_quality_report(
+            {
+                "comparison_stars": [
+                    {
+                        "auid": "000-AAA-001",
+                        "name": "106",
+                        "n_valid": 12,
+                        "scatter_mag": 0.021,
+                        "median_formal_error_mag": 0.012,
+                        "status": "stable",
+                    }
+                ]
+            }
+        )
+        assert table._table.item(0, 6).text() == "12"
+        assert table._table.item(0, 9).text() == "Stable"
+    finally:
+        table.close()
+        table.deleteLater()
         qapp.processEvents()
 
 

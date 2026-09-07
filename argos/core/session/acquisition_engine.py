@@ -100,6 +100,7 @@ class AcquisitionEngine(QObject):
     photometry_measuring = pyqtSignal()  # a measurement pass starts (temp sample)
     photometry_point = pyqtSignal(object)  # PhotometryPoint
     curves_changed = pyqtSignal()  # the curve STORE was replaced/cleared — re-render
+    comparison_quality_updated = pyqtSignal(object)  # leave-one-out report
     apertures_tracked = pyqtSignal()  # live tracker refit — re-project markers
 
     # Logging / status relays.
@@ -157,6 +158,7 @@ class AcquisitionEngine(QObject):
         self._catalog_worker: CatalogWorker | None = None
         self._variables: list = []
         self._comparisons: list = []
+        self._comparison_quality_report: dict | None = None
         self._field_stars: list = []
         self._named_objects: list = []
         self._exoplanet_hosts: list = []
@@ -225,6 +227,11 @@ class AcquisitionEngine(QObject):
         return self._comparisons
 
     @property
+    def comparison_quality_report(self) -> dict | None:
+        """Latest in-memory leave-one-out diagnostic for the live ensemble."""
+        return self._comparison_quality_report
+
+    @property
     def field_stars(self) -> list:
         """Cached named Gaia DR3 sources for the current solved field."""
         return self._field_stars
@@ -257,6 +264,8 @@ class AcquisitionEngine(QObject):
     def clear_lightcurves(self) -> None:
         """Drop the session's curve store (object change). CSVs stay on disk."""
         self._lightcurves.clear()
+        self._comparison_quality_report = None
+        self.comparison_quality_updated.emit({})
         self.curves_changed.emit()
 
     @property
@@ -1378,6 +1387,8 @@ class AcquisitionEngine(QObject):
                 self._cfg("photometry.comparison_validation_max_formal_error_mag", 0.10)
             ),
         )
+        self._comparison_quality_report = report
+        self.comparison_quality_updated.emit(report)
         try:
             save_comparison_quality_report(
                 self._active_run_root / "photometry_quality.json", report

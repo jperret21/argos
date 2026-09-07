@@ -17,7 +17,7 @@ from __future__ import annotations
 import base64
 import logging
 
-from PyQt6.QtCore import QByteArray, Qt
+from PyQt6.QtCore import QByteArray, Qt, pyqtSlot
 from PyQt6.QtGui import QAction, QShowEvent
 from PyQt6.QtWidgets import (
     QFileDialog,
@@ -40,6 +40,7 @@ from argos.core.photometry.lightcurve import read_curves_csv
 from argos.core.session.review import SessionReviewError, load_session, load_session_curves
 from argos.ui import design, theme
 from argos.ui.widgets.comparison_curve_panel import ComparisonCurvePanel
+from argos.ui.widgets.comparison_table import ComparisonQualityTable
 from argos.ui.widgets.dock_host import make_dock, panel_toolbar_qss, style_toggle_action
 from argos.ui.widgets.session_review import SessionQualityPlot
 from argos.ui.widgets.target_curve_panel import TargetCurvePanel
@@ -156,10 +157,12 @@ class AnalyzeScreen(QWidget):
         self._quality = SessionQualityPlot(metric="fwhm")
         self._curves = TargetCurvePanel()
         self._comparison_curves = ComparisonCurvePanel()
+        self._comparison_quality = ComparisonQualityTable()
         self._curves.point_hovered.connect(self._on_curve_point_hovered)
         self._curves.point_clicked.connect(self._on_curve_point_clicked)
         self._comparison_curves.point_hovered.connect(self._on_curve_point_hovered)
         self._comparison_curves.point_clicked.connect(self._on_curve_point_clicked)
+        self._comparison_quality.star_selected.connect(self._on_quality_star_selected)
 
         curves_page = QWidget()
         curves_layout = QVBoxLayout(curves_page)
@@ -203,6 +206,12 @@ class AnalyzeScreen(QWidget):
                 object_name="review.comparison_curves",
                 scroll=False,
             ),
+            "comparison_quality": make_dock(
+                "Comparison quality",
+                self._comparison_quality,
+                object_name="review.comparison_quality",
+                scroll=False,
+            ),
             "frames": make_dock("Frames", self._frames, object_name="review.frames", scroll=False),
             "metadata": make_dock(
                 "Session metadata", self._metadata, object_name="review.metadata", scroll=False
@@ -226,11 +235,13 @@ class AnalyzeScreen(QWidget):
         self._docks["source"].setMinimumHeight(280)
         self._docks["fwhm"].setMinimumHeight(240)
         self._docks["comparison"].setMinimumHeight(220)
+        self._docks["comparison_quality"].setMinimumHeight(220)
 
     _PANEL_ORDER = (
         ("source", "Source curve"),
         ("fwhm", "FWHM"),
         ("comparison", "Comparison stars"),
+        ("comparison_quality", "Comparison quality"),
         ("frames", "Frames"),
         ("metadata", "Metadata"),
         ("export", "AAVSO export"),
@@ -260,7 +271,7 @@ class AnalyzeScreen(QWidget):
                 f"Show or hide {label}. Drag its title bar to arrange it; double-click to detach it."
             )
             self._panel_actions[key] = action
-        for key in ("source", "fwhm", "comparison", "frames"):
+        for key in ("source", "fwhm", "comparison", "comparison_quality", "frames"):
             bar.addAction(self._panel_actions[key])
         more = QToolButton()
         more.setText("Panels ▾")
@@ -378,10 +389,14 @@ class AnalyzeScreen(QWidget):
         workspace.addDockWidget(bottom, self._docks["frames"])
         workspace.addDockWidget(right, self._docks["metadata"])
         workspace.addDockWidget(right, self._docks["export"])
+        workspace.addDockWidget(right, self._docks["comparison_quality"])
         workspace.tabifyDockWidget(self._docks["metadata"], self._docks["export"])
+        workspace.tabifyDockWidget(self._docks["export"], self._docks["comparison_quality"])
 
         for key in ("frames", "metadata", "export"):
             self._docks[key].setVisible(False)
+        self._docks["comparison_quality"].setVisible(True)
+        self._docks["comparison_quality"].raise_()
         self._docks["fwhm"].setVisible(show_fwhm)
         for index, dock in enumerate(self._source_docks):
             dock.setVisible(dock in source_plots or (show_placeholder and index == 0))
@@ -539,6 +554,14 @@ class AnalyzeScreen(QWidget):
                 dock.setVisible(False)
         self._update_workspace_scroll_extent()
 
+    @pyqtSlot(str)
+    def _on_quality_star_selected(self, key: str) -> None:
+        """Make the Review quality table a direct route to its comparison curve."""
+        if self._comparison_panels:
+            self._comparison_panels[0].set_selected_key(key)
+            self._docks["comparison"].setVisible(True)
+            self._docks["comparison"].raise_()
+
     def _update_workspace_scroll_extent(self, target_count: int | None = None) -> None:
         """Let the outer Review scroll area grow instead of flattening plots.
 
@@ -600,6 +623,7 @@ class AnalyzeScreen(QWidget):
         self._quality.set_session(review)
         curves = load_session_curves(review)
         self._review_curves = curves
+        self._comparison_quality.set_quality_report(review.comparison_quality)
         self._sync_target_plots()
         self._sync_comparison_plots()
         # A newly opened session defines the initial scientific layout: every
