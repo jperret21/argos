@@ -13,11 +13,14 @@ cross-check. Their sensor reference curves are available as fallbacks, but
 their CFA layout and Seestar-specific gain scaling still need hardware
 verification before precision photometry.
 
-The **S50 Pro** is deliberately absent. Its optics are published (50 mm,
-260 mm, f/5.2) but its sensor is described only as "1/1.2-inch 4K", and
-without a confirmed pixel pitch there is no plate scale — the one number the
-whole astrometry path depends on. A profile that cannot be filled honestly is
-worse than a missing one, so it lands when the specification does.
+The **S50 Pro** is deliberately absent from 0.4.1 even though its published
+telephoto specification is now sufficient to derive a physical plate scale:
+50 mm, 260 mm, 2.9 µm pixels and 3840 × 2160 (about 2.30 arcsec/pixel). What
+remains unverified is the raw Seestar CFA layout and the camera's gain,
+linearity and saturation behaviour. Exposing it as an ordinary selectable
+profile before that work would encourage scientifically unsafe quick-look
+photometry; it should be added with explicit unvalidated caveats once a raw
+frame validation is available.
 """
 
 from __future__ import annotations

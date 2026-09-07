@@ -8,11 +8,12 @@ expect rough edges and frequent changes.
 ## Getting Started
 
 ```bash
-# Prerequisites: macOS, Python 3.11+, Homebrew
+# Prerequisites: Python 3.11 and uv. macOS is the reference platform;
+# Debian-family Linux is supported as a technical preview.
 
-brew install uv
-git clone https://github.com/jperret21/seerstar.git
-cd seerstar
+# macOS example: brew install uv
+git clone https://github.com/jperret21/argos.git
+cd argos
 uv sync --extra dev
 ```
 
@@ -23,8 +24,8 @@ uv sync --extra dev
 ### Branches
 
 ```
-main        -- stable, tagged
-develop     -- integration branch (base your work here)
+main        -- stable, tagged release line
+release/*   -- release preparation and field validation
 feat/<name> -- new features
 fix/<name>  -- bug fixes
 docs/<name> -- documentation
@@ -51,14 +52,18 @@ docs(readme): simplify project status section
 ### Run the app
 
 ```bash
-./run.sh
+uv run python main.py
 ```
+
+`./run.sh` is a macOS convenience launcher. Use the explicit `uv run` command
+in documentation, CI reproductions and cross-platform instructions.
 
 ### Run tests
 
 ```bash
 uv run --extra dev pytest -q          # whole suite
 uv run --extra dev pytest tests/ -v   # verbose
+uv run --extra docs sphinx-build -W -b html docsrc /tmp/argos-docs
 ```
 
 > **Always run tests through `uv`.** This project is `uv`-managed and the
@@ -76,9 +81,11 @@ uv run --extra dev pytest tests/ -v   # verbose
 ### Format and lint
 
 ```bash
-uv run black argos/ tests/
-uv run ruff check argos/ tests/
+uv run --extra dev black --check argos/ tests/ main.py
+uv run --extra dev ruff check argos/ tests/ main.py
 ```
+
+Use the same paths as CI. To apply Black formatting locally, omit `--check`.
 
 ---
 

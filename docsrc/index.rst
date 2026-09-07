@@ -1,15 +1,16 @@
-Welcome to Argos's documentation
-========================================
+ARGOS technical documentation
+=============================
 
-Argos is a macOS desktop application for **ensemble differential photometry**
-with ZWO Seestar telescopes — from the raw mosaic straight off the sensor to a
-reviewable differential light curve in one observing session. The S30 Pro is
-the reference profile; S30 and S50 support remains explicitly unvalidated for
+ARGOS is desktop observing software for time-series photometry with smart
+telescopes. It records raw FITS acquisition, solved-field context, selected
+photometry roles and a reviewable session record. The Seestar S30 Pro is the
+reference profile; S30 and S50 profiles remain explicitly unvalidated for
 precision photometry.
 
-Argos 0.4.1 is a field-validation alpha. It is intended for technically
-confident observers who retain their raw FITS and independently review the
-results; it is not an unattended-observatory or general-public release.
+ARGOS 0.4.1 is a field-validation release. It is intended for technically
+confident observers who retain raw FITS and independently reduce the data; it
+is not unattended-observatory software and does not present quick-look curves
+as final scientific results.
 
 What it does
 ------------
@@ -19,13 +20,12 @@ native software saves FITS with minimal metadata and offers no scientific
 workflow beyond "save an image". Argos fills the gap:
 
 * **ASCOM Alpaca driver layer** — talks to the Seestar over Wi-Fi and to
-  any ASCOM-compatible focuser / filter wheel / camera through the Alpaca
-  protocol. The Alpaca layer is generic: the same code works with the
-  Seestar, a simulator, or any Alpaca device.
-* **Plate solving via ASTAP** — can recover a WCS from a frame (solved on
-  the green half-res plane), so star positions are known in celestial
-  coordinates. Used to drive an RA/Dec grid overlay and to project variable-
-  star and comparison-star markers from the AAVSO VSP catalogue.
+  compatible focuser, filter-wheel and camera services through the Alpaca
+  protocol. The same layer works with the Seestar and the local simulator.
+* **Plate solving and field identification** — ASTAP recovers a WCS so pixel
+  positions can be compared with local and optional catalogue data. The image
+  can display a coordinate grid, general stars, variables, deep-sky entries,
+  exoplanet hosts, VSP references and the selected ensemble.
 * **Live star detection and focus metrics** — HFD, FWHM, eccentricity, and
   star count computed per frame on the green plane, written to FITS headers
   and to a JSON session log for post-processing.
@@ -34,10 +34,12 @@ workflow beyond "save an image". Argos fills the gap:
 * **Ensemble differential photometry** — zero-point from a comparison-star
   ensemble (Honeycutt 1992), field-error estimate that includes everything
   the CCD equation does not (flat residuals, cirrus, seeing variations).
-* **Sequence engine** — multi-step plans (Light/Dark/Flat/Bias) with repeats,
-  autofocus cadence, and Siril-compatible folder layout.
-* **AAVSO workflow** — target lookup from VSX, comparison stars from VSP,
-  differential light-curve export and cached catalogue queries for field use.
+* **Sequence and Review workspaces** — multi-step Light/Dark/Flat/Bias plans,
+  a durable session record, and an offline review surface for quality trends,
+  preview curves, metadata and source frames.
+* **Catalogue-aware workflow** — target lookup, VSP candidate retrieval and
+  cached catalogue queries for field use, with the selected roles retained as
+  session data.
 
 The two-pipeline rule
 ---------------------
@@ -52,7 +54,8 @@ to your heart's content without ever touching the science frame.
 What this documentation covers
 ------------------------------
 
-* :ref:`sec-getting-started` — build instructions, simulator test drive.
+* :ref:`sec-getting-started` — field guide, source setup and simulator test
+  drive.
 * :ref:`sec-architecture` — how the layers fit together: Alpaca → workers →
   UI → photometry pipeline.
 * :ref:`sec-design` — detailed design documents for the photometry plan, the
@@ -67,6 +70,7 @@ What this documentation covers
 
    CONTRIBUTING.md
    guide_terrain_0_4_1.md
+   field_identification.md
    exoplanet_transits.md
    simulator_testing.md
    field_connectivity.md
@@ -100,7 +104,6 @@ What this documentation covers
 
    capture_panel.md
    photometry_plan.md
-   field_identification.md
    acquisition_sequence.md
 
 .. toctree::
@@ -115,6 +118,7 @@ What this documentation covers
    ui_design_pass.md
    ui_interaction_architecture.md
    ui_redesign_todo.md
+   website_documentation_plan.md
 
 .. toctree::
    :maxdepth: 1

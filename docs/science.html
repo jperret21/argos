@@ -1,457 +1,121 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Science — Argos</title>
-    <meta name="description" content="How Argos measures a star: the green-plane aperture, the CCD-equation error budget, the ensemble zero point, the run-level systematic floor — and what those numbers are and are not worth." />
-    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
-    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
-    <link rel="stylesheet" href="css/style.css" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="How ARGOS 0.4.1 measures a frame: green-plane aperture photometry, an AAVSO VSP ensemble zero point, the files it writes and the limits of 0.4.1.">
+  <title>Method &amp; limits — ARGOS 0.4.1</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="stylesheet" href="css/argos.css">
+  <link rel="stylesheet" href="css/doc.css">
 </head>
-<body>
-
-    <nav class="navbar navbar-solid" id="navbar">
-        <div class="container container-wide nav-container">
-            <div class="nav-left">
-                <a href="index.html" class="nav-logo">
-                    <svg width="16" height="16" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-                        <circle cx="50" cy="50" r="42"/>
-                        <circle cx="50" cy="50" r="5" fill="currentColor" stroke="none"/>
-                        <g transform="translate(50 50) scale(0.95) translate(-50 -50)">
-                            <path d="M50 6 Q70 24 82 24 Q88 24 86 32 Q82 42 74 44"/>
-                            <path d="M50 94 Q30 76 18 76 Q12 76 14 68 Q18 58 26 56"/>
-                            <path d="M6 50 Q24 36 22 20 Q21 14 30 16 Q40 18 44 28"/>
-                            <path d="M94 50 Q76 64 78 80 Q79 86 70 84 Q60 82 56 72"/>
-                        </g>
-                    </svg>
-                    Argos
-                </a>
-                <span class="nav-sep" aria-hidden="true"></span>
-                <ul class="nav-pages">
-                    <li><a href="science.html" class="active" aria-current="page">Science</a></li>
-                    <li><a href="hardware.html">Hardware</a></li>
-                </ul>
-            </div>
-            <ul class="nav-links">
-                <li><a href="#chain">Method</a></li>
-                <li><a href="#numbers">Numbers</a></li>
-                <li><a href="#validation">Validation</a></li>
-                <li><a href="#results">Results</a></li>
-                <li><a href="#limits">Limits</a></li>
-                <li><a href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub</a></li>
-            </ul>
-        </div>
+<body class="doc-page">
+  <header class="site-header">
+    <a class="site-brand" href="index.html"><img src="favicon.svg" alt="">ARGOS</a>
+    <nav aria-label="Main navigation">
+      <a href="getting-started.html">Start here</a>
+      <a href="science.html" aria-current="page">Method</a>
+      <a href="hardware.html">Instruments</a>
+      <a href="releases.html">Releases</a>
+      <a href="https://github.com/jperret21/argos/tree/main/docs" target="_blank" rel="noopener">Technical docs</a>
     </nav>
+    <a class="site-external" href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub <span>↗</span></a>
+  </header>
 
-    <header class="page-hero">
-        <div class="container container-wide">
-            <p class="page-eyebrow">Science</p>
-            <h1>What the number means</h1>
-            <p class="page-lead">
-                Any program can print a magnitude. The question that matters is what stands
-                behind it &mdash; which pixels were summed, which noise sources were counted,
-                which stars set the zero point, and <strong>how much of the scatter the error
-                bar does not explain</strong>. This page is the answer, stated precisely enough
-                to be argued with.
-            </p>
-        </div>
-    </header>
-
-    <section class="section" id="chain">
-        <div class="container container-wide">
-            <div class="section-header align-left">
-                <div class="h-rule"><h2>The measurement chain</h2></div>
-                <p>From photons on the sensor to one point on a light curve. Every stage runs on your laptop, frame by frame, while the subs are still landing.</p>
-            </div>
-
-            <div class="def-list">
-                <dl class="item">
-                    <dt>Raw frame<small>linear &middot; 16-bit &middot; GRBG</small></dt>
-                    <dd>
-                        Nothing is stretched, debayered or rescaled on the way to disk. The saved
-                        FITS <em>is</em> the sensor. What you see on screen comes from a display
-                        pipeline that never touches the data pipeline &mdash; the single rule the
-                        rest of this page depends on.
-                    </dd>
-                </dl>
-                <dl class="item">
-                    <dt>Green plane<small>(G1+G2)/2 &middot; half res</small></dt>
-                    <dd>
-                        Every measurement happens on one grid: the green half-resolution plane,
-                        one sample per 2&times;2 Bayer tile, averaging both green photosites for
-                        signal-to-noise. Star detection, plate solving, the WCS and catalogue
-                        projection all speak that same grid, so a marker cannot drift from the
-                        pixel it describes.
-                    </dd>
-                </dl>
-                <dl class="item">
-                    <dt>Aperture<small>circle + sky annulus</small></dt>
-                    <dd>
-                        A circular aperture, a median sky annulus, a background-subtracted sum.
-                        Saturation is tested against the profile&rsquo;s <em>linearity</em>
-                        threshold rather than full well, and a peak with no PSF support around it
-                        is flagged <span class="inline-code">suspect</span> instead of being
-                        quietly measured &mdash; that is a hot pixel or a cosmic ray, not a star.
-                    </dd>
-                </dl>
-                <dl class="item">
-                    <dt>Photon budget<small>CCD equation, in e&minus;</small></dt>
-                    <dd>
-                        Source shot noise, sky, and read noise, converted to electrons through the
-                        sensor&rsquo;s e&minus;/ADU. This is the <em>formal</em> error: the part of
-                        the scatter that is fully explained by counting statistics.
-                    </dd>
-                </dl>
-                <dl class="item">
-                    <dt>Zero point<small>comparison ensemble</small></dt>
-                    <dd>
-                        The mean of (catalogue &minus; instrumental) over the comparison stars,
-                        with a median-and-MAD clip that removes a variable or blended comparison
-                        before it contaminates the target.
-                    </dd>
-                </dl>
-                <dl class="item">
-                    <dt>Systematic floor<small>run level</small></dt>
-                    <dd>
-                        Scintillation, flat-field residuals, thin cirrus and tracking drift are
-                        shared across a run and appear nowhere in the photon budget. Argos measures
-                        them from the light curve itself and adds them in quadrature, so the plotted
-                        error bar reflects the night rather than the arithmetic.
-                    </dd>
-                </dl>
-                <dl class="item">
-                    <dt>Time &amp; airmass<small>DATE-AVG &middot; Pickering 2002</small></dt>
-                    <dd>
-                        Timestamps are exposure <em>midpoints</em>, not shutter-open. Airmass comes
-                        from one formula used project-wide, so a frame&rsquo;s FITS header and its
-                        light-curve point can never disagree. BJD&#95;TDB is a post-processing
-                        step, and Argos says so rather than approximating it.
-                    </dd>
-                </dl>
-            </div>
-        </div>
+  <main>
+    <section class="doc-hero">
+      <div>
+        <p class="mono-label">Method / ARGOS 0.4.1</p>
+        <h1>Method &amp; limits.</h1>
+        <p class="lede">The measurement ARGOS runs on every frame, the files it writes, and what 0.4.1 has not validated.</p>
+      </div>
+      <aside class="doc-note">
+        <b>Read this first</b>
+        <p>The live curve is a quick-look: raw subs, no dark, flat or bias, no registration, JD_UTC midpoints. It exists to catch clouds, saturation, drift and a bad comparison star while the night can still be saved.</p>
+        <p>The publishable measurement is produced afterwards from the raw FITS, in Siril and <a href="https://github.com/jperret21/star_var_script" target="_blank" rel="noopener">star_var_script</a>. Keep the session folder.</p>
+      </aside>
     </section>
 
-    <section class="section section-dark" id="numbers">
-        <div class="container container-wide">
-            <div class="section-header align-left">
-                <div class="h-rule"><h2>Four equations</h2></div>
-                <p>The whole photometric contract, written out. These are the expressions the code evaluates &mdash; not a simplified account of them.</p>
-            </div>
-
-            <div class="eq-grid">
-                <div class="eq">
-                    <div class="eq-title">Instrumental magnitude and its formal error</div>
-                    <div class="eq-math">m_inst = &minus;2.5 &middot; log&#8321;&#8320;(F)<br />&sigma;_m&nbsp;&nbsp;&nbsp;&nbsp;= 1.0857 &middot; &sigma;_F / F</div>
-                    <p class="eq-note">
-                        <b>F</b> is the background-subtracted aperture sum. The magnitude is
-                        uncalibrated and carries no zero point &mdash; it is only ever used
-                        differentially.
-                    </p>
-                </div>
-
-                <div class="eq">
-                    <div class="eq-title">The CCD equation &mdash; every noise source, in electrons</div>
-                    <div class="eq-math">&sigma;_F = &radic;( F + n_pix &middot; ( S + R&sup2; ) )</div>
-                    <p class="eq-note">
-                        <b>F</b> source electrons, <b>n_pix</b> aperture pixels, <b>S</b> sky
-                        electrons per pixel, <b>R</b> read noise in electrons. Signal-to-noise is
-                        the ratio of the two. Nothing here is a fitted fudge factor; every term is
-                        a counted quantity.
-                    </p>
-                </div>
-
-                <div class="eq">
-                    <div class="eq-title">Ensemble zero point, with outlier rejection</div>
-                    <div class="eq-math">ZP = mean( m_cat &minus; m_inst )&nbsp;&nbsp;over kept comparisons<br />reject &nbsp;|&Delta; &minus; median| &gt; max( 2.5 &middot; 1.4826 &middot; MAD, 10 mmag )</div>
-                    <p class="eq-note">
-                        Median and MAD rather than mean and RMS, deliberately: in a small ensemble
-                        <b>a single bad comparison inflates the RMS enough to hide itself</b>. The
-                        10&nbsp;mmag floor stops photon noise alone from rejecting a perfectly good
-                        star when three or four comparisons are nearly identical.
-                    </p>
-                </div>
-
-                <div class="eq">
-                    <div class="eq-title">The systematic floor &mdash; what the photons do not explain</div>
-                    <div class="eq-math">Var( m&#7522;&#8331;&#8321; &minus; 2m&#7522; + m&#7522;&#8330;&#8321; ) = 6&sigma;&sup2;<br />&sigma;_sys = &radic;( &sigma;_real&sup2; &minus; median(&sigma;_formal)&sup2; )<br />&sigma;_final = hypot( &sigma;_formal, &sigma;_sys )</div>
-                    <p class="eq-note">
-                        Second differences cancel any locally linear trend, so a genuinely varying
-                        star does not inflate its own noise estimate. What remains after the formal
-                        error is subtracted in quadrature <b>is</b> the systematic floor. The same
-                        contract is used by <span class="inline-code">star_var_script</span>, so a
-                        live Argos error bar and a reduced one mean the same thing.
-                    </p>
-                </div>
-            </div>
-
-            <div class="callout" style="margin-top: 28px;">
-                <div class="callout-title">And one path with no catalogue at all</div>
-                <p>
-                    For a transit, absolute calibration is beside the point. The relative-flux mode
-                    plots <span class="inline-code">F_target / &sum; F_comparisons</span>, which
-                    needs no catalogue magnitudes and no zero point &mdash; only a stable ensemble
-                    and a stable cadence. It is normalised to the displayed series median, and it
-                    is deliberately <strong>not</strong> an out-of-transit normalisation or a
-                    detrending result.
-                </p>
-            </div>
-        </div>
+    <section class="doc-facts">
+      <div><span>Measurement</span><strong>Green plane, 3.74″/px</strong><p>Aperture photometry on the raw GRBG green samples — one per 2×2 tile, 7.48″ wide on an S30 Pro.</p></div>
+      <div><span>Zero point</span><strong>AAVSO VSP ensemble</strong><p>Band TG, two comparisons minimum, 2.5σ MAD clip with a 10 mmag floor.</p></div>
+      <div><span>Output</span><strong>photometry.csv</strong><p>Thirteen columns per point, including bjd_tdb, airmass, fwhm and comps_used.</p></div>
     </section>
 
-    <section class="section" id="validation">
-        <div class="container container-wide">
-            <div class="section-header align-left">
-                <div class="h-rule"><h2>How we check it is true</h2></div>
-                <p>A pipeline that only agrees with itself has proved nothing. The test is an external one: measure a star whose behaviour was published by someone else, and see whether the points fall on their curve.</p>
-            </div>
-
-            <p class="prose">
-                <strong>RR&nbsp;Lyrae is the reference target</strong>, and it is a demanding one.
-                It swings roughly a magnitude in under half a day, with a steep rise and a slow
-                decline &mdash; a shape that punishes timing errors, zero-point drift and airmass
-                mistakes in visibly different ways. Its period and template light curve are
-                published, so the comparison is against the literature rather than against a
-                previous Argos run.
-            </p>
-            <p class="prose">
-                The protocol is deliberately reproducible by anyone with a Seestar: acquire an
-                uninterrupted series, select the variable and its comparison stars from the AAVSO
-                chart, reduce the raw subs in Siril with
-                <span class="inline-code">star_var_script</span>, phase-fold at the published
-                period, and overlay the <strong>Sesar&nbsp;2010</strong> r-band template. No free
-                parameters are fitted to make it match: the period and the template come from the
-                paper, and the observed segment either lands on the model or it does not.
-            </p>
-
-            <div class="callout warn" style="margin-top: 26px;">
-                <div class="callout-title">What counts as a pass</div>
-                <ul>
-                    <li>The phase-folded points follow the template through the rising branch &mdash; the part of the curve where an error in time or zero point shows up first.</li>
-                    <li>The measured per-point scatter is consistent with the quoted error bars, once the systematic floor is included.</li>
-                    <li>The same night, reduced independently in Siril, agrees with the live Argos quick-look within that scatter.</li>
-                </ul>
-            </div>
-        </div>
+    <section class="doc-section">
+      <div class="doc-section-head">
+        <p class="mono-label">01</p>
+        <h2>Per-frame pipeline</h2>
+      </div>
+      <div class="doc-body">
+        <ol>
+          <li><strong>Write the sub.</strong> Linear 16-bit CFA FITS, GRBG, straight from the driver — never the displayed image. Headers carry <code>DATE-OBS</code>, <code>DATE-AVG</code> (exposure midpoint), <code>MJD-OBS</code>, <code>MJD-AVG</code>, <code>EXPTIME</code>, <code>EGAIN</code>, <code>OFFSET</code>, <code>CCD-TEMP</code>, <code>AIRMASS</code>, <code>MOONSEP</code>, <code>OBJCTRA/DEC</code>, <code>SITELAT/LONG</code>, <code>FOCALLEN</code>, <code>APTDIA</code>, <code>FOCRATIO</code>, <code>BAYERPAT</code> and <code>IMAGETYP</code>.</li>
+          <li><strong>Solve.</strong> ASTAP, external, on the extracted green plane. Automatic solving re-runs at most every 20 s, or after a slew. A failed solve keeps the last good WCS rather than blanking the overlays.</li>
+          <li><strong>Place the apertures.</strong> Target, comparison and check positions project through the WCS, then re-centroid. A rigid rotation-and-translation fit against the reference geometry absorbs alt-az field rotation and mount drift, re-fit every frame so centroid noise does not accumulate.</li>
+          <li><strong>Measure.</strong> Circular aperture of 2.5 × FWHM; median sky annulus from 8 to 12 green pixels. Uncertainty from the CCD equation with 1.5 e⁻/px read noise and the driver's <code>EGAIN</code>. Saturation flags at the profile's linearity limit — 50 000 ADU, not full well.</li>
+          <li><strong>Reduce differentially.</strong> The zero point is the mean of (catalogue − instrumental) over the VSP comparisons in band TG. Comparisons further than <code>max(2.5 × 1.4826 × MAD, 10 mmag)</code> from the median are dropped, at most twice; with fewer than two survivors the point is flagged uncalibrated. An unnormalised target/ensemble flux ratio is recorded alongside the magnitude, so a transit needs no catalogue magnitudes at all.</li>
+        </ol>
+        <div class="doc-aside"><span class="mn-label">Why the green plane</span>Measurements use the raw GRBG green samples, averaged (G1+G2)/2 per 2×2 tile. They are recorded photosites; the interpolated RGB view is for orientation only. ASTAP solves this plane, and every overlay coordinate is expressed in it.</div>
+      </div>
     </section>
 
-    <section class="section section-dark" id="results">
-        <div class="container container-wide">
-            <div class="section-header align-left">
-                <div class="h-rule"><h2>Results</h2></div>
-                <p>What has actually been measured. The 0.4.1 field campaign is under way; the slots below are the observations it is designed to produce, and they will be filled with real data or removed &mdash; not softened.</p>
-            </div>
-
-            <figure class="chart-figure">
-                <div class="chart-card">
-                    <picture>
-                        <source srcset="img/rrlyrae-sesar-fit-dark.webp" type="image/webp" />
-                        <img src="img/rrlyrae-sesar-fit-dark.png" width="1680" height="1000" loading="lazy" decoding="async"
-                             alt="RR Lyrae phase-folded light curve from one Argos session, laid over the published Sesar 2010 r-band template; the observed points fall on the model through the rising branch." />
-                    </picture>
-                </div>
-                <figcaption class="chart-cap">
-                    <strong>RR&nbsp;Lyrae, one Seestar S30&nbsp;Pro night.</strong> Acquired in Argos,
-                    reduced in Siril with <code>star_var_script</code>, phase-folded at
-                    P&nbsp;=&nbsp;0.5667&nbsp;d and laid over the published <strong>Sesar&nbsp;2010</strong>
-                    template. The observed segment falls on the model through the rising branch.
-                </figcaption>
-            </figure>
-
-            <!-- ══════════════════════════════════════════════════════════════
-                 RESULT SLOTS — replace after the 0.4.1 field campaign.
-
-                 To turn a slot into a real result, swap the whole
-                 <div class="slot"> … </div> for the same <figure class="chart-figure">
-                 markup used above:
-
-                   <figure class="chart-figure">
-                     <div class="chart-card">
-                       <picture>
-                         <source srcset="img/NAME.webp" type="image/webp" />
-                         <img src="img/NAME.png" width="…" height="…"
-                              loading="lazy" decoding="async" alt="…" />
-                       </picture>
-                     </div>
-                     <figcaption class="chart-cap">…</figcaption>
-                   </figure>
-
-                 Drop new figures in docs/img/ as .png + .webp, dark background,
-                 to match the existing plots.
-                 ══════════════════════════════════════════════════════════════ -->
-            <div class="result-grid" style="margin-top: 42px;">
-                <div class="slot">
-                    <span class="slot-tag">Awaiting field data</span>
-                    <h3>A second variable, a second night</h3>
-                    <p>
-                        The RR&nbsp;Lyrae result is one star on one night. Repeating the protocol on
-                        a different variable, at a different altitude, is what separates a working
-                        pipeline from a lucky one.
-                    </p>
-                    <div class="slot-meta">phase-folded curve &middot; published template overlay</div>
-                </div>
-
-                <div class="slot">
-                    <span class="slot-tag">Awaiting field data</span>
-                    <h3>An exoplanet transit</h3>
-                    <p>
-                        Relative flux through ingress and egress, with out-of-transit baseline on
-                        both sides. A shallow, slow event tests cadence stability and the
-                        systematic floor far harder than a large-amplitude variable does.
-                    </p>
-                    <div class="slot-meta">relative flux vs time &middot; published depth for scale</div>
-                </div>
-
-                <div class="slot">
-                    <span class="slot-tag">Awaiting field data</span>
-                    <h3>Precision against magnitude</h3>
-                    <p>
-                        Measured per-point scatter versus catalogue magnitude, with the CCD-equation
-                        prediction drawn through it. This is the plot that states plainly how faint
-                        a 30&nbsp;mm telescope can go, and where the systematic floor takes over
-                        from photon noise.
-                    </p>
-                    <div class="slot-meta">&sigma; vs mag &middot; formal prediction vs achieved</div>
-                </div>
-
-                <div class="slot">
-                    <span class="slot-tag">Awaiting field data</span>
-                    <h3>Live quick-look vs reduced curve</h3>
-                    <p>
-                        The same night twice: the curve Argos drew at the telescope, and the one
-                        Siril produced afterwards from the same raw subs. The honest claim for the
-                        live view is exactly the size of the gap between them.
-                    </p>
-                    <div class="slot-meta">overlay &middot; residuals &middot; scatter comparison</div>
-                </div>
-            </div>
-        </div>
+    <section class="doc-section">
+      <div class="doc-section-head">
+        <p class="mono-label">02</p>
+        <h2>Diagnostics worth reading</h2>
+      </div>
+      <div class="doc-body">
+        <ul>
+          <li><strong>Check star.</strong> A star assumed constant, measured against the same ensemble. It moves when the ensemble or the sky moves, not when the target does.</li>
+          <li><strong>Comparison report.</strong> Every comparison gets a leave-one-out differential curve. It is reported stable only with at least 10 unsaturated points, robust scatter ≤ 0.10 mag and formal error ≤ 0.10 mag. Role changes are appended to <code>photometry_selection_history.jsonl</code>.</li>
+          <li><strong>A shift common</strong> to target, check and comparisons is transparency, tracking or focus. No ensemble removes it.</li>
+        </ul>
+      </div>
     </section>
 
-    <section class="section" id="limits">
-        <div class="container container-wide">
-            <div class="section-header align-left">
-                <div class="h-rule"><h2>What Argos does not claim</h2></div>
-                <p>The limits are part of the specification. A tool that overstates what it measured is worse than one that measures less.</p>
-            </div>
-
-            <div class="callout warn">
-                <div class="callout-title">Read this before quoting a number</div>
-                <ul>
-                    <li><strong>No calibration frames are applied.</strong> Argos does not subtract darks or divide by flats. Its live curve is a raw-sub quick-look, and flat-field residuals are part of what the systematic floor is absorbing.</li>
-                    <li><strong>The live curve is not a publishable curve.</strong> It exists so you can see in the field that the target, the ensemble and the cadence are behaving. The publishable result comes from reducing the raw subs in Siril.</li>
-                    <li><strong>No transit fitting.</strong> Depth, duration and mid-point are never derived from Argos data; the ephemeris shown is the published one, used for planning.</li>
-                    <li><strong>BJD&#95;TDB is not computed.</strong> Timestamps are UTC exposure midpoints. The barycentric correction belongs to post-processing, and Argos refuses an ephemeris whose time standard is not explicitly BJD&#95;TDB rather than converting implicitly.</li>
-                    <li><strong>Only the S30&nbsp;Pro is validated.</strong> The S30 and S50 profiles carry published optics but unconfirmed CFA layout and gain scaling, and must not be used for precision photometry yet &mdash; see <a href="hardware.html">Hardware</a>.</li>
-                    <li><strong>0.4.1 is a field-validation alpha.</strong> Keep your raw FITS. Review the results independently. This is not an unattended-observatory release.</li>
-                </ul>
-            </div>
-
-            <p class="prose" style="margin-top: 28px;">
-                None of this is an apology. Argos stops precisely where honesty stops, and hands
-                over real subs with complete headers &mdash; which is what makes the next stage
-                possible instead of guesswork.
-            </p>
+    <section class="doc-section">
+      <div class="doc-section-head">
+        <p class="mono-label">03</p>
+        <h2>What the session folder contains</h2>
+      </div>
+      <div class="doc-body">
+        <div class="tablewrap">
+          <table>
+            <caption>Written during the run — the hand-off to reduction</caption>
+            <thead><tr><th>File</th><th>Contents</th></tr></thead>
+            <tbody>
+              <tr><th scope="row"><code>lights/ darks/<br>flats/ biases/</code></th><td>Raw linear 16-bit CFA subs and calibration frames. The only data that can be calibrated, registered and independently remeasured.</td></tr>
+              <tr><th scope="row"><code>session.json</code></th><td>Per-frame inventory: type, filter, exposure, gain, timestamp, FWHM, HFD, star count, sky background, eccentricity, temperature and warnings.</td></tr>
+              <tr><th scope="row"><code>targets.json</code></th><td>Target, comparison and check roles with AUID, name, RA/Dec and catalogue magnitudes.</td></tr>
+              <tr><th scope="row"><code>photometry.csv</code></th><td>One series per star: <code>jd_utc</code>, <code>bjd_tdb</code>, <code>mag</code>, <code>mag_err</code>, <code>formal_mag_err</code>, <code>sigma_syst</code>, <code>airmass</code>, <code>fwhm</code>, <code>sky_adu</code>, <code>comps_used</code>, <code>relative_flux</code>, <code>relative_flux_err</code>, <code>saturated</code>.</td></tr>
+              <tr><th scope="row"><code>diagnostics/<br>*.jsonl</code></th><td>Opt-in per-frame measurement detail, one JSON object per line.</td></tr>
+            </tbody>
+          </table>
         </div>
+        <p><code>bjd_tdb</code> is computed with astropy from the exposure midpoint and the configured site, so a transit timing does not have to be reconstructed downstream. The AAVSO export writes the science target only — comparison curves are diagnostics and must never be submitted as observations.</p>
+      </div>
     </section>
 
-    <section class="section section-dark">
-        <div class="container container-wide">
-            <div class="section-header align-left">
-                <div class="h-rule"><h2>References</h2></div>
-                <p>The published work the pipeline leans on, and the catalogues it queries.</p>
-            </div>
-            <ul class="refs">
-                <li>
-                    <span class="ref-key">Honeycutt 1992</span>
-                    <span class="ref-body"><b>CCD ensemble photometry on an inhomogeneous set of exposures.</b> The zero point from a comparison ensemble, rather than a single comparison star.</span>
-                </li>
-                <li>
-                    <span class="ref-key">Sesar et&nbsp;al. 2010</span>
-                    <span class="ref-body"><b>Light-curve templates for RR&nbsp;Lyrae stars.</b> The external reference the validation curve is laid over.</span>
-                </li>
-                <li>
-                    <span class="ref-key">Pickering 2002</span>
-                    <span class="ref-body"><b>Airmass interpolation.</b> One formula for the FITS header and the light-curve point alike.</span>
-                </li>
-                <li>
-                    <span class="ref-key">AAVSO VSX / VSP</span>
-                    <span class="ref-body"><b>Variable Star Index and Variable Star Plotter.</b> Target identification and the comparison-star chart, queried on request and cached locally.</span>
-                </li>
-                <li>
-                    <span class="ref-key">NASA Exoplanet Archive</span>
-                    <span class="ref-body"><b>PSCompPars.</b> Published ephemerides for transit planning &mdash; queried only when you ask for a planet, then cached.</span>
-                </li>
-                <li>
-                    <span class="ref-key">ASTAP</span>
-                    <span class="ref-body"><b>Plate solving.</b> External and never bundled; it supplies the WCS that puts every measured star on the sky.</span>
-                </li>
-                <li>
-                    <span class="ref-key">star_var_script</span>
-                    <span class="ref-body"><b>Siril reduction script.</b> The post-processing half of the workflow, and the source of the shared uncertainty contract. <a href="https://github.com/jperret21/star_var_script" target="_blank" rel="noopener">On GitHub &rarr;</a></span>
-                </li>
-            </ul>
-        </div>
+    <section class="doc-section">
+      <div class="doc-section-head">
+        <p class="mono-label">04</p>
+        <h2>Known limits in 0.4.1</h2>
+      </div>
+      <div class="doc-body">
+        <ul>
+          <li><strong>One validated profile.</strong> The S30 Pro. The S30 and S50 ship with published optics but an assumed GRBG pattern, an inherited EGAIN curve and S30 Pro saturation thresholds — see <a href="hardware.html">Instruments</a>.</li>
+          <li><strong>ASTAP is external.</strong> ARGOS bundles neither the executable nor a star database. An unsuccessful or implausible solution invalidates every identity overlay.</li>
+          <li><strong>Catalogue coverage is bounded.</strong> A per-field budget of 100 to 1 600 objects caps the Gaia and SIMBAD identities considered. A missing marker is a budget, not a non-detection.</li>
+          <li><strong>No unattended operation.</strong> No weather safety, no recovery after a device or network interruption. Stay with the telescope.</li>
+          <li><strong>No published precision figure.</strong> The missing evidence is a multi-night comparison against <code>star_var_script</code> on the same raw frames — not another feature.</li>
+        </ul>
+      </div>
     </section>
 
-    <section class="section">
-        <div class="container container-wide">
-            <div class="next-links">
-                <a class="next-card" href="hardware.html">
-                    <div class="nc-kicker">Next</div>
-                    <b>Hardware &rarr;</b>
-                    <span>Which telescopes Argos speaks to, and which numbers it will stand behind.</span>
-                </a>
-                <a class="next-card" href="index.html#start">
-                    <div class="nc-kicker">Run it</div>
-                    <b>How to start &rarr;</b>
-                    <span>On your Seestar, or against the ASCOM Alpaca simulator with no telescope at all.</span>
-                </a>
-            </div>
-        </div>
-    </section>
+    <p class="doc-next">Next: use <a href="getting-started.html">Start here</a> for the field workflow, <a href="field-identification.html">Identify a solved field</a> for the catalogue controls, or <a href="hardware.html">Instruments</a> to check profile status.</p>
+  </main>
 
-    <footer class="footer">
-        <div class="container container-wide footer-content">
-            <div class="footer-brand">
-                <svg width="14" height="14" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="50" cy="50" r="42"/>
-                    <circle cx="50" cy="50" r="5" fill="currentColor" stroke="none"/>
-                    <g transform="translate(50 50) scale(0.95) translate(-50 -50)">
-                        <path d="M50 6 Q70 24 82 24 Q88 24 86 32 Q82 42 74 44"/>
-                        <path d="M50 94 Q30 76 18 76 Q12 76 14 68 Q18 58 26 56"/>
-                        <path d="M6 50 Q24 36 22 20 Q21 14 30 16 Q40 18 44 28"/>
-                        <path d="M94 50 Q76 64 78 80 Q79 86 70 84 Q60 82 56 72"/>
-                    </g>
-                </svg>
-                Argos
-            </div>
-            <div class="footer-links">
-                <a href="science.html">Science</a>
-                <a href="hardware.html">Hardware</a>
-                <a href="index.html#start">Start</a>
-                <a href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub</a>
-            </div>
-            <div class="footer-copy">GNU GPL v3+ &middot; Jules Perret - built under Californian skies</div>
-        </div>
-    </footer>
-
-    <script>
-        // In-page anchors only — cross-page links must navigate normally.
-        document.querySelectorAll('a[href^="#"]').forEach(a => {
-            a.addEventListener('click', e => {
-                const h = a.getAttribute('href');
-                if (h === '#') return;
-                const t = document.querySelector(h);
-                if (!t) return;
-                e.preventDefault();
-                t.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            });
-        });
-    </script>
+  <footer class="site-footer"><a class="site-brand" href="index.html"><img src="favicon.svg" alt="">ARGOS</a><p>Open-source observing software · GNU GPL v3+</p><a href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub ↗</a></footer>
 </body>
 </html>

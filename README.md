@@ -1,187 +1,142 @@
-# Argos
+# ARGOS
 
-**Desktop astrophotography & differential photometry for the ZWO Seestar S30 Pro.**
-*The hundred-eyed watcher — from raw frames to calibrated light curves, on your laptop.*
+**A desktop observing workspace for time-series photometry with smart telescopes.**
 
-> **Field-validation alpha (0.4.1).** Suitable for technically confident
-> testers who retain their raw FITS and review results independently; not yet
-> a general-public or unattended-observatory release.
+ARGOS helps an observer move from a connected telescope to a well-documented
+observing session: acquire raw FITS frames, solve and identify the field, keep
+the chosen target/comparison/check-star ensemble with the session, and review
+what happened afterwards.
 
-The Seestar S30 Pro is a formidable little sky-explorer, and its app is a pleasure
-to use — but it is built for *looking*, not for *measuring*. The FITS files it saves
-are missing the metadata real science needs, and there is no measurement workflow
-beyond a pretty picture. Argos picks up from there and turns this remarkable
-telescope into a scientific instrument: it completes the FITS headers, detects and
-measures every star, solves astrometry on each frame, and builds differential light
-curves — frame by frame, as the light lands.
+The point is to make a small smart telescope useful for measurement without
+pretending that a live curve is a final scientific result. ARGOS keeps the raw
+data intact. Calibration, registration and final photometry remain a separate,
+auditable reduction workflow in Siril and `star_var_script`.
 
-**Why "Argos"?** In Greek myth, Argos Panoptes was the giant of a hundred eyes, the
-all-seeing watcher who never closed them all at once. A fitting name for software
-that keeps watch over the sky.
+> **0.4.1 is a field-validation release.** Use it with the telescope attended,
+> retain every raw FITS frame, and independently review or reduce the data
+> before drawing a scientific conclusion.
 
-## The pipeline
+## What ARGOS 0.4.1 does
 
-From raw photons to a calibrated light curve, all running locally:
+- Connects to Seestar equipment through Alpaca, with discovery, pointing,
+  framing, focusing controls and sequence capture.
+- Writes a durable session record alongside unmodified raw FITS frames,
+  including observing context, frame inventory and selected-star roles.
+- Uses a local ASTAP installation to recover a WCS and align the solved field
+  with catalogue information.
+- Identifies and filters Gaia stars, variable stars, exoplanet hosts, deep-sky
+  objects and available VSP references; catalogue lookups and caches remain
+  under the observer's control.
+- Supports target, comparison-star and check-star selection, with a quick-look
+  differential-photometry preview during acquisition.
+- Opens a completed session in Review: inspect frame-quality trends, curves,
+  metadata, source FITS frames and field overlays without reconnecting a
+  telescope.
+- Creates an explicit, local and redacted support bundle. ARGOS has no
+  telemetry, analytics or automatic crash upload.
 
-**Acquisition & control**
-- ASCOM Alpaca mount control — GoTo, tracking, park — plus the native Seestar jog
-  API for the moves the firmware won't expose over Alpaca
-- Live exposure loop with linear / log / asinh auto-stretch (display only; the linear
-  frame written to disk is never altered)
-- Multi-step sequencer (Light / Dark / Flat / Bias)
-- Filter wheel — the internal Seestar wheel (Dark / IR / LP) and Alpaca wheels
-- Slew the mount straight from Stellarium over the Telescope Protocol v1.0
-- UDP auto-discovery of the Seestar on the local network
+Read the public guides before the first session:
 
-**Frames & data**
-- Science-grade 16-bit FITS — fills in the headers the Seestar omits (exposure
-  mid-times, gain, airmass, Moon separation), ready for Siril, PixInsight, AstroImageJ
-- All measurement runs on the raw green pixels — no demosaic, no interpolation, so
-  every value is signal the camera actually recorded
+- [Start here](https://perretjules.com/argos/getting-started.html)
+- [Identify a solved field](https://perretjules.com/argos/field-identification.html)
+- [Review a session](https://perretjules.com/argos/review-session.html)
+- [Method and limits](https://perretjules.com/argos/science.html)
+- [Instrument profiles](https://perretjules.com/argos/hardware.html)
 
-**Astrometry**
-- Star detection at 5σ over a robust sky estimate, with per-star HFD, FWHM and
-  eccentricity for focus and frame-quality metrics
-- ASTAP plate solving — a full WCS recovered on every sub, so any pixel maps to real
-  sky coordinates
-- Built-in offline target catalogue — Messier, NGC and IC names, aliases and
-  pointing coordinates work without Wi-Fi; broader designations such as HD use
-  CDS on first lookup and are then cached locally
+## Supported scope and roadmap
 
-**Photometry**
-- Aperture photometry — circular aperture + median sky annulus → background-subtracted
-  flux, instrumental magnitude and a CCD-equation uncertainty, with a saturation flag
-- Ensemble differential photometry — zero-point from a comparison ensemble; the
-  uncertainty combines the target's photon noise with the ensemble scatter
-  (Honeycutt 1992)
-- AAVSO VSX / VSP catalog — variable targets and comparison stars by cone search on
-  the solved field; comparisons auto-ranked by proximity and matched brightness
-- Light-curve export — per-target CSV: JD_UTC / BJD_TDB, magnitude and error, airmass
-  (Kasten–Young), FWHM, sky background, comparisons used
+The **Seestar S30 Pro** is the 0.4.1 reference profile. S30 and S50 profiles
+can be selected for connection, framing and exploratory work, but their
+camera-specific assumptions still need field validation before they are used
+for precision claims.
 
-**Exoplanet transit preparation**
+ARGOS is being extended to the full Seestar range. **DwarfLab support is
+planned for the next ARGOS version**; it is not part of 0.4.1.
 
-- NASA Exoplanet Archive lookup — resolve a confirmed planet to its host star,
-  retrieve and locally cache the published BJD_TDB ephemeris
-- Transit sequence preparation — one stable Light series, fixed filter/cadence,
-  no autofocus or dithering, with configurable pre/post-transit baseline
-- Argos prepares capture and raw-sub preview only; Siril and the dedicated
-  post-processing workflow remain responsible for calibration and final transit
-  photometry/model fitting
+## Install
 
-## On the way
+Release packages are attached to the
+[ARGOS 0.4.1 release](https://github.com/jperret21/argos/releases/tag/v0.4.1):
 
-- Autofocus — HFD V-curve sweep with a parabola-fit minimum (focuser control is
-  already wired; the routine is landing next)
+- **macOS / Apple silicon:** download `Argos-0.4.1-macOS-arm64.dmg`, copy
+  ARGOS to Applications and open it locally. The application is not signed
+  with an Apple Developer certificate; use **Control-click → Open** for the
+  first launch. If macOS reports that it is damaged, remove the quarantine
+  attribute deliberately:
 
-## Try it
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/Argos.app
+  ```
 
-**macOS — download the app.** Grab the `.dmg` from the
-[latest release](https://github.com/jperret21/argos/releases), drag Argos into
-Applications, then **right-click Argos → Open** the first time.
+- **Debian-family Linux / x86-64:** download `argos_0.4.1_amd64.deb` and
+  install it with:
 
-Argos is not signed with an Apple Developer certificate, so macOS blocks the
-first launch. That is about the absence of a paid certificate, not about the
-software. If macOS claims Argos "is damaged", clear the quarantine flag:
+  ```bash
+  sudo apt install ./argos_0.4.1_amd64.deb
+  ```
 
-```bash
-xattr -dr com.apple.quarantine /Applications/Argos.app
-```
+  The Debian package is a technical preview. Validate it on the actual field
+  computer before relying on it for a session.
 
-**Debian / Ubuntu (x86_64 technical preview).** A tagged release also carries
-a `.deb` built and smoke-tested on Ubuntu CI. Download it, then install it with:
+ARGOS does not bundle ASTAP. Install [ASTAP](https://www.hnsky.org/astap.htm)
+and an appropriate star database separately, then set both paths in
+**Settings → Astrometry**.
+
+## Run from source
 
 ```bash
-sudo apt install ./argos_0.4.1_amd64.deb
-```
-
-Launch **Argos** from the applications menu or run `argos`. The Linux package
-is not field-validated yet; keep it to technical testing until that changes.
-
-**From source** (macOS is the reference platform; Linux is a technical preview):
-
-```bash
-brew install uv
 git clone https://github.com/jperret21/argos.git
 cd argos
 uv sync --extra dev
 uv run python main.py
 ```
 
-Plate solving needs [ASTAP](https://www.hnsky.org/astap.htm) installed
-separately — Argos finds it automatically but never bundles it.
-
-Before a first observing session, read the French
-[0.4.1 field guide](docsrc/guide_terrain_0_4_1.md): site setup, ASTAP, connection,
-planning, dockable workspaces, photometry roles, exports and the field-test checklist.
-
-No telescope? Argos runs against the ASCOM Alpaca simulator:
+The repository includes a mock Alpaca server when no telescope is available:
 
 ```bash
 # terminal 1 — mock Seestar
 uv run python scripts/mock_alpaca_server.py
-# terminal 2 — Argos
+
+# terminal 2 — ARGOS
 uv run python main.py
 ```
 
-See [`docsrc/simulator_testing.md`](docsrc/simulator_testing.md) for the full guide.
+See [`docsrc/simulator_testing.md`](docsrc/simulator_testing.md) for the
+simulator workflow and [`docsrc/guide_terrain_0_4_1.md`](docsrc/guide_terrain_0_4_1.md)
+for the technical field guide maintained with the source tree.
 
 ## Privacy and field diagnostics
 
-Argos has **no remote telemetry, analytics or automatic crash upload**. The
-built-in Messier/NGC/IC catalogue is fully local. Broader target, catalogue and
-site searches use the network only when the observer asks for them; optional
-Stellarium coordinate lookup requires a separate explicit opt-in. Local
-diagnostics are opt-in and can be disabled in **Settings → Data & catalogues**.
+ARGOS does not collect telemetry or upload data automatically. Network-backed
+catalogue and site lookups are initiated by the observer; local catalogue data
+and caches can be inspected in Settings.
 
-For a field issue, **More → Create local support bundle…** creates a ZIP only
-when requested. It contains redacted local logs and, if selected, redacted
-session metadata; raw FITS, observing-site coordinates, network addresses and
-observer identity are excluded. Argos never uploads the ZIP — review and share
-it manually only if you choose to do so.
+**More → Create local support bundle…** creates a ZIP only when requested. It
+contains redacted logs and optional redacted session metadata. Raw FITS,
+observer identity, site coordinates, network addresses and private paths are
+excluded by design. Review the ZIP and share it manually only when you decide
+to do so.
 
-## CI and releases
+## Development, CI and releases
 
-GitHub Actions runs linting, formatting, documentation and tests on every pull
-request and on every push to `main` or `release/**`.
+GitHub Actions runs formatting, linting, tests and documentation checks on pull
+requests and on pushes to `main` or `release/**`. A version tag such as
+`v0.4.1` builds the macOS DMG and Debian package, then creates a GitHub release
+draft with both assets. Publishing that draft remains a deliberate human step.
 
-Installers are deliberately **not** rebuilt for every commit on `main`. After a
-release branch has been merged and its CI is green, create and push a version
-tag, for example `v0.4.1`:
+For local checks:
 
 ```bash
-git checkout main
-git pull --ff-only
-git tag -a v0.4.1 -m "Argos 0.4.1"
-git push origin v0.4.1
-```
-
-The release workflow then builds the macOS `.dmg` and Debian/Ubuntu `.deb`,
-smoke-tests both bundles, and creates a GitHub release **draft** with the two
-artifacts attached. Publishing that draft remains a deliberate human step. The
-same packaging workflow can also be started manually from the
-[Actions page](https://github.com/jperret21/argos/actions).
-
-## Contributing
-
-Argos is open source and built in the open. Issues, ideas and pull requests are all
-welcome — especially from Seestar owners who want to push their data further. The
-codebase is uv-managed, fully typed, and covered by tests:
-
-```bash
-uv sync --extra dev
+uv run --extra dev ruff check argos/ tests/ main.py
+uv run --extra dev black --check argos/ tests/ main.py
 uv run --extra dev pytest
+uv run --extra docs sphinx-build -W -b html docsrc /tmp/argos-docs
 ```
 
-See [`docsrc/CONTRIBUTING.md`](docsrc/CONTRIBUTING.md) to get started.
+Contributions, issue reports and field observations are welcome. See
+[`docsrc/CONTRIBUTING.md`](docsrc/CONTRIBUTING.md).
 
 ## License
 
-**GNU General Public License v3.0** — see [`LICENSE`](LICENSE).
-
-Argos links against PyQt6, which is GPL v3 (Riverbank also sells a commercial
-licence). Distributing Argos as a binary means redistributing PyQt6, so the
-project as a whole is GPL v3 — the same licence Siril and INDI use.
-
-Argos does not bundle ASTAP: it is an external solver you install separately,
-under its own licence.
+ARGOS is distributed under the [GNU General Public License v3.0](LICENSE).
+It does not bundle ASTAP, which remains a separate tool under its own licence.

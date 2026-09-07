@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ARGOS 0.4.1 — website proposal</title>
+  <link rel="stylesheet" href="argos-041.css">
+</head>
+<body>
+  <header class="masthead">
+    <a class="brand" href="#top"><img src="../docs/favicon.svg" alt=""> <span>ARGOS</span></a>
+    <nav aria-label="Main navigation">
+      <a href="#science">Science</a>
+      <a href="#workspace">Workspace</a>
+      <a href="#release">0.4.1</a>
+      <a href="#docs">Documentation</a>
+    </nav>
+    <a class="source-link" href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub <span>↗</span></a>
+  </header>
+
+  <main id="top">
+    <section class="intro-shell" aria-labelledby="intro-title">
+      <div class="intro-copy">
+        <p class="release-line"><span class="status-dot"></span> ARGOS 0.4.1 &nbsp;/&nbsp; macOS and Debian packages</p>
+        <h1 id="intro-title">Time-series<br>photometry,<br>from the field.</h1>
+        <p class="lede">ARGOS turns a smart telescope into a focused observing workspace:
+          acquire FITS frames, identify the sky, choose a measurement ensemble and review the session as it builds.</p>
+        <div class="actions">
+          <a class="action action-primary" href="#release">Get ARGOS 0.4.1 <span>↓</span></a>
+          <a class="action" href="#workspace">See the workspace <span>↓</span></a>
+        </div>
+        <dl class="intro-facts">
+          <div><dt>Reference profile</dt><dd>Seestar S30 Pro</dd></div>
+          <div><dt>Output</dt><dd>Science FITS + session data</dd></div>
+          <div><dt>Platforms</dt><dd>macOS · Debian</dd></div>
+        </dl>
+      </div>
+
+      <figure class="interface-figure">
+        <div class="window-titlebar"><span class="window-dot"></span><span class="window-dot"></span><span class="window-dot"></span><b>ARGOS / observing session</b><span class="window-state">LIVE</span></div>
+        <div class="image-reveal"><img src="../docs/img/screenshot-photometry.webp" alt="ARGOS workspace with a solved field and differential photometry"></div>
+        <figcaption><span>Field identification</span><span>Live differential photometry</span><span>Review-ready session</span></figcaption>
+      </figure>
+    </section>
+
+    <section class="statement" aria-label="Product statement">
+      <p>A compact scientific workspace for the measurements that begin once the telescope is pointed.</p>
+      <span class="measurement">RA 20h 03m 16.3s &nbsp;·&nbsp; Dec +58° 56′ 26.0″ &nbsp;·&nbsp; 3.67″/px</span>
+    </section>
+
+    <section class="science-section" id="science" aria-labelledby="science-title">
+      <header class="section-heading"><p>Two observing cases</p><h2 id="science-title">Built around what you want to measure.</h2></header>
+      <div class="case-grid">
+        <article class="case case-variable">
+          <div class="case-head"><span>01 / Variable stars</span><span>RR Lyrae</span></div>
+          <div class="curve-image"><img src="../docs/img/rrlyrae-sesar-fit-dark.webp" alt="RR Lyrae light curve obtained from an ARGOS session and reduced in Siril"></div>
+          <div class="case-body"><h3>Follow a changing star through the night.</h3><p>Identify the target and comparison stars in the solved field, track the differential curve during acquisition, then keep the full session for reduction.</p></div>
+          <p class="case-foot">Observed with ARGOS · reduced with <code>star_var_script</code> in Siril</p>
+        </article>
+
+        <article class="case case-transit">
+          <div class="case-head"><span>02 / Exoplanet transits</span><span>HD 189733 b</span></div>
+          <div class="transit-record" aria-label="Example transit planning record">
+            <div class="record-top"><span>Observation plan</span><span>Illustrative target</span></div>
+            <dl><div><dt>Source</dt><dd>HD 189733</dd></div><div><dt>Event</dt><dd>Planetary transit</dd></div><div><dt>Filter</dt><dd>IR-cut</dd></div><div><dt>Cadence</dt><dd>— s</dd></div></dl>
+            <svg viewBox="0 0 560 170" role="img" aria-label="Illustrative transit light curve"><path class="axis" d="M16 16V144H544M16 53H544M16 98H544"/><path class="t-line" d="M16 44L65 43 113 46 162 45 211 47 258 72 306 107 354 108 402 73 449 48 497 44 544 45"/><g class="t-points"><circle cx="65" cy="43" r="3"/><circle cx="162" cy="45" r="3"/><circle cx="258" cy="72" r="3"/><circle cx="306" cy="107" r="3"/><circle cx="354" cy="108" r="3"/><circle cx="449" cy="48" r="3"/></g></svg>
+          </div>
+          <div class="case-body"><h3>Plan the sequence around the event.</h3><p>Search a target, inspect when it is observable, prepare the sequence and use the same solved-field workflow for the frame-by-frame quick-look.</p></div>
+          <p class="case-foot">Planning and live preview · final reduction remains explicit</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="workspace-section" id="workspace" aria-labelledby="workspace-title">
+      <div class="workspace-heading"><p>One observation, one record</p><h2 id="workspace-title">The useful information stays close to the frame.</h2></div>
+      <ol class="sequence-table">
+        <li><span>01</span><strong>Connect the instrument</strong><p>Telescope profile, position and camera are chosen once, visibly.</p></li>
+        <li><span>02</span><strong>Identify the field</strong><p>WCS, catalogue sources, magnitudes and selected stars belong on the image.</p></li>
+        <li><span>03</span><strong>Observe the source</strong><p>Acquire a sequence and inspect the evolving measurement without claiming final calibration.</p></li>
+        <li><span>04</span><strong>Review the session</strong><p>Open the frames behind a point, inspect the curve and hand the complete record to post-processing.</p></li>
+      </ol>
+    </section>
+
+    <section class="release-section" id="release" aria-labelledby="release-title">
+      <div class="release-intro"><p>Current release</p><h2 id="release-title">ARGOS 0.4.1</h2><p>This version focuses on a complete observing session: clearer instrument setup, source identification, a responsive observation workspace and a review panel built around the data you collected.</p></div>
+      <div class="release-manifest">
+        <div class="manifest-row"><span>Package</span><strong>macOS <code>.dmg</code></strong><a href="https://github.com/jperret21/argos/releases" target="_blank" rel="noopener">GitHub releases ↗</a></div>
+        <div class="manifest-row"><span>Package</span><strong>Debian <code>.deb</code></strong><a href="https://github.com/jperret21/argos/releases" target="_blank" rel="noopener">GitHub releases ↗</a></div>
+        <div class="manifest-row"><span>Source</span><strong>GPL-3.0-or-later</strong><a href="https://github.com/jperret21/argos" target="_blank" rel="noopener">Repository ↗</a></div>
+        <div class="manifest-row"><span>Read first</span><strong>Field guide</strong><a href="https://github.com/jperret21/argos/blob/release/0.4.1/docsrc/guide_terrain_0_4_1.md" target="_blank" rel="noopener">Open guide ↗</a></div>
+      </div>
+    </section>
+
+    <section class="documentation-section" id="docs"><p>Documentation is part of the instrument.</p><a href="https://github.com/jperret21/argos/tree/release/0.4.1/docsrc" target="_blank" rel="noopener">Read the technical documentation <span>→</span></a></section>
+  </main>
+
+  <footer><a class="brand" href="#top"><img src="../docs/favicon.svg" alt=""> <span>ARGOS</span></a><p>Open-source observing software · 0.4.1 proposal</p><a href="index.html">All visual studies</a></footer>
+</body>
+</html>

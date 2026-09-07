@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Solve a frame in ARGOS 0.4.1, read the Gaia DR3, VSX, SIMBAD, VSP and NASA overlays, and assign target, comparison and check roles.">
+  <title>Identify a field — ARGOS 0.4.1</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="stylesheet" href="css/argos.css">
+  <link rel="stylesheet" href="css/doc.css">
+</head>
+<body class="doc-page">
+  <header class="site-header">
+    <a class="site-brand" href="index.html"><img src="favicon.svg" alt="">ARGOS</a>
+    <nav aria-label="Main navigation">
+      <a href="getting-started.html">Start here</a>
+      <a href="science.html">Method</a>
+      <a href="hardware.html">Instruments</a>
+      <a href="releases.html">Releases</a>
+      <a href="https://github.com/jperret21/argos/tree/main/docs" target="_blank" rel="noopener">Technical docs</a>
+    </nav>
+    <a class="site-external" href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub <span>↗</span></a>
+  </header>
+
+  <main>
+    <section class="doc-hero">
+      <div>
+        <p class="mono-label">Field identification / ARGOS 0.4.1</p>
+        <h1>Identify a solved field.</h1>
+        <p class="lede">Solve a frame, read the catalogue overlays, and assign the target, comparison and check roles.</p>
+      </div>
+      <aside class="doc-note">
+        <b>Two operations, not one</b>
+        <p><strong>Plate solving</strong> maps image pixels to sky coordinates. <strong>Field identification</strong> asks which catalogue objects sit at those coordinates. The second is worthless when the first is wrong.</p>
+        <p>Overlays never modify the FITS.</p>
+      </aside>
+    </section>
+
+    <section class="doc-facts">
+      <div><span>01 · Solve</span><strong>Field → Identify field</strong><p>Centre, scale and grid must match the stars.</p></div>
+      <div><span>02 · Filter</span><strong>Gaia G ≤ 18.0</strong><p>Ten layer chips, one slider, one budget.</p></div>
+      <div><span>03 · Assign</span><strong>Target · Comparison · Check</strong><p>At least two comparisons.</p></div>
+    </section>
+
+    <section class="doc-section">
+      <div class="doc-section-head">
+        <p class="mono-label">01</p>
+        <h2>Start from a trustworthy solution</h2>
+      </div>
+      <div class="doc-body">
+        <ol>
+          <li>Open a full-resolution light frame in <strong>Observe</strong>, or use <strong>File → Open FITS image…</strong> to inspect an existing frame.</li>
+          <li>Choose <strong>Field → Identify field</strong>. ARGOS calls the ASTAP set in <strong>Settings → Astrometry</strong> and solves on the extracted green plane.</li>
+          <li>Check the solved centre, image scale and coordinate grid against recognisable stars. If markers consistently miss the centroids, fix the solve — changing the stretch, zoom or debayer mode does not fix a coordinate error.</li>
+        </ol>
+        <div class="doc-aside"><span class="mn-label">Solved ≠ identified</span>A detection proves a source exists, not what it is. The Target, Comparison and Check buttons stay disabled until the field is solved and the clicked star has reliable coordinates.</div>
+      </div>
+    </section>
+
+    <section class="doc-section">
+      <div class="doc-section-head">
+        <p class="mono-label">02</p>
+        <h2>Choose what the image shows</h2>
+      </div>
+      <div class="doc-body">
+        <p>The chips above the frame control visibility only; each shows its current object count.</p>
+        <div class="tablewrap">
+          <table>
+            <caption>Overlay chips</caption>
+            <thead><tr><th>Chip</th><th>What it shows</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">Coordinate grid</th><td>RA/Dec grid projected through the ASTAP WCS. Spacing in <strong>Field → Configure field identification…</strong> (0′ = adaptive).</td></tr>
+              <tr><th scope="row">Stars</th><td>Gaia DR3 sources, enriched with conventional SIMBAD identities when available. A Gaia identity is not a photometric calibration.</td></tr>
+              <tr><th scope="row">Variables</th><td>Variable stars from the AAVSO VSX catalogue.</td></tr>
+              <tr><th scope="row">Galaxies</th><td>SIMBAD galaxies, plus the bundled Messier/NGC/IC catalogue.</td></tr>
+              <tr><th scope="row">Nebulae + clusters</th><td>Same sources; nebulae and stellar clusters.</td></tr>
+              <tr><th scope="row">Exoplanets</th><td>Confirmed host stars from the NASA Exoplanet Archive. The marker is the host star, not a planet.</td></tr>
+              <tr><th scope="row">Other objects</th><td>Other SIMBAD physical types — radio, X-ray and similar sources.</td></tr>
+              <tr><th scope="row">VSP references</th><td>AAVSO VSP reference candidates: a starting point for the comparison ensemble, not the ensemble.</td></tr>
+              <tr><th scope="row">Selected stars</th><td>The session target, comparison stars and check star.</td></tr>
+              <tr><th scope="row">Labels</th><td>Off by default. Abbreviated and overlap-avoiding; click a marker for the full identity.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section">
+      <div class="doc-section-head">
+        <p class="mono-label">03</p>
+        <h2>Keep a dense field readable</h2>
+      </div>
+      <div class="doc-body">
+        <p>The Gaia G limit sits on the overlay bar. Everything else is behind <strong>Catalogues &amp; depth…</strong>, the same dialog as <strong>Field → Configure catalogues…</strong>.</p>
+        <div class="tablewrap">
+          <table>
+            <caption>Depth controls</caption>
+            <thead><tr><th>Control</th><th>Setting</th><th>Limit</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">Gaia G limit<br>(overlay bar)</th><td>Slider, G 5.0–20.0, default ≤ 18.0.</td><td>Display-only and instant. It cannot reveal a star that was never fetched, and it does not filter galaxies by their integrated magnitude.</td></tr>
+              <tr><th scope="row">Gaia cache depth</th><td>Bright field · G ≤ 15 / Standard field · G ≤ 18 / Deep field · G ≤ 20.</td><td>This is what gets downloaded and cached. Raise it before raising the slider.</td></tr>
+              <tr><th scope="row">VSX faint-end<br>magnitude limit</th><td>5.0–20.0, step 0.5.</td><td>Drops fainter variables from the query itself.</td></tr>
+              <tr><th scope="row">Maximum VSX<br>variables in field</th><td>Brightest kept.</td><td><strong>Include suspected variables</strong> is a separate checkbox.</td></tr>
+              <tr><th scope="row">Field identification<br>budget</th><td>Fast · 100 / Fast · 200 / Balanced · 400 (default) / Detailed · 800 / Dense field · 1,600 objects.</td><td>A shared Gaia + SIMBAD cap. VSX and VSP results are <em>not</em> truncated by it.</td></tr>
+              <tr><th scope="row">Only draw Gaia sources with a local image detection</th><td>Off by default.</td><td>Decluttering, not astrometric validation.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="doc-section">
+      <div class="doc-section-head">
+        <p class="mono-label">04</p>
+        <h2>Assign scientific roles</h2>
+      </div>
+      <div class="doc-body">
+        <p>Click a marker: catalogue identity, RA/Dec, magnitudes, and image measurements such as FWHM, HFD, SNR and saturation where available. Drag the card by its title bar, resize it by its bottom-right corner.</p>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>Button</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">Target</th><td>The star whose differential magnitude is measured.</td></tr>
+              <tr><th scope="row">Comparison star</th><td>A reference star contributing to the ensemble zero point.</td></tr>
+              <tr><th scope="row">Check star</th><td>A star expected to be constant, measured against the ensemble to expose its instability. It does not check focus.</td></tr>
+              <tr><th scope="row">Remove</th><td>Takes this star out of the saved set.</td></tr>
+              <tr><th scope="row">Dismiss</th><td>Closes the card; roles already assigned are kept.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Once a field catalogue is available, ARGOS can propose comparisons from VSP candidates and image-quality checks. Inspect separation, brightness, saturation and blending before accepting. At least two comparisons are required; a measurement with fewer is flagged <code>only N comparison(s)</code>.</p>
+      </div>
+    </section>
+
+    <section class="doc-section">
+      <div class="doc-section-head">
+        <p class="mono-label">05</p>
+        <h2>Catalogue, cache and privacy</h2>
+      </div>
+      <div class="doc-body">
+        <p>The bundled Messier/NGC/IC catalogue is local and read-only. Gaia, SIMBAD/CDS, AAVSO and NASA are read from cache first; with a provider enabled, ARGOS requests only the sky cone the field needs. Paths are in <strong>Settings → Catalogues · data</strong>.</p>
+        <p><strong>Refresh</strong> deletes the selected local cache and downloads nothing; the next explicit lookup refetches it if there is internet. With providers disabled, field identification is cache-only.</p>
+      </div>
+    </section>
+
+    <section class="doc-section">
+      <div class="doc-section-head">
+        <p class="mono-label">06</p>
+        <h2>When the answer is uncertain</h2>
+      </div>
+      <div class="doc-body">
+        <ul>
+          <li><strong>No marker on a bright star:</strong> fainter than the <strong>Gaia G limit</strong> slider, deeper than the cached Gaia depth, over the identification budget, or in a disabled catalogue.</li>
+          <li><strong>A marker in empty sky:</strong> do not assign a role. Recheck the ASTAP centre, scale and rotation on a full-resolution frame.</li>
+          <li><strong>The card says manual measurement:</strong> a local source with no sufficiently close catalogue match. It has no identity.</li>
+          <li><strong>A provider does not answer:</strong> work from cache or retry later. An empty layer is not a negative survey.</li>
+          <li><strong>One object, several names:</strong> the card's full identity is authoritative; overlay labels are abbreviated.</li>
+        </ul>
+      </div>
+    </section>
+
+    <p class="doc-next">Next: return to <a href="getting-started.html">Start here</a> to run the sequence, or read <a href="science.html">Method &amp; limits</a> before interpreting the live differential curve.</p>
+  </main>
+
+  <footer class="site-footer"><a class="site-brand" href="index.html"><img src="favicon.svg" alt="">ARGOS</a><p>Open-source observing software · GNU GPL v3+</p><a href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub ↗</a></footer>
+</body>
+</html>

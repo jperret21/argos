@@ -48,8 +48,8 @@
 
 ## Review après une nuit
 
-1. Ouvrir **Review → Open session folder…** et sélectionner le dossier qui contient
-   `session.json` (pas directement `lights/`).
+1. Sélectionner **Review** dans la barre latérale, puis **Open session…**, et choisir
+   le dossier qui contient `session.json` (pas directement `lights/`).
 2. Vérifier le nombre de poses, les filtres et les avertissements, puis regarder les
    tendances **FWHM**, **HFD**, température et fond de ciel. Ces mesures décrivent la
    séance Argos ; elles ne remplacent pas la réduction scientifique.
@@ -60,6 +60,18 @@
    visualiseur. Les FITS bruts restent inchangés.
 
 ## 3. Déroulé d'une soirée
+
+### Avant Argos : préparer le télescope dans l'application officielle
+
+Pour l'instant, chaque soirée doit commencer dans l'application officielle
+Seestar : allumer et initialiser le télescope, puis effectuer sa calibration de
+pointage (**GoTo**) avant de connecter Argos.
+
+La mise au point initiale est également conseillée dans l'application
+officielle. Les outils de focus d'Argos fonctionnent et peuvent servir à refaire
+le point pendant la séance si nécessaire, mais leur autofocus est actuellement
+plus lent. Argos ne remplace donc pas encore la procédure de démarrage ni la
+calibration de pointage de l'application officielle.
 
 ### 3.1 Connection
 
@@ -177,11 +189,11 @@ Une séquence est organisée pour Siril sous le dossier de sessions configuré :
 
 ```text
 <sessions>/
-└── <date>_<objet>/
-    ├── Lights/
-    ├── Darks/
-    ├── Flats/
-    ├── Bias/
+└── <horodatage>_<OBJECT>/
+    ├── lights/
+    ├── darks/
+    ├── flats/
+    ├── biases/
     ├── session.json
     └── diagnostics/
 ```

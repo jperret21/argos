@@ -1,415 +1,119 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Argos — scientific observing for ZWO Seestar telescopes</title>
-    <meta name="description" content="Desktop acquisition, astrometry and differential photometry for ZWO Seestar telescopes. An alpha version: from raw FITS to live differential light curves on your laptop." />
-    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
-    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
-    <link rel="stylesheet" href="css/style.css" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="ARGOS is a desktop application for variable-star and exoplanet time-series photometry with ZWO Seestar telescopes: Alpaca control, ASTAP plate solving, linear 16-bit FITS, AAVSO Extended export.">
+  <title>ARGOS — time-series photometry with a Seestar</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="stylesheet" href="css/argos.css">
 </head>
 <body>
-
-    <nav class="navbar" id="navbar">
-        <div class="container container-wide nav-container">
-            <div class="nav-left">
-                <a href="#" class="nav-logo">
-                    <svg width="16" height="16" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-                        <circle cx="50" cy="50" r="42"/>
-                        <circle cx="50" cy="50" r="5" fill="currentColor" stroke="none"/>
-                        <g transform="translate(50 50) scale(0.95) translate(-50 -50)">
-                            <path d="M50 6 Q70 24 82 24 Q88 24 86 32 Q82 42 74 44"/>
-                            <path d="M50 94 Q30 76 18 76 Q12 76 14 68 Q18 58 26 56"/>
-                            <path d="M6 50 Q24 36 22 20 Q21 14 30 16 Q40 18 44 28"/>
-                            <path d="M94 50 Q76 64 78 80 Q79 86 70 84 Q60 82 56 72"/>
-                        </g>
-                    </svg>
-                    Argos
-                </a>
-                <span class="nav-sep" aria-hidden="true"></span>
-                <ul class="nav-pages">
-                    <li><a href="science.html">Science</a></li>
-                    <li><a href="hardware.html">Hardware</a></li>
-                </ul>
-            </div>
-            <ul class="nav-links">
-                <li><a href="#about">About</a></li>
-                <li><a href="#preview">Preview</a></li>
-                <li><a href="#capabilities">Pipeline</a></li>
-                <li><a href="#siril">Siril</a></li>
-                <li><a href="#start">Start</a></li>
-                <li><a href="#contribute">Contribute</a></li>
-                <li><a href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub</a></li>
-            </ul>
-        </div>
+  <header class="site-header">
+    <a class="site-brand" href="index.html"><img src="favicon.svg" alt="">ARGOS</a>
+    <nav aria-label="Main navigation">
+      <a href="getting-started.html">Start here</a>
+      <a href="science.html">Method</a>
+      <a href="hardware.html">Instruments</a>
+      <a href="releases.html">Releases</a>
+      <a href="https://github.com/jperret21/argos/tree/main/docs" target="_blank" rel="noopener">Technical docs</a>
     </nav>
+    <a class="site-external" href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub <span>↗</span></a>
+  </header>
 
-    <header class="hero">
-        <div class="hero-bg"></div>
-        <div class="hero-sky" id="sky" aria-hidden="true"></div>
-        <div class="hero-curve" aria-hidden="true"><svg id="curve" xmlns="http://www.w3.org/2000/svg"></svg></div>
-
-        <div class="container hero-content">
-            <a href="#start" class="hero-badge hero-badge-link">Alpha version v0.4.1 &middot; how to run it &rarr;</a>
-            <h1>Argos</h1>
-            <p class="hero-myth">the hundred-eyed watcher</p>
-            <p class="hero-sub">Scientific acquisition, astrometry &amp; differential photometry<br />for ZWO Seestar telescopes.</p>
-            <div class="hero-actions">
-                <a href="https://github.com/jperret21/argos" class="btn btn-primary" target="_blank" rel="noopener">View on GitHub</a>
-                <a href="#start" class="btn btn-ghost">How to start</a>
-            </div>
+  <main>
+    <section class="home-hero">
+      <div>
+        <p class="release-line"><i class="status-dot"></i>GPL v3+ &nbsp;/&nbsp; ARGOS 0.4.1 &nbsp;/&nbsp; macOS arm64 + Debian x86-64</p>
+        <h1>Put your smart telescope to scientific work.</h1>
+        <p class="lede">ARGOS is a desktop application for variable-star and exoplanet observing with smart telescopes. Telescope control over ASCOM Alpaca, ASTAP plate solving, linear 16-bit FITS, live differential photometry and AAVSO Extended export.</p>
+        <div class="actions">
+          <a class="action action-primary" href="releases.html">Download ARGOS 0.4.1 <span>↓</span></a>
+          <a class="action" href="#workspace">Workflow <span>↓</span></a>
         </div>
+        <dl class="intro-facts">
+          <div><dt>Instrument</dt><dd>Seestar S30 Pro (S30, S50 unvalidated)</dd></div>
+          <div><dt>Output</dt><dd>16-bit FITS, session.json, AAVSO/CSV</dd></div>
+          <div><dt>Requires</dt><dd>ASTAP + star database</dd></div>
+        </dl>
+      </div>
 
-        <a href="#about" class="hero-scroll" aria-label="Scroll down">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
-        </a>
-    </header>
-
-    <section class="section section-dark" id="about">
-        <div class="container intro">
-            <p class="intro-lead">The Seestar shows you the sky.<br /><strong>Argos measures it.</strong></p>
-            <p class="intro-body">
-                The S30 Pro is a formidable little sky-explorer, and its app is a pleasure to use
-                &mdash; but it&rsquo;s built for looking, not for measuring. The FITS it saves are
-                missing the metadata that real science needs. Argos picks up from there and turns
-                this remarkable telescope into a scientific observing workstation: complete science
-                headers, optional local plate solving, measured stars and live differential light
-                curves &mdash; on your laptop, as the light lands.
-            </p>
-            <p class="intro-aside">
-                Argos Panoptes, the giant of a hundred eyes, was set to watch and never sleep —
-                a fitting name for software that keeps watch over the sky.
-            </p>
+      <figure class="app-window">
+        <div class="window-titlebar"><i class="window-dot"></i><i class="window-dot"></i><i class="window-dot"></i><b>ARGOS / observing session</b><span class="window-state">LIVE</span></div>
+        <picture><source srcset="img/screenshot-photometry.webp" type="image/webp"><img src="img/screenshot-photometry.png" alt="Solved field with comparison ensemble and differential photometry curve"></picture>
+        <div class="session-readout">
+          <div><span>Field</span><strong>ASTAP WCS</strong></div>
+          <div><span>Sources</span><strong>Gaia DR3, VSX</strong></div>
+          <div><span>Ensemble</span><strong>target, comp, check</strong></div>
+          <div><span>Curve</span><strong>Green plane</strong></div>
         </div>
+      </figure>
     </section>
 
-    <section class="release-band" id="release">
-        <div class="container container-wide rel-inner">
-            <div class="rel-head">
-                <div class="rel-kicker">Release 0.4.1</div>
-                <h2>Now speaking to the whole Seestar family</h2>
-                <p>
-                    Telescope profiles, signed-off plate scales and shipped binaries &mdash; with an
-                    explicit line between the model that is validated and the ones that are not.
-                </p>
-            </div>
-            <div class="rel-chips">
-                <span class="chip chip-ok"><b>S30&nbsp;Pro</b> reference</span>
-                <span class="chip"><b>S30</b> unvalidated</span>
-                <span class="chip"><b>S50</b> unvalidated</span>
-                <span class="chip"><b>macOS</b> .dmg</span>
-                <span class="chip"><b>Debian</b> .deb preview</span>
-                <a href="hardware.html" class="btn btn-ghost">Hardware details &rarr;</a>
-            </div>
-        </div>
+    <section class="home-section" id="science">
+      <div class="section-heading">
+        <p class="mono-label">Targets</p>
+        <h2>Variable stars and exoplanet transits.</h2>
+      </div>
+      <div class="case-grid">
+        <article class="case">
+          <div class="case-head"><span>Variable star</span><span>Live preview</span></div>
+          <div class="curve-image"><picture><source srcset="img/rrlyrae-sesar-fit-dark.webp" type="image/webp"><img src="img/rrlyrae-sesar-fit-dark.png" alt="RR Lyrae light curve"></picture></div>
+          <div class="case-body">
+            <h3>Variable star</h3>
+            <p>VSX for the variable, AAVSO VSP for the comparison ensemble. Aperture photometry runs on the raw green CFA plane, frame by frame, against an ensemble zero point in band TG.</p>
+          </div>
+          <p class="case-foot">RR Lyrae example · AAVSO Extended export</p>
+        </article>
+
+        <article class="case">
+          <div class="case-head"><span>Exoplanet transit</span><span>Sequence planning</span></div>
+          <div class="transit-record">
+            <div class="record-top"><span>HD 189733 b</span><span>Observation plan</span></div>
+            <dl><div><dt>Ephemeris</dt><dd>NASA Exoplanet Archive</dd></div><div><dt>Epoch</dt><dd>BJD_TDB</dd></div><div><dt>Mid-transit</dt><dd>Computed for your site</dd></div><div><dt>Coverage</dt><dd>Pre + post baseline</dd></div></dl>
+            <svg viewBox="0 0 480 150" role="img" aria-label="Illustrative predicted exoplanet transit curve"><path class="axis" d="M15 19H470M15 75H470M15 131H470M15 18V133"/><path class="t-line" d="M18 44C74 43 93 45 128 44C165 44 179 45 194 59C204 70 213 101 240 102C267 102 276 70 286 59C301 45 315 44 352 44C387 45 406 43 466 44"/><g class="t-points"><circle cx="39" cy="46" r="2"/><circle cx="83" cy="43" r="2"/><circle cx="131" cy="45" r="2"/><circle cx="174" cy="48" r="2"/><circle cx="206" cy="79" r="2"/><circle cx="239" cy="103" r="2"/><circle cx="273" cy="80" r="2"/><circle cx="307" cy="45" r="2"/><circle cx="354" cy="44" r="2"/><circle cx="405" cy="42" r="2"/><circle cx="452" cy="45" r="2"/></g></svg>
+          </div>
+          <div class="case-body">
+            <h3>Exoplanet transit</h3>
+            <p>Find a confirmed planet, pull its published NASA ephemeris, and get the next mid-transit in BJD_TDB for your observing site. Set the pre- and post-transit baseline against the 30° altitude line.</p>
+          </div>
+          <p class="case-foot">HD 189733 b · illustrative curve, not a transit fit</p>
+        </article>
+      </div>
     </section>
 
-    <section class="section showcase" id="preview">
-        <div class="container container-wide">
-            <div class="section-header">
-                <h2>See it run</h2>
-                <p>Live differential photometry of RR&nbsp;Lyrae &mdash; the light curve building frame by frame, as the subs land.</p>
-            </div>
-            <figure class="app-window">
-                <div class="app-bar">
-                    <span class="app-dot"></span><span class="app-dot"></span><span class="app-dot"></span>
-                    <span class="app-title">Argos live observing session</span>
-                </div>
-                <picture>
-                    <source srcset="img/screenshot-photometry.webp" type="image/webp" />
-                    <img src="img/screenshot-photometry.png" width="2868" height="1638" loading="lazy" decoding="async"
-                         alt="Argos capturing RR Lyrae: a live view with the variable and its comparison stars marked, next to a differential light-curve panel filling in over 205 subs." />
-                </picture>
-                <figcaption class="showcase-cap">RR&nbsp;Lyrae &middot; 105/205 subs &middot; variable &amp; comparison stars selected from the AAVSO chart &middot; plate-solved at 3.67&Prime;/px</figcaption>
-            </figure>
-        </div>
+    <section class="workspace-band" id="workspace">
+      <div class="workspace-heading">
+        <p class="mono-label">Workflow</p>
+        <h2>Connect, identify, observe, review.</h2>
+      </div>
+      <ol class="sequence-table">
+        <li><span>01</span><strong>Prepare</strong><p>Site, telescope profile and working folder. Resolve the target, check its altitude, and build the sequence: frame type, filter, exposure, gain, count, interval.</p></li>
+        <li><span>02</span><a href="field-identification.html"><strong>Identify</strong></a><p>ASTAP solves the frame. Gaia DR3, VSX, SIMBAD, NASA hosts and VSP overlay it. Assign target, comparison and check roles.</p></li>
+        <li><span>03</span><strong>Observe</strong><p>Run the sequence with pause, resume and stop. One linear 16-bit FITS per frame. FWHM, HFD, sky background and the differential curve update live.</p></li>
+        <li><span>04</span><a href="review-session.html"><strong>Review</strong></a><p>Offline, with no telescope connected: quality trends, curves, FITS headers, and the source frame behind any measurement point.</p></li>
+      </ol>
     </section>
 
-    <section class="section" id="capabilities">
-        <div class="container">
-            <div class="section-header">
-                <h2>The pipeline</h2>
-                <p>One signal path, from raw photons to a calibrated light curve &mdash; every stage running on your laptop, frame by frame.</p>
-            </div>
-
-            <div class="flow" aria-hidden="true">
-                <span class="flow-step"><i class="flow-node"></i>Photons</span>
-                <span class="flow-step"><i class="flow-node"></i>Science FITS</span>
-                <span class="flow-step"><i class="flow-node"></i>Astrometry</span>
-                <span class="flow-step"><i class="flow-node"></i>Photometry</span>
-                <span class="flow-step"><i class="flow-node end"></i>Light curve</span>
-            </div>
-
-            <div class="pipe">
-                <article class="stage">
-                    <div class="stage-rail"><span class="stage-num">01</span></div>
-                    <div class="stage-body">
-                        <h3 class="stage-name">Capture</h3>
-                        <p class="stage-lead">Point, track and shoot &mdash; target lookup, altitude preview, live view and sequences from your laptop.</p>
-                    </div>
-                </article>
-
-                <article class="stage">
-                    <div class="stage-rail"><span class="stage-num">02</span></div>
-                    <div class="stage-body">
-                        <h3 class="stage-name">Frame</h3>
-                        <p class="stage-lead">Every frame saved as a proper science file, with the details the Seestar leaves out &mdash; ready for Siril or PixInsight.</p>
-                    </div>
-                </article>
-
-                <article class="stage">
-                    <div class="stage-rail"><span class="stage-num">03</span></div>
-                    <div class="stage-body">
-                        <h3 class="stage-name">Astrometry</h3>
-                        <p class="stage-lead">Each frame is matched to the sky, so every pixel knows exactly where it points.</p>
-                    </div>
-                </article>
-
-                <article class="stage">
-                    <div class="stage-rail"><span class="stage-num">04</span></div>
-                    <div class="stage-body">
-                        <h3 class="stage-name">Photometry</h3>
-                        <p class="stage-lead">A target measured against a comparison-star ensemble, with diagnostics kept separate from the science curve.</p>
-                    </div>
-                </article>
-
-                <article class="stage">
-                    <div class="stage-rail"><span class="stage-num end">05</span></div>
-                    <div class="stage-body">
-                        <h3 class="stage-name">Light curve</h3>
-                        <p class="stage-lead">Differential brightness over time, building live as the light lands &mdash; and exported with its session data.</p>
-                    </div>
-                </article>
-            </div>
-        </div>
+    <section class="release-overview" id="releases">
+      <div class="release-intro">
+        <p class="mono-label">Current release</p>
+        <h2>ARGOS 0.4.1</h2>
+      </div>
+      <div class="release-manifest">
+        <div class="manifest-row"><span>macOS</span><strong>Apple silicon <code>.dmg</code>, 67 MB, unsigned</strong><a href="https://github.com/jperret21/argos/releases" target="_blank" rel="noopener">Download ↗</a></div>
+        <div class="manifest-row"><span>Debian</span><strong>x86-64 <code>.deb</code>, technical preview</strong><a href="https://github.com/jperret21/argos/releases" target="_blank" rel="noopener">Download ↗</a></div>
+        <div class="manifest-row"><span>Source</span><strong>Python 3.11, <code>uv sync --extra dev</code></strong><a href="https://github.com/jperret21/argos" target="_blank" rel="noopener">Open GitHub ↗</a></div>
+        <div class="manifest-row"><span>Field guide</span><strong>First observation with 0.4.1</strong><a href="getting-started.html">Start here →</a></div>
+      </div>
     </section>
+  </main>
 
-    <section class="section section-dark" id="siril">
-        <div class="container container-wide">
-            <div class="section-header">
-                <h2>Take it further in Siril</h2>
-                <p>Argos stops where honesty ends &mdash; real subs, real headers, a live quick-look. For the publishable curve, its frames drop straight into Siril.</p>
-            </div>
-
-            <div class="handoff">
-                <div class="handoff-step"><b>Argos</b><small>capture &middot; science FITS &middot; quick-look</small></div>
-                <i class="handoff-arrow">&rarr;</i>
-                <div class="handoff-step mid"><b>star_var_script</b><small>in Siril</small></div>
-                <i class="handoff-arrow">&rarr;</i>
-                <div class="handoff-step"><b>AAVSO</b><small>publishable light curve</small></div>
-            </div>
-
-            <figure class="chart-figure">
-                <div class="chart-card">
-                    <picture>
-                        <source srcset="img/rrlyrae-sesar-fit-dark.webp" type="image/webp" />
-                        <img src="img/rrlyrae-sesar-fit-dark.png" width="1680" height="1000" loading="lazy" decoding="async"
-                             alt="RR Lyrae phase-folded light curve from one Argos + Siril session, laid over the published Sesar 2010 r-band template; the observed points fall on the model through the rising branch." />
-                    </picture>
-                </div>
-                <figcaption class="chart-cap">One Seestar night on RR&nbsp;Lyrae, reduced in Siril with <code>star_var_script</code> &mdash; phase-folded at P&nbsp;=&nbsp;0.5667&nbsp;d and laid over the published <strong>Sesar&nbsp;2010</strong> template. The observed segment falls right on the model.</figcaption>
-            </figure>
-
-            <div class="start-links">
-                <a href="science.html" class="btn btn-ghost">The science behind the curve &rarr;</a>
-                <a href="https://github.com/jperret21/star_var_script" class="btn btn-ghost" target="_blank" rel="noopener">star_var_script on GitHub &rarr;</a>
-            </div>
-        </div>
-    </section>
-
-    <section class="section" id="start">
-        <div class="container container-wide">
-            <div class="section-header">
-                <h2>How to start</h2>
-                <p><strong>v0.4.1 is an alpha version.</strong> The S30 Pro is the reference profile; S30 and S50 remain explicitly unvalidated for precision photometry. Run it on your Seestar &mdash; or against the ASCOM Alpaca simulator, no telescope needed.</p>
-            </div>
-
-            <div class="code-wrap">
-                <div class="code-bar">
-                    <span class="code-dot"></span><span class="code-dot"></span><span class="code-dot"></span>
-                    <span class="code-label">install</span>
-                </div>
-                <pre><code><span class="hl">brew</span> install uv
-<span class="hl">git clone</span> https://github.com/jperret21/argos.git
-<span class="hl">cd</span> argos
-uv sync --extra dev</code></pre>
-            </div>
-
-            <div class="start-split">
-                <div class="start-col">
-                    <div class="start-col-label"><span>01</span> With your Seestar</div>
-                    <div class="code-wrap">
-                        <div class="code-bar">
-                            <span class="code-dot"></span><span class="code-dot"></span><span class="code-dot"></span>
-                            <span class="code-label">default</span>
-                        </div>
-                        <pre><code><span class="cm"># power on the Seestar, join its Wi-Fi</span>
-uv run python main.py
-<span class="cm"># Connection &rarr; IP address &lt;seestar-ip&gt;, port 32323</span></code></pre>
-                    </div>
-                    <a href="https://github.com/jperret21/argos/blob/main/docsrc/release_0_4_1.md" class="btn btn-ghost start-col-link" target="_blank" rel="noopener">v0.4.1 build status &rarr;</a>
-                </div>
-
-                <div class="start-col">
-                    <div class="start-col-label"><span>02</span> No telescope &mdash; simulator (Docker)</div>
-                    <div class="code-wrap">
-                        <div class="code-bar">
-                            <span class="code-dot"></span><span class="code-dot"></span><span class="code-dot"></span>
-                            <span class="code-label">simulator</span>
-                        </div>
-                        <pre><code><span class="cm"># ASCOM Alpaca simulator (OmniSim) in Docker</span>
-<span class="hl">docker</span> run -d --name omnisim \
-  -p 32323:32323 -p 32227:32227/udp omnisim
-uv run python main.py
-<span class="cm"># Connection &rarr; IP address localhost, port 32323</span></code></pre>
-                    </div>
-                    <a href="https://github.com/jperret21/argos/blob/main/docsrc/simulator_testing.md" class="btn btn-ghost start-col-link" target="_blank" rel="noopener">Build the simulator image &rarr;</a>
-                </div>
-            </div>
-            <div class="start-links">
-                <a href="https://github.com/jperret21/argos/blob/main/docsrc/guide_terrain_0_4_1.md" class="btn btn-ghost" target="_blank" rel="noopener">0.4.1 field guide &rarr;</a>
-            </div>
-        </div>
-    </section>
-
-    <section class="section" id="contribute">
-        <div class="container">
-            <div class="section-header">
-                <h2>How to contribute</h2>
-                <p>Argos is open source and built in the open.</p>
-            </div>
-            <p class="contribute-text">
-                Issues, ideas, and pull requests are all welcome &mdash; especially from Seestar
-                owners who want to push their data further. The codebase is uv-managed, linted,
-                and covered by automated tests.
-            </p>
-            <div class="code-wrap">
-                <div class="code-bar">
-                    <span class="code-dot"></span><span class="code-dot"></span><span class="code-dot"></span>
-                    <span class="code-label">terminal</span>
-                </div>
-                <pre><code><span class="cm"># fork &amp; clone, then:</span>
-uv sync --extra dev
-uv run --extra dev pytest</code></pre>
-            </div>
-            <div class="start-links">
-                <a href="https://github.com/jperret21/argos/blob/main/docsrc/CONTRIBUTING.md" class="btn btn-ghost" target="_blank" rel="noopener">Contributing guide &rarr;</a>
-                <a href="https://github.com/jperret21/argos/issues" class="btn btn-ghost" target="_blank" rel="noopener">Open an issue &rarr;</a>
-            </div>
-        </div>
-    </section>
-
-    <footer class="footer">
-        <div class="container container-wide footer-content">
-            <div class="footer-brand">
-                <svg width="14" height="14" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="50" cy="50" r="42"/>
-                    <circle cx="50" cy="50" r="5" fill="currentColor" stroke="none"/>
-                    <g transform="translate(50 50) scale(0.95) translate(-50 -50)">
-                        <path d="M50 6 Q70 24 82 24 Q88 24 86 32 Q82 42 74 44"/>
-                        <path d="M50 94 Q30 76 18 76 Q12 76 14 68 Q18 58 26 56"/>
-                        <path d="M6 50 Q24 36 22 20 Q21 14 30 16 Q40 18 44 28"/>
-                        <path d="M94 50 Q76 64 78 80 Q79 86 70 84 Q60 82 56 72"/>
-                    </g>
-                </svg>
-                Argos
-            </div>
-            <div class="footer-links">
-                <a href="science.html">Science</a>
-                <a href="hardware.html">Hardware</a>
-                <a href="#start">Start</a>
-                <a href="#contribute">Contribute</a>
-                <a href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub</a>
-            </div>
-            <div class="footer-copy">GNU GPL v3+ &middot; Jules Perret - built under Californian skies</div>
-        </div>
-    </footer>
-
-    <script>
-        // ── Nav scroll state ──────────────────────────────────────────
-        const nav = document.querySelector('.navbar');
-        window.addEventListener('scroll', () => nav.classList.toggle('scrolled', window.scrollY > 50));
-
-        // ── Smooth in-page scroll ─────────────────────────────────────
-        document.querySelectorAll('a[href^="#"]').forEach(a => {
-            a.addEventListener('click', e => {
-                const h = a.getAttribute('href');
-                if (h === '#') return;
-                e.preventDefault();
-                const t = document.querySelector(h);
-                if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            });
-        });
-
-        // ── Hero starfield — the hundred eyes ─────────────────────────
-        (function () {
-            const sky = document.getElementById('sky');
-            if (!sky) return;
-            const n = 110;   // the hundred eyes
-            for (let i = 0; i < n; i++) {
-                const s = document.createElement('span');
-                s.className = 'star';
-                const r = Math.random() * 1.7 + 0.7;
-                s.style.width = s.style.height = r.toFixed(1) + 'px';
-                s.style.left = (Math.random() * 100).toFixed(2) + '%';
-                s.style.top = (Math.random() * 100).toFixed(2) + '%';
-                s.style.opacity = (Math.random() * 0.5 + 0.3).toFixed(2);
-                if (Math.random() < 0.45) {
-                    s.style.animationDuration = (Math.random() * 3.5 + 3.5).toFixed(1) + 's';
-                    s.style.animationDelay = (-Math.random() * 7).toFixed(1) + 's';
-                    s.classList.add('twinkle');
-                }
-                sky.appendChild(s);
-            }
-        })();
-
-        // ── Hero light curve — a star's brightness, watched over time ──
-        // periodPx must match the lc-drift keyframe translate in style.css.
-        (function () {
-            const svg = document.getElementById('curve');
-            if (!svg) return;
-            const NS = 'http://www.w3.org/2000/svg';
-            const periodPx = 360, periods = 10, totalW = periodPx * periods;
-            const h = 340, midY = h / 2, amp = 118;   // amp = peak-to-peak, px
-            svg.setAttribute('width', totalW);
-            svg.setAttribute('height', h);
-
-            // Brightness of a pulsating variable (RR Lyrae / Cepheid type):
-            // a steep rise to maximum, then a slower decline — the classic
-            // asymmetric light-curve shape. Returns 0 (faintest) to 1 (brightest).
-            const rise = 0.22;
-            const f = (cycles) => {
-                const p = cycles - Math.floor(cycles);
-                return p < rise
-                    ? 0.5 - 0.5 * Math.cos(Math.PI * (p / rise))
-                    : 0.5 + 0.5 * Math.cos(Math.PI * (p - rise) / (1 - rise));
-            };
-            const yOf = (x) => midY - amp * (f(x / periodPx) - 0.5);  // bright = up
-
-            let d = '';
-            for (let x = 0; x <= totalW; x += 3) {
-                d += (x === 0 ? 'M' : 'L') + x + ',' + yOf(x).toFixed(1) + ' ';
-            }
-            const path = document.createElementNS(NS, 'path');
-            path.setAttribute('d', d.trim());
-            path.setAttribute('class', 'lc-line');
-            svg.appendChild(path);
-
-            // Scattered observations hugging the model curve — AAVSO style.
-            for (let x = 0; x <= totalW; x += 11) {
-                const y = yOf(x) + (Math.random() - 0.5) * 11;
-                const c = document.createElementNS(NS, 'circle');
-                c.setAttribute('cx', x);
-                c.setAttribute('cy', y.toFixed(1));
-                c.setAttribute('r', '1.3');
-                c.setAttribute('class', 'lc-dot');
-                svg.appendChild(c);
-            }
-        })();
-    </script>
+  <footer class="site-footer">
+    <a class="site-brand" href="index.html"><img src="favicon.svg" alt="">ARGOS</a>
+    <p>Open-source observing software · GNU GPL v3+</p>
+    <a href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub ↗</a>
+  </footer>
 </body>
 </html>
