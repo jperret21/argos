@@ -2117,8 +2117,13 @@ class ImagingPage(QWidget):
                 "OK", f"Photometry: selected {added} pilot-qualified comparison(s)."
             )
         else:
+            selected = len(self._engine.target_set().by_role("comparison"))
             self.log_message.emit(
-                "INFO", f"Photometry: comparison proposal set to {count} calibrated star(s)."
+                "INFO",
+                (
+                    f"Photometry: requested {count} comparison(s); "
+                    f"{selected} pilot-qualified VSP star(s) selected."
+                ),
             )
 
     def _recommend_comparison_stars(self) -> None:

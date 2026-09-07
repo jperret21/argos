@@ -897,6 +897,8 @@ class AcquisitionEngine(QObject):
         self._named_objects = list(result.named_objects)
         self._exoplanet_hosts = list(result.exoplanet_hosts)
         self.catalog_ready.emit(result)  # the page re-projects onto the WCS
+        for warning in result.warnings:
+            self.log_message.emit("WARN", f"Catalog: {warning}")
         if self._variables:
             self.log_message.emit("OK", f"Catalog: {len(self._variables)} variable(s) in field")
         if self._field_stars:
