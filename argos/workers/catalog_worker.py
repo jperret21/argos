@@ -65,6 +65,11 @@ class CatalogResult:
     exoplanet_hosts: list[CachedExoplanetHost] = field(default_factory=list)
     field_star_limit: int = 0
     named_object_limit: int = 0
+    # Optional catalogues must never make a solved field unusable.  Preserve
+    # their failure reason nevertheless: treating an unreachable VSP service
+    # as an empty calibrated sequence leaves the observer with no actionable
+    # explanation when automatic comparison selection cannot run.
+    warnings: list[str] = field(default_factory=list)
     error: str = ""
 
     @property
@@ -97,6 +102,7 @@ class CatalogWorker(QThread):
                 max_results=r.max_results,
             )
             comparisons: list[ComparisonStar] = []
+            warnings: list[str] = []
             if r.want_comparisons:
                 try:
                     comparisons = vsp_chart(
@@ -110,6 +116,7 @@ class CatalogWorker(QThread):
                     # Comparison stars are a bonus; a VSP miss shouldn't sink the
                     # whole result when we already have the variables.
                     logger.warning("VSP fetch failed (keeping VSX result): %s", exc)
+                    warnings.append(f"VSP comparison sequence unavailable: {exc}")
             field_stars: list[GaiaStar] = []
             if r.want_field_stars:
                 try:
@@ -155,6 +162,7 @@ class CatalogWorker(QThread):
                 exoplanet_hosts=exoplanet_hosts,
                 field_star_limit=r.field_star_max_results if r.want_field_stars else 0,
                 named_object_limit=r.named_object_max_results if r.want_named_objects else 0,
+                warnings=warnings,
             )
         except CatalogError as exc:
             result = CatalogResult(error=str(exc))
