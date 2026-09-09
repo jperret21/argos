@@ -26,16 +26,23 @@ a coordinate error.
 
 The overlay controls deliberately distinguish layers from selected roles:
 
-| Control | Meaning |
+The bar has two rows: the object layers, then the display controls.
+
+| Object layer | What it draws |
 |---|---|
-| **Grid** | RA/Dec grid derived from the solved WCS. |
-| **Stars** | General stellar identities, principally Gaia sources where available. |
-| **Variables** | Variable-star catalogue entries. |
-| **Deep sky** | Catalogue deep-sky entries such as galaxies, nebulae and clusters. |
-| **Exoplanets** | Known exoplanet-host systems. The marker identifies the host, not a resolved planet. |
-| **References** | Available calibrated reference candidates from VSP. |
-| **Selected** | The target, comparison and check stars stored with the active session. |
-| **Labels** | Short labels. Keep this off in crowded fields and inspect a source by clicking it. |
+| **Stars** | [Gaia DR3](https://www.cosmos.esa.int/web/gaia/dr3) stars, enriched with conventional [SIMBAD](https://simbad.cds.unistra.fr/) identities when available. |
+| **Variables** | Variable stars from the [AAVSO VSX](https://vsx.aavso.org/) catalogue. |
+| **Galaxies** | Galaxies identified by SIMBAD or the bundled Messier/NGC/IC catalogue. |
+| **Nebulae + clusters** | Nebulae and stellar clusters from SIMBAD or the bundled Messier/NGC/IC catalogue. |
+| **Exoplanets** | Confirmed exoplanet hosts returned by the [NASA Exoplanet Archive](https://exoplanetarchive.ipac.caltech.edu/), cache first. The marker identifies the host, not a resolved planet. |
+| **Other objects** | Other physically classified SIMBAD sources, such as radio or X-ray sources. |
+
+| Display control | What it does |
+|---|---|
+| **Coordinate grid** | RA/Dec grid derived from the solved WCS. |
+| **VSP references** | [AAVSO VSP](https://app.aavso.org/vsp/) reference candidates — not necessarily the ensemble you selected. |
+| **Selected stars** | The target, selected comparison stars and check stars for this observation. |
+| **Labels** | Compact non-overlapping labels. Keep this off in crowded fields and hover or click a marker for its full identity. |
 
 The **faint-limit** control is a catalogue/display budget, not a detection
 threshold. A higher magnitude limit can return many more objects, increase the
@@ -46,6 +53,20 @@ of interest is still missing.
 
 Filtering one layer does not remove data from the session or alter the FITS.
 It only changes what is displayed over the current image.
+
+```{admonition} Not every magnitude on screen is a photometric magnitude
+:class: warning
+
+The **Stars** layer shows Gaia $G$ — a very broad white-light band, and *not*
+$V$. It is there so you can tell a 12th-magnitude star from a 16th, and it is
+excellent for that. It is not what builds the zero point.
+
+Only the **VSP references** carry sequence magnitudes calibrated by the AAVSO
+in a standard band, with an AUID. That is why a manually clicked star can be
+kept as a comparison and still contribute nothing to the ensemble: it has a
+position and a flux, but no calibrated magnitude to difference against. See
+[§4 of the method page](differential_photometry.md#4-the-comparison-ensemble).
+```
 
 ## 3. Catalogue coverage and identity
 
@@ -87,7 +108,7 @@ saturation, isolation, brightness, colour and the future post-processing
 requirements; keep the exact selected ensemble recorded with the session.
 
 The same target or comparison selection is visible in the photometry tables and
-in the **Selected** overlay. Selecting or removing a row updates the image
+in the **Selected stars** overlay. Selecting or removing a row updates the image
 overlay so the table and the field do not become two conflicting views of the
 session.
 
@@ -113,5 +134,11 @@ perform the final calibrated reduction independently.
 | Too few comparison candidates | Confirm the solve and catalogue filters, then select candidates manually and record the rationale for final reduction. |
 | Same object has several names | Use the information card's full identity and coordinates; overlay labels are intentionally abbreviated. |
 
-For the observer-oriented version of this workflow, see the public
-[field-identification guide](https://perretjules.com/argos/field-identification.html).
+```{seealso}
+- {doc}`guide` — the observer-oriented version of this workflow, in the order
+  you actually do it.
+- {doc}`differential_photometry` — what happens to a star once you have given
+  it a role.
+- {doc}`references` — every catalogue named on this page, with its citation and
+  its acknowledgement requirements.
+```

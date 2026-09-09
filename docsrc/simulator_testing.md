@@ -1,27 +1,26 @@
-# Testing Argos against the ASCOM Alpaca Simulator
+# Testing ARGOS against the ASCOM Alpaca Simulator
 
-Argos talks to the Seestar over **ASCOM Alpaca**. The same protocol is
+ARGOS talks to the Seestar over **ASCOM Alpaca**. The same protocol is
 spoken by the official **ASCOM Alpaca Simulators** (OmniSim), so you can develop
 and test the whole app — connect, expose, preview, focus, jog, sequence —
 **without the telescope plugged in**.
 
-This doc covers:
+The simulator is the
+[ASCOM Initiative's own](https://github.com/ASCOMInitiative/ASCOM.Alpaca.Simulators),
+so testing against it tests conformance to the protocol rather than to our own
+assumptions about it.
 
-1. [What the simulator gives you](#1-what-the-simulator-gives-you)
-2. Installing and building it (macOS arm64)
-3. [Running it](#3-running-it)
-4. [Manual app test against the sim](#4-manual-app-test-against-the-sim)
-5. [Automated integration tests](#5-automated-integration-tests)
-6. [Known sim quirks (expected, not bugs)](#6-known-sim-quirks-expected-not-bugs)
-7. [Troubleshooting](#7-troubleshooting)
-
----
+```{tip}
+Two ways to run it: **Docker**, which needs nothing installed (§2a), or a
+native .NET build (§2). Take Docker unless you need to debug the simulator
+itself.
+```
 
 ## 1. What the simulator gives you
 
 OmniSim exposes a full set of Alpaca devices on one HTTP port (default
 **`32323`**): **Camera**, **Telescope**, **Focuser**, **FilterWheel**, and more.
-Argos connects to all of them exactly as it would to a real Seestar.
+ARGOS connects to all of them exactly as it would to a real Seestar.
 
 | You can test… | How the sim behaves |
 |---|---|
@@ -34,20 +33,19 @@ Argos connects to all of them exactly as it would to a real Seestar.
 
 What it **won't** reproduce: the Seestar's native JSON-RPC features (UDP
 auto-discovery, native jog, the real GRBG star field). For native-protocol tests
-use the bundled `seestar_alp` simulator instead — see
+use the `seestar_alp` simulator instead — it is **not** bundled, and must be
+cloned next to this repository — see
 [`tests/conftest.py`](../tests/conftest.py) (`seestar_simulator` fixture).
-
----
 
 ## 2a. Running it via Docker (no .NET SDK needed — preferred on this Mac)
 
-The clone lives at `~/Documents/dev/python/ASCOM.Alpaca.Simulators` on this
+Clone it wherever you keep source; the commands below assume it sits beside this
 machine and .NET is not installed, so use Docker. One-time build (the
 `ASCOM_COM` define in `ASCOM.Alpaca.Simulators.csproj` must be conditioned on
 Windows — see §2 below — or the Linux build fails):
 
 ```bash
-cd ~/Documents/dev/python/ASCOM.Alpaca.Simulators
+cd ../ASCOM.Alpaca.Simulators
 docker build -t omnisim .
 ```
 
@@ -96,9 +94,7 @@ define must be **conditioned on Windows**:
 
 (If you cloned fresh and it isn't already conditioned, add the
 `Condition=" '$(OS)' == 'Windows_NT' "` part.) This edit lives in the **simulator
-clone, not in seerstar** — it is not tracked by this repo.
-
----
+clone, not in this repository** — it is not tracked by this repo.
 
 ## 3. Running it
 
@@ -120,17 +116,15 @@ curl -s http://localhost:32323/api/v1/telescope/0/connected
 
 The browser UI at <http://localhost:32323> lets you inspect device state and
 change the port (**Server settings → Server Port**) if `32323` is taken. Keep it
-at `32323` — that's the value Argos and the tests default to
+at `32323` — that's the value ARGOS and the tests default to
 (`SIMULATOR_PORT` in `tests/conftest.py`).
-
----
 
 ## 4. Manual app test against the sim
 
-With the simulator running, launch Argos:
+With the simulator running, launch ARGOS:
 
 ```bash
-cd ~/Documents/perso/dev/seerstar
+cd /path/to/argos
 ./run.sh
 ```
 
@@ -140,14 +134,12 @@ Then walk the app:
 |---|---|---|
 | 1. Connect | **Connection** | IP address `localhost`, port `32323` → **Connect equipment** (the 4 devices become Ready) |
 | 2. Preview | **Observe** | Start a 1 s exposure → image appears, **no UI freeze**, auto-STF stretches it |
-| 3. Display | **Display** tab | R/G/B histogram visible; black/white/midtone sliders react; view selector (super-pixel / bilinear / CFA channels) |
+| 3. Display | **Image display** dock | R/G/B histogram visible; black/white/midtone sliders react; view selector (super-pixel / bilinear / CFA channels) |
 | 4. Measure | on the image | Crosshair cursor + ROI selection → stats (min/max/mean/σ) show in the bar (not a big column) |
-| 5. Focus | **Focus** tab | HFD curve fills as exposures roll in |
-| 6. Mount | **Mount** tab | RA/Dec read back; jog moves the mount |
-| 7. Filter | **Filter** tab | Connect the wheel → current filter shown; "Move to" rotates (Dark/IR/LP) |
-| 8. Sequence | **Sequence** tab | Chain a few Light frames → progress advances, frames render |
-
----
+| 5. Focus | **Focusing** dock | HFD curve fills as exposures roll in |
+| 6. Mount | **Telescope** dock | RA/Dec read back; jog moves the mount |
+| 7. Filter | Filter selector in the **Acquisition** dock | Connect the wheel → current filter shown; selecting a slot rotates it (Dark/IR/LP). The filter wheel has no dock of its own |
+| 8. Sequence | The **Plan** mode in the sidebar | Chain a few Light frames → progress advances, frames render |
 
 ## 5. Automated integration tests
 
@@ -157,10 +149,10 @@ way a live session does. Every test is decorated `@simulator_required`, so it
 
 ```bash
 # Full suite (sim tests skip if it's not running)
-~/.local/bin/uv run --extra dev pytest
+uv run --extra dev pytest
 
 # Just the simulator suite (start the sim first)
-~/.local/bin/uv run --extra dev pytest tests/core/test_simulator_*.py -v
+uv run --extra dev pytest tests/core/test_simulator_*.py -v
 ```
 
 | File | Validates |
@@ -171,6 +163,7 @@ way a live session does. Every test is decorated `@simulator_required`, so it
 | [`test_simulator_filterwheel.py`](../tests/core/test_simulator_filterwheel.py) | connect, read position, change filter (Dark/IR/LP) |
 | [`test_simulator_sequence.py`](../tests/core/test_simulator_sequence.py) | **end-to-end `SequenceWorker`** → FITS subs in the Siril folder + per-frame QA headers + a valid `session.json` (§7); a multi-filter plan **drives the wheel** and ends on the last filter |
 | [`test_simulator_session.py`](../tests/core/test_simulator_session.py) | original smoke: camera→display pipeline, telescope position |
+| [`test_telescope.py`](../tests/core/test_telescope.py) | also carries `@simulator_required` cases alongside its unit tests |
 
 The sequence test runs the worker's `run()` synchronously on the test thread, so
 its Qt signals fire by direct connection — no event loop needed.
@@ -179,12 +172,10 @@ Pure-logic pieces that back these flows are also unit-tested **without** the sim
 [`test_metrics.py`](../tests/core/test_metrics.py) (`detect_stars` FWHM/eccentricity)
 and [`test_session_log.py`](../tests/core/test_session_log.py) (`session.json`).
 
----
-
 ## 6. Known sim quirks (expected, not bugs)
 
 The OmniSim camera is generic, so a couple of things differ from a real Seestar.
-Argos tolerates both on purpose:
+ARGOS tolerates both on purpose:
 
 - **Gain not implemented** → log line `Camera does not implement Gain —
   skipping`. The sim has no Gain property; the real Seestar does and is
@@ -198,8 +189,6 @@ Argos tolerates both on purpose:
 
 Both are informational. If you see them, the sim is working as intended.
 
----
-
 ## 7. Troubleshooting
 
 | Symptom | Fix |
@@ -211,8 +200,5 @@ Both are informational. If you see them, the sim is working as intended.
 | Port `32323` already in use | Change it in the sim's web UI (Server settings) **and** keep `tests/conftest.py` / the Connection panel in sync |
 | App connects but no image | Give the exposure time to finish; the sim needs ~1 s + download before `ImageReady` |
 
----
-
 **See also:** [ARCHITECTURE.md](ARCHITECTURE.md) ·
-[capture_panel.md](capture_panel.md) ·
 [CONTRIBUTING.md](CONTRIBUTING.md)

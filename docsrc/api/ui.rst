@@ -20,6 +20,16 @@ Modules
    :undoc-members:
    :show-inheritance:
 
+.. automodule:: argos.ui.palettes
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.ui.splash
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 .. automodule:: argos.ui.statusbar
    :members:
    :undoc-members:
@@ -170,6 +180,36 @@ Widgets
    :show-inheritance:
 
 .. automodule:: argos.ui.widgets.statistics_dock
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.ui.widgets.comparison_curve_panel
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.ui.widgets.dock_host
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.ui.widgets.session_review
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.ui.widgets.target_curve_panel
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.ui.widgets.variable_table
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.ui.widgets.vcurve
    :members:
    :undoc-members:
    :show-inheritance:

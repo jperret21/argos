@@ -1,6 +1,6 @@
 """AstrometryController — the live page's solve lifecycle + auto-solve policy.
 
-See ``docsrc/photometry_plan.md`` §4 (Workstream A3). A ``QObject`` that lives on the
+See ``notes/photometry_plan.md`` §4 (Workstream A3). A ``QObject`` that lives on the
 UI thread and owns a :class:`SolveWorker`. It centralises *when* and *how* the live
 frame is plate-solved so the page doesn't grow ad-hoc solve state:
 

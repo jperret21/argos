@@ -12,5 +12,9 @@ Quick start:
 
 ```sh
 uv sync --extra dev
-uv run --extra dev pytest
+# The suite runs in two processes; a single process can abort on the
+# simulator fixtures. This is what CI does.
+export QT_QPA_PLATFORM=offscreen
+uv run --extra dev pytest -q --deselect tests/ui/test_photometry_window.py
+uv run --extra dev pytest -q tests/ui/test_photometry_window.py
 ```

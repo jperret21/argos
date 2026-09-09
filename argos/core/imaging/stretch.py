@@ -1,7 +1,7 @@
 """Display stretch transforms + measurement stats — display/analysis only.
 
 Pure numpy, Qt-free, unit-tested. None of this touches the raw data written to
-FITS (see ``docsrc/capture_panel.md`` §0/§3): ``apply_stretch`` returns a *new*
+FITS (see ``notes/capture_panel.md`` §0/§3): ``apply_stretch`` returns a *new*
 uint8 array for the screen; the linear array is passed in unchanged.
 """
 

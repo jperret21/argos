@@ -1,4 +1,4 @@
-"""Ensemble differential photometry (docsrc/photometry_plan.md §6 C2).
+"""Ensemble differential photometry (notes/photometry_plan.md §6 C2).
 
 Zero-point from a comparison ensemble (mean of catalog − instrumental in the
 chosen band), then the target magnitude + an honest uncertainty that combines the

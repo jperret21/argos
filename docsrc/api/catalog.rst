@@ -39,3 +39,18 @@ Modules
    :members:
    :undoc-members:
    :show-inheritance:
+
+.. automodule:: argos.core.catalog.field_objects
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.core.catalog.gaia
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.core.catalog.point_identity
+   :members:
+   :undoc-members:
+   :show-inheritance:

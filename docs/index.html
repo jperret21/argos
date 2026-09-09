@@ -3,116 +3,129 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="ARGOS is a desktop application for variable-star and exoplanet time-series photometry with ZWO Seestar telescopes: Alpaca control, ASTAP plate solving, linear 16-bit FITS, AAVSO Extended export.">
-  <title>ARGOS — time-series photometry with a Seestar</title>
+  <meta name="description" content="ARGOS is a desktop workspace for variable-star observing with ZWO Seestar telescopes: record timed FITS sequences, follow relative brightness as frames arrive, and review each measurement against its source image.">
+  <meta property="og:title" content="ARGOS — variable-star observing with a Seestar">
+  <meta property="og:description" content="Record timed FITS sequences, follow relative brightness as frames arrive, and review the light curve alongside its source images. Free software, GPL v3.">
+  <title>ARGOS — variable-star observing with a Seestar</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="stylesheet" href="css/argos.css">
 </head>
 <body>
   <header class="site-header">
-    <a class="site-brand" href="index.html"><img src="favicon.svg" alt="">ARGOS</a>
+    <a class="site-brand" href="index.html" aria-current="page"><img src="favicon.svg" alt="">ARGOS</a>
     <nav aria-label="Main navigation">
-      <a href="getting-started.html">Start here</a>
-      <a href="science.html">Method</a>
-      <a href="hardware.html">Instruments</a>
-      <a href="releases.html">Releases</a>
-      <a href="https://github.com/jperret21/argos/tree/main/docs" target="_blank" rel="noopener">Technical docs</a>
+      <a href="install.html">Install</a>
+      <a href="https://github.com/jperret21/argos/tree/main/docsrc" target="_blank" rel="noopener">Documentation</a>
     </nav>
+    <details class="mobile-menu">
+      <summary>Menu</summary>
+      <div role="navigation" aria-label="Mobile navigation">
+        <a href="install.html">Install</a>
+        <a href="https://github.com/jperret21/argos/tree/main/docsrc" target="_blank" rel="noopener">Documentation ↗</a>
+        <a href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub ↗</a>
+      </div>
+    </details>
     <a class="site-external" href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub <span>↗</span></a>
   </header>
 
   <main>
     <section class="home-hero">
       <div>
-        <p class="release-line"><i class="status-dot"></i>GPL v3+ &nbsp;/&nbsp; ARGOS 0.4.1 &nbsp;/&nbsp; macOS arm64 + Debian x86-64</p>
+        <p class="release-line"><i class="status-dot"></i>ARGOS 0.4.1 &nbsp;/&nbsp; free software, GNU GPL v3</p>
         <h1>Put your smart telescope to scientific work.</h1>
-        <p class="lede">ARGOS is a desktop application for variable-star and exoplanet observing with smart telescopes. Telescope control over ASCOM Alpaca, ASTAP plate solving, linear 16-bit FITS, live differential photometry and AAVSO Extended export.</p>
+        <p class="lede">A desktop workspace for variable-star observing with ZWO Seestar telescopes. Record a timed sequence, follow relative brightness as the frames arrive, and review each point against the image that produced it.</p>
         <div class="actions">
-          <a class="action action-primary" href="releases.html">Download ARGOS 0.4.1 <span>↓</span></a>
-          <a class="action" href="#workspace">Workflow <span>↓</span></a>
+          <a class="action action-primary" href="install.html">Download 0.4.1 <span>→</span></a>
+          <a class="action" href="https://github.com/jperret21/argos/tree/main/docsrc" target="_blank" rel="noopener">Documentation <span>↗</span></a>
         </div>
-        <dl class="intro-facts">
-          <div><dt>Instrument</dt><dd>Seestar S30 Pro (S30, S50 unvalidated)</dd></div>
-          <div><dt>Output</dt><dd>16-bit FITS, session.json, AAVSO/CSV</dd></div>
-          <div><dt>Requires</dt><dd>ASTAP + star database</dd></div>
-        </dl>
+        <p class="existing-data">macOS and Debian · <a href="install.html">installers and release notes</a></p>
       </div>
 
       <figure class="app-window">
-        <div class="window-titlebar"><i class="window-dot"></i><i class="window-dot"></i><i class="window-dot"></i><b>ARGOS / observing session</b><span class="window-state">LIVE</span></div>
-        <picture><source srcset="img/screenshot-photometry.webp" type="image/webp"><img src="img/screenshot-photometry.png" alt="Solved field with comparison ensemble and differential photometry curve"></picture>
+        <div class="window-titlebar"><i class="window-dot"></i><i class="window-dot"></i><i class="window-dot"></i><b>ARGOS / differential photometry</b><span class="window-state">XX CYG</span></div>
+        <picture><source srcset="img/session-lightcurve.webp" type="image/webp"><img src="img/session-lightcurve.jpg" alt="ARGOS on a solved field of XX Cyg, with the differential-photometry window showing the light curve and the comparison-star panel"></picture>
         <div class="session-readout">
-          <div><span>Field</span><strong>ASTAP WCS</strong></div>
-          <div><span>Sources</span><strong>Gaia DR3, VSX</strong></div>
-          <div><span>Ensemble</span><strong>target, comp, check</strong></div>
-          <div><span>Curve</span><strong>Green plane</strong></div>
+          <div><span>Target</span><strong>XX Cyg</strong></div>
+          <div><span>Solve</span><strong>3.67″/px</strong></div>
+          <div><span>Ensemble</span><strong>8 comparison stars</strong></div>
+          <div><span>Curve</span><strong>Differential mag</strong></div>
         </div>
+        <figcaption><span>Live session, uncalibrated quick-look</span><span>0.4.1</span></figcaption>
       </figure>
     </section>
 
-    <section class="home-section" id="science">
+    <section class="home-section band">
       <div class="section-heading">
-        <p class="mono-label">Targets</p>
-        <h2>Variable stars and exoplanet transits.</h2>
+        <p class="mono-label">01 · What it does</p>
+        <h2>One night, one session folder.</h2>
       </div>
-      <div class="case-grid">
-        <article class="case">
-          <div class="case-head"><span>Variable star</span><span>Live preview</span></div>
-          <div class="curve-image"><picture><source srcset="img/rrlyrae-sesar-fit-dark.webp" type="image/webp"><img src="img/rrlyrae-sesar-fit-dark.png" alt="RR Lyrae light curve"></picture></div>
-          <div class="case-body">
-            <h3>Variable star</h3>
-            <p>VSX for the variable, AAVSO VSP for the comparison ensemble. Aperture photometry runs on the raw green CFA plane, frame by frame, against an ensemble zero point in band TG.</p>
-          </div>
-          <p class="case-foot">RR Lyrae example · AAVSO Extended export</p>
-        </article>
-
-        <article class="case">
-          <div class="case-head"><span>Exoplanet transit</span><span>Sequence planning</span></div>
-          <div class="transit-record">
-            <div class="record-top"><span>HD 189733 b</span><span>Observation plan</span></div>
-            <dl><div><dt>Ephemeris</dt><dd>NASA Exoplanet Archive</dd></div><div><dt>Epoch</dt><dd>BJD_TDB</dd></div><div><dt>Mid-transit</dt><dd>Computed for your site</dd></div><div><dt>Coverage</dt><dd>Pre + post baseline</dd></div></dl>
-            <svg viewBox="0 0 480 150" role="img" aria-label="Illustrative predicted exoplanet transit curve"><path class="axis" d="M15 19H470M15 75H470M15 131H470M15 18V133"/><path class="t-line" d="M18 44C74 43 93 45 128 44C165 44 179 45 194 59C204 70 213 101 240 102C267 102 276 70 286 59C301 45 315 44 352 44C387 45 406 43 466 44"/><g class="t-points"><circle cx="39" cy="46" r="2"/><circle cx="83" cy="43" r="2"/><circle cx="131" cy="45" r="2"/><circle cx="174" cy="48" r="2"/><circle cx="206" cy="79" r="2"/><circle cx="239" cy="103" r="2"/><circle cx="273" cy="80" r="2"/><circle cx="307" cy="45" r="2"/><circle cx="354" cy="44" r="2"/><circle cx="405" cy="42" r="2"/><circle cx="452" cy="45" r="2"/></g></svg>
-          </div>
-          <div class="case-body">
-            <h3>Exoplanet transit</h3>
-            <p>Find a confirmed planet, pull its published NASA ephemeris, and get the next mid-transit in BJD_TDB for your observing site. Set the pre- and post-transit baseline against the 30° altitude line.</p>
-          </div>
-          <p class="case-foot">HD 189733 b · illustrative curve, not a transit fit</p>
-        </article>
+      <div class="output-grid">
+        <article><span>01</span><h3>Identify the field</h3><p>ASTAP solves the frame. Gaia DR3, AAVSO VSX, SIMBAD and VSP name what is in it.</p></article>
+        <article><span>02</span><h3>Record the sequence</h3><p>Set exposure and cadence. Every frame is written as linear 16-bit FITS with correct optics headers.</p></article>
+        <article><span>03</span><h3>Review offline</h3><p>Open any curve point beside its source image, with focus, background and star count.</p></article>
       </div>
     </section>
 
-    <section class="workspace-band" id="workspace">
-      <div class="workspace-heading">
-        <p class="mono-label">Workflow</p>
-        <h2>Connect, identify, observe, review.</h2>
+    <section class="home-section">
+      <div class="section-heading">
+        <p class="mono-label">02 · Field identification</p>
+        <h2>Know what is in the frame.</h2>
       </div>
-      <ol class="sequence-table">
-        <li><span>01</span><strong>Prepare</strong><p>Site, telescope profile and working folder. Resolve the target, check its altitude, and build the sequence: frame type, filter, exposure, gain, count, interval.</p></li>
-        <li><span>02</span><a href="field-identification.html"><strong>Identify</strong></a><p>ASTAP solves the frame. Gaia DR3, VSX, SIMBAD, NASA hosts and VSP overlay it. Assign target, comparison and check roles.</p></li>
-        <li><span>03</span><strong>Observe</strong><p>Run the sequence with pause, resume and stop. One linear 16-bit FITS per frame. FWHM, HFD, sky background and the differential curve update live.</p></li>
-        <li><span>04</span><a href="review-session.html"><strong>Review</strong></a><p>Offline, with no telescope connected: quality trends, curves, FITS headers, and the source frame behind any measurement point.</p></li>
-      </ol>
+      <figure class="app-window wide">
+        <div class="window-titlebar"><i class="window-dot"></i><i class="window-dot"></i><i class="window-dot"></i><b>ARGOS / field identification</b><span class="window-state">HD 189733</span></div>
+        <picture><source srcset="img/field-identification.webp" type="image/webp"><img src="img/field-identification.jpg" alt="ARGOS field identification: catalogue overlays on a solved field, with the information card of the exoplanet host HD 189733"></picture>
+        <div class="session-readout">
+          <div><span>Identified</span><strong>HD 189733</strong></div>
+          <div><span>Source</span><strong>NASA Exoplanet Archive</strong></div>
+          <div><span>Depth</span><strong>Gaia G ≤ 12.3</strong></div>
+          <div><span>In field</span><strong>123 variables, 1 host</strong></div>
+        </div>
+        <figcaption><span>Catalogue overlays, a per-field query budget and local caches</span></figcaption>
+      </figure>
     </section>
 
-    <section class="release-overview" id="releases">
+    <section class="home-section band">
+      <div class="section-heading">
+        <p class="mono-label">03 · One result</p>
+        <h2>A rising branch, on the published template.</h2>
+      </div>
+      <figure class="app-window wide">
+        <picture><source srcset="img/rrlyrae-sesar-fit-dark.webp" type="image/webp"><img src="img/rrlyrae-sesar-fit-dark.png" alt="RR Lyrae light curve folded on a period of 0.56674 days, the observed points tracing the rising branch of the Sesar 2010 published template"></picture>
+        <div class="session-readout">
+          <div><span>Star</span><strong>RR Lyrae</strong></div>
+          <div><span>Period</span><strong>0.56674 d</strong></div>
+          <div><span>Observed</span><strong>Rising branch, ≈2.5 h</strong></div>
+          <div><span>Template</span><strong>Sesar 2010, r-band</strong></div>
+        </div>
+        <figcaption><span>One night of frames, folded on the catalogue period</span><span>AAVSO Extended export</span></figcaption>
+      </figure>
+      <div class="release-checklist">
+        <div><span>01 · ARGOS</span><strong>Records</strong><p>Timed FITS frames, a live differential curve, and the run-level uncertainty floor.</p></div>
+        <div><span>02 · Siril</span><strong>Calibrates and registers</strong><p>Dark, flat and bias calibration, then registration of the untouched raw frames.</p></div>
+        <div><span>03 · star_var_script</span><strong>Reduces</strong><p>Final photometry and the AAVSO export. ARGOS applies the same systematic-floor model live, so both share one uncertainty contract.</p></div>
+      </div>
+      <p class="method-boundary">The live curve is a quick-look on raw, uncalibrated subs. The publishable measurement is produced downstream by <a href="https://siril.org" target="_blank" rel="noopener">Siril</a>, free astronomical image-processing software, and <code>star_var_script</code>. ARGOS keeps every raw frame so that reduction stays independent and auditable.</p>
+    </section>
+
+    <section class="release-overview">
       <div class="release-intro">
-        <p class="mono-label">Current release</p>
-        <h2>ARGOS 0.4.1</h2>
+        <p class="mono-label">04 · Requirements</p>
+        <h2>What you need.</h2>
       </div>
       <div class="release-manifest">
-        <div class="manifest-row"><span>macOS</span><strong>Apple silicon <code>.dmg</code>, 67 MB, unsigned</strong><a href="https://github.com/jperret21/argos/releases" target="_blank" rel="noopener">Download ↗</a></div>
-        <div class="manifest-row"><span>Debian</span><strong>x86-64 <code>.deb</code>, technical preview</strong><a href="https://github.com/jperret21/argos/releases" target="_blank" rel="noopener">Download ↗</a></div>
-        <div class="manifest-row"><span>Source</span><strong>Python 3.11, <code>uv sync --extra dev</code></strong><a href="https://github.com/jperret21/argos" target="_blank" rel="noopener">Open GitHub ↗</a></div>
-        <div class="manifest-row"><span>Field guide</span><strong>First observation with 0.4.1</strong><a href="getting-started.html">Start here →</a></div>
+        <div class="manifest-row"><span>Telescope</span><strong>Seestar S30 Pro</strong><a href="install.html">S30 and S50 unvalidated →</a></div>
+        <div class="manifest-row"><span>Computer</span><strong>macOS on Apple silicon, or Debian x86-64</strong><a href="install.html">Installers →</a></div>
+        <div class="manifest-row"><span>Plate solving</span><strong>ASTAP and a star database, installed separately</strong><a href="https://www.hnsky.org/astap.htm" target="_blank" rel="noopener">ASTAP ↗</a></div>
+        <div class="manifest-row"><span>Connection</span><strong>ASCOM Alpaca</strong><a href="https://github.com/jperret21/argos/tree/main/docsrc" target="_blank" rel="noopener">Documentation ↗</a></div>
       </div>
     </section>
+
   </main>
 
   <footer class="site-footer">
     <a class="site-brand" href="index.html"><img src="favicon.svg" alt="">ARGOS</a>
-    <p>Open-source observing software · GNU GPL v3+</p>
+    <p>Open-source observing software · GNU GPL v3+ · Jules Perret — built under Californian skies</p>
     <a href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub ↗</a>
   </footer>
 </body>

@@ -1,1 +1,179 @@
-/* SeerControl docs — custom overrides */
+/* ARGOS documentation — readability overrides on top of Furo.
+   Kept deliberately small: adjust spacing, tables and cards, and leave the
+   theme's colour system alone so light/dark keep working. */
+
+/* ---------------------------------------------------------------- layout */
+
+/* Furo's default column is narrow for tables of FITS keywords and for
+   displayed equations. A little more room, without going full-width. */
+.content {
+  width: 52em;
+  max-width: 100%;
+}
+
+article h2 {
+  margin-top: 2.2em;
+  padding-top: 0.6em;
+  border-top: 1px solid var(--color-background-border);
+}
+
+article h3 {
+  margin-top: 1.8em;
+}
+
+/* First heading of a page shouldn't carry a rule above it. */
+article > section > h2:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+/* --------------------------------------------------------------- reading */
+
+article p,
+article li {
+  line-height: 1.65;
+}
+
+/* Furo shrinks admonition text; these boxes carry real content here. */
+:root {
+  --admonition-font-size: 0.95rem;
+  --admonition-title-font-size: 0.95rem;
+}
+
+.admonition {
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.admonition > .admonition-title {
+  letter-spacing: 0.01em;
+}
+
+/* ---------------------------------------------------------------- tables */
+
+/* Long reference tables (headers, parameters, protocol fields) must never
+   push the page sideways. */
+table.docutils {
+  width: 100%;
+  display: table;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+.table-wrapper {
+  overflow-x: auto;
+  margin: 1.2em 0;
+}
+
+table.docutils th {
+  background: var(--color-background-secondary);
+  font-weight: 600;
+  text-align: left;
+}
+
+table.docutils td,
+table.docutils th {
+  padding: 0.5em 0.8em;
+  vertical-align: top;
+  border: 1px solid var(--color-background-border);
+}
+
+table.docutils tbody tr:nth-child(even) {
+  background: var(--color-background-secondary);
+}
+
+/* Keep a keyword column from wrapping mid-name. */
+table.docutils td > p > code,
+table.docutils td > code {
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------- sd cards */
+
+.sd-card {
+  border: 1px solid var(--color-background-border);
+  border-radius: 8px;
+  background: var(--color-background-secondary);
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+
+.sd-card:hover {
+  border-color: var(--color-brand-content);
+}
+
+/* Cards that are themselves links get a small lift on hover. */
+a.sd-stretched-link:hover ~ .sd-card-body,
+.sd-card:has(a.sd-stretched-link):hover {
+  transform: translateY(-2px);
+}
+
+.sd-card .sd-card-title {
+  font-weight: 650;
+  font-size: 1.02rem;
+  margin-bottom: 0.4em;
+  color: var(--color-content-foreground);
+}
+
+.sd-card .sd-card-body {
+  padding: 1.1em 1.2em;
+}
+
+.sd-card .sd-card-body > p:last-child {
+  margin-bottom: 0;
+}
+
+/* ------------------------------------------------------------------ math */
+
+div.math,
+.math-block {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.4em 0;
+}
+
+/* ------------------------------------------------------------------ code */
+
+code.literal {
+  font-size: 0.88em;
+  padding: 0.12em 0.34em;
+  border-radius: 4px;
+}
+
+/* --------------------------------------------------------------- lists */
+
+/* Checklists written as - [ ] should read as a checklist, not a bullet. */
+.task-list-item {
+  list-style-type: none;
+}
+
+.task-list-item input[type="checkbox"] {
+  margin-right: 0.5em;
+}
+
+ul.simple > li > p {
+  margin-bottom: 0.3em;
+}
+
+/* -------------------------------------------------------------- sidebar */
+
+/* Toctree captions are the only structure the sidebar has here, so make
+   them read as section headers rather than faint labels. */
+.sidebar-tree .caption,
+.sidebar-tree p.caption {
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-sidebar-caption-text);
+  margin-top: 1.4em;
+}
+
+/* Code inside a card must scroll rather than clip — cards are narrow. */
+.sd-card .highlight,
+.sd-card pre {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.sd-card .highlight pre {
+  white-space: pre;
+}

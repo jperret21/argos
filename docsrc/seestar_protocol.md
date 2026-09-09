@@ -1,9 +1,24 @@
 # Seestar S30 Pro — Protocol & Control Reference
 
-> Synthesized from: `seevar-main/dev/logic/*.MD`, `seestar_alp` source code,
-> and real-device testing (firmware 7.18 / fw_ver_int ~2706+, April–May 2026).
+```{admonition} Where this comes from
+:class: note
 
----
+This is a **reverse-engineering record**, not a vendor specification. ZWO
+publishes no protocol documentation for the Seestar. Everything here was
+established from three sources: the
+[`seestar_alp`](https://github.com/smart-underworld/seestar_alp) project's
+source, community protocol notes, and real-device testing against **firmware
+7.18** (`fw_ver_int` ~2706+, April–May 2026).
+
+Expect a firmware update to break something. Where a behaviour was confirmed on
+hardware, the date is given next to it; treat anything unconfirmed as a
+hypothesis.
+```
+
+The standard half of this — everything on port 32323 — is plain
+[ASCOM Alpaca](https://ascom-standards.org/api/), and ARGOS speaks it through
+[alpyca](https://github.com/ASCOMInitiative/alpyca). Only the native JSON-RPC
+port is Seestar-specific.
 
 ## 1. Hardware Facts
 
@@ -18,10 +33,8 @@
 | AAVSO filter code | TG (untransformed Bayer green) |
 | Optics | 160 mm f/5.3, quadruplet APO |
 | Pixel scale | 3.74 arcsec/pixel |
-| Field of view | ~4.6° (276 arcmin) |
+| Field of view | 3.99° × 2.24° (4.58° diagonal, 239 × 134 arcmin) |
 | Mount type | Alt-Az |
-
----
 
 ## 2. Port Architecture
 
@@ -29,7 +42,7 @@
 |------|----------|--------|---------|
 | **32323** | HTTP Alpaca REST | **Active — primary** | All hardware control |
 | 4700 | JSON-RPC TCP | Silent — unusable | Accepts TCP but never responds to any command |
-| 4720 | UDP | No response | `scan_iscope` — not required on firmware 7.18+ |
+| 4720 | UDP | No response observed | `scan_iscope` intro. ARGOS sends it on **every** native connect and treats failure as non-fatal (`native_client.py`) — so it is neither "required" nor skippable from the outside |
 | 32227 | UDP | No response | Alpaca discovery broadcast — unreliable on S30-Pro |
 | 4801 | Binary | Open but unused | Preview frame stream — see plan_live_preview.md |
 | 80 | HTTP | Incomplete responses | Internal firmware web UI — not usable |
@@ -43,8 +56,6 @@
 - `MoveAxis` (Alpaca) **works** on firmware 7.18+ despite earlier docs saying otherwise.
   Measured: ~3°/1.5s at 2 deg/s, all 4 directions confirmed.
 - No UDP handshake is required. Direct HTTP to port 32323 is sufficient.
-
----
 
 ## 3. Validated Connection Recipe (2026-05-10)
 
@@ -120,15 +131,13 @@ import time; time.sleep(2.0)
 scope.stop_axis(1)                      # stop
 
 cam = Camera("192.168.0.18", 32323)
-cam.connect()                           # width=2160, height=3840, gain 0-600
+cam.connect()                           # width=3840, height=2160, gain 0-600
 cam.set_gain(80)
 cam.start_exposure(10.0)
 while not cam.is_image_ready():
     time.sleep(0.5)
 arr = cam.get_image_array()             # numpy uint16 (height, width)
 ```
-
----
 
 ## 4. Alpaca REST API (Port 32323)
 
@@ -140,11 +149,9 @@ Base URL: `http://<telescope_ip>:32323`
 |--------|-------|---------|
 | Telescope | 0 | Slew, track, park, unpark |
 | Camera | 0 | IMX585 telephoto (science camera) |
-| Camera | 1 | Wide-angle / finder |
 | Focuser | 0 | Telephoto focuser |
 | Focuser | 1 | Wide-angle focuser |
 | FilterWheel | 0 | Dark(0) / IR(1) / LP(2) |
-| Switch | 0 | Dew heater on/off |
 
 ### Common query parameters
 
@@ -154,8 +161,6 @@ ClientID=42&ClientTransactionID=<n>
 
 `ClientTransactionID` is an atomic counter — increment on each call.
 Always check `ErrorNumber` in every response: 0 = success, anything else = failure.
-
----
 
 ## 5. Telescope Control
 
@@ -206,7 +211,7 @@ Body: ClientID=42&ClientTransactionID=<n>&<params>
 | 1024 | Property not implemented |
 | 1032 | Not initialised (unpark first) |
 | 1036 | Action not implemented |
-| 1279 | Command rejected (e.g. below horizon) |
+| 1279 | Command rejected (e.g. below horizon) — observed on the device; ARGOS has no specific handler for it |
 
 ### MoveAxis — confirmed working on firmware 7.18+
 
@@ -225,8 +230,6 @@ Body: ClientID=1&ClientTransactionID=<n>&Axis=0&Rate=0.0   # stop
 
 Measured movement: ~3° per 1.5 s at Rate=2.0 deg/s.
 Rate=0.0 stops immediately.
-
----
 
 ## 6. Camera Control
 
@@ -251,7 +254,7 @@ GET /api/v1/camera/0/<property>?ClientID=42&ClientTransactionID=<n>
 |--------|--------|--------|
 | `gain` | `Gain=<0-600>` | Set sensor gain (default: 80) |
 | `startexposure` | `Duration=<seconds>&Light=true` | Start exposure |
-| `abortexposure` | — | Stop active exposure |
+| `stopexposure` | — | Stop active exposure — ARGOS calls this, never `abortexposure` |
 
 ### Image download
 
@@ -271,12 +274,12 @@ GET /api/v1/camera/0/camerastate  ← poll this
 GET /api/v1/camera/0/imageready   ← True when ready
 ```
 
-Timeouts used in seevar:
+Timeouts below come from the external *seevar* project and are **not** used by
+ARGOS, which defines its own (for example a 300 s poll bound on a synchronous
+mount slew):
 - `SLEW_TIMEOUT = 60 s`
 - `EXPOSE_TIMEOUT = 120 s`
 - `DOWNLOAD_TIMEOUT = 300 s`
-
----
 
 ## 7. Native JSON-RPC TCP (Port 4700) — Jogging Only
 
@@ -293,7 +296,15 @@ wire = (json.dumps(msg) + "\r\n").encode("utf-8")
 **Note:** Some methods must omit the `params` key entirely (do not send `"params": {}`).
 `get_device_state` is one such method — the firmware rejects an explicit empty dict.
 
-### UDP handshake (required before TCP connect)
+### UDP handshake (always attempted, best-effort)
+
+```{note}
+Earlier revisions of this page said in one place that the handshake was *not
+required* and in another that it was *required*. Neither is what the code does:
+`_send_udp_intro()` runs unconditionally before the TCP connect, and a failure
+is logged as `Native: UDP intro failed (non-fatal)` and ignored. It costs
+nothing, it sometimes helps, and it never blocks the connection.
+```
 
 ```python
 msg = {"id": 1, "method": "scan_iscope", "params": ""}
@@ -344,7 +355,7 @@ Pattern for held-button jogging:
 | Firmware ver_int | Action |
 |-----------------|--------|
 | < 2582 | No inject |
-| 2582 – 2705 | Add `"verify": true` to params |
+| 2583 – 2704 | Add `"verify": true` to params (strict bounds: 2582 and 2705 are excluded) |
 | ≥ 2706 (SSL-auth) | No inject (rejected with code 109) |
 | 0 (unknown) | No inject (assume modern) |
 
@@ -352,8 +363,6 @@ Pattern for held-button jogging:
 
 Send `scope_get_equ_coord` every 10s — without it the Seestar closes the connection
 after ~20s of inactivity (BrokenPipe on next command).
-
----
 
 ## 8. Filter Wheel
 
@@ -368,8 +377,6 @@ Body: ClientID=42&ClientTransactionID=<n>&Position=<0-2>
 | 1 | IR | Infrared pass |
 | 2 | LP | Light pollution filter |
 
----
-
 ## 9. Hardware Fingerprinting
 
 To confirm the device is an S30 Pro (not S30 or S50):
@@ -381,26 +388,30 @@ GET /api/v1/camera/0/cameraxsize?ClientID=42&ClientTransactionID=1
 - **3840** → S30 Pro (IMX585) ✅
 - **1920** → S30 or S50 (IMX662/IMX462)
 
----
-
 ## 10. Device Discovery
 
-**Preferred:** Direct HTTP probe
+ARGOS tries three layers, in this order:
+
+**1. UDP broadcast** on port 32227 — the standard Alpaca discovery.
+
+**2. Direct HTTP probe** of the last-used host, then the profile's access-point
+address, once the broadcast comes back empty:
 
 ```
 GET http://<ip>:32323/management/v1/configureddevices
 ```
 
-A 200 response with 7 devices confirms the telescope is online.
+A 200 response confirms the telescope is online.
 
-**Fallback:** UDP broadcast on port 32227 (unreliable on S30-Pro).
-
----
+**3. TCP sweep** of the local /24 subnet, confirming each candidate with the
+same management endpoint.
 
 ## 11. Unpark Behaviour
 
-`PUT /api/v1/telescope/0/unpark` deploys the arm and triggers a `ScopeMoveToHorizon`
-event — the arm swings to the horizon ready for use.
+`PUT /api/v1/telescope/0/unpark` deploys the arm — it swings to the horizon
+ready for use. The device may emit an unsolicited event as it does so; ARGOS
+logs whatever `method` string arrives but does not name or handle any specific
+event here.
 
 `park` closes the arm and is the correct safe end state.
 
@@ -408,18 +419,31 @@ event — the arm swings to the horizon ready for use.
 The user may need to use the native Seestar app for the first initialization in a session.
 After that, `park` / `unpark` via Alpaca work correctly.
 
----
+## 12. Safety thresholds — proposed, NOT implemented in 0.4.1
 
-## 12. Safety Vetoes
+```{danger}
+**None of the following exists in ARGOS 0.4.1.** This table is a design note
+that was previously presented as behaviour. Do not rely on any of it.
 
-| Condition | Threshold | Action |
-|-----------|-----------|--------|
-| Sensor temperature | > 55 °C | Park, abort |
-| Battery | < 10% | Park, alert |
-| Target below horizon | altitude < 30° | Skip target |
-| Pointing error (post-solve) | > 12 arcmin | Retry/skip |
+Verified against the source: the string `battery` appears **nowhere** in
+`argos/`. No altitude minimum, no pointing-error threshold and no temperature
+comparison exist. `CCD-TEMP` is read and recorded — into the FITS header and the
+session log — and never acted upon. The only `park()` call is the opt-in
+end-of-plan action you choose in the acquisition options.
 
----
+This is why {doc}`index` says, in its first admonition, that there is no weather
+safety and no restart recovery, and that the telescope must be operated
+attended. That statement is the accurate one.
+```
+
+Retained as a specification for a future release:
+
+| Condition | Proposed threshold | Intended action | Status |
+|-----------|-----------|--------|---|
+| Sensor temperature | > 55 °C | Park, abort | value read, never compared |
+| Battery | < 10 % | Park, alert | **no battery telemetry at all** |
+| Target below horizon | altitude < 30° | Skip target | not implemented |
+| Pointing error (post-solve) | > 12 arcmin | Retry/skip | not implemented |
 
 ## 13. FITS Headers (Correct Values for S30 Pro)
 

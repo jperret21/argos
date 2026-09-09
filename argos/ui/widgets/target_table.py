@@ -1,4 +1,4 @@
-"""Target-set management table (docsrc/photometry_plan.md §5 B4, P5).
+"""Target-set management table (notes/photometry_plan.md §5 B4, P5).
 
 Review the night's saved stars (role / name / RA / Dec / mags), remove one, or
 copy the lot as TSV. Display only — the page owns the ``TargetSet`` and handles

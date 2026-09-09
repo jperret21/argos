@@ -13,7 +13,7 @@ concurrency:
 jobs:
   test:
     # macOS is the only platform Argos is validated on today. A Linux job
-    # lands with the .deb work (see docsrc/release_0_4_1.md), not before —
+    # lands with the .deb work (see notes/release_0_4_1.md), not before —
     # a green CI on an unported platform would be a false signal.
     runs-on: macos-latest
 

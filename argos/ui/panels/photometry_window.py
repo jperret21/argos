@@ -1,4 +1,4 @@
-"""Floating Photometry window (docsrc/photometry_plan.md §6 C5/C6).
+"""Floating Photometry window (notes/photometry_plan.md §6 C5/C6).
 
 Hosts the live differential light curve + the session-metrics panel in tabs. A
 separate top-level window (like the analysis window) so it can sit on a second

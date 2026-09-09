@@ -1,4 +1,4 @@
-"""Measure a target set on one solved frame (docsrc/photometry_plan.md §6 C4).
+"""Measure a target set on one solved frame (notes/photometry_plan.md §6 C4).
 
 Glue between the catalog (``TargetSet``), the WCS and the aperture/differential
 primitives: project each saved star to green px, aperture-measure it, then

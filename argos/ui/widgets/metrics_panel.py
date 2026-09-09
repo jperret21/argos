@@ -1,4 +1,4 @@
-"""Session metrics over time (docsrc/photometry_plan.md §6 C6).
+"""Session metrics over time (notes/photometry_plan.md §6 C6).
 
 A single plot with a metric selector — sensor temperature, airmass, sky level,
 FWHM, HFD, star count vs elapsed time. Each series stores its own samples (fed at

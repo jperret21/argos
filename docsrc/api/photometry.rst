@@ -34,3 +34,23 @@ Modules
    :members:
    :undoc-members:
    :show-inheritance:
+
+.. automodule:: argos.core.photometry.params
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.core.photometry.quality
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.core.photometry.tracking
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: argos.core.photometry.uncertainty
+   :members:
+   :undoc-members:
+   :show-inheritance:

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SeerControl launcher
+# ARGOS launcher
 set -e
 cd "$(dirname "$0")"
 

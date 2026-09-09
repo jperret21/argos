@@ -84,3 +84,7 @@ Modules
    :members:
    :undoc-members:
    :show-inheritance:
+
+.. automodule:: argos.core.imaging.focus
+   :members:
+   :show-inheritance:

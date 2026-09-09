@@ -1,4 +1,4 @@
-"""Airmass + Julian date helpers (docsrc/photometry_plan.md §6 C4).
+"""Airmass + Julian date helpers (notes/photometry_plan.md §6 C4).
 
 Qt-free, dependency-light. JD is the standard calendar→Julian-date conversion
 for an exposure-midpoint UTC datetime. (BJD_TDB, the publishable standard, is

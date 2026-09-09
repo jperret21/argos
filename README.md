@@ -35,13 +35,12 @@ auditable reduction workflow in Siril and `star_var_script`.
 - Creates an explicit, local and redacted support bundle. ARGOS has no
   telemetry, analytics or automatic crash upload.
 
-Read the public guides before the first session:
+Read the documentation before the first session:
 
-- [Start here](https://perretjules.com/argos/getting-started.html)
-- [Identify a solved field](https://perretjules.com/argos/field-identification.html)
-- [Review a session](https://perretjules.com/argos/review-session.html)
-- [Method and limits](https://perretjules.com/argos/science.html)
-- [Instrument profiles](https://perretjules.com/argos/hardware.html)
+- [Install and release notes](https://perretjules.com/argos/install.html)
+- [First observing session](notes/guide_terrain_0_4_1_fr.md)
+- [Identify a solved field](docsrc/field_identification.md)
+- [What changed in 0.4.1](notes/release_0_4_1.md)
 
 ## Supported scope and roadmap
 
@@ -102,7 +101,7 @@ uv run python main.py
 ```
 
 See [`docsrc/simulator_testing.md`](docsrc/simulator_testing.md) for the
-simulator workflow and [`docsrc/guide_terrain_0_4_1.md`](docsrc/guide_terrain_0_4_1.md)
+simulator workflow and [`notes/guide_terrain_0_4_1_fr.md`](notes/guide_terrain_0_4_1_fr.md)
 for the technical field guide maintained with the source tree.
 
 ## Privacy and field diagnostics
@@ -129,7 +128,11 @@ For local checks:
 ```bash
 uv run --extra dev ruff check argos/ tests/ main.py
 uv run --extra dev black --check argos/ tests/ main.py
-uv run --extra dev pytest
+# The suite runs in two processes; a single process can abort on the
+# simulator fixtures. This is what CI does.
+export QT_QPA_PLATFORM=offscreen
+uv run --extra dev pytest -q --deselect tests/ui/test_photometry_window.py
+uv run --extra dev pytest -q tests/ui/test_photometry_window.py
 uv run --extra docs sphinx-build -W -b html docsrc /tmp/argos-docs
 ```
 

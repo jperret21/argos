@@ -92,16 +92,18 @@ def seestar_simulator():
     """Start the seestar_alp simulator in an in-process background thread.
 
     Yields a dict with ``host``, ``tcp_port``, and ``udp_port``.
-    Automatically skipped if the seestar_alp project is not present next to
-    Seestar_controller, or if its dependencies are not installed.
+    Automatically skipped if the seestar_alp checkout is not present next to
+    this repository, or if its dependencies are not installed.
 
-    Install simulator dependencies (once, into the system/active Python):
-        pip install tomlkit pyhocon blinker pydash geomag tzlocal
+    The simulator's dependencies (tomlkit, pyhocon, blinker, pydash, geomag,
+    tzlocal) are already in this project's ``dev`` extra, so ``uv sync --extra
+    dev`` covers them; no separate pip install is needed.
     """
     if not _is_seestar_sim_available():
         pytest.skip(
             f"seestar_alp simulator not found at {_SEESTAR_SIM_DIR}. "
-            "Clone seestar_alp-main next to Seestar_controller to run native tests."
+            "Clone https://github.com/smart-underworld/seestar_alp as the directory "
+            "name 'seestar_alp-main', beside this repository, to run native tests."
         )
 
     # Add simulator source to sys.path so its local imports resolve.

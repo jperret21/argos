@@ -1,4 +1,4 @@
-"""On-image star-info card (docsrc/photometry_plan.md §5 B2, confirmed UX).
+"""On-image star-info card (notes/photometry_plan.md §5 B2, confirmed UX).
 
 A compact overlay card that shows what the user clicked — catalog identity +
 RA/Dec + mags + measured FWHM/SNR — and offers role buttons to build the

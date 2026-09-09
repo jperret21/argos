@@ -1,4 +1,4 @@
-"""Light-curve accumulator + CSV export (docsrc/photometry_plan.md §6 C3).
+"""Light-curve accumulator + CSV export (notes/photometry_plan.md §6 C3).
 
 One :class:`LightCurve` per target; points are appended as subs are measured and
 written to ``photometry.csv`` (the hand-off to post-processing). Qt-free.
