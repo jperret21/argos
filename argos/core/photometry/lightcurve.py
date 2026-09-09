@@ -24,7 +24,9 @@ _COLUMNS = (
     "comps_used",
     "relative_flux",
     "relative_flux_err",
+    "relative_comps_used",
     "saturated",
+    "suspect",
 )
 
 #: Session export retains the identity and role of every measured star.  Older
@@ -44,12 +46,20 @@ class LcPoint:
     airmass: float | None = None
     fwhm: float | None = None
     sky_adu: float | None = None
+    #: Comparisons behind ``mag`` — the magnitude ensemble.
     comps_used: int = 0
     saturated: bool = False
+    #: Aperture peak lacked PSF support (hot pixel / cosmic ray suspicion).
+    #: Recorded, never used to drop a point: the observer decides.
+    suspect: bool = False
     formal_mag_err: float | None = None
     sigma_syst: float | None = None
     relative_flux: float | None = None
     relative_flux_err: float | None = None
+    #: Comparisons behind ``relative_flux``. Filtered differently from
+    #: ``comps_used`` (the ratio path also rejects *suspect* stars), so the two
+    #: legitimately differ on the same row.
+    relative_comps_used: int = 0
 
 
 @dataclass
@@ -103,7 +113,7 @@ class LightCurve:
 
 
 def _row(p: LcPoint) -> list:
-    """One CSV row (the canonical 9 columns) for a light-curve point."""
+    """One CSV row, in ``_COLUMNS`` order, for a light-curve point."""
     return [
         p.jd_utc,
         "" if p.bjd_tdb is None else p.bjd_tdb,
@@ -117,7 +127,9 @@ def _row(p: LcPoint) -> list:
         p.comps_used,
         "" if p.relative_flux is None else p.relative_flux,
         "" if p.relative_flux_err is None else p.relative_flux_err,
+        p.relative_comps_used,
         int(p.saturated),
+        int(p.suspect),
     ]
 
 
@@ -170,7 +182,9 @@ def _point_from_row(row: dict[str, str]) -> LcPoint:
         fwhm=_opt_float(row.get("fwhm")),
         sky_adu=_opt_float(row.get("sky_adu")),
         comps_used=int(row.get("comps_used") or 0),
+        relative_comps_used=int(row.get("relative_comps_used") or 0),
         saturated=bool(int(row.get("saturated") or 0)),
+        suspect=bool(int(row.get("suspect") or 0)),
         formal_mag_err=_opt_float(row.get("formal_mag_err")) or mag_err,
         sigma_syst=_opt_float(row.get("sigma_syst")),
         relative_flux=_opt_float(row.get("relative_flux")),

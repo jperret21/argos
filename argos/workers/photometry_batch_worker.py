@@ -5,8 +5,10 @@ measure a whole folder of already-saved subs against a target set, off the UI
 thread. Uses the SAME measurement core as the live path
 (:func:`argos.core.photometry.params.measure_frame` → ``measure_targets``), so
 comps get their catalog magnitudes and the physics is identical; the only
-intentional live/batch difference is the aperture FWHM (a saved sub carries no
-measured FWHM, so the aperture floors to ``aperture_min_px``).
+intentional live/batch difference is the aperture FWHM: this worker measures the
+field FWHM once, on the first readable frame, and holds it for the whole series.
+Only when no stars are detected does it fall through to ``DEFAULT_FWHM`` — which
+gives a *wider* aperture than the floor, not the floor itself.
 
 Emits progress + a per-frame point stream and writes the canonical 9-column
 CSVs (:meth:`LightCurve.to_csv`) so Analyze can reload the result. Cancellable
@@ -202,7 +204,8 @@ class PhotometryBatchWorker(QThread):
 
         Time-series practice: a single radius for the whole run, sized from
         the measured seeing, instead of the aperture_min_px floor (saved subs
-        carry no FWHM header). None (→ floor) when no stars are detected.
+        carry no FWHM header). None when no stars are detected, which makes the
+        aperture fall back to ``DEFAULT_FWHM`` — wider than the floor.
         """
         from argos.core.imaging.metrics import detect_stars
 

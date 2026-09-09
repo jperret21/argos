@@ -77,6 +77,8 @@ from argos.core.catalog.offline import essential_catalogue_objects
 from argos.core.catalog.photometry import separation_arcmin
 from argos.core.catalog.object_resolver import is_variable_object_type
 from argos.core.catalog.targets import TargetStar
+from argos.core.hardware import active as hardware
+from argos.core.imaging import sensor_models
 from argos.core.imaging.astrometry_session import field_geometry, project_points
 from argos.core.imaging.debayer import VIEW_SUPERPIXEL
 from argos.core.imaging.metrics import (
@@ -2266,15 +2268,21 @@ class ImagingPage(QWidget):
         worker.start()
 
     def _engine_egain(self) -> float:
-        """e-/ADU from the config table (batch has no live driver handle)."""
+        """e-/ADU for an offline batch: config table, then the sensor reference.
+
+        Mirrors ``AcquisitionEngine._egain`` minus the driver step, which needs
+        a live handle. Falling back to 1.0 here — as this used to — silently
+        treated ADU as electrons and made every batch SNR and formal error
+        wrong, without any warning.
+        """
+        gain = self._camera_dock.params().gain
         table = self._cfg("camera.egain_table", {}) or {}
-        gain = str(self._camera_dock.params().gain)
-        if isinstance(table, dict) and gain in table:
+        if isinstance(table, dict) and str(gain) in table:
             try:
-                return float(table[gain])
+                return float(table[str(gain)])
             except (TypeError, ValueError):
                 pass
-        return 1.0
+        return sensor_models.lookup_egain(hardware.profile().sensor, gain)
 
     @pyqtSlot(object)
     def _on_batch_done(self, result) -> None:
