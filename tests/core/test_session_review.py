@@ -101,3 +101,30 @@ def test_review_recovers_roles_from_per_star_curve_files(tmp_path) -> None:
     comparison = next(curve for curve in curves.values() if curve.role == "comparison")
     assert target.name == "XX Cyg"
     assert comparison.name == "106" and comparison.auid == "000-BJV-171"
+
+
+def test_review_loads_persisted_comparison_quality(tmp_path) -> None:
+    root = tmp_path / "20260828T010203Z_XX_Cyg"
+    root.mkdir()
+    (root / "session.json").write_text(json.dumps({"object": "XX Cyg", "frames": []}))
+    (root / "photometry_quality.json").write_text(
+        json.dumps(
+            {
+                "criteria": {"min_points": 10},
+                "comparison_stars": [
+                    {
+                        "name": "106",
+                        "auid": "000-BJV-171",
+                        "n_valid": 12,
+                        "scatter_mag": 0.021,
+                        "median_formal_error_mag": 0.012,
+                        "status": "stable",
+                    }
+                ],
+            }
+        )
+    )
+
+    review = load_session(root, read_temperature=False)
+
+    assert review.comparison_quality["comparison_stars"][0]["status"] == "stable"

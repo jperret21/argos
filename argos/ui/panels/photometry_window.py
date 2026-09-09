@@ -203,7 +203,8 @@ class PhotometryWindow(QWidget):
         super().__init__(parent)
         self.setWindowFlag(Qt.WindowType.Window, True)
         self.setWindowTitle("Field photometry")
-        self.resize(720, 480)
+        self.setMinimumSize(780, 620)
+        self.resize(960, 700)
 
         root = QVBoxLayout(self)
         banner = QLabel(

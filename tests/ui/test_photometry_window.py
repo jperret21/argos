@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QApplication
 from argos.core.photometry.lightcurve import LcPoint, LightCurve
 from argos.ui.panels.photometry_window import PhotometryWindow
 from argos.ui.widgets.comparison_curve_panel import ComparisonCurvePanel
+from argos.ui.widgets.comparison_table import ComparisonEnsembleTable
 from argos.ui.widgets.lightcurve_panel import LightCurvePanel
 from argos.ui.widgets.target_curve_panel import TargetCurvePanel
 from argos.ui.widgets.variable_table import VariableTable
@@ -145,6 +146,45 @@ def test_comparison_proposal_count_is_a_user_preference(qapp) -> None:
         qapp.processEvents()
 
 
+def test_comparison_table_surfaces_live_quality(qapp) -> None:
+    from argos.core.catalog.targets import TargetStar
+
+    table = ComparisonEnsembleTable()
+    try:
+        table.set_targets(
+            [
+                TargetStar(
+                    role="comparison",
+                    ra_deg=300.0,
+                    dec_deg=22.0,
+                    auid="000-AAA-001",
+                    name="106",
+                    mags={"V": 10.6},
+                )
+            ]
+        )
+        table.set_quality_report(
+            {
+                "comparison_stars": [
+                    {
+                        "auid": "000-AAA-001",
+                        "name": "106",
+                        "n_valid": 12,
+                        "scatter_mag": 0.021,
+                        "median_formal_error_mag": 0.012,
+                        "status": "stable",
+                    }
+                ]
+            }
+        )
+        assert table._table.item(0, 6).text() == "12"
+        assert table._table.item(0, 9).text() == "Stable"
+    finally:
+        table.close()
+        table.deleteLater()
+        qapp.processEvents()
+
+
 def test_variable_table_keeps_catalogue_and_overlay_source_indices_aligned(qapp) -> None:
     table = VariableTable()
     try:
@@ -187,6 +227,10 @@ def test_lightcurve_separates_comparisons_and_keeps_error_visibility(qapp) -> No
         panel._errors.setChecked(False)
         panel.add_point("C1", 2451545.2, 11.1, 0.03, role="comparison")
         assert panel._series["C1"]["errbar"].isVisible() is False
+        panel._errors.setChecked(True)
+        panel._series["C1"]["curve"].setVisible(False)
+        assert panel._series["C1"]["errbar"].isVisible() is False
+        assert panel._series["C1"]["sat"].isVisible() is False
     finally:
         win.close()
         win.deleteLater()

@@ -64,13 +64,21 @@ class LightCurvePanel(QWidget):
             if view in {"both", "comparison"}
             else None
         )
+        self._splitter: QSplitter | None = None
         if self._target_plot is not None and self._comparison_plot is not None:
             self._comparison_plot.setXLink(self._target_plot)
             splitter = QSplitter(Qt.Orientation.Vertical)
+            splitter.setChildrenCollapsible(False)
             splitter.addWidget(self._target_plot)
             splitter.addWidget(self._comparison_plot)
-            splitter.setSizes([260, 150])
+            self._target_plot.setMinimumHeight(220)
+            self._comparison_plot.setMinimumHeight(180)
+            splitter.setStretchFactor(0, 3)
+            splitter.setStretchFactor(1, 2)
+            splitter.setSizes([320, 220])
+            self._splitter = splitter
             layout.addWidget(splitter, 1)
+            self.setMinimumHeight(470)
         else:
             layout.addWidget(self._target_plot or self._comparison_plot, 1)
 
@@ -175,6 +183,12 @@ class LightCurvePanel(QWidget):
                     self.point_clicked, series, points
                 )
             )
+            # A legend click hides only the PlotDataItem.  The uncertainty
+            # item is independent in pyqtgraph, so explicitly mirror the
+            # series visibility instead of leaving orphaned error bars.
+            curve.visibleChanged.connect(
+                lambda *_args, series=name: self._apply_series_visibility(series)
+            )
             self._series[name] = s
 
         safe_err = float(err or 0.0)
@@ -212,6 +226,7 @@ class LightCurvePanel(QWidget):
             s["curve"].setData([], [])
             s["errbar"].setData(x=np.array([]), y=np.array([]))
             s["sat"].setData([], [])
+            self._apply_series_visibility(name)
             return
         if flux_mode:
             baseline = float(np.median(y[finite]))
@@ -231,7 +246,16 @@ class LightCurvePanel(QWidget):
         # thin vertical interval is the standard, unambiguous representation.
         s["errbar"].setData(x=x, y=y, top=e, bottom=e, beam=None)
         s["sat"].setData(np.asarray(s["sat_jd"], dtype=float), sat_y)
-        s["errbar"].setVisible(self._errors.isChecked())
+        self._apply_series_visibility(name)
+
+    def _apply_series_visibility(self, name: str) -> None:
+        """Keep every visual item of one series in the same visible state."""
+        s = self._series.get(name)
+        if s is None:
+            return
+        visible = s["curve"].isVisible()
+        s["errbar"].setVisible(visible and self._errors.isChecked())
+        s["sat"].setVisible(visible)
 
     def set_curves(self, curves: dict) -> None:
         """Replace the plots with ``key → LightCurve`` from the engine store."""
@@ -276,8 +300,8 @@ class LightCurvePanel(QWidget):
     # ------------------------------------------------------------------
 
     def _apply_error_visibility(self, visible: bool) -> None:
-        for s in self._series.values():
-            s["errbar"].setVisible(bool(visible))
+        for name in self._series:
+            self._apply_series_visibility(name)
 
     def _set_relative_flux(self, enabled: bool) -> None:
         if self._target_plot is not None:

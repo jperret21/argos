@@ -533,6 +533,7 @@ class ImagingPage(QWidget):
         e.photometry_measuring.connect(self._on_photometry_measuring)
         e.photometry_point.connect(self._on_photometry_point)
         e.curves_changed.connect(self._render_curves)  # dock + window, one store
+        e.comparison_quality_updated.connect(self._on_comparison_quality_updated)
         e.apertures_tracked.connect(self._project_catalog)  # markers follow the frame
         # Live plate-solve controller (engine-owned, shared pipeline).
         self._astrometry.solved.connect(self._on_astrometry_solved)
@@ -2078,6 +2079,9 @@ class ImagingPage(QWidget):
         # AAVSO/CSV export reflects points (and targets) added after this open.
         self._photometry_window.lightcurves = self._engine.lightcurves
         self._refresh_target_table()
+        self._photometry_window.comparisons.set_quality_report(
+            self._engine.comparison_quality_report
+        )
         self._photometry_window.comparisons.set_auto_count(
             int(self._cfg("photometry.auto_comparisons", 5))
         )
@@ -2342,6 +2346,12 @@ class ImagingPage(QWidget):
         win = self._photometry_window
         if win is not None and win.isVisible():
             win.feed_point(point)
+
+    @pyqtSlot(object)
+    def _on_comparison_quality_updated(self, report) -> None:
+        """Mirror the persisted live vetting result into Photometry immediately."""
+        if self._photometry_window is not None:
+            self._photometry_window.comparisons.set_quality_report(report)
 
     def _elapsed(self) -> float:
         if self._metrics_t0 is None:

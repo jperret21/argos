@@ -50,6 +50,7 @@ class ReviewedSession:
     observer: str
     frames: list[ReviewFrame] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    comparison_quality: dict[str, Any] | None = None
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -131,6 +132,17 @@ def load_session(path: Path | str, *, read_temperature: bool = True) -> Reviewed
                 review.metadata = payload
         except (OSError, ValueError):
             review.warnings.append("Could not read observation.json.")
+
+    quality_path = root / "photometry_quality.json"
+    if quality_path.is_file():
+        try:
+            payload = json.loads(quality_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                review.comparison_quality = payload
+            else:
+                review.warnings.append("Ignored an invalid photometry_quality.json.")
+        except (OSError, ValueError):
+            review.warnings.append("Could not read photometry_quality.json.")
 
     frame_paths = {candidate.name: candidate for candidate in root.rglob("*.fit*")}
     for row in document["frames"]:
