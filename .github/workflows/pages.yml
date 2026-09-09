@@ -1,0 +1,92 @@
+# Publishes both halves of the public site in one deployment:
+#
+#   /argos/          the showcase site  — hand-written HTML in docs/
+#   /argos/docs/     the documentation  — Sphinx, built here from docsrc/
+#
+# GitHub Pages' legacy branch/folder source can only publish one folder, which
+# is why this is a workflow: it assembles the two trees into a single artifact.
+# The repository's Pages source must be set to "GitHub Actions" for the deploy
+# step to succeed (Settings -> Pages -> Build and deployment -> Source).
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "docsrc/**"
+      - "argos/**" # docstrings feed the API reference
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+# One deployment at a time; never cancel a run that is mid-publish, or the
+# live site can be left half-written.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Sphinx renders the architecture diagrams through the native `dot`
+      # executable, which the Python extension does not bundle. Because the
+      # build runs with -W, a missing dot fails the job rather than warning.
+      - name: Install Graphviz
+        run: sudo apt-get update && sudo apt-get install -y graphviz
+
+      # PyQt6 is fully mocked in docsrc/conf.py, so the docs build needs no
+      # Qt runtime and no display — the docs extra alone is enough.
+      - name: Install dependencies
+        run: uv sync --extra docs
+
+      - name: Build documentation
+        run: uv run --extra docs sphinx-build -W -b html docsrc _build/docs
+
+      - name: Assemble the site
+        run: |
+          mkdir -p _site
+          cp -R docs/. _site/
+          mkdir -p _site/docs
+          cp -R _build/docs/. _site/docs/
+          # Sphinx output contains _static/ and _sources/; Jekyll would strip
+          # any path beginning with an underscore.
+          touch _site/.nojekyll
+
+      - name: Check the assembled tree
+        run: |
+          set -e
+          for f in index.html install.html docs/index.html docs/guide.html \
+                   docs/differential_photometry.html docs/api/index.html; do
+            test -s "_site/$f" || { echo "missing or empty: $f"; exit 1; }
+          done
+          echo "Assembled $(find _site -type f | wc -l) files."
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
