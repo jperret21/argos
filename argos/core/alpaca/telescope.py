@@ -74,7 +74,7 @@ class Telescope:
 
     Args:
         host: IP address of the Seestar.
-        port: Alpaca HTTP port (discovered via UDP, typically 4700).
+        port: Alpaca HTTP port (discovered via UDP, 32323 on the Seestar).
     """
 
     def __init__(self, host: str, port: int) -> None:
