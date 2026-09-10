@@ -56,62 +56,9 @@
       </figure>
     </section>
 
-    <section class="home-section">
-      <div class="section-heading">
-        <p class="mono-label">01 · The frame</p>
-        <h2>An image is not a measurement.</h2>
-      </div>
-      <p class="section-lede">A photograph keeps the pixels. A measurement keeps everything around them.</p>
-      <div class="keyword-grid">
-        <div><code>DATE-AVG</code><p>The midpoint, not the start. A 60-second sub is otherwise half a minute wrong.</p></div>
-        <div><code>BAYERPAT</code><p><b>GRBG</b>, not RGGB. Debayer with the wrong one and the photometry is quietly wrong.</p></div>
-        <div><code>EGAIN</code> <code>RDNOISE</code><p>No error bar without them. The CCD equation counts electrons; the file counts ADU.</p></div>
-        <div><code>FOCALLEN</code> <code>XPIXSZ</code><p>3.74&Prime; per pixel on an S30 Pro. An aperture measured in pixels means nothing without it.</p></div>
-        <div><code>AIRMASS</code><p>Pickering, evaluated at the frame. What extinction gets fitted against later.</p></div>
-        <div><code>BJD_TDB</code><p>Up to &plusmn;8 minutes over a year. Transit timing does not survive JD_UTC.</p></div>
-      </div>
-      <div class="stat-row">
-        <div><b>65</b><span>keywords per frame</span></div>
-        <div><b>16-bit</b><span>linear FITS, never stretched</span></div>
-        <div><b>0</b><span>pixels modified on disk</span></div>
-      </div>
-      <p class="method-boundary">Every keyword is listed in the <a href="docs/fits_headers.html">FITS reference</a>. Debayer, stretch or stack once and none of it comes back.</p>
-    </section>
-
     <section class="home-section band">
       <div class="section-heading">
-        <p class="mono-label">02 · The session</p>
-        <h2>One night, one session folder.</h2>
-      </div>
-      <p class="section-lede">Variable stars &nbsp;·&nbsp; Exoplanet transits &nbsp;·&nbsp; Knowing the night worked before you pack up</p>
-      <div class="output-grid">
-        <article><span>01</span><h3>Identify the field</h3><p>ASTAP solves the frame. Gaia DR3, AAVSO VSX, SIMBAD and VSP name what is in it.</p></article>
-        <article><span>02</span><h3>Record the sequence</h3><p>Set exposure and cadence. Every frame is written as linear 16-bit FITS with correct optics headers.</p></article>
-        <article><span>03</span><h3>Review offline</h3><p>Open any curve point beside its source image, with focus, background and star count.</p></article>
-      </div>
-    </section>
-
-    <section class="home-section">
-      <div class="section-heading">
-        <p class="mono-label">03 · Field identification</p>
-        <h2>Know what is in the frame.</h2>
-      </div>
-      <figure class="app-window wide">
-        <div class="window-titlebar"><i class="window-dot"></i><i class="window-dot"></i><i class="window-dot"></i><b>ARGOS / field identification</b><span class="window-state">HD 189733</span></div>
-        <picture><source srcset="img/field-identification.webp" type="image/webp"><img src="img/field-identification.jpg" alt="ARGOS field identification: catalogue overlays on a solved field, with the information card of the exoplanet host HD 189733"></picture>
-        <div class="session-readout">
-          <div><span>Identified</span><strong>HD 189733</strong></div>
-          <div><span>Source</span><strong>NASA Exoplanet Archive</strong></div>
-          <div><span>Depth</span><strong>Gaia G ≤ 12.3</strong></div>
-          <div><span>In field</span><strong>123 variables, 1 host</strong></div>
-        </div>
-        <figcaption><span>Catalogue overlays, a per-field query budget and local caches</span></figcaption>
-      </figure>
-    </section>
-
-    <section class="home-section band">
-      <div class="section-heading">
-        <p class="mono-label">04 · One result</p>
+        <p class="mono-label">01 · One result</p>
         <h2>A rising branch, on the published template.</h2>
       </div>
       <p class="section-lede">ARGOS writes data a reduction can use. Calibrated in <a href="https://siril.org" target="_blank" rel="noopener">Siril</a>, reduced with <code>star_var_script</code> — a light curve of scientific quality.</p>
@@ -133,9 +80,48 @@
       <p class="method-boundary">The curve you watch during the night is a quick-look on uncalibrated subs: it tells you the run is working, not what the star did. The measurement comes out of the reduction — which is why ARGOS keeps every raw frame, and why that reduction stays independent and auditable.</p>
     </section>
 
+    <section class="home-section">
+      <div class="section-heading">
+        <p class="mono-label">02 · The session</p>
+        <h2>One night, one session folder.</h2>
+      </div>
+      <p class="section-lede">Variable stars &nbsp;·&nbsp; Exoplanet transits &nbsp;·&nbsp; Knowing the night worked before you pack up</p>
+      <div class="output-grid">
+        <article><span>01</span><h3>Identify the field</h3><p>ASTAP solves the frame. Gaia DR3, AAVSO VSX, SIMBAD and VSP name what is in it.</p></article>
+        <article><span>02</span><h3>Record the sequence</h3><p>Set exposure and cadence. Every frame is written as linear 16-bit FITS with correct optics headers.</p></article>
+        <article><span>03</span><h3>Review offline</h3><p>Open any curve point beside its source image, with focus, background and star count.</p></article>
+      </div>
+    </section>
+
+    <section class="home-section band">
+      <div class="section-heading">
+        <p class="mono-label">03 · Field identification</p>
+        <h2>Know what is in the frame.</h2>
+      </div>
+      <div class="source-grid">
+        <div><strong>ASTAP</strong><p>Plate solving</p></div>
+        <div><strong>Gaia DR3</strong><p>Field stars</p></div>
+        <div><strong>AAVSO VSX</strong><p>Variable-star identity, type, period</p></div>
+        <div><strong>AAVSO VSP</strong><p>Comparison sequences with calibrated magnitudes</p></div>
+        <div><strong>SIMBAD</strong><p>Deep-sky objects and cross-identifications</p></div>
+        <div><strong>NASA Exoplanet Archive</strong><p>Transit hosts and ephemerides</p></div>
+      </div>
+      <figure class="app-window wide">
+        <div class="window-titlebar"><i class="window-dot"></i><i class="window-dot"></i><i class="window-dot"></i><b>ARGOS / field identification</b><span class="window-state">HD 189733</span></div>
+        <picture><source srcset="img/field-identification.webp" type="image/webp"><img src="img/field-identification.jpg" alt="ARGOS field identification: catalogue overlays on a solved field, with the information card of the exoplanet host HD 189733"></picture>
+        <div class="session-readout">
+          <div><span>Identified</span><strong>HD 189733</strong></div>
+          <div><span>Source</span><strong>NASA Exoplanet Archive</strong></div>
+          <div><span>Depth</span><strong>Gaia G ≤ 12.3</strong></div>
+          <div><span>In field</span><strong>123 variables, 1 host</strong></div>
+        </div>
+        <figcaption><span>Catalogue overlays, a per-field query budget and local caches</span></figcaption>
+      </figure>
+    </section>
+
     <section class="release-overview">
       <div class="release-intro">
-        <p class="mono-label">05 · Requirements</p>
+        <p class="mono-label">04 · Requirements</p>
         <h2>What you need.</h2>
       </div>
       <div class="release-manifest">
