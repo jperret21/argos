@@ -419,10 +419,10 @@ event here.
 The user may need to use the native Seestar app for the first initialization in a session.
 After that, `park` / `unpark` via Alpaca work correctly.
 
-## 12. Safety thresholds — proposed, NOT implemented in 0.4.1
+## 12. Safety thresholds — proposed, NOT implemented in 0.4.2
 
 ```{danger}
-**None of the following exists in ARGOS 0.4.1.** This table is a design note
+**None of the following exists in ARGOS 0.4.2.** This table is a design note
 that was previously presented as behaviour. Do not rely on any of it.
 
 Verified against the source: the string `battery` appears **nowhere** in

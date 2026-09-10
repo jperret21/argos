@@ -1,10 +1,10 @@
 # Using ARGOS — a complete session
 
 This guide covers one full observing session, from the settings you fill in
-indoors to the folder you hand to Siril at the end. It assumes ARGOS 0.4.1 and a
+indoors to the folder you hand to Siril at the end. It assumes ARGOS 0.4.2 and a
 Seestar telescope.
 
-```{admonition} 0.4.1 is a field-validation release
+```{admonition} 0.4.2 is a field-validation release
 :class: warning
 
 Operate the telescope attended: there is no weather safety and no restart
