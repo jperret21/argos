@@ -87,6 +87,14 @@ a:focus-visible { outline:2px solid var(--orange); outline-offset:4px; }
 .output-grid h3 { margin:36px 0 8px; font-size:23px; line-height:1.08; letter-spacing:-.04em; }
 .output-grid p { margin:0; color:var(--muted); }
 .method-boundary { max-width:850px; margin:30px 0 0; padding-left:18px; border-left:3px solid var(--orange); color:var(--muted); }
+/* The gap ARGOS exists to fill: stated in the hero, itemised in section 01. */
+.gap-line { max-width:520px; margin:18px 0 0; padding-left:16px; border-left:2px solid var(--orange); color:var(--muted); font-size:15px; line-height:1.55; }
+.section-lede { max-width:760px; margin:0 0 40px; color:var(--muted); font-size:19px; line-height:1.5; }
+.gap-list { border-top:1px solid var(--ink); }
+.gap-row { display:grid; grid-template-columns:210px minmax(0,1fr); gap:32px; padding:22px 0; border-bottom:1px solid var(--line); align-items:baseline; }
+.gap-row strong { color:var(--orange); font:11px/1.4 var(--mono); letter-spacing:.045em; text-transform:uppercase; font-weight:400; }
+.gap-row p { margin:0; color:var(--muted); }
+.gap-row code { color:var(--ink); font:13px/1 var(--mono); white-space:nowrap; }
 /* Releases */.release-page .page-hero { max-width:1280px; padding:105px 40px 80px; margin:auto; display:grid; grid-template-columns:1fr 1fr; gap:50px; }
 .release-page .page-hero h1 { max-width:630px; margin:15px 0; font-size:clamp(50px,6.3vw,86px); line-height:.91; letter-spacing:-.075em; }
 .release-page .page-hero p:last-child { max-width:470px; color:var(--muted); font-size:18px; }
@@ -152,6 +160,8 @@ code { font-family:var(--mono); font-size:.92em; }
 .download-row { grid-template-columns:80px 1fr; padding:16px 0; }
 .download-row p { grid-column:2; overflow-wrap:anywhere; }.download-row a { grid-column:2; width:max-content; }
 .release-notes { padding:0 20px 70px; }
+.gap-row { grid-template-columns:1fr; gap:9px; }
+.section-lede { font-size:17px; }
 .release-checklist { grid-template-columns:1fr; }.sequence-table li { grid-template-columns:45px minmax(0,1fr); gap:10px; }.sequence-table li p { grid-column:2; }
 .release-checklist div { min-height:0; padding:17px 0; border-bottom:1px solid var(--line); }
 .release-checklist div+div { border-left:0; padding-left:0; }
