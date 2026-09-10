@@ -92,6 +92,7 @@ a:focus-visible { outline:2px solid var(--orange); outline-offset:4px; }
 .showcase .app-window { max-width:none; justify-self:stretch; top:0; margin:0; }
 .showcase-text { min-width:0; }
 .showcase-text h3 { margin:14px 0 12px; font-size:clamp(24px,2.4vw,32px); font-weight:600; line-height:1.02; letter-spacing:-.045em; }
+.showcase-text p { margin:0 0 14px; line-height:1.6; }
 .showcase-text p:last-child { margin:0; color:var(--muted); }
 .method-boundary { max-width:850px; margin:30px 0 0; padding-left:18px; border-left:3px solid var(--orange); color:var(--muted); }
 /* The gap ARGOS exists to fill: stated in the hero, itemised in section 01. */
