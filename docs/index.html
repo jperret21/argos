@@ -144,16 +144,18 @@
         <h2>Raw data, calibrated for science.</h2>
       </div>
       <p class="section-lede">ARGOS gives you the raw FITS frames. <a href="https://siril.org" target="_blank" rel="noopener">Siril</a> — free image-processing software — calibrates and registers them, and the <a href="https://github.com/jperret21/star_var_script" target="_blank" rel="noopener">star_var_script</a> extension turns them into a calibrated light curve. That is the scientifically valid measurement, and this is one.</p>
-      <figure class="app-window wide">
-        <picture><source srcset="img/rrlyrae-sesar-fit-dark.webp" type="image/webp"><img src="img/rrlyrae-sesar-fit-dark.png" alt="RR Lyrae light curve folded on a period of 0.56674 days, the observed points tracing the rising branch of the Sesar 2010 published template"></picture>
-        <div class="session-readout">
-          <div><span>Star</span><strong>RR Lyrae</strong></div>
-          <div><span>Period</span><strong>0.56674 d</strong></div>
-          <div><span>Observed</span><strong>Rising branch, ≈2.5 h</strong></div>
-          <div><span>Template</span><strong>Sesar 2010, r-band</strong></div>
-        </div>
-        <figcaption><span>One night of frames, folded on the catalogue period</span><span>AAVSO Extended export</span></figcaption>
-      </figure>
+      <div class="plot-split">
+        <figure class="app-window">
+          <picture><source srcset="img/rrlyrae-sesar-fit-dark.webp" type="image/webp"><img src="img/rrlyrae-sesar-fit-dark.png" alt="RR Lyrae light curve folded on a period of 0.56674 days, the observed points tracing the rising branch of the Sesar 2010 published template" loading="lazy"></picture>
+          <figcaption><span>One night of frames, folded on the catalogue period</span><span>AAVSO Extended export</span></figcaption>
+        </figure>
+        <dl class="plot-facts">
+          <div><dt>Star</dt><dd>RR Lyrae</dd></div>
+          <div><dt>Period</dt><dd>0.56674 d</dd></div>
+          <div><dt>Observed</dt><dd>Rising branch, &#8776;2.5 h</dd></div>
+          <div><dt>Template</dt><dd>Sesar 2010, r-band</dd></div>
+        </dl>
+      </div>
       <div class="release-checklist">
         <div><span>01 · ARGOS</span><strong>Records</strong><p>Timed FITS frames, a live differential curve, and the run-level uncertainty floor.</p></div>
         <div><span>02 · Siril</span><strong>Calibrates and registers</strong><p>Dark, flat and bias calibration, then registration of the untouched raw frames.</p></div>

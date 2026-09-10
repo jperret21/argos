@@ -146,6 +146,17 @@ a:focus-visible { outline:2px solid var(--orange); outline-offset:4px; }
 .band { max-width:none; background:var(--soft); border-top:1px solid var(--line); border-bottom:1px solid var(--line); padding:110px max(40px,calc((100vw - 1200px)/2)); }
 .band .release-scope { background:var(--paper); }
 .app-window + .release-checklist { margin-top:54px; }
+/* Section 04 shows a plot, not a screenshot. Full-bleed it ran 714px tall and
+   made a second full-width block right after section 03; beside its numbers it
+   reads as a figure, and the four values escape the 8px status bar. */
+.plot-split { display:grid; grid-template-columns:minmax(0,2.9fr) minmax(0,1fr); gap:48px; align-items:center; margin-top:46px; }
+.plot-split .app-window { max-width:none; justify-self:stretch; top:0; margin:0; }
+.plot-facts { margin:0; border-top:1px solid var(--ink); }
+.plot-facts div { display:flex; align-items:baseline; justify-content:space-between; gap:18px; padding:14px 0; border-bottom:1px solid var(--line); }
+.plot-facts dt { color:var(--muted); font:11px var(--mono); letter-spacing:.05em; text-transform:uppercase; white-space:nowrap; }
+.plot-facts dd { margin:0; font-size:15px; font-weight:600; letter-spacing:-.01em; text-align:right; }
+.plot-split + .release-checklist { margin-top:54px; }
+@media (max-width:1000px) { .plot-split { grid-template-columns:1fr; gap:26px; margin-top:34px; }  }
 code { font-family:var(--mono); font-size:.92em; }
 /* Numbered step list, restored for the install walkthrough. */
 .sequence-table { padding:0; margin:0; list-style:none; border-top:1px solid var(--ink); }
