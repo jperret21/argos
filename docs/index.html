@@ -35,7 +35,7 @@
         <p class="release-line"><i class="status-dot"></i>ARGOS 0.4.1 &nbsp;/&nbsp; free software, GNU GPL v3</p>
         <h1>Put your smart telescope to scientific work.</h1>
         <p class="lede">A desktop workspace for variable-star observing with ZWO Seestar telescopes. Record a timed sequence, follow relative brightness as the frames arrive, and review each point against the image that produced it.</p>
-        <p class="gap-line">A Seestar is a capable little astrograph. Its own software is built to produce a picture — it stops where a measurement would begin. ARGOS picks it up there.</p>
+        <p class="gap-line">Its own software stops at the picture. ARGOS starts at the measurement.</p>
         <div class="actions">
           <a class="action action-primary" href="install.html">Download 0.4.1 <span>→</span></a>
           <a class="action" href="docs/">Documentation</a>
@@ -61,15 +61,21 @@
         <p class="mono-label">01 · Why it exists</p>
         <h2>An image is not a measurement.</h2>
       </div>
-      <p class="section-lede">A photograph and a data point can be the very same pixels. What separates them is everything recorded <em>around</em> the pixels — and once a frame has been debayered, stretched or stacked, none of it can be recovered.</p>
-      <div class="gap-list">
-        <div class="gap-row"><strong>The clock</strong><p>The exposure <em>midpoint</em>, to the second — <code>DATE-AVG</code>, <code>MJD-AVG</code>, and <code>BJD_TDB</code> once the site is known. A light curve on the wrong clock is a wrong light curve, and no amount of reprocessing fixes it afterwards.</p></div>
-        <div class="gap-row"><strong>The optics</strong><p><code>FOCALLEN</code>, <code>APTDIA</code>, <code>FOCRATIO</code>, <code>XPIXSZ</code>. Without them the plate scale is a guess, and an aperture sized in pixels is the wrong size on the sky.</p></div>
-        <div class="gap-row"><strong>The detector</strong><p><code>EGAIN</code> and <code>RDNOISE</code> — electrons per ADU, and read noise. There is no uncertainty without these: the CCD equation counts electrons, and a raw file counts ADU.</p></div>
-        <div class="gap-row"><strong>The sky</strong><p><code>AIRMASS</code>, <code>MOONSEP</code>, <code>MOONALT</code>, <code>MOONPHAS</code>. What the atmosphere and the Moon were doing while the shutter was open.</p></div>
-        <div class="gap-row"><strong>The mosaic, untouched</strong><p><code>BAYERPAT='GRBG'</code> over a linear 16-bit array. ARGOS never debayers, stretches or scales what it writes — the display pipeline works on a copy.</p></div>
+      <p class="section-lede">A photograph keeps the pixels. A measurement keeps everything around them.</p>
+      <div class="keyword-grid">
+        <div><code>DATE-AVG</code><span>Exposure midpoint, to the second</span></div>
+        <div><code>EGAIN</code><span>Electrons per ADU</span></div>
+        <div><code>RDNOISE</code><span>Read noise</span></div>
+        <div><code>FOCALLEN</code><span>Plate scale on the sky</span></div>
+        <div><code>AIRMASS</code><span>Air in the way</span></div>
+        <div><code>BAYERPAT</code><span>Mosaic, untouched</span></div>
       </div>
-      <p class="method-boundary">Sixty-five keywords per frame, every one of them listed and explained in the <a href="docs/fits_headers.html">FITS reference</a>. They are written because something downstream needs them, not for completeness.</p>
+      <div class="stat-row">
+        <div><b>65</b><span>keywords per frame</span></div>
+        <div><b>16-bit</b><span>linear FITS, never stretched</span></div>
+        <div><b>0</b><span>pixels modified on disk</span></div>
+      </div>
+      <p class="method-boundary">Every keyword is listed in the <a href="docs/fits_headers.html">FITS reference</a>. Debayer, stretch or stack once and none of it comes back.</p>
     </section>
 
     <section class="home-section band">
@@ -77,7 +83,7 @@
         <p class="mono-label">02 · What it does</p>
         <h2>One night, one session folder.</h2>
       </div>
-      <p class="section-lede">Built for three kinds of evening: following a variable star well enough to report it, sitting on an exoplanet transit for a few hours, and knowing before you pack up whether the night was any good.</p>
+      <p class="section-lede">Variable stars &nbsp;·&nbsp; Exoplanet transits &nbsp;·&nbsp; Knowing the night worked before you pack up</p>
       <div class="output-grid">
         <article><span>01</span><h3>Identify the field</h3><p>ASTAP solves the frame. Gaia DR3, AAVSO VSX, SIMBAD and VSP name what is in it.</p></article>
         <article><span>02</span><h3>Record the sequence</h3><p>Set exposure and cadence. Every frame is written as linear 16-bit FITS with correct optics headers.</p></article>
@@ -108,7 +114,7 @@
         <p class="mono-label">04 · One result</p>
         <h2>A rising branch, on the published template.</h2>
       </div>
-      <p class="section-lede">What ARGOS writes is scientifically usable data: raw, linear sub-exposures carrying every header a measurement needs. Calibrated and registered in <a href="https://siril.org" target="_blank" rel="noopener">Siril</a>, then reduced with <code>star_var_script</code>, they yield a light curve of scientific quality — this one, folded on its catalogue period, falls on a published template.</p>
+      <p class="section-lede">ARGOS writes data a reduction can use. Calibrated in <a href="https://siril.org" target="_blank" rel="noopener">Siril</a>, reduced with <code>star_var_script</code> — a light curve of scientific quality.</p>
       <figure class="app-window wide">
         <picture><source srcset="img/rrlyrae-sesar-fit-dark.webp" type="image/webp"><img src="img/rrlyrae-sesar-fit-dark.png" alt="RR Lyrae light curve folded on a period of 0.56674 days, the observed points tracing the rising branch of the Sesar 2010 published template"></picture>
         <div class="session-readout">
