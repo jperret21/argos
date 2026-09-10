@@ -34,11 +34,11 @@ a:focus-visible { outline:2px solid var(--orange); outline-offset:4px; }
 .mobile-menu a+a { border-top:1px solid var(--line); }
 .mobile-menu a:hover,.mobile-menu a[aria-current="page"] { color:var(--ink); background:var(--soft); }
 .mobile-menu summary:focus-visible { outline:2px solid var(--orange); outline-offset:4px; }
-/* Home */.home-hero { max-width:1280px; min-height:calc(100vh - 68px); padding:95px 40px 65px; margin:auto; display:grid; grid-template-columns:minmax(400px,1fr) minmax(400px,1fr); align-items:center; gap:52px; }
+/* Home */.home-hero { max-width:1280px; min-height:calc(100vh - 68px); padding:95px 40px 65px; margin:auto; display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr); align-items:center; gap:52px; }
 .release-line { margin:0; color:var(--muted); font:11px/1.3 var(--mono); letter-spacing:.045em; text-transform:uppercase; }
 .status-dot { width:8px; height:8px; display:inline-block; background:var(--orange); border-radius:50%; vertical-align:1px; margin-right:4px; animation:signal 2.8s ease-in-out infinite; }
 @keyframes signal { 0%,100%{box-shadow:0 0 0 0 rgba(196,154,60,0)}45%{box-shadow:0 0 0 6px rgba(196,154,60,.18)} }
-.home-hero h1 { max-width:620px; margin:20px 0 23px; font-size:clamp(52px,5.4vw,80px); font-weight:600; letter-spacing:-.075em; line-height:.91; }
+.home-hero h1 { max-width:680px; margin:20px 0 23px; font-size:clamp(46px,4.7vw,64px); font-weight:600; letter-spacing:-.075em; line-height:.91; }
 .lede { max-width:520px; margin:0; color:var(--muted); font-size:18px; line-height:1.55; }
 .actions { display:flex; flex-wrap:wrap; gap:9px; margin:33px 0 56px; }
 .action { border:1px solid var(--ink); padding:12px 14px; font:12px/1 var(--mono); transition:background .18s,color .18s,border-color .18s; }
@@ -156,6 +156,7 @@ a:focus-visible { outline:2px solid var(--orange); outline-offset:4px; }
 .plot-facts dt { color:var(--muted); font:11px var(--mono); letter-spacing:.05em; text-transform:uppercase; white-space:nowrap; }
 .plot-facts dd { margin:0; font-size:15px; font-weight:600; letter-spacing:-.01em; text-align:right; }
 .plot-split + .release-checklist { margin-top:54px; }
+@media (max-width:950px) { .home-hero { grid-template-columns:1fr; min-height:auto; }  }
 @media (max-width:1000px) { .plot-split { grid-template-columns:1fr; gap:26px; margin-top:34px; }  }
 code { font-family:var(--mono); font-size:.92em; }
 /* Numbered step list, restored for the install walkthrough. */
@@ -186,6 +187,8 @@ code { font-family:var(--mono); font-size:.92em; }
 .release-page .page-hero,.release-page .download-section { padding:70px 20px; }
 .release-page .download-section { padding-top:60px; }
 .download-row { grid-template-columns:80px 1fr; padding:16px 0; }
+.download-row>* { min-width:0; }
+.download-row strong { overflow-wrap:anywhere; }
 .download-row p { grid-column:2; overflow-wrap:anywhere; }.download-row a { grid-column:2; width:max-content; }
 .release-notes { padding:0 20px 70px; }
 .showcase,.showcase.reverse { grid-template-columns:1fr; gap:26px; margin-top:38px; }
