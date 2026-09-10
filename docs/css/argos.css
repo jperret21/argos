@@ -68,8 +68,8 @@ a:focus-visible { outline:2px solid var(--orange); outline-offset:4px; }
 @keyframes interface-in {from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
 @keyframes image-in {from{opacity:.15;transform:scale(1.02)}to{opacity:1;transform:scale(1)}}
 .home-section { max-width:1280px; padding:130px 40px 120px; margin:auto; }
-.section-heading { display:grid; grid-template-columns:1fr 2fr; margin-bottom:43px; }
-.section-heading h2,.release-intro h2 { max-width:680px; margin:0; font-size:clamp(35px,4.4vw,61px); font-weight:600; line-height:.97; letter-spacing:-.065em; }
+.section-heading { display:grid; grid-template-columns:1fr 2.6fr; margin-bottom:43px; }
+.section-heading h2,.release-intro h2 { max-width:850px; margin:0; font-size:clamp(35px,4.4vw,61px); font-weight:600; line-height:.97; letter-spacing:-.065em; }
 /* Headings break on their own width, not the viewport's: without this every
    one of them drops its last word alone onto a second line. */
 .home-hero h1,.release-page .page-hero h1,.section-heading h2,.release-intro h2,.showcase-text h3 { text-wrap:balance; }
