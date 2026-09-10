@@ -202,13 +202,29 @@ def _opt_float(value) -> float | None:
 
 
 def write_aavso(
-    path, curves, *, obscode: str = "XXX", filt: str = "TG", software: str = "Argos"
+    path,
+    curves,
+    *,
+    obscode: str = "XXX",
+    filt: str = "TG",
+    chart: str | None = None,
+    software: str = "Argos",
 ) -> None:
     """Write one or more :class:`LightCurve` to an AAVSO Extended File.
 
     A *preview* export — DATE is the JD_UTC midpoint, MTYPE=STD, comparison is the
     ensemble (CNAME=ENSEMBLE). Calibrated mags + BJD_TDB come from post-processing.
+
+    Only *target* curves become rows. The first *check* curve fills KNAME/KMAG with
+    its ensemble magnitude on the same frame — the check star the spec asks for
+    with ensemble photometry. ``chart`` is the VSP chart of the comparison
+    sequence (CHART).
     """
+    check = next((lc for lc in curves if lc.role == "check" and lc.points), None)
+    kname = _aavso_field(check.auid or check.name) if check is not None else None
+    # Target and check points of one frame share its JD.
+    kmags = {p.jd_utc: p.mag for p in check.points if math.isfinite(p.mag)} if kname else {}
+    chart_field = _aavso_field(chart) or "na"
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as f:
@@ -230,7 +246,17 @@ def write_aavso(
                 if not (math.isfinite(p.mag) and math.isfinite(p.mag_err)):
                     continue
                 amass = "na" if p.airmass is None else f"{p.airmass:.3f}"
+                kmag = kmags.get(p.jd_utc)
+                check_fields = "na,na" if kmag is None else f"{kname},{kmag:.4f}"
                 f.write(
                     f"{name},{p.jd_utc:.6f},{p.mag:.4f},{p.mag_err:.4f},{filt},NO,STD,"
-                    f"ENSEMBLE,na,na,na,{amass},na,na,na\n"
+                    f"ENSEMBLE,na,{check_fields},{amass},na,{chart_field},na\n"
                 )
+
+
+def _aavso_field(value, limit: int = 20) -> str | None:
+    """``value`` as a KNAME/CHART field (at most ``limit`` characters, no comma)."""
+    value = str(value or "").strip()
+    if not value or len(value) > limit or "," in value:
+        return None
+    return value

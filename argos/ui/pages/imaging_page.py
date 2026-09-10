@@ -842,6 +842,7 @@ class ImagingPage(QWidget):
                     name=c.auid,
                     source="vsp",
                     mags={b.band: b.mag for b in c.bands},
+                    chart_id=c.chart_id,
                 ),
             )
             return

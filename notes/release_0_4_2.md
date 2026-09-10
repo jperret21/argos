@@ -1,7 +1,7 @@
 # Argos 0.4.2 — photometry corrections
 
 > Branch: `release/0.4.2`, cut from `main` with `release/0.4.1` merged in.
-> Last updated: 2026-09-09.
+> Last updated: 2026-09-10.
 
 A patch release with no new features. It exists because writing the 0.4.1
 documentation against the source turned up five measurement defects, none of
@@ -57,6 +57,21 @@ rather than silently altered:
   project's own EGAIN/FULLWELL tables at any shipped gain, so the saturation
   flag effectively never fires. Resolving it needs a **gain measured from a
   pair of flats**, not a guess. Recorded as an open defect.
+
+## AAVSO export
+
+Added after the cut: the export left two fields the AAVSO asks for as `na`,
+although Argos had the data.
+
+- `CHART` names the VSP chart the comparison stars came from — VSP returns its
+  ID, and Argos used to discard it. It stays `na` when an ensemble mixes charts
+  or holds a comparison picked by hand. Comparisons saved before this change
+  carry no chart until they are picked again.
+- `KNAME`/`KMAG` carry the check star: its AUID and its ensemble magnitude on
+  the same frame. It is still never written as an observation of its own.
+- The chart ID is kept in `targets.json` and in the
+  `photometry_selection.json` hand-off (`catalogue_chart_id`), so
+  star_var_script reports it too.
 
 ## Also
 

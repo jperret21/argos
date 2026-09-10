@@ -429,3 +429,32 @@ def test_variables_tab_lists_and_selects(qapp) -> None:
         win.close()
         win.deleteLater()
         qapp.processEvents()  # flush the deferred delete now (pyqtgraph teardown)
+
+
+def test_aavso_export_names_the_check_star_and_the_vsp_chart(qapp, tmp_path, monkeypatch) -> None:
+    from PyQt6.QtWidgets import QFileDialog
+
+    from argos.core.catalog.targets import TargetStar
+
+    out = tmp_path / "aavso.txt"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(out), ""))
+    win = PhotometryWindow()
+    try:
+        target = LightCurve(auid="000-BCK-301", name="XX Cyg", role="target")
+        target.append(LcPoint(2451545.0, 11.0, 0.02))
+        check = LightCurve(auid="000-BJV-171", name="106", role="check")
+        check.append(LcPoint(2451545.0, 10.61, 0.01))
+        win.load_curves({"T": target, "K": check}, obscode="ABC")
+        comparison = TargetStar(
+            role="comparison", ra_deg=300.7, dec_deg=59.0, auid="000-BJV-170", chart_id="X42"
+        )
+        win.set_targets([comparison])
+        win._export_aavso()
+
+        rows = [ln.split(",") for ln in out.read_text().splitlines() if not ln.startswith("#")]
+        assert len(rows) == 1  # the check star is not an observation of its own
+        assert (rows[0][9], rows[0][10], rows[0][13]) == ("000-BJV-171", "10.6100", "X42")
+    finally:
+        win.close()
+        win.deleteLater()
+        qapp.processEvents()

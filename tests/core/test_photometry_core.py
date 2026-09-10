@@ -239,6 +239,43 @@ def test_aavso_export_ignores_comparison_diagnostics(tmp_path) -> None:
     assert data[0].startswith("NU ORI,")
 
 
+def test_aavso_export_names_the_check_star_and_the_vsp_chart(tmp_path) -> None:
+    from argos.core.photometry.lightcurve import write_aavso
+
+    target = LightCurve(auid="000-BCK-301", name="XX Cyg", role="target")
+    check = LightCurve(auid="000-BJV-171", name="106", role="check")
+    for jd, mag in ((2451545.0, 11.0), (2451545.01, 11.1), (2451545.02, 11.2)):
+        target.append(LcPoint(jd_utc=jd, mag=mag, mag_err=0.02))
+    check.append(LcPoint(jd_utc=2451545.0, mag=10.61, mag_err=0.01))
+    check.append(LcPoint(jd_utc=2451545.01, mag=float("nan"), mag_err=float("nan")))
+    path = tmp_path / "aavso.txt"
+    write_aavso(path, [target, check], obscode="ABC", filt="TG", chart="X42585ESI")
+
+    rows = [ln.split(",") for ln in path.read_text().splitlines() if not ln.startswith("#")]
+    assert len(rows) == 3  # the check curve is never written as an observation
+    assert all(len(r) == 15 for r in rows)
+    kname, kmag, chart = 9, 10, 13
+    assert (rows[0][kname], rows[0][kmag], rows[0][chart]) == (
+        "000-BJV-171",
+        "10.6100",
+        "X42585ESI",
+    )
+    # No usable check measurement on that frame → both check fields "na".
+    assert (rows[1][kname], rows[1][kmag]) == ("na", "na")
+    assert (rows[2][kname], rows[2][kmag]) == ("na", "na")
+
+
+def test_aavso_export_without_check_or_chart_keeps_na(tmp_path) -> None:
+    from argos.core.photometry.lightcurve import write_aavso
+
+    target = LightCurve(name="NU Ori", role="target")
+    target.append(LcPoint(jd_utc=2451545.0, mag=9.0, mag_err=0.02))
+    path = tmp_path / "aavso.txt"
+    write_aavso(path, [target], obscode="ABC", chart="a,b")  # a comma cannot be a field
+    row = [ln for ln in path.read_text().splitlines() if not ln.startswith("#")][0].split(",")
+    assert (row[9], row[10], row[13]) == ("na", "na", "na")
+
+
 def test_bjd_tdb_close_to_jd() -> None:
     # BJD−JD is at most ~8.3 min (0.0058 d); just check the correction is sane.
     bjd = bjd_tdb(2451545.0, ra_deg=83.6, dec_deg=22.0, lat_deg=43.6, lon_deg=1.4, elev_m=150.0)

@@ -449,6 +449,14 @@ the time (which is what AAVSO asks for), the band `TG`, `CNAME=ENSEMBLE`, and
 curves whose role is *target* are written: a comparison or check curve can never
 leave through this door as an observation.
 
+Your check star, if you chose one, goes into `KNAME`/`KMAG`: its AUID and its
+ensemble magnitude on the same frame, which is what the AAVSO asks for with
+ensemble photometry. `CHART` names the VSP chart the comparison stars came
+from, so the AAVSO knows which sequence you used; it stays `na` when the
+ensemble includes a star picked by hand, or stars from two different charts.
+Comparison stars saved before this version carry no chart, so pick them again
+to fill `CHART`.
+
 **What it is not.** Calibrated. There is no dark, no flat, no bias and no colour
 transformation, the zero point is cross-band, and the uncertainties do not
 contain slow systematics. See {doc}`differential_photometry` §10 for the full
