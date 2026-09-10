@@ -86,6 +86,13 @@ a:focus-visible { outline:2px solid var(--orange); outline-offset:4px; }
 .output-grid span { color:var(--orange); font:11px var(--mono); }
 .output-grid h3 { margin:36px 0 8px; font-size:23px; line-height:1.08; letter-spacing:-.04em; }
 .output-grid p { margin:0; color:var(--muted); }
+/* Alternating text / screenshot rows — the hero's rhythm, repeated. */
+.showcase { display:grid; grid-template-columns:minmax(0,0.85fr) minmax(0,1.15fr); gap:56px; align-items:center; margin-top:56px; }
+.showcase.reverse { grid-template-columns:minmax(0,1.15fr) minmax(0,0.85fr); }
+.showcase .app-window { max-width:none; justify-self:stretch; top:0; margin:0; }
+.showcase-text { min-width:0; }
+.showcase-text h3 { margin:14px 0 12px; font-size:clamp(24px,2.4vw,32px); font-weight:600; line-height:1.02; letter-spacing:-.045em; }
+.showcase-text p:last-child { margin:0; color:var(--muted); }
 .method-boundary { max-width:850px; margin:30px 0 0; padding-left:18px; border-left:3px solid var(--orange); color:var(--muted); }
 /* The gap ARGOS exists to fill: stated in the hero, itemised in section 01. */
 .gap-line { max-width:520px; margin:18px 0 0; padding-left:16px; border-left:2px solid var(--orange); color:var(--muted); font-size:15px; line-height:1.55; }
@@ -166,6 +173,9 @@ code { font-family:var(--mono); font-size:.92em; }
 .download-row { grid-template-columns:80px 1fr; padding:16px 0; }
 .download-row p { grid-column:2; overflow-wrap:anywhere; }.download-row a { grid-column:2; width:max-content; }
 .release-notes { padding:0 20px 70px; }
+.showcase,.showcase.reverse { grid-template-columns:1fr; gap:26px; margin-top:38px; }
+.showcase.reverse .app-window { order:-1; }
+.showcase-text h3 { margin-top:10px; }
 .keyword-grid { grid-template-columns:1fr; }
 .keyword-grid div,.keyword-grid div:not(:nth-child(3n+1)) { padding:17px 0; border-left:0; }
 .stat-row { grid-template-columns:1fr; gap:26px; }

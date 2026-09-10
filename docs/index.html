@@ -84,10 +84,31 @@
         <h2>One night, one session folder.</h2>
       </div>
       <p class="section-lede">Variable stars &nbsp;·&nbsp; Exoplanet transits &nbsp;·&nbsp; Knowing the night worked before you pack up</p>
-      <div class="output-grid">
-        <article><span>01</span><h3>Plan the night</h3><p>Resolve the target, read its altitude across the coming night, and build the steps before you go out.</p></article>
-        <article><span>02</span><h3>Record the sequence</h3><p>Set exposure and cadence. Every frame is written as linear 16-bit FITS with correct optics headers.</p></article>
-        <article><span>03</span><h3>Review offline</h3><p>Open any curve point beside its source image, with focus, background and star count.</p></article>
+
+      <div class="showcase">
+        <div class="showcase-text">
+          <p class="mono-label">Before the night</p>
+          <h3>Plan it indoors.</h3>
+          <p>Resolve the target, read its altitude across the coming night, and build the run — lights, darks, flats and bias — with the total duration in front of you. Then it records unattended.</p>
+        </div>
+        <figure class="app-window">
+          <div class="window-titlebar"><i class="window-dot"></i><i class="window-dot"></i><i class="window-dot"></i><b>ARGOS / plan</b><span class="window-state">RR LYR</span></div>
+          <picture><source srcset="img/plan-sequence.webp" type="image/webp"><img src="img/plan-sequence.jpg" alt="The ARGOS plan workspace: a four-step sequence of light, dark, flat and bias frames for RR Lyrae, beside the target's altitude curve for the coming night" loading="lazy"></picture>
+          <figcaption><span>RR Lyr resolved · peak 85.1° at 21:20 local · 17 m 10 s total</span></figcaption>
+        </figure>
+      </div>
+
+      <div class="showcase reverse">
+        <figure class="app-window">
+          <div class="window-titlebar"><i class="window-dot"></i><i class="window-dot"></i><i class="window-dot"></i><b>ARGOS / review</b><span class="window-state">XX CYG</span></div>
+          <picture><source srcset="img/review-session.webp" type="image/webp"><img src="img/review-session.jpg" alt="The ARGOS review workspace with a finished session reopened: the target light curve of XX Cyg over the per-comparison-star diagnostic panels" loading="lazy"></picture>
+          <figcaption><span>22 frames · comparison diagnostics · every point links to its FITS</span></figcaption>
+        </figure>
+        <div class="showcase-text">
+          <p class="mono-label">After the night</p>
+          <h3>Read it back offline.</h3>
+          <p>Reopen the folder with no telescope connected. The target curve, each comparison star's own diagnostic, and every point traceable to the frame that produced it.</p>
+        </div>
       </div>
     </section>
 
