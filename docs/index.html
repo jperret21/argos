@@ -82,29 +82,49 @@
 
     <section class="home-section">
       <div class="section-heading">
-        <p class="mono-label">02 · The session</p>
+        <p class="mono-label">02 · The frame</p>
+        <h2>An image is not a measurement.</h2>
+      </div>
+      <p class="section-lede">A photograph keeps the pixels. A measurement keeps everything around them.</p>
+      <div class="keyword-grid">
+        <div><code>DATE-AVG</code><p>The midpoint, not the start. A 60-second sub is otherwise half a minute wrong.</p></div>
+        <div><code>BAYERPAT</code><p><b>GRBG</b>, not RGGB. Debayer with the wrong one and the photometry is quietly wrong.</p></div>
+        <div><code>EGAIN</code> <code>RDNOISE</code><p>No error bar without them. The noise model works in electrons; the file stores ADU.</p></div>
+        <div><code>FOCALLEN</code> <code>XPIXSZ</code><p>3.74&Prime; per pixel on an S30 Pro. An aperture measured in pixels means nothing without it.</p></div>
+        <div><code>AIRMASS</code><p>How much atmosphere the star sat behind — what you correct against as it sets.</p></div>
+        <div><code>IMAGETYP</code><p>Light, dark, flat or bias, in the folders Siril expects. Point it at the session and go.</p></div>
+      </div>
+      <div class="stat-row">
+        <div><b>65</b><span>keywords per frame</span></div>
+        <div><b>16-bit</b><span>linear FITS, never stretched</span></div>
+        <div><b>0</b><span>pixels modified on disk</span></div>
+      </div>
+      <p class="method-boundary">Every keyword is listed in the <a href="docs/fits_headers.html">FITS reference</a>. Debayer, stretch or stack once and none of it comes back.</p>
+    </section>
+
+    <section class="home-section band">
+      <div class="section-heading">
+        <p class="mono-label">03 · The session</p>
         <h2>One night, one session folder.</h2>
       </div>
       <p class="section-lede">Variable stars &nbsp;·&nbsp; Exoplanet transits &nbsp;·&nbsp; Knowing the night worked before you pack up</p>
       <div class="output-grid">
-        <article><span>01</span><h3>Identify the field</h3><p>ASTAP solves the frame. Gaia DR3, AAVSO VSX, SIMBAD and VSP name what is in it.</p></article>
+        <article><span>01</span><h3>Plan the night</h3><p>Resolve the target, read its altitude across the coming night, and build the steps before you go out.</p></article>
         <article><span>02</span><h3>Record the sequence</h3><p>Set exposure and cadence. Every frame is written as linear 16-bit FITS with correct optics headers.</p></article>
         <article><span>03</span><h3>Review offline</h3><p>Open any curve point beside its source image, with focus, background and star count.</p></article>
       </div>
     </section>
 
-    <section class="home-section band">
+    <section class="home-section">
       <div class="section-heading">
-        <p class="mono-label">03 · Field identification</p>
+        <p class="mono-label">04 · Field identification</p>
         <h2>Know what is in the frame.</h2>
       </div>
-      <div class="source-grid">
-        <div><strong>ASTAP</strong><p>Plate solving</p></div>
-        <div><strong>Gaia DR3</strong><p>Field stars</p></div>
-        <div><strong>AAVSO VSX</strong><p>Variable-star identity, type, period</p></div>
-        <div><strong>AAVSO VSP</strong><p>Comparison sequences with calibrated magnitudes</p></div>
-        <div><strong>SIMBAD</strong><p>Deep-sky objects and cross-identifications</p></div>
-        <div><strong>NASA Exoplanet Archive</strong><p>Transit hosts and ephemerides</p></div>
+      <p class="section-lede">Solve it with ASTAP, then let the catalogues do the naming — and the choosing.</p>
+      <div class="output-grid">
+        <article><span>01</span><h3>Plate solving</h3><p>ASTAP recovers the WCS from the frame. Every pixel becomes a coordinate, on every frame of the run.</p></article>
+        <article><span>02</span><h3>Catalogues on the image</h3><p>Gaia DR3 for the field stars, AAVSO VSX for the variables, SIMBAD for deep-sky and cross-IDs, the NASA archive for transit hosts. Cached, so the field still works with no signal.</p></article>
+        <article><span>03</span><h3>The ensemble, chosen for you</h3><p>ARGOS pulls the AAVSO VSP sequence, measures each candidate on a test frame, and proposes the comparison stars — on signal, brightness match and distance. Override any of it.</p></article>
       </div>
       <figure class="app-window wide">
         <div class="window-titlebar"><i class="window-dot"></i><i class="window-dot"></i><i class="window-dot"></i><b>ARGOS / field identification</b><span class="window-state">HD 189733</span></div>
@@ -121,7 +141,7 @@
 
     <section class="release-overview">
       <div class="release-intro">
-        <p class="mono-label">04 · Requirements</p>
+        <p class="mono-label">05 · Requirements</p>
         <h2>What you need.</h2>
       </div>
       <div class="release-manifest">

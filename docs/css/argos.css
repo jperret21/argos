@@ -90,29 +90,17 @@ a:focus-visible { outline:2px solid var(--orange); outline-offset:4px; }
 /* The gap ARGOS exists to fill: stated in the hero, itemised in section 01. */
 .gap-line { max-width:520px; margin:18px 0 0; padding-left:16px; border-left:2px solid var(--orange); color:var(--muted); font-size:15px; line-height:1.55; }
 .section-lede { max-width:760px; margin:0 0 40px; color:var(--muted); font-size:19px; line-height:1.5; }
-/* What names the field: the source, and what it supplies. */
-.source-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); margin-bottom:48px; border-top:1px solid var(--ink); }
-.source-grid div { min-width:0; padding:19px 24px 22px 0; border-bottom:1px solid var(--line); }
-.source-grid div:not(:nth-child(3n+1)) { padding-left:24px; border-left:1px solid var(--line); }
-.source-grid strong { display:block; margin-bottom:7px; font-size:17px; font-weight:600; letter-spacing:-.03em; }
-.source-grid p { margin:0; color:var(--muted); font-size:14px; line-height:1.4; }
-/* Releases */.release-page .page-hero { max-width:1280px; padding:105px 40px 80px; margin:auto; display:grid; grid-template-columns:1fr 1fr; gap:50px; }
-.release-page .page-hero h1 { max-width:630px; margin:15px 0; font-size:clamp(50px,6.3vw,86px); line-height:.91; letter-spacing:-.075em; }
-.release-page .page-hero p:last-child { max-width:470px; color:var(--muted); font-size:18px; }
-.release-page .release-note { align-self:end; padding:20px; background:var(--screen); color:var(--screen-text); border-left:4px solid var(--orange); font:12px/1.55 var(--mono); }
-.release-page .release-note b,.release-page .release-scope b { color:var(--orange); font-weight:500; }
-.release-page .release-note b { display:block; margin-bottom:7px; }
-.release-page .download-section { max-width:1280px; padding:100px 40px; margin:auto; }
-.release-page .download-section h2 { max-width:710px; margin:0 0 44px; font-size:clamp(34px,4vw,55px); line-height:.98; letter-spacing:-.06em; }
-.download-table { border-top:1px solid var(--ink); }
-.download-row { min-height:94px; display:grid; grid-template-columns:130px 1fr 1.1fr auto; align-items:center; gap:18px; border-bottom:1px solid var(--line); }
-.download-row .platform { font:12px var(--mono); color:var(--orange); }
-.download-row strong { font-size:19px; }
-.download-row p { margin:0; color:var(--muted); font-size:14px; }
-.download-row a { padding:10px 12px; border:1px solid var(--ink); font:11px var(--mono); white-space:nowrap; }
-.download-row a:hover { background:var(--ink); color:var(--paper); }
-.release-notes { max-width:1280px; margin:auto; padding:100px 40px; }
-.release-notes h2 { max-width:680px; margin:0 0 30px; font-size:clamp(32px,3.6vw,48px); line-height:1; letter-spacing:-.06em; }
+/* Scannable: the keyword, and what breaks without it. */
+.keyword-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); border-top:1px solid var(--ink); }
+.keyword-grid div { min-width:0; padding:21px 24px 24px 0; border-bottom:1px solid var(--line); }
+.keyword-grid div:not(:nth-child(3n+1)) { padding-left:24px; border-left:1px solid var(--line); }
+.keyword-grid code { display:inline-block; margin:0 8px 11px 0; color:var(--orange); font:12px/1 var(--mono); }
+.keyword-grid p { margin:0; color:var(--muted); font-size:15px; line-height:1.45; }
+.keyword-grid p b { color:var(--ink); font-weight:500; }
+.stat-row { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:24px; margin-top:44px; }
+.stat-row div { min-width:0; }
+.stat-row b { display:block; font-size:clamp(38px,4.6vw,58px); font-weight:600; line-height:1; letter-spacing:-.06em; }
+.stat-row span { display:block; margin-top:10px; color:var(--muted); font:11px/1.4 var(--mono); letter-spacing:.045em; text-transform:uppercase; }
 .release-checklist { display:grid; grid-template-columns:repeat(3,1fr); border-top:1px solid var(--ink); }
 .release-checklist div { min-height:180px; padding:17px 24px 20px 0; }
 .release-checklist div+div { border-left:1px solid var(--line); padding-left:24px; }
@@ -161,8 +149,9 @@ code { font-family:var(--mono); font-size:.92em; }
 .download-row { grid-template-columns:80px 1fr; padding:16px 0; }
 .download-row p { grid-column:2; overflow-wrap:anywhere; }.download-row a { grid-column:2; width:max-content; }
 .release-notes { padding:0 20px 70px; }
-.source-grid { grid-template-columns:1fr; }
-.source-grid div,.source-grid div:not(:nth-child(3n+1)) { padding:15px 0; border-left:0; }
+.keyword-grid { grid-template-columns:1fr; }
+.keyword-grid div,.keyword-grid div:not(:nth-child(3n+1)) { padding:17px 0; border-left:0; }
+.stat-row { grid-template-columns:1fr; gap:26px; }
 .section-lede { font-size:17px; }
 .release-checklist { grid-template-columns:1fr; }.sequence-table li { grid-template-columns:45px minmax(0,1fr); gap:10px; }.sequence-table li p { grid-column:2; }
 .release-checklist div { min-height:0; padding:17px 0; border-bottom:1px solid var(--line); }
