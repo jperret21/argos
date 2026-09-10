@@ -56,33 +56,9 @@
       </figure>
     </section>
 
-    <section class="home-section band">
-      <div class="section-heading">
-        <p class="mono-label">01 · One result</p>
-        <h2>A rising branch, on the published template.</h2>
-      </div>
-      <p class="section-lede">ARGOS writes data a reduction can use. Calibrated in <a href="https://siril.org" target="_blank" rel="noopener">Siril</a>, reduced with <code>star_var_script</code> — a light curve of scientific quality.</p>
-      <figure class="app-window wide">
-        <picture><source srcset="img/rrlyrae-sesar-fit-dark.webp" type="image/webp"><img src="img/rrlyrae-sesar-fit-dark.png" alt="RR Lyrae light curve folded on a period of 0.56674 days, the observed points tracing the rising branch of the Sesar 2010 published template"></picture>
-        <div class="session-readout">
-          <div><span>Star</span><strong>RR Lyrae</strong></div>
-          <div><span>Period</span><strong>0.56674 d</strong></div>
-          <div><span>Observed</span><strong>Rising branch, ≈2.5 h</strong></div>
-          <div><span>Template</span><strong>Sesar 2010, r-band</strong></div>
-        </div>
-        <figcaption><span>One night of frames, folded on the catalogue period</span><span>AAVSO Extended export</span></figcaption>
-      </figure>
-      <div class="release-checklist">
-        <div><span>01 · ARGOS</span><strong>Records</strong><p>Timed FITS frames, a live differential curve, and the run-level uncertainty floor.</p></div>
-        <div><span>02 · Siril</span><strong>Calibrates and registers</strong><p>Dark, flat and bias calibration, then registration of the untouched raw frames.</p></div>
-        <div><span>03 · star_var_script</span><strong>Reduces</strong><p>Final photometry and the AAVSO export. ARGOS applies the same systematic-floor model live, so both share one uncertainty contract.</p></div>
-      </div>
-      <p class="method-boundary">The curve you watch during the night is a quick-look on uncalibrated subs: it tells you the run is working, not what the star did. The measurement comes out of the reduction — which is why ARGOS keeps every raw frame, and why that reduction stays independent and auditable.</p>
-    </section>
-
     <section class="home-section">
       <div class="section-heading">
-        <p class="mono-label">02 · The frame</p>
+        <p class="mono-label">01 · The frame</p>
         <h2>An image is not a measurement.</h2>
       </div>
       <p class="section-lede">A photograph keeps the pixels. A measurement keeps everything around them.</p>
@@ -104,7 +80,7 @@
 
     <section class="home-section band">
       <div class="section-heading">
-        <p class="mono-label">03 · The session</p>
+        <p class="mono-label">02 · The session</p>
         <h2>One night, one session folder.</h2>
       </div>
       <p class="section-lede">Variable stars &nbsp;·&nbsp; Exoplanet transits &nbsp;·&nbsp; Knowing the night worked before you pack up</p>
@@ -117,7 +93,7 @@
 
     <section class="home-section">
       <div class="section-heading">
-        <p class="mono-label">04 · Field identification</p>
+        <p class="mono-label">03 · Field identification</p>
         <h2>Know what is in the frame.</h2>
       </div>
       <p class="section-lede">Solve it with ASTAP, then let the catalogues do the naming — and the choosing.</p>
@@ -137,6 +113,30 @@
         </div>
         <figcaption><span>Catalogue overlays, a per-field query budget and local caches</span></figcaption>
       </figure>
+    </section>
+
+    <section class="home-section band">
+      <div class="section-heading">
+        <p class="mono-label">04 · One result</p>
+        <h2>A rising branch, on the published template.</h2>
+      </div>
+      <p class="section-lede">ARGOS gives you the raw FITS frames. <a href="https://siril.org" target="_blank" rel="noopener">Siril</a> — free image-processing software — calibrates and registers them, and the <a href="https://github.com/jperret21/star_var_script" target="_blank" rel="noopener">star_var_script</a> extension turns them into a calibrated light curve. That is the scientifically valid measurement, and this is one.</p>
+      <figure class="app-window wide">
+        <picture><source srcset="img/rrlyrae-sesar-fit-dark.webp" type="image/webp"><img src="img/rrlyrae-sesar-fit-dark.png" alt="RR Lyrae light curve folded on a period of 0.56674 days, the observed points tracing the rising branch of the Sesar 2010 published template"></picture>
+        <div class="session-readout">
+          <div><span>Star</span><strong>RR Lyrae</strong></div>
+          <div><span>Period</span><strong>0.56674 d</strong></div>
+          <div><span>Observed</span><strong>Rising branch, ≈2.5 h</strong></div>
+          <div><span>Template</span><strong>Sesar 2010, r-band</strong></div>
+        </div>
+        <figcaption><span>One night of frames, folded on the catalogue period</span><span>AAVSO Extended export</span></figcaption>
+      </figure>
+      <div class="release-checklist">
+        <div><span>01 · ARGOS</span><strong>Records</strong><p>Timed FITS frames, a live differential curve, and the run-level uncertainty floor.</p></div>
+        <div><span>02 · Siril</span><strong>Calibrates and registers</strong><p>Dark, flat and bias calibration, then registration of the untouched raw frames.</p></div>
+        <div><span>03 · star_var_script</span><strong>Reduces</strong><p>Final photometry and the AAVSO export. ARGOS applies the same systematic-floor model live, so both share one uncertainty contract.</p></div>
+      </div>
+      <p class="method-boundary">The curve you watch during the night is a quick-look on uncalibrated subs: it tells you the run is working, not what the star did. The measurement comes out of the reduction — which is why ARGOS keeps every raw frame, and why that reduction stays independent and auditable.</p>
     </section>
 
     <section class="release-overview">

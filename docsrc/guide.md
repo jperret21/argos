@@ -408,7 +408,8 @@ When you report an observation, keep the raw FITS, `session.json`, the CSV
 exports and any `*_diagnostics.jsonl` together.
 
 Copy the whole session folder before reducing it in
-[Siril](https://siril.org) and `star_var_script` — the folder layout is already
+[Siril](https://siril.org) and
+[`star_var_script`](https://github.com/jperret21/star_var_script) — the folder layout is already
 the one Siril's sequence discovery expects, so a copy is all it takes. The
 naming rules and the full header list are in {doc}`fits_headers`.
 

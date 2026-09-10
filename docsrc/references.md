@@ -33,11 +33,12 @@ is where a quick-look curve becomes a reducible dataset.
 :::::
 
 :::::{grid-item-card} `star_var_script`
-The companion reduction script for variable-star work on registered, calibrated
-frames. ARGOS's run-level uncertainty floor is deliberately the same model, so
-the live preview and the final reduction quote comparable error bars.
+The companion reduction script: a Siril script for automatic variable-star
+study with the Seestar S30 Pro. ARGOS's run-level uncertainty floor is
+deliberately the same model, so the live preview and the final reduction quote
+comparable error bars.
 
-*Not publicly distributed at the time of writing.*
+**Jules Perret** — <https://github.com/jperret21/star_var_script>
 :::::
 
 :::::{grid-item-card} Stellarium
