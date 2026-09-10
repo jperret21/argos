@@ -58,17 +58,17 @@
 
     <section class="home-section">
       <div class="section-heading">
-        <p class="mono-label">01 · Why it exists</p>
+        <p class="mono-label">01 · The frame</p>
         <h2>An image is not a measurement.</h2>
       </div>
       <p class="section-lede">A photograph keeps the pixels. A measurement keeps everything around them.</p>
       <div class="keyword-grid">
-        <div><code>DATE-AVG</code><span>Exposure midpoint, to the second</span></div>
-        <div><code>EGAIN</code><span>Electrons per ADU</span></div>
-        <div><code>RDNOISE</code><span>Read noise</span></div>
-        <div><code>FOCALLEN</code><span>Plate scale on the sky</span></div>
-        <div><code>AIRMASS</code><span>Air in the way</span></div>
-        <div><code>BAYERPAT</code><span>Mosaic, untouched</span></div>
+        <div><code>DATE-AVG</code><p>The midpoint, not the start. A 60-second sub is otherwise half a minute wrong.</p></div>
+        <div><code>BAYERPAT</code><p><b>GRBG</b>, not RGGB. Debayer with the wrong one and the photometry is quietly wrong.</p></div>
+        <div><code>EGAIN</code> <code>RDNOISE</code><p>No error bar without them. The CCD equation counts electrons; the file counts ADU.</p></div>
+        <div><code>FOCALLEN</code> <code>XPIXSZ</code><p>3.74&Prime; per pixel on an S30 Pro. An aperture measured in pixels means nothing without it.</p></div>
+        <div><code>AIRMASS</code><p>Pickering, evaluated at the frame. What extinction gets fitted against later.</p></div>
+        <div><code>BJD_TDB</code><p>Up to &plusmn;8 minutes over a year. Transit timing does not survive JD_UTC.</p></div>
       </div>
       <div class="stat-row">
         <div><b>65</b><span>keywords per frame</span></div>
@@ -80,7 +80,7 @@
 
     <section class="home-section band">
       <div class="section-heading">
-        <p class="mono-label">02 · What it does</p>
+        <p class="mono-label">02 · The session</p>
         <h2>One night, one session folder.</h2>
       </div>
       <p class="section-lede">Variable stars &nbsp;·&nbsp; Exoplanet transits &nbsp;·&nbsp; Knowing the night worked before you pack up</p>
