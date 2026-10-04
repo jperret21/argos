@@ -1283,7 +1283,12 @@ class AcquisitionEngine(QObject):
             return wcs
         if self._tracker is None:
             self._tracker = self._build_live_tracker(green, wcs, tset, params)
-        self._tracker.update(green)
+        telescope = self._session.telescope
+        # The alt-az tracker needs a rigid rotation + translation.  On an EQ
+        # wedge there is no field rotation, so only retain measured drift;
+        # centroid noise must not rotate a whole overlay about the sensor.
+        allow_rotation = getattr(telescope, "alignment_mode", None) not in {"EQ", "EQ (GEM)"}
+        self._tracker.update(green, allow_rotation=allow_rotation)
         if not self._tracker.anchors_used:
             self.log_message.emit("WARN", "Photometry: no anchor star found — apertures unguided")
         self.apertures_tracked.emit()
