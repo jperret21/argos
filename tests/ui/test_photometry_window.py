@@ -103,6 +103,22 @@ def test_offline_deep_sky_types_map_to_physical_filters() -> None:
     assert ImagingPage._object_category("OC") == "cluster"
 
 
+def test_field_catalogue_simbad_match_is_nearest_and_within_three_arcsec() -> None:
+    stars = [
+        GaiaStar("near", 300.0, 58.0),
+        GaiaStar("far", 301.0, 58.0),
+    ]
+    near = NamedFieldObject("HD near", 300.0 + 1.0 / 3600.0, 58.0, "*")
+    # At +58°, an RA offset is shortened by cos(dec); 7 arcsec in RA is
+    # safely beyond the 3-arcsec great-circle matching radius.
+    far = NamedFieldObject("HD far", 301.0 + 7.0 / 3600.0, 58.0, "*")
+
+    matched, names = ImagingPage._match_field_catalogue_names(stars, [near, far])
+
+    assert matched == {0}
+    assert names == [near, None]
+
+
 def test_photometry_measurement_controls_are_explicit_and_configurable(qapp) -> None:
     win = PhotometryWindow()
     try:
