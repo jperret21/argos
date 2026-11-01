@@ -910,6 +910,11 @@ W1 shell + Connection ──► W2 Settings ──► W4 field + overlays ──
 | **W7 Review** | Review sessions and the live run, export to AAVSO, inspect frames, re-run photometry | A67-A79 | Plot wall (facets, linked axis, cell menu, `expand-pane`), job strip, Export dialogs, `frame-prev` / `frame-next` | R0, R1, R2, Re-run dialog; M8 (re-run), M50, M80-M95, M100-M103 | Exports byte-identical to `write_aavso` / `write_curves_csv` for the sample sessions, with the new guards; a re-run writes a new folder inside the session |
 | **W8 Desktop app and Qt retirement** | Ship the Tauri app; remove PyQt from the runtime | A7, A12 | Quit dialog + shutdown scrim, custom title bar (Night Red), native app menu (optional, Q-G10), crash notice, ⌘1-5 | M18, M20; optional multi-window (D27) | Every mapping row of §2 is "done"; Appendix A re-run on the final Qt tree shows nothing new; `PyQt6` and `pyqtgraph` leave the runtime dependencies |
 
+Status note (2026-11-01): A19 (the Stellarium bridge) and the Planetarium card's Start /
+Stop shipped with W1, so that the W1 exit criterion (every Qt Connection control of 02 §2.2
+has its web control) holds; W3 keeps the Stellarium target-name suggestion. See
+`progress.md`.
+
 Ordering notes: W2 before W4 because plate solving needs the ASTAP settings and catalogue
 budgets; W3 does not need W2 (camera, mount and focuser settings come from devices). The
 Review wave is last because it depends on the job model (W1), the config (W2), the viewer

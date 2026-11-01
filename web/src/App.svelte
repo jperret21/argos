@@ -1,69 +1,78 @@
 <!--
-  ARGOS web UI shell: navigation rail | section | status bar, plus toasts.
+  ARGOS web UI shell (README 1.1, 01 2.3.1): navigation rail | section |
+  status bar, plus toasts, the keyboard shortcuts sheet (in NavRail) and the
+  start-up screen.
 
-  The app state (server link, settings, display, feedback) lives in one
-  ArgosApp instance shared through context (lib/app/state.svelte.ts).
-  Sections other than Observe are placeholders in this spike.
+  - The app state (server link, settings, display, feedback, log, jobs, the
+    shortcut registry) lives in one ArgosApp instance shared through context
+    (lib/app/state.svelte.ts). Global keys (F1-F5, ?, L, Mod+, and Escape =
+    abort motion, D21) are bound there, through the one registry.
+  - Start-up screen (01 2.3.8, M1-M2): over the shell until GET /api/health
+    answers and /ws/events has sent its first status; a failure stays on
+    screen with Retry. It never comes back once the UI started: a later
+    link loss shows in the status bar and the Link card.
+  - Sections: Connection (wave 1) and Observe are built; Plan, Review and
+    Settings say what they will hold. Every section has the Log drawer (L).
   Add ?perf to the URL to log per-frame decode/upload/stats/draw timings
   (upload and draw are then fenced with a 1-px readPixels: measurements only).
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { matchesShortcut } from './lib/app/shortcuts';
   import { ArgosApp, provideApp, type Section } from './lib/app/state.svelte';
+  import ConnectionScreen from './lib/connection/ConnectionScreen.svelte';
   import ImagingScreen from './lib/imaging/ImagingScreen.svelte';
   import EmptySection from './lib/shell/EmptySection.svelte';
+  import LogDrawer from './lib/shell/LogDrawer.svelte';
   import NavRail, { type NavEntry } from './lib/shell/NavRail.svelte';
+  import StartupScreen from './lib/shell/StartupScreen.svelte';
   import StatusBar from './lib/shell/StatusBar.svelte';
   import Toasts from './lib/shell/Toasts.svelte';
 
   const app = provideApp(new ArgosApp());
   const perf = new URLSearchParams(location.search).has('perf');
 
+  const key = (id: string) => app.shortcuts.keyFor(id) ?? '';
+
   const NAV: readonly NavEntry[] = [
     {
       id: 'connection',
       icon: 'nav-connection',
       label: 'Connection',
-      hint: 'Connection: set up the telescope equipment',
-      shortcut: 'F1',
+      hint: 'Connection: telescope profile, link and the four devices',
+      shortcut: key('nav.connection'),
     },
     {
       id: 'imaging',
       icon: 'nav-imaging',
       label: 'Observe',
       hint: 'Observe: frame, focus and monitor the observation',
-      shortcut: 'F2',
+      shortcut: key('nav.observe'),
     },
     {
       id: 'sequencer',
       icon: 'nav-sequencer',
       label: 'Plan',
       hint: "Plan: build and run the night's sequence",
-      shortcut: 'F3',
+      shortcut: key('nav.plan'),
     },
     {
       id: 'analyze',
       icon: 'nav-analyze',
       label: 'Review',
       hint: 'Review: inspect the light curve and export to AAVSO',
-      shortcut: 'F4',
+      shortcut: key('nav.review'),
     },
     {
       id: 'configuration',
       icon: 'nav-configuration',
       label: 'Settings',
       hint: 'Settings: observer, site, paths, appearance',
-      shortcut: 'F5',
+      shortcut: key('nav.settings'),
     },
   ];
 
-  const PLACEHOLDERS: Record<Exclude<Section, 'imaging'>, { title: string; text: string; items: string[] }> = {
-    connection: {
-      title: 'Equipment set-up',
-      text: 'The full set-up page of the Qt app comes later. The Connection card on the Observe screen already connects the simulator or a Seestar over ASCOM Alpaca.',
-      items: ['Telescope profile and sensor', 'Alpaca discovery on the local network', 'Device health and firmware checks'],
-    },
+  type Placeholder = Exclude<Section, 'imaging' | 'connection'>;
+  const PLACEHOLDERS: Record<Placeholder, { title: string; text: string; items: string[] }> = {
     sequencer: {
       title: "The night's sequence",
       text: 'Planning and running timed FITS sequences, with the target visibility and the expected end of the run.',
@@ -76,34 +85,36 @@
     },
     configuration: {
       title: 'Settings',
-      text: 'Observer, site, storage paths and appearance. Until then, the theme switch sits at the right of the Observe toolbar.',
-      items: ['Observer code and site coordinates', 'Output folders and file naming', 'Theme and display preferences'],
+      text: 'Observer, site, plate solving, catalogues, storage paths and appearance. The theme switch is in the rail footer, above Settings.',
+      items: ['Observer code and site coordinates', 'ASTAP, catalogues and photometry', 'Data folders, privacy and appearance'],
     },
   };
 
   onMount(() => app.start());
 
-  function onKey(e: KeyboardEvent): void {
-    // Rail shortcuts (Qt View menu): F1-F5, even from a text field.
-    const hit = NAV.find((n) => matchesShortcut(e, n.shortcut));
-    if (hit) {
-      e.preventDefault();
-      app.section = hit.id;
-    }
-  }
+  // The start-up screen fades out once (--duration-base), then leaves the DOM.
+  let startupGone = $state(false);
+  $effect(() => {
+    if (!app.started) return;
+    const t = setTimeout(() => (startupGone = true), 220);
+    return () => clearTimeout(t);
+  });
 </script>
 
-<svelte:window onkeydown={onKey} />
-
-<div class="shell">
+<div class="shell" inert={!app.started || undefined}>
   <NavRail entries={NAV} />
   <main class="section" aria-label={NAV.find((n) => n.id === app.section)?.label}>
     {#if app.section === 'imaging'}
       <ImagingScreen {perf} />
+    {:else if app.section === 'connection'}
+      <ConnectionScreen />
     {:else}
       {@const p = PLACEHOLDERS[app.section]}
       {@const nav = NAV.find((n) => n.id === app.section)}
-      <EmptySection icon={nav?.icon ?? 'nav-imaging'} title={p.title} text={p.text} items={p.items} />
+      <div class="placeholder" style:grid-template-rows="minmax(0, 1fr) {app.logOpen ? '216px' : '0px'}">
+        <EmptySection icon={nav?.icon ?? 'nav-imaging'} title={p.title} text={p.text} items={p.items} />
+        {#if app.logOpen}<LogDrawer label="{nav?.label ?? 'Section'} drawer" />{/if}
+      </div>
     {/if}
   </main>
   <div class="status">
@@ -111,6 +122,15 @@
   </div>
 </div>
 <Toasts />
+{#if !startupGone}
+  <StartupScreen
+    stages={app.startup.stages}
+    version={app.serverVersion}
+    failure={app.startup.failure}
+    leaving={app.started}
+    onretry={() => app.retryStartup()}
+  />
+{/if}
 
 <style>
   .shell {
@@ -122,6 +142,13 @@
 
   .section {
     min-width: 0;
+    min-height: 0;
+  }
+
+  .placeholder {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    height: 100%;
     min-height: 0;
   }
 
