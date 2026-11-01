@@ -37,3 +37,188 @@ def test_ingest_frame_feeds_the_live_pipeline(qapp, tmp_path) -> None:
     assert frames[0].decimated is False
     # Solve/photometry read the same authoritative frame.
     assert engine._last_raw is raw and engine._last_raw_decimated is False
+
+
+# ---------------------------------------------------------------------------
+# Take shot: a real engine, a fake camera/wheel/preview worker, and a
+# synchronous thread pool, so the FITS save really writes under tmp_path.
+# ---------------------------------------------------------------------------
+
+
+class _Sig:
+    """Stand-in for a worker signal: records the connected slots."""
+
+    def __init__(self) -> None:
+        self.slots: list = []
+
+    def connect(self, slot) -> None:
+        self.slots.append(slot)
+
+
+class _FakePreviewWorker:
+    """Records how the engine created it; never exposes anything."""
+
+    created: list[dict] = []
+
+    def __init__(self, camera, **kwargs) -> None:
+        self.kw = kwargs
+        _FakePreviewWorker.created.append(kwargs)
+        self.frame_ready = _Sig()
+        self.status_updated = _Sig()
+        self.error_occurred = _Sig()
+        self.finished = _Sig()
+        self.updates: list = []
+
+    def start(self) -> None:
+        pass
+
+    def isRunning(self) -> bool:  # noqa: N802 (QThread API)
+        return False
+
+    def update_settings(self, *args, **kwargs) -> None:
+        self.updates.append((args, kwargs))
+
+    def stop(self) -> None:
+        pass
+
+    def wait(self, _ms: int = 0) -> bool:
+        return True
+
+
+class _FakeCamera:
+    def __init__(self) -> None:
+        self.gains: list = []
+        self.exposures: list = []
+
+    def get_ccd_temperature(self):
+        return 20.0
+
+    def get_electrons_per_adu(self):
+        return None
+
+    def get_offset(self):
+        return None
+
+    def get_readout_mode_name(self):
+        return None
+
+    def set_gain(self, gain) -> None:
+        self.gains.append(gain)
+
+    def try_get_gain(self):
+        return self.gains[-1] if self.gains else None
+
+    def start_exposure(self, exposure, light=True) -> None:
+        self.exposures.append((exposure, light))
+
+    def is_image_ready(self) -> bool:
+        return True
+
+    def get_image_array(self):
+        return _star_frame()
+
+    def stop_exposure(self) -> None:
+        pass
+
+
+class _FakeWheel:
+    """Seestar wheel: 0 = Dark, 1 = IR, 2 = LP. Moves are instantaneous."""
+
+    names = {0: "Dark", 1: "IR", 2: "LP"}
+
+    def __init__(self, position: int = 1) -> None:
+        self.position = position
+        self.set_calls: list[int] = []
+
+    def get_position(self) -> int:
+        return self.position
+
+    def set_position(self, position: int) -> None:
+        self.set_calls.append(position)
+        self.position = position
+
+    def position_name(self) -> str:
+        return self.names[self.position]
+
+
+class _SyncPool:
+    """QThreadPool stand-in: runs the task at once, on this thread."""
+
+    def start(self, task) -> None:
+        task.run()
+
+
+def _star_frame(h: int = 120, w: int = 160, sigma: float = 2.0) -> np.ndarray:
+    yy, xx = np.mgrid[0:h, 0:w]
+    star = 20000.0 * np.exp(-((xx - 80.0) ** 2 + (yy - 60.0) ** 2) / (2 * sigma**2))
+    return (star + 300.0).astype(np.uint16)
+
+
+@pytest.fixture
+def shot_rig(qapp, tmp_path, monkeypatch):
+    """(engine, session, form, logs): ``form["p"]`` is what the Camera form shows."""
+    import argos.core.session.acquisition_engine as ae
+    from argos.ui.widgets.camera_dock import CaptureParams
+
+    _FakePreviewWorker.created = []
+    monkeypatch.setattr(ae, "LivePreviewWorker", _FakePreviewWorker)
+    monkeypatch.setattr(ae.QThreadPool, "globalInstance", staticmethod(lambda: _SyncPool()))
+    cfg = Config(dict(_DEFAULTS, sessions_path=str(tmp_path / "sessions")))
+    session = DeviceSession(cfg)
+    session._camera = _FakeCamera()
+    engine = AcquisitionEngine(cfg, session)
+    form = {"p": CaptureParams("Light Frame", "V1", "IR", 10.0, 80)}
+    engine.set_providers(lambda: form["p"], lambda: 1)
+    logs: list[tuple[str, str]] = []
+    engine.log_message.connect(lambda level, msg: logs.append((level, msg)))
+    return engine, session, form, logs
+
+
+def test_dark_take_shot_refused_unless_the_wheel_is_on_the_dark_slot(shot_rig) -> None:
+    """S1: the Seestar has no shutter — its wheel's Dark slot is the only one.
+
+    A Dark/Bias Take shot with the wheel on a light filter used to expose a
+    light frame and label it IMAGETYP=Dark; used as a master dark it corrupts
+    every calibrated science frame.
+    """
+    from argos.ui.widgets.camera_dock import CaptureParams
+    from argos.workers.camera_service import CameraState
+
+    engine, session, form, logs = shot_rig
+    session._filterwheel = _FakeWheel(position=1)  # wheel on IR
+
+    for frame_type in ("Dark Frame", "Bias Frame"):
+        form["p"] = CaptureParams(frame_type, "V1", "IR", 10.0, 80)
+        logs.clear()
+        engine.take_shot()
+        assert _FakePreviewWorker.created == [], f"{frame_type} exposed behind IR"
+        assert engine.camera_state is CameraState.IDLE
+        assert engine._capture_pending == 0
+        assert any(level == "WARN" and "Dark" in msg for level, msg in logs), logs
+
+    # Live owns the camera: the shot must not tag the next (light) frame either.
+    form["p"] = CaptureParams("Light Frame", "V1", "IR", 10.0, 80)
+    engine.start_live()
+    form["p"] = CaptureParams("Dark Frame", "V1", "IR", 10.0, 80)
+    engine.take_shot()
+    assert engine._capture_pending == 0
+    engine.stop_live()
+
+    # Filter "Dark" selected: the shot goes, shutter closed.
+    _FakePreviewWorker.created = []
+    form["p"] = CaptureParams("Dark Frame", "V1", "Dark", 10.0, 80)
+    engine.take_shot()
+    assert len(_FakePreviewWorker.created) == 1
+    assert _FakePreviewWorker.created[0]["light"] is False
+    assert engine._capture_pending == 1
+
+
+def test_dark_take_shot_without_a_wheel_warns_that_the_scope_must_be_covered(shot_rig) -> None:
+    from argos.ui.widgets.camera_dock import CaptureParams
+
+    engine, session, form, logs = shot_rig
+    assert session.filterwheel is None
+    form["p"] = CaptureParams("Dark Frame", "V1", "IR", 10.0, 80)
+    engine.take_shot()
+    assert len(_FakePreviewWorker.created) == 1  # no wheel to check: trust the observer
+    assert any(level == "WARN" and "cover" in msg for level, msg in logs), logs

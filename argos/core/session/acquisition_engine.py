@@ -50,6 +50,7 @@ from argos.core.imaging.fits_writer import FITSWriter, FrameContext
 from argos.core.imaging.green import green_plane
 from argos.core.imaging.metrics import measure_star_at
 from argos.core.imaging.platesolve import angular_separation_deg
+from argos.core.imaging.sequencer import DARK_FILTER_NAME
 from argos.core.photometry.airmass import (
     airmass_at,
     airmass_from_altitude,
@@ -318,6 +319,8 @@ class AcquisitionEngine(QObject):
         if not self._session.camera:
             self.log_message.emit("WARN", "Camera not connected.")
             return
+        if not self._dark_shot_allowed(self._params()):
+            return
         if self._camera_service.state is CameraState.LIVE:
             # The live loop already owns the camera — just tag its next frame
             # for saving; no ownership change.
@@ -328,6 +331,36 @@ class AcquisitionEngine(QObject):
             return  # refused (sequence/autofocus owns the camera) — reason logged
         self._capture_pending = 1
         self.log_message.emit("CMD", "Take shot — saving next frame…")
+
+    def _dark_shot_allowed(self, params) -> bool:
+        """Refuse a Dark/Bias shot unless the wheel's opaque slot is selected.
+
+        The Seestar has no shutter: ``light=False`` does not close anything,
+        and the wheel's Dark slot is the only way to block the light (field
+        bug 2026-07-11, the same rule as ``FrameSpec.wheel_filter``). Without
+        that slot the frame is a light frame labelled IMAGETYP=Dark, and a
+        master dark built from it corrupts every calibrated science frame.
+        The check reads the Camera form's filter (the wheel is moved from
+        there); it is not moved automatically here.
+        """
+        if _is_light_frame(params.frame_type):
+            return True
+        has_dark_slot = DeviceSession.filter_position_for(DARK_FILTER_NAME) is not None
+        if self._session.filterwheel is None or not has_dark_slot:
+            self.log_message.emit(
+                "WARN",
+                f"{params.frame_type}: no filter wheel to block the light — the frame is "
+                "only dark if the telescope is covered.",
+            )
+            return True
+        if params.filter_name.strip().lower() != DARK_FILTER_NAME.lower():
+            self.log_message.emit(
+                "WARN",
+                f"{params.frame_type} shot refused: the wheel is on '{params.filter_name}'. "
+                f"Select Filter '{DARK_FILTER_NAME}' first (the Seestar has no shutter).",
+            )
+            return False
+        return True
 
     def start_live(self) -> None:
         if not self._session.camera:
