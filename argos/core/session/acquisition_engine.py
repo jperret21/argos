@@ -42,7 +42,7 @@ from argos.core.catalog.targets import (
     TargetSet,
     TargetStar,
 )
-from argos.core.config import Config
+from argos.core.config import Config, observing_site
 from argos.core.hardware import active as hardware
 from argos.core.imaging import sensor_models
 from argos.core.imaging.astrometry_session import field_geometry
@@ -824,6 +824,7 @@ class AcquisitionEngine(QObject):
         pos = self._session.last_position
         target = self._session.target_radec
         cam = self._session.camera
+        site = observing_site(self._config) or (None, None, None)
         return FrameContext(
             ra=pos.ra if pos else None,
             dec=pos.dec if pos else None,
@@ -834,9 +835,9 @@ class AcquisitionEngine(QObject):
             object_name=object_name,
             filter_name=filter_name,
             observer=(self._config.get("observer.name") or "").strip(),
-            site_lat=self._config.get("site.latitude"),
-            site_lon=self._config.get("site.longitude"),
-            site_elev=self._config.get("site.elevation"),
+            site_lat=site[0],
+            site_lon=site[1],
+            site_elev=site[2],
             software=_SOFTWARE,
             ccd_temp=cam.get_ccd_temperature() if cam else None,
             egain_driver=cam.get_electrons_per_adu() if cam else None,
@@ -1579,8 +1580,9 @@ class AcquisitionEngine(QObject):
         jd = julian_date(self._last_exposure_mid)
         pos = self._session.last_position
         air = airmass_from_altitude(pos.altitude) if pos else None
-        lat, lon = self._cfg("site.latitude", None), self._cfg("site.longitude", None)
-        elev = self._cfg("site.elevation", 0.0) or 0.0
+        # Never the 0/0 default: without a site, the airmass is the mount's
+        # (or none) and there is no BJD_TDB.
+        lat, lon, elev = observing_site(self._config) or (None, None, 0.0)
         diag.record("frame", frame=frame_no, jd_utc=jd, airmass=air, fwhm=fwhm)
         self.photometry_measuring.emit()  # the page samples the CCD temp if open
         for res in results:
@@ -1753,6 +1755,7 @@ class AcquisitionEngine(QObject):
 
         pos = self._session.last_position
         target = self._session.target_radec
+        site = observing_site(self._config) or (None, None, None)
         ctx_kwargs = {
             "ra": pos.ra if pos else None,
             "dec": pos.dec if pos else None,
@@ -1762,9 +1765,9 @@ class AcquisitionEngine(QObject):
             "target_dec": target[1] if target else None,
             "object_name": params.object_name,
             "observer": (self._config.get("observer.name") or "").strip(),
-            "site_lat": self._config.get("site.latitude"),
-            "site_lon": self._config.get("site.longitude"),
-            "site_elev": self._config.get("site.elevation"),
+            "site_lat": site[0],
+            "site_lon": site[1],
+            "site_elev": site[2],
             "software": _SOFTWARE,
         }
 

@@ -219,6 +219,16 @@ def test_no_saved_site_draws_no_altitude_curve() -> None:
     finally:
         _dispose(page)
 
+    # Coordinates typed without a name (or migrated from pre-0.4 observer
+    # keys) are a site: the same rule as photometry and FITS (observing_site).
+    page, _engine = _page({"site": {"name": "", "latitude": 45.0, "longitude": 5.0}})
+    try:
+        page.set_target_coordinates("Vega", 18.6156, 38.7837)
+        x, _y = page.panel._visibility_plot._curve.getData()
+        assert x is not None and len(x) > 0
+    finally:
+        _dispose(page)
+
 
 def test_transit_after_midnight_is_inside_the_plotted_night() -> None:
     """S26b: a 00:30-03:30 coverage was shaded outside the plotted 18:00-06:00."""

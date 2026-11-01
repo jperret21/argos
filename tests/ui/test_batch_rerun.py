@@ -34,6 +34,11 @@ class _Recorder:
         return lambda *a, **k: None
 
 
+def _or_default(value, default):
+    """ImagingPage._cfg: a stored None reads as the default."""
+    return default if value is None else value
+
+
 def _fits(path, imagetyp: str, date_obs: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     hdu = fits.PrimaryHDU(np.zeros((4, 4), dtype=np.uint16))
@@ -61,16 +66,19 @@ def rerun(tmp_path, monkeypatch):
     tset.set_role(TargetStar(role=ROLE_TARGET, ra_deg=1.0, dec_deg=1.0, auid="T"))
     tset.set_role(TargetStar(role=ROLE_COMPARISON, ra_deg=2.0, dec_deg=2.0, auid="C1"))
 
-    def run(folder):
+    def run(folder, site=None):
+        from argos.core.config import _DEFAULTS, Config
+
         monkeypatch.setattr(
             ip.QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(folder))
         )
+        config = Config({"site": dict(_DEFAULTS["site"], **(site or {}))})
         page = SimpleNamespace(
             _batch_worker=None,
             _astrometry=SimpleNamespace(wcs=object()),
             _engine=SimpleNamespace(target_set=lambda: tset, last_sequence_dir=None),
-            _config=SimpleNamespace(sessions_path=tmp_path / "sessions"),
-            _cfg=lambda key, default: default,
+            _config=SimpleNamespace(sessions_path=tmp_path / "sessions", get=config.get),
+            _cfg=lambda key, default: _or_default(config.get(key, default), default),
             _engine_egain=lambda: 1.723,
             _on_batch_done=lambda result: None,
         )
@@ -109,6 +117,24 @@ def test_rerun_writes_into_a_new_folder_of_the_session(tmp_path, rerun) -> None:
 
     out_dir = requests[-1].out_dir
     assert out_dir.parent == run and out_dir.name.startswith("photometry_rerun_")
+
+
+def test_rerun_without_a_site_computes_no_airmass_at_latitude_0_longitude_0(
+    tmp_path, rerun
+) -> None:
+    """The re-run got the config's 0/0 defaults as its site: every point's
+    airmass (CSV, AAVSO AMASS) and BJD_TDB were computed for 0/0."""
+    run = tmp_path / "sessions" / "20261101T200000Z_SS_Cyg"
+    _fits(run / "lights" / "a.fit", "Light Frame", "2026-11-01T20:00:00")
+
+    requests, _messages = rerun(run / "lights")
+    assert requests[-1].site == (None, None, 0.0)
+
+    requests, _messages = rerun(
+        run / "lights",
+        site={"name": "Paris", "latitude": 48.85, "longitude": 2.35, "elevation": 35.0},
+    )
+    assert requests[-1].site == (48.85, 2.35, 35.0)
 
 
 def test_cancelled_batch_is_reported_and_not_adopted() -> None:

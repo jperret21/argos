@@ -673,6 +673,66 @@ def test_frames_saved_after_the_mount_went_away_carry_no_pointing(shot_rig, tmp_
         assert key not in hdr, f"{key} written from a disconnected mount"
 
 
+def test_no_site_set_means_no_site_products_not_latitude_0_longitude_0(
+    shot_rig, tmp_path, monkeypatch
+) -> None:
+    """With no site set, the config's 0/0 defaults were used as the site:
+    the live point's airmass (the CSV airmass column and AAVSO AMASS) was
+    computed for 0/0 (1.379 for SS Cyg at 2026-11-01 19:00 UTC, where the
+    mount said 1.154 and Paris sees 1.005), and FITS got SITELAT/SITELONG 0."""
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.alpaca.telescope import MountPosition
+    from argos.core.catalog.targets import ROLE_TARGET, TargetSet, TargetStar
+    from argos.core.photometry.airmass import airmass_at, airmass_from_altitude, julian_date
+
+    engine, session, form, logs = shot_rig
+    assert engine._config.get("site.name") == "" and engine._config.get("site.latitude") == 0.0
+    session._telescope = MagicMock()
+    session._on_position(MountPosition(21.7, 43.6, 60.0, 270.0, True, False))
+    star = TargetStar(role=ROLE_TARGET, ra_deg=325.678, dec_deg=43.586, name="SS Cyg")
+    monkeypatch.setattr(engine, "target_set", lambda: TargetSet("SS Cyg", [star]))
+    diff = SimpleNamespace(
+        mag=11.0, mag_err=0.02, formal_mag_err=0.02, comps_used=3, zero_point=0.0, zp_rms=0.0
+    )
+    diff.note = ""
+    phot = SimpleNamespace(sky_adu=300.0, saturated=False, suspect=False)
+    result = SimpleNamespace(star=star, diff=diff, relative=None, phot=phot)
+    monkeypatch.setattr(ae, "measure_frame", lambda *a, **k: [result])
+    monkeypatch.setattr(engine, "_wcs_for_frame", lambda *a: None)
+    monkeypatch.setattr(engine, "_write_live_quality_report", lambda tset: None)
+    mid = datetime(2026, 11, 1, 19, 0, tzinfo=timezone.utc)
+    jd = julian_date(mid)
+
+    def measure():
+        engine.astrometry._wcs = object()
+        engine._last_raw, engine._last_raw_decimated = _star_frame(), False
+        engine._last_exposure_mid = mid
+        engine._measure_photometry()
+        return engine.lightcurves["SS Cyg"].points[-1]
+
+    point = measure()
+    assert point.airmass == pytest.approx(airmass_from_altitude(60.0))  # the mount's
+    assert point.airmass != pytest.approx(airmass_at(jd, 325.678, 43.586, 0.0, 0.0))
+    assert point.bjd_tdb is None
+    ctx = engine._sequence_frame_context("SS Cyg", "IR")
+    assert (ctx.site_lat, ctx.site_lon, ctx.site_elev) == (None, None, None)
+    engine.take_shot()
+    _deliver(engine)
+    ((_, hdr),) = _saved_headers(tmp_path / "sessions")
+    assert "SITELAT" not in hdr and "SITELONG" not in hdr
+
+    # A site that was set (here typed, without a name) is used as before.
+    engine._config._data["site"] = {"name": "", "latitude": 48.85, "longitude": 2.35}
+    point = measure()
+    assert point.airmass == pytest.approx(airmass_at(jd, 325.678, 43.586, 48.85, 2.35))
+    assert point.bjd_tdb is not None
+    assert engine._sequence_frame_context("SS Cyg", "IR").site_lat == 48.85
+
+
 def test_engine_reports_whether_the_running_sequence_shoots_lights(shot_rig, monkeypatch) -> None:
     """S14: the page arms field identification only for runs with Light frames."""
     import argos.core.session.acquisition_engine as ae

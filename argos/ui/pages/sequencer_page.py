@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import QVBoxLayout, QWidget
 from argos.ui import design
 from argos.ui.widgets.sequence_panel import SequencePanel
 from argos.core.catalog.object_resolver import ResolvedObject
+from argos.core.config import observing_site
 from argos.core.exoplanet.transit import make_transit_sequence, predict_next_transit
 from argos.core.photometry.airmass import bjd_tdb, julian_date, utc_from_bjd_tdb
 from argos.workers.exoplanet_worker import ExoplanetLookupWorker
@@ -148,17 +149,9 @@ class SequencerPage(QWidget):
         )
 
     def _site_coordinates(self) -> tuple[float, float, float] | None:
-        """Return the explicitly saved observing site, never the 0/0 default."""
-        if not str(self._config.get("site.name", "") or "").strip():
-            return None
-        try:
-            return (
-                float(self._config.get("site.latitude")),
-                float(self._config.get("site.longitude")),
-                float(self._config.get("site.elevation", 0.0) or 0.0),
-            )
-        except (TypeError, ValueError):
-            return None
+        """Return the observing site the observer set, never the 0/0 default
+        (the rule photometry and FITS use too: :func:`observing_site`)."""
+        return observing_site(self._config)
 
     def _local_transit_window(self, target, window):
         """Return topocentric local coverage instants, or ``None`` if unavailable."""

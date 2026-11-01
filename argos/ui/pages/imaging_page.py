@@ -65,7 +65,7 @@ from PyQt6.QtWidgets import (
 )
 
 from argos.core.alpaca.telescope import MountPosition
-from argos.core.config import Config
+from argos.core.config import Config, observing_site
 from argos.core.session.acquisition_engine import AcquisitionEngine
 from argos.core.session.device_session import DeviceSession
 from argos.core.session.types import (
@@ -2333,11 +2333,8 @@ class ImagingPage(QWidget):
             # A new folder in the session per re-run: never another run's CSVs.
             out_dir=rerun_output_dir(Path(folder), datetime.now(timezone.utc)),
             object_name=tset.object_name or "untitled",
-            site=(
-                self._cfg("site.latitude", None),
-                self._cfg("site.longitude", None),
-                self._cfg("site.elevation", 0.0) or 0.0,
-            ),
+            # Never the 0/0 default: no site, no airmass and no BJD_TDB.
+            site=observing_site(self._config) or (None, None, 0.0),
             diagnostics=bool(self._cfg("diagnostics.enabled", False)),
         )
         dialog = QProgressDialog("Re-running photometry…", "Cancel", 0, len(paths), self)
