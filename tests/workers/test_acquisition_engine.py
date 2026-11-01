@@ -222,3 +222,80 @@ def test_dark_take_shot_without_a_wheel_warns_that_the_scope_must_be_covered(sho
     engine.take_shot()
     assert len(_FakePreviewWorker.created) == 1  # no wheel to check: trust the observer
     assert any(level == "WARN" and "cover" in msg for level, msg in logs), logs
+
+
+class _OneFrameCamera(_FakeCamera):
+    """Lets a real LivePreviewWorker deliver exactly one frame, then stop."""
+
+    worker = None
+
+    def get_image_array(self):
+        self.worker.stop()  # the loop ends after this frame is emitted
+        return _star_frame()
+
+
+@pytest.fixture
+def real_preview_rig(qapp, tmp_path, monkeypatch):
+    """The engine with the real LivePreviewWorker, run on this thread."""
+    import argos.core.session.acquisition_engine as ae
+    from argos.ui.widgets.camera_dock import CaptureParams
+    from argos.workers.exposure_worker import LivePreviewWorker
+
+    monkeypatch.setattr(LivePreviewWorker, "start", lambda self: None)
+    monkeypatch.setattr(ae.QThreadPool, "globalInstance", staticmethod(lambda: _SyncPool()))
+    cfg = Config(dict(_DEFAULTS, sessions_path=str(tmp_path / "sessions")))
+    session = DeviceSession(cfg)
+    camera = _OneFrameCamera()
+    session._camera = camera
+    engine = AcquisitionEngine(cfg, session)
+    form = {"p": CaptureParams("Light Frame", "V1", "IR", 10.0, 80)}
+    engine.set_providers(lambda: form["p"], lambda: 1)
+
+    def deliver_one_frame() -> None:
+        camera.worker = engine._preview
+        engine._preview.run()  # synchronous: frame_ready reaches the engine directly
+
+    return engine, camera, form, deliver_one_frame, tmp_path / "sessions"
+
+
+def _saved_headers(root) -> list:
+    from astropy.io import fits
+
+    return [(path, fits.getheader(path)) for path in sorted(root.rglob("*.fit"))]
+
+
+def test_take_shot_header_records_the_settings_the_frame_was_exposed_with(
+    real_preview_rig,
+) -> None:
+    """S2: the form edited during the exposure must not rewrite its header."""
+    from argos.ui.widgets.camera_dock import CaptureParams
+
+    engine, camera, form, deliver_one_frame, root = real_preview_rig
+    engine.take_shot()  # the worker is created with 10 s / gain 80 / Light / IR
+    form["p"] = CaptureParams("Flat Frame", "V1", "LP", 30.0, 200)  # edited meanwhile
+    deliver_one_frame()
+
+    assert camera.exposures == [(10.0, True)] and camera.gains == [80]
+    ((path, hdr),) = _saved_headers(root)
+    assert hdr["EXPTIME"] == 10.0
+    assert hdr["GAIN"] == 80
+    assert hdr["IMAGETYP"] == "Light Frame"
+    assert hdr["FILTER"] == "IR"
+    assert "_ir_" in path.name.lower() and "e010000ms" in path.name and "g080" in path.name
+
+
+def test_live_take_shot_saves_the_in_flight_frame_with_its_own_exposure(
+    real_preview_rig,
+) -> None:
+    """S2: Live at 10 s, set 30 s and press Take shot during the exposure."""
+    from argos.ui.widgets.camera_dock import CaptureParams
+
+    engine, camera, form, deliver_one_frame, root = real_preview_rig
+    engine.start_live()
+    form["p"] = CaptureParams("Light Frame", "V1", "IR", 30.0, 80)
+    engine.take_shot()  # Live: tags the next frame to arrive (exposed at 10 s)
+    deliver_one_frame()
+
+    assert camera.exposures == [(10.0, True)]
+    ((_, hdr),) = _saved_headers(root)
+    assert hdr["EXPTIME"] == 10.0

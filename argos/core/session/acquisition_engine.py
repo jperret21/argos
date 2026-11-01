@@ -390,6 +390,7 @@ class AcquisitionEngine(QObject):
             gain=params.gain,
             preview_scale=self._preview_scale(),
             light=_is_light_frame(params.frame_type),
+            tag=params,
         )
         self._preview.frame_ready.connect(self._on_frame)
         self._preview.status_updated.connect(self.action_changed)
@@ -421,11 +422,13 @@ class AcquisitionEngine(QObject):
         else:
             self._stop_preview()
 
-    @pyqtSlot(object, object, object, object)
-    def _on_frame(self, preview_arr, full_arr, start_dt, end_dt) -> None:
+    @pyqtSlot(object, object, object, object, object)
+    def _on_frame(self, preview_arr, full_arr, start_dt, end_dt, used=None) -> None:
         # Update worker settings for the next frame from the dock form. The
         # preview scale (Full/Half quality) only shapes the display pipeline —
-        # saved FITS always use the full-resolution readout below.
+        # saved FITS always use the full-resolution readout below. The form
+        # snapshot rides along as the tag: ``used`` (a FrameSettings) is what
+        # THIS frame was exposed with, which the form may no longer show.
         params = self._params()
         if self._preview:
             self._preview.update_settings(
@@ -433,6 +436,7 @@ class AcquisitionEngine(QObject):
                 params.gain,
                 scale=self._preview_scale(),
                 light=_is_light_frame(params.frame_type),
+                tag=params,
             )
 
         try:  # exposure-midpoint time → the light curve's true epoch
@@ -456,7 +460,7 @@ class AcquisitionEngine(QObject):
         # Single-shot save: persist the requested number of FULL-RES frames.
         if self._capture_pending > 0:
             self._capture_pending -= 1
-            self._save_fits_async(full_arr, start_dt, end_dt)
+            self._save_fits_async(full_arr, start_dt, end_dt, used)
             if self._capture_pending == 0 and not self._live_requested:
                 # Transient Take-shot loop done; Live keeps going (its release
                 # would be a no-op here because LIVE owns the camera).
@@ -1540,8 +1544,20 @@ class AcquisitionEngine(QObject):
     # FITS save
     # ------------------------------------------------------------------
 
-    def _save_fits_async(self, arr: np.ndarray, start_dt: datetime, end_dt: datetime) -> None:
+    def _save_fits_async(
+        self, arr: np.ndarray, start_dt: datetime, end_dt: datetime, used=None
+    ) -> None:
+        """Write a Take-shot frame off the UI thread.
+
+        ``used`` is the worker's :class:`FrameSettings` for this frame: its
+        exposure, gain and form snapshot (object, filter, frame type) are the
+        ones the frame was exposed with. The current form is only a fallback.
+        """
         params = self._params()
+        if used is not None and used.tag is not None:
+            params = used.tag
+        exposure = used.exposure_s if used is not None else params.exposure_s
+        gain = used.gain if used is not None else params.gain
 
         pos = self._session.last_position
         target = self._session.target_radec
@@ -1579,10 +1595,10 @@ class AcquisitionEngine(QObject):
                 params.object_name,
                 params.frame_type,
                 start_dt,
-                params.exposure_s,
+                exposure,
                 params.filter_name,
                 frame_idx,
-                params.gain,
+                gain,
             )
             path = folder / filename
             if not path.exists():
@@ -1591,8 +1607,6 @@ class AcquisitionEngine(QObject):
         # Capture the engine's signal (long-lived) — never a page method.
         log_emit = self.log_message.emit
 
-        gain = params.gain
-        exposure = params.exposure_s
         frame_type = params.frame_type
 
         class _Task(QRunnable):
