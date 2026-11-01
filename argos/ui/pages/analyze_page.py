@@ -749,14 +749,8 @@ class AnalyzeScreen(QWidget):
             return
         from argos.ui.panels.photometry_window import PhotometryWindow
 
-        # A session CSV sits in its run folder or the photometry/ subfolder,
-        # beside the run's targets.json (whose comparisons name the AAVSO CHART).
-        targets = None
+        targets = _target_set_of_curve(Path(path))
         csv_dir = Path(path).parent
-        for folder in (csv_dir, csv_dir.parent):
-            if (folder / "targets.json").exists():
-                targets = TargetSet.load(folder / "targets.json")
-                break
         # A per-star CSV has no role or name column: recover them from the
         # file name and targets.json, or a comparison star would be exported
         # to AAVSO as the variable, named after the file.
@@ -804,3 +798,25 @@ class AnalyzeScreen(QWidget):
         window.load(path)
         window.show()
         self._windows.append(window)
+
+
+def _target_set_of_curve(csv_path: Path) -> TargetSet | None:
+    """The target set a per-star curve CSV was measured with, or ``None``.
+
+    A run's CSV sits in its run folder or the photometry/ subfolder, beside
+    the run's ``targets.json`` (whose comparisons name the AAVSO CHART). A
+    live-preview CSV (no run yet: Observe photometry, or Open FITS replay)
+    sits in ``<sessions>/targets/`` as ``<object>_<star>.csv``, beside the
+    object's set ``<object>.json``: the longest stem prefix naming one.
+    """
+    csv_dir = csv_path.parent
+    for folder in (csv_dir, csv_dir.parent):
+        if (folder / "targets.json").exists():
+            return TargetSet.load(folder / "targets.json")
+    if csv_dir.name == "targets":
+        parts = csv_path.stem.split("_")
+        for count in range(len(parts) - 1, 0, -1):
+            candidate = csv_dir / ("_".join(parts[:count]) + ".json")
+            if candidate.is_file():
+                return TargetSet.load(candidate)
+    return None

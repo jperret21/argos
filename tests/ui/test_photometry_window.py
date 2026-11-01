@@ -590,6 +590,62 @@ def test_open_curve_csv_never_exports_a_comparison_as_the_variable(
         qapp.processEvents()
 
 
+def test_open_curve_csv_finds_the_target_set_of_a_preview_curve(
+    qapp, tmp_path, monkeypatch
+) -> None:
+    """S10 (gap found in review): a live-preview CSV sits in <sessions>/targets/
+    as <object>_<star>.csv, beside <object>.json, not beside a targets.json.
+    It was always 'role unknown' and its AAVSO export disabled, even for the
+    real target."""
+    import argos.ui.panels.photometry_window as pw
+    from argos.core.catalog.targets import TargetSet, TargetStar
+
+    targets_dir = tmp_path / "sessions" / "targets"
+    targets_dir.mkdir(parents=True)
+    TargetSet(
+        object_name="SS Cyg",
+        stars=[
+            TargetStar("target", 325.678, 43.586, auid="000-BCP-095", name="SS Cyg"),
+            TargetStar("comparison", 325.70, 43.60, auid="000-AAA-111", name="111"),
+        ],
+    ).save(
+        targets_dir / "SS_Cyg.json"
+    )  # AcquisitionEngine._target_path("SS Cyg")
+    TargetSet(object_name="SS", stars=[]).save(targets_dir / "SS.json")  # a shorter prefix
+    rows = "jd_utc,mag,mag_err,saturated\n2461315.5,12.0,0.02,0\n"
+    (targets_dir / "SS_Cyg_000-BCP-095.csv").write_text(rows)
+    (targets_dir / "SS_Cyg_000-AAA-111.csv").write_text(rows)
+    monkeypatch.setattr(
+        pw,
+        "QMessageBox",
+        SimpleNamespace(warning=lambda *a, **k: None, information=lambda *a, **k: None),
+        raising=False,
+    )
+
+    def export(csv_name: str) -> tuple[list[str], list[str]]:
+        out = tmp_path / f"{csv_name}.aavso.txt"
+        monkeypatch.setattr(
+            pw.QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(out), ""))
+        )
+        window, warnings = _open_curve_csv_as_review_does(qapp, monkeypatch, targets_dir / csv_name)
+        try:
+            assert window._aavso_btn.isEnabled()
+            window._export_aavso()
+        finally:
+            window.close()
+            window.deleteLater()
+            qapp.processEvents()
+        lines = out.read_text().splitlines() if out.exists() else []
+        return [line for line in lines if not line.startswith("#")], warnings
+
+    rows_out, warnings = export("SS_Cyg_000-BCP-095.csv")
+    assert warnings == []
+    assert len(rows_out) == 1 and rows_out[0].startswith("SS CYG,2461315.500000,")
+
+    rows_out, warnings = export("SS_Cyg_000-AAA-111.csv")  # a comparison: never a row
+    assert warnings == [] and rows_out == []
+
+
 class _MessageBoxRecorder:
     """Stands in for QMessageBox: records (kind, text) instead of blocking."""
 
