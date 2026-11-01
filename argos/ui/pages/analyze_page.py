@@ -39,7 +39,12 @@ from PyQt6.QtWidgets import (
 from argos.core.catalog.targets import TargetSet
 from argos.core.config import Config
 from argos.core.photometry.lightcurve import read_curves_csv
-from argos.core.session.review import SessionReviewError, load_session, load_session_curves
+from argos.core.session.review import (
+    SessionReviewError,
+    identify_curve_file,
+    load_session,
+    load_session_curves,
+)
 from argos.ui import design, theme
 from argos.ui.widgets.comparison_curve_panel import ComparisonCurvePanel
 from argos.ui.widgets.comparison_table import ComparisonQualityTable
@@ -744,6 +749,19 @@ class AnalyzeScreen(QWidget):
             return
         from argos.ui.panels.photometry_window import PhotometryWindow
 
+        # A session CSV sits in its run folder or the photometry/ subfolder,
+        # beside the run's targets.json (whose comparisons name the AAVSO CHART).
+        targets = None
+        csv_dir = Path(path).parent
+        for folder in (csv_dir, csv_dir.parent):
+            if (folder / "targets.json").exists():
+                targets = TargetSet.load(folder / "targets.json")
+                break
+        # A per-star CSV has no role or name column: recover them from the
+        # file name and targets.json, or a comparison star would be exported
+        # to AAVSO as the variable, named after the file.
+        curves, problems = identify_curve_file(path, curves, targets or TargetSet())
+
         window = PhotometryWindow()
         window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         window.load_curves(
@@ -751,16 +769,23 @@ class AnalyzeScreen(QWidget):
             obscode=self._obscode() or "XXX",
             filt=self._band(),
         )
-        # A session CSV sits in its run folder or the photometry/ subfolder,
-        # beside the run's targets.json (whose comparisons name the AAVSO CHART).
-        csv_dir = Path(path).parent
-        for folder in (csv_dir, csv_dir.parent):
-            if (folder / "targets.json").exists():
-                window.set_targets(TargetSet.load(folder / "targets.json").stars)
-                break
+        if targets is not None:
+            window.set_targets(targets.stars)
+        if problems:
+            window.set_aavso_export_enabled(
+                False, "The star or role of this light curve is unknown — no AAVSO export."
+            )
         window.show()
         window.raise_()
         self._windows.append(window)
+        if problems:
+            QMessageBox.warning(
+                self,
+                "Light curve not identified",
+                "\n".join(problems)
+                + "\n\nAAVSO export is disabled for this file: its row would carry the "
+                "file name instead of the star, and possibly the wrong role.",
+            )
 
     def _open_frame(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

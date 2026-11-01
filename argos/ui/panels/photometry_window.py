@@ -288,6 +288,15 @@ class PhotometryWindow(QWidget):
         self.targets.set_targets(stars)
         self.comparisons.set_targets(stars)
 
+    def set_aavso_export_enabled(self, enabled: bool, reason: str = "") -> None:
+        """Allow or forbid the AAVSO export (e.g. a curve whose star is unknown)."""
+        self._aavso_btn.setEnabled(enabled)
+        self._aavso_btn.setToolTip(
+            "Export science targets only; comparison curves are diagnostics"
+            if enabled
+            else reason or "AAVSO export unavailable"
+        )
+
     def load_curves(self, curves: dict, obscode: str = "XXX", filt: str = "TG") -> None:
         """Display finished curves (e.g. reloaded from a session CSV by Analyze).
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 from PyQt6.QtWidgets import QApplication
 
+from types import SimpleNamespace
+
 from argos.core.photometry.lightcurve import LcPoint, LightCurve
 from argos.ui.panels.photometry_window import PhotometryWindow
 from argos.ui.widgets.comparison_curve_panel import ComparisonCurvePanel
@@ -495,4 +497,91 @@ def test_target_plot_lists_check_curve(qapp) -> None:
     finally:
         panel.close()
         panel.deleteLater()
+        qapp.processEvents()
+
+
+def _open_curve_csv_as_review_does(qapp, monkeypatch, csv_path):
+    """Run AnalyzeScreen._open_lightcurve on a stand-in screen; return
+    (window, warnings shown)."""
+    from types import SimpleNamespace
+
+    import argos.ui.pages.analyze_page as ap
+
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        ap.QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(csv_path), ""))
+    )
+    monkeypatch.setattr(
+        ap,
+        "QMessageBox",
+        SimpleNamespace(warning=lambda *args, **kwargs: warnings.append(str(args[2]))),
+        raising=False,
+    )
+    screen = SimpleNamespace(
+        _config=SimpleNamespace(sessions_path=csv_path.parent),
+        _obscode=lambda: "ABC",
+        _band=lambda: "TG",
+        _windows=[],
+    )
+    ap.AnalyzeScreen._open_lightcurve(screen)
+    (window,) = screen._windows
+    return window, warnings
+
+
+def test_open_curve_csv_never_exports_a_comparison_as_the_variable(
+    qapp, tmp_path, monkeypatch
+) -> None:
+    """S10: a comparison_ CSV opened in Review was exported as a target row
+    named COMPARISON_SS_CYG_000-AAA-111; an unidentifiable file must not
+    be exportable at all."""
+    import argos.ui.panels.photometry_window as pw
+    from argos.core.catalog.targets import TargetSet, TargetStar
+
+    run = tmp_path / "run"
+    photometry = run / "photometry"
+    photometry.mkdir(parents=True)
+    TargetSet(
+        object_name="SS Cyg",
+        stars=[
+            TargetStar("target", 325.678, 43.586, auid="000-BCP-095", name="SS Cyg"),
+            TargetStar("comparison", 325.70, 43.60, auid="000-AAA-111", name="111"),
+        ],
+    ).save(run / "targets.json")
+    csv_path = photometry / "comparison_SS_Cyg_000-AAA-111.csv"
+    csv_path.write_text("jd_utc,mag,mag_err,saturated\n2461315.5,11.0,0.02,0\n")
+    out = tmp_path / "aavso.txt"
+    monkeypatch.setattr(
+        pw.QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(out), ""))
+    )
+    monkeypatch.setattr(
+        pw,
+        "QMessageBox",
+        SimpleNamespace(warning=lambda *a, **k: None, information=lambda *a, **k: None),
+        raising=False,
+    )
+
+    window, warnings = _open_curve_csv_as_review_does(qapp, monkeypatch, csv_path)
+    try:
+        window._export_aavso()
+        rows = (
+            [line for line in out.read_text().splitlines() if not line.startswith("#")]
+            if out.exists()
+            else []
+        )
+        assert not any(row.startswith("COMPARISON_") for row in rows), rows
+        assert warnings == []
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+
+    legacy = tmp_path / "SS_Cyg_000-BCP-095.csv"  # no prefix, no targets.json near it
+    legacy.write_text("jd_utc,mag,mag_err,saturated\n2461315.5,12.0,0.02,0\n")
+    window, warnings = _open_curve_csv_as_review_does(qapp, monkeypatch, legacy)
+    try:
+        assert warnings and "unknown" in warnings[0]
+        assert not window._aavso_btn.isEnabled()
+    finally:
+        window.close()
+        window.deleteLater()
         qapp.processEvents()
