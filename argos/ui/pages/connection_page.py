@@ -145,6 +145,13 @@ class ConnectionPage(QWidget):
 
         layout.addWidget(design.horizontal_divider())
         layout.addLayout(self._build_endpoint_row())
+        # Said when Connect is pressed with no address (it used to do nothing).
+        self._endpoint_hint = design.MutedLabel("Enter the Seestar IP address or press Discover.")
+        self._endpoint_hint.setWordWrap(True)
+        self._endpoint_hint.setStyleSheet(f"color:{theme.WARNING};")
+        self._endpoint_hint.hide()
+        self._host_edit.textChanged.connect(self._endpoint_hint.hide)  # display only
+        layout.addWidget(self._endpoint_hint)
         layout.addWidget(design.horizontal_divider())
         self._summary_labels: dict[str, QLabel] = {}
         status_grid = QGridLayout()
@@ -383,14 +390,20 @@ class ConnectionPage(QWidget):
     def _on_connect_one(self, device_id: str) -> None:
         host, port = self._endpoint()
         if not host:
+            self._ask_for_address()
             return
         self.connect_requested.emit(device_id, host, port)
 
     def _on_connect_all(self) -> None:
         host, port = self._endpoint()
         if not host:
+            self._ask_for_address()
             return
         self.connect_all_requested.emit(host, port)
+
+    def _ask_for_address(self) -> None:
+        self._endpoint_hint.show()
+        self._host_edit.setFocus()
 
 
 # --------------------------------------------------------------------------- #
@@ -427,6 +440,7 @@ class _DeviceCard(design.Card):
         text_col = QVBoxLayout()
         text_col.setSpacing(2)
         self._status_lbl = QLabel("Disconnected")
+        self._status_lbl.setWordWrap(True)  # an error's full reason, never cut
         self._status_lbl.setStyleSheet(
             f"color:{theme.FG}; font-size:13px; font-weight:bold;" f" background:transparent;"
         )

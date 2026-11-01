@@ -243,3 +243,39 @@ def test_mount_clock_error_message_says_what_happens(monkeypatch) -> None:
         assert "2.0 h off" in msg
         assert "refused" in msg
         assert "disabled" not in msg
+
+
+def test_connection_failures_carry_their_reason(monkeypatch) -> None:
+    """H12: a lost mount showed a bare "Error" while it retried, and a
+    connect error was cut to 48 characters (port and cause lost)."""
+    import argos.core.session.device_session as ds
+    from argos.core.alpaca.client import AlpacaError
+
+    reason = (
+        "Cannot connect to 192.168.1.20:32323 — HTTPConnectionPool: Max retries "
+        "exceeded (Connection refused by the Seestar)"
+    )
+
+    def camera(host, port):
+        c = MagicMock()
+        c.connect.side_effect = AlpacaError(0, reason)
+        return c
+
+    monkeypatch.setattr(ds, "Camera", camera)
+    session = DeviceSession(Config(dict(_DEFAULTS)))
+    states: list[tuple[str, str, str]] = []
+    session.device_state_changed.connect(lambda d, s, i: states.append((d, s, i)))
+
+    session.connect_camera("192.168.1.20", 32323)
+    assert states[-1] == ("camera", "error", f"Alpaca error 0: {reason}")
+    assert len(states[-1][2]) > 100
+
+    session._telescope = MagicMock()
+    session._mount_endpoint = ("192.168.1.20", 32323)
+    try:
+        session._on_mount_lost()
+    finally:
+        session._mount_retry.stop()
+    device, state, info = states[-1]
+    assert (device, state) == ("mount", "error")
+    assert "lost" in info and "retrying" in info

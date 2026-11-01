@@ -322,7 +322,7 @@ class DeviceSession(QObject):
             self._start_polling()
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Mount: {exc}")
-            self.device_state_changed.emit("mount", "error", str(exc)[:48])
+            self.device_state_changed.emit("mount", "error", str(exc))
 
     def _log_clock_error(self, scope: Telescope) -> None:
         """Say what a stale mount clock does: the Telescope refuses GoTo, Sync
@@ -398,7 +398,7 @@ class DeviceSession(QObject):
             self.device_state_changed.emit("camera", "connected", name)
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Camera: {exc}")
-            self.device_state_changed.emit("camera", "error", str(exc)[:48])
+            self.device_state_changed.emit("camera", "error", str(exc))
 
     def _check_profile_against(self, cam: Camera, camera_name: str) -> None:
         """Warn when the connected camera contradicts the active profile.
@@ -480,7 +480,7 @@ class DeviceSession(QObject):
             self.device_state_changed.emit("filterwheel", "connected", fw.position_name())
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Filter wheel: {exc}")
-            self.device_state_changed.emit("filterwheel", "error", str(exc)[:48])
+            self.device_state_changed.emit("filterwheel", "error", str(exc))
 
     def disconnect_filterwheel(self) -> None:
         if self._filterwheel:
@@ -520,7 +520,7 @@ class DeviceSession(QObject):
             self.device_state_changed.emit("focuser", "connected", name)
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Focuser: {exc}")
-            self.device_state_changed.emit("focuser", "error", str(exc)[:48])
+            self.device_state_changed.emit("focuser", "error", str(exc))
 
     def disconnect_focuser(self) -> None:
         # Synchronous hook: the engine stops a running autofocus sweep first.
@@ -596,9 +596,14 @@ class DeviceSession(QObject):
         self._telescope = None
         self.mount_lost.emit()
         self.mount_mode.emit(None)
-        self.device_state_changed.emit("mount", "error", "")
+        retrying = self._mount_endpoint is not None
+        self.device_state_changed.emit(
+            "mount",
+            "error",
+            "connection lost — retrying every 10 s" if retrying else "connection lost",
+        )
         self.tracking_changed.emit(None)
-        if self._mount_endpoint is not None:
+        if retrying:
             self.log_message.emit("INFO", "Retrying the mount every 10s — disconnect to stop.")
             self._mount_retry.start()
 

@@ -201,6 +201,32 @@ def test_telescope_picker_walkthrough() -> None:
         # A discovered address is saved without any edit.
         connection.set_discovered_address("10.0.0.7", 32323)
         assert config.alpaca_host == "10.0.0.7"
+
+        # H12: Connect with no address said nothing; an error showed only
+        # its first 48 characters, on the card and in the status bar.
+        endpoints.clear()
+        connection._host_edit.clear()
+        connection._start_connect_btn.click()
+        assert endpoints == []
+        assert not connection._endpoint_hint.isHidden()
+        assert "IP address" in connection._endpoint_hint.text()
+        connection._host_edit.setText("10.0.0.7")
+        assert connection._endpoint_hint.isHidden()
+        reason = "Alpaca error 0: Cannot connect to 192.168.1.20:32323 — connection refused"
+        connection.set_device_state("camera", "error", reason)
+        card_status = connection._cards["camera"]._status_lbl
+        assert reason in card_status.text() and card_status.wordWrap()
         connection.deleteLater()
+
+        from argos.ui.statusbar import TopStatusBar
+
+        bar = TopStatusBar()
+        bar.set_device_state("camera", "error", reason)
+        badge = bar._badges["camera"]
+        assert len(badge.text()) < len(reason)  # the bar stays one line
+        assert badge.toolTip() == reason
+        bar.set_device_state("camera", "connected", "")
+        assert badge.toolTip() == ""
+        bar.deleteLater()
     finally:
         active.set_profile(before)
