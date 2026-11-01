@@ -17,6 +17,13 @@ same process: fourteen are fixed here, each with a test that fails on the code
 before it (H17 only needed the test: its fix was already on the branch), and
 three (H1, H5, H16) are left to the web UI.
 
+A review of the branch then found gaps in six of these fixes (S1, S3, S4, S10,
+S23, H3) and two defects outside the inventory, both writing wrong values into
+files: **X1**, found while verifying H7 (frames keep a disconnected mount's
+pointing), and **X2**, found in the review (with no site set, latitude and
+longitude 0/0 were used as the site). They are fixed here too, each with a test
+that fails on the code before it.
+
 **Several of these defects affect files you already hold.** The table says
 which; *Check your old files* below says how to find them.
 
@@ -30,7 +37,9 @@ which; *Check your old files* below says how to find them.
 | S2 | A Take shot's header was written from the form *after* the exposure | `EXPTIME`, `GAIN`, `IMAGETYP`, `FILTER`, `OBJECT` of the next settings | **yes** |
 | S3 | A Take shot's `FILTER` came from the form, never from the wheel | Wrong `FILTER` after a sequence moved the wheel | **yes** |
 | S20 | Take-shot QA headers came from the last *displayed* frame | `HFD`, `NSTARS`, `SKYLEVEL` of another frame | **yes** |
-| S4 | **Open FITS** kept the previous frame's time and WCS | A point dated with another frame's time, in the curve, its CSV and AAVSO | **yes** |
+| S4 | **Open FITS** kept the previous frame's time and WCS, and wrapped a calibrated frame's pixels | A point dated with another frame's time, in the curve, its CSV and AAVSO; points measured on wrapped pixels | **yes** |
+| X1 | The mount's last polled position outlived a disconnect or a lost connection | Frozen `RA`, `DEC`, `ALTITUDE`, `AZIMUTH`, `AIRMASS` in the frames saved meanwhile | **yes** |
+| X2 | With no site set, latitude and longitude 0/0 were used as the site (0.4.1, 0.4.2) | Live and batch airmass (CSV `airmass`, AAVSO `AMASS`) for 0/0; `SITELAT`/`SITELONG` 0 | **yes** |
 | S22 | Autofocus never applied its gain | Worse or rejected autofocus | no |
 | S23 | **Stop AF** could leave the focuser mid-sweep | Defocused frames after "Autofocus complete" | possibly defocused frames |
 | S5 | The Plan editor dropped a transit's planning metadata | No `observation.json` for any run started from the UI | **yes** |
@@ -74,13 +83,19 @@ Hardware safety and responsiveness:
 Most checks below read the files themselves; S14 and S15 use Argos 0.5.0's
 batch re-run.
 
+Which frames: those whose `SOFTWARE` header is `Argos v0.4.2` or earlier (the
+header exists since 0.3.0). Frames written by 0.5.0 carry `Argos v0.5.0` and
+were written with these fixes. CSV and AAVSO files carry no version: date them
+against the day you installed 0.5.0.
+
 - **Dark and bias Take shots (S1).** A single dark or bias shot whose `FILTER`
   is not `Dark` was exposed to the sky unless the telescope was covered. Compare
   its median level with a sequence dark of the same `EXPTIME` and `GAIN` (a
   sequence moves the wheel to the Dark slot for darks and biases); do not use
   it as a master dark or bias if it is higher. `FILTER = Dark` is not a full
-  guarantee in 0.4.2 (S3: a sequence could have moved the wheel since), so
-  check the level anyway.
+  guarantee in 0.4.2 (S3: a sequence could have moved the wheel since; and a
+  shot taken right after picking Dark started exposing while the wheel still
+  turned), so check the level anyway.
 - **Take-shot exposure (S2).** `DATE-AVG` is the midpoint of the exposure as
   timed by the worker (start command to image ready), so
   `2 × (DATE-AVG − DATE-OBS)` is the time the exposure really took, plus
@@ -89,14 +104,33 @@ batch re-run.
   not affected.
 - **Take-shot filter (S3).** A Take shot taken after a sequence that changed
   filter carries the Camera form's filter. Compare with the last sequence
-  frame's `FILTER` (sequence frames read the wheel back).
+  frame's `FILTER` (sequence frames read the wheel back). A Take shot pressed
+  in Live just after a filter change saved the frame already exposing, partly
+  or wholly through the previous filter, with the new `FILTER`; no header
+  shows it.
 - **Take-shot `HFD`, `NSTARS`, `SKYLEVEL` (S20).** Re-measure them; do not sort
   or reject Take shots on these values.
 - **Opened frames (S4).** If you opened archived frames in Observe (**Open
   FITS…**) and solved them, the points they produced carry the time of another
   frame or of the solve. They are in the live curve's CSV (`<sessions>/targets/`,
   or the last run's `photometry/` folder if a sequence had run). Remove them
-  before any AAVSO export.
+  before any AAVSO export. A calibrated or stacked frame opened that way was
+  also measured on wrapped pixel values (a negative sky pixel became about
+  65535, a sum above 65535 lost 65536): discard its points whatever their time.
+- **Frozen pointing (X1).** A polled mount reports a changing `ALTITUDE` and
+  `AZIMUTH` while it tracks, and a changing `RA` when it does not. Frames
+  minutes apart with `RA`, `DEC`, `ALTITUDE` and `AZIMUTH` all identical were
+  saved while the mount was disconnected or being reconnected: those values
+  and `AIRMASS` are the last poll's. Recompute the airmass from the target's coordinates and `DATE-OBS`
+  (or take it from a plate solve) before using it, for example in an
+  extinction fit.
+- **No site set (X2, 0.4.1 and 0.4.2).** Frames with `SITELAT = 0` and
+  `SITELONG = 0` were taken without a site. The live curve's airmass of those
+  nights (CSV `airmass` column, AAVSO `AMASS`), and that of a batch re-run made
+  without a site, was computed for 0/0 (1.379 instead of about 1.005 for
+  SS Cyg seen from Paris at 2026-11-01 19:00 UTC). Replace `AMASS` with `na`,
+  or recompute it for your site, before submitting. `MOONALT` of those frames
+  is for 0/0 too. The CSVs' `bjd_tdb` column is off by less than 0.03 s.
 - **Black Light frames (S7).** Sequence Light frames with `FILTER = Dark` were
   shot through the opaque slot. The header is truthful; the data are lost.
 - **Runs with no live curve (S14) or mixed apertures (S15).** Re-run the batch
@@ -104,9 +138,15 @@ batch re-run.
   session, S12): it measures every frame with one aperture geometry.
 - **AAVSO files (S10, S11).** Do not submit a file with `#OBSCODE=XXX`, or one
   whose `NAME` starts with `TARGET_`, `COMPARISON_` or `CHECK_` (an exported
-  per-star CSV). For any 0.4.2 export, compare its rows with the curve CSV's
-  `saturated` and `suspect` columns: those points were submitted without a
-  flag.
+  per-star CSV). A `NAME` shaped like a file name, `<OBJECT>_<AUID or star
+  name>` (for example `SS_CYG_000-AAA-111`), also came from a per-star CSV,
+  one without a role prefix: a live-preview CSV from `<sessions>/targets/`, or
+  a batch re-run CSV. It may be a comparison or check star exported as the
+  variable: compare the AUID suffix with the stars and roles of the run's
+  `targets.json`, or of `<sessions>/targets/<object>.json`, and do not submit
+  (or retract) rows that are not the target's. For any 0.4.2 export, compare
+  its rows with the curve CSV's `saturated` and `suspect` columns: those
+  points were submitted without a flag.
 - **Batch CSVs (S13).** A row with `jd_utc = 0` came from a frame without
   `DATE-OBS`. This only happened with frames from other software, and only in
   `*.fits` folders (S12 kept the re-run from finding Argos frames).
@@ -136,8 +176,22 @@ with a WARN asking for Filter `Dark`, unless the form is on it; this also covers
 a shot taken during Live. Without a wheel the shot goes, with a WARN that it is
 dark only if the telescope is covered. The wheel is not moved automatically
 (that needs a move-then-expose chain, left to the web UI).
-**How to check.** `tests/workers/test_acquisition_engine.py::test_dark_take_shot_refused_unless_the_wheel_is_on_the_dark_slot`.
+**Found in review.** The guard read only the Filter selector, which shows
+`Dark` as soon as it is picked, while the wheel still turns: a Dark shot taken
+at once exposed through the moving wheel and was saved as a clean dark. The
+same after a refused move that could not be read back (H9), and when the wheel
+was turned away from Dark before the shot's frame arrived. The session now
+tracks the slot the wheel last reported it settled on: a Dark/Bias shot also
+needs the wheel settled on Dark (a WARN says it is still turning, or that its
+position is unknown and Dark must be selected again), and a pending dark whose
+frame arrives with the wheel elsewhere is not saved. Only moves made from the
+Camera form are tracked; a sequence moves the wheel itself but owns the camera,
+so no Take shot can overlap it.
+**How to check.** `tests/workers/test_acquisition_engine.py::test_dark_take_shot_refused_unless_the_wheel_is_on_the_dark_slot`,
+`::test_dark_take_shot_waits_for_the_wheel_to_settle_on_dark` and
+`::test_dark_shot_is_dropped_if_the_wheel_leaves_the_dark_slot`.
 At the telescope: Frame type Dark, Filter IR, Take shot: a WARN, no exposure.
+Pick Dark and press Take shot at once: a WARN that the wheel is still turning.
 
 ### S2 — A Take shot's header describes the settings it was exposed with
 
@@ -167,8 +221,15 @@ outside the Camera form.
 with the sequence's read-back rules: a readable wheel that differs from the form
 wins, with a WARN; an unreadable or turning wheel keeps the form's value, with a
 WARN. At the end of a sequence the form is resynchronised with the wheel.
+**Found in review.** In Live the Filter selector stays usable, so the wheel
+could turn during the exposure a Take shot then saved, and `FILTER`, read after
+the exposure, named the slot the wheel ended on. A Take shot now never saves a
+frame whose exposure started before the last wheel move ended (or while one is
+in flight): the loop exposes another frame, which is the one saved (INFO in the
+log). `FILTER` is therefore the slot of the whole exposure.
 **How to check.** `tests/workers/test_acquisition_engine.py::test_take_shot_after_a_sequence_records_the_filter_the_wheel_is_on`
-(0.4.2: `FILTER = 'IR'` with the wheel on LP).
+(0.4.2: `FILTER = 'IR'` with the wheel on LP) and
+`::test_take_shot_never_saves_a_frame_exposed_while_the_wheel_turned`.
 
 ### S20 — A Take shot's QA headers are measured on the saved frame
 
@@ -213,11 +274,23 @@ flag, so a worker waking in between could have its return move halted; and a
 Stop during the final move to best focus was reported as "complete" at the
 fitted position (25000) with the focuser short of it (25333 in the test). The
 halt now comes first, and a stop on the way to best focus returns to the
-start. The UI still waits up to 10 s for the stop; a non-blocking stop is left
-to the web UI.
+start. Stop AF blocks the UI for up to 10 s while the worker ends; a
+non-blocking stop is left to the web UI.
+**Found in review.** When the return outlasted those 10 s (the worker allows
+it 30 s), Stop AF dropped the worker and released the camera while the worker
+still drove the focuser, and a new Start AF ran a second worker on the same
+focuser (reproduced with a simulated 12 s return; the Seestar focuser's real
+speed is not known). Stop AF now keeps such a worker and its hold on the
+camera, and says the focuser is still returning; the camera is released, and a
+paused sequence resumes, only when the focuser is back. A second Stop does not
+block again. Not changed: at quit, every worker shares a 5 s budget, so
+quitting while a stopped autofocus is still returning can abandon its worker
+(the H8 item left to the web UI; not run on the full app).
 **How to check.** `tests/workers/test_autofocus_worker.py` (the three Stop
-tests) and `tests/ui/test_autofocus_feedback.py`. At the telescope: Stop AF
-mid-sweep, then read the focuser position: it is the start.
+tests), `tests/ui/test_autofocus_feedback.py` and
+`tests/workers/test_acquisition_engine.py::test_stop_af_keeps_a_returning_worker_and_refuses_a_second_sweep`.
+At the telescope: Stop AF mid-sweep, then read the focuser position: it is the
+start.
 
 ## Opened frames
 
@@ -233,10 +306,67 @@ CSV and the AAVSO export.
 else none; the WCS, catalogue cache and last run folder are dropped. With no
 epoch, photometry is skipped with a WARN instead of stamping "now".
 `DATE-OBS` = exposure start is Argos' convention; a file from other software
-may differ. Not changed: a floating-point FITS is still cast to 16-bit integers
-on open (a separate issue).
-**How to check.** `tests/workers/test_acquisition_engine.py::test_opened_fits_is_dated_by_its_header_and_drops_the_previous_wcs`
-and `::test_opened_fits_without_a_date_measures_no_point`.
+may differ.
+**Found in review.** Open FITS cast any pixel data to 16-bit integers, and that
+cast wraps: a negative value (common in a dark-subtracted or calibrated frame)
+became about 65535, and 70000 became 4464. Such a frame could still be solved
+and measured, with wrong sky and aperture sums, and since the fix above its
+points carry the file's real time. Open FITS now accepts integer values from 0
+to 65535, whatever the stored type, and refuses anything else with an ERROR,
+leaving the live frame, its time and its WCS untouched. Inspect a calibrated
+frame with **Review → Open FITS…**.
+**How to check.** `tests/workers/test_acquisition_engine.py::test_opened_fits_is_dated_by_its_header_and_drops_the_previous_wcs`,
+`::test_opened_fits_without_a_date_measures_no_point` and
+`::test_opened_fits_that_is_not_raw_16_bit_data_is_refused`.
+
+## Pointing and site in files
+
+### X1 — Frames do not keep a disconnected mount's pointing
+
+**What was wrong.** The last polled mount position stayed in memory after a
+mount disconnect and after a lost connection (three failed polls). Every frame
+saved afterwards, Take shot or sequence frame, wrote `RA`, `DEC`, `OBJCTRA`,
+`OBJCTDEC`, `ALTITUDE`, `AZIMUTH` and `AIRMASS` from it: while a lost mount
+was retried every 10 s, or with the camera still exposing after the mount was
+disconnected. A poll in flight during a disconnect could also restore the
+position, and a "connected" mount state, afterwards (read from the code: the
+poll's result is queued to the UI thread).
+**Who was affected.** Since 0.3.0, anyone whose mount dropped or was
+disconnected while frames were being saved. Found while verifying H7.
+**What changed.** The position is cleared on disconnect and on a lost
+connection, and a position arriving once the mount is gone is ignored: the
+frames get no pointing keys and no `AIRMASS`, and the live curve's airmass
+falls back to the site computation or `na`. Within the poller's own detection
+window (three failed polls, 2 s apart) the last position is still used.
+**How to check.** `tests/core/test_device_session.py::test_mount_position_is_forgotten_when_the_mount_goes_away`
+and `tests/workers/test_acquisition_engine.py::test_frames_saved_after_the_mount_went_away_carry_no_pointing`.
+At the telescope: Live, disconnect the mount, Take shot: no `RA`, `ALTITUDE`
+or `AIRMASS` in the file.
+
+### X2 — The 0/0 default is never used as the observing site
+
+**What was wrong.** The site defaults are latitude and longitude 0.0, not
+"unknown", so with no site set the engine's fallback to the mount altitude
+never applied. Each live point's airmass, the CSV `airmass` column and AAVSO
+`AMASS`, was computed for 0/0: 1.379 for SS Cyg at 2026-11-01 19:00 UTC, where
+the mount (altitude 60°) gave 1.154 and Paris sees 1.005. The batch re-run did
+the same. Frames got `SITELAT`/`SITELONG`/`SITEELEV` = 0 and `MOONALT` for 0/0;
+`BJD_TDB` was off by less than 0.03 s (the Earth's radius over the speed of
+light is 0.021 s; 0.006 s in this example).
+**Who was affected.** 0.4.1 and 0.4.2 users who never set a site (earlier
+versions had no 0/0 default). Found in the review of this branch.
+**What changed.** One rule for live photometry, both FITS paths, the batch
+re-run and Plan: a site is set when it has a name or coordinates other than
+0/0 (Settings saves typed coordinates without a name, and the pre-0.4
+migration moves observer coordinates in without one). Without a site the live
+airmass is the mount's (`na` without a mount), the re-run has no airmass, there
+is no `BJD_TDB`, and frames have no `SITELAT`/`SITELONG`/`SITEELEV` or
+`MOONALT` (`MOONSEP` and `MOONPHAS` need no site and stay). With a site set,
+nothing changes.
+**How to check.** `tests/workers/test_acquisition_engine.py::test_no_site_set_means_no_site_products_not_latitude_0_longitude_0`
+(1.3789 on the code before the fix, the mount's 1.1541 here),
+`tests/ui/test_batch_rerun.py::test_rerun_without_a_site_computes_no_airmass_at_latitude_0_longitude_0`
+and `tests/core/test_config_migration.py::test_observing_site_is_never_the_0_0_default`.
 
 ## Plan
 
@@ -275,16 +405,18 @@ still allowed.
 **How to check.** `tests/ui/test_sequence_panel_plan.py::test_add_after_wheel_connect_never_defaults_a_light_step_to_the_opaque_slot`.
 At the telescope: connect the wheel, **+ Add**: the new Light row is on IR.
 
-### S26 — Plan visibility needs the saved site; transit coverage after midnight
+### S26 — Plan visibility needs a site; transit coverage after midnight
 
 **What was wrong.** Without a saved site the visibility curve used latitude and
 longitude 0/0; a transit whose midpoint is after midnight was drawn on the wrong
 night; **Find** ignored the Baseline field; a missing duration was reported as
 "Observing site required".
 **Who was affected.** Planning display only; nothing written to files.
-**What changed.** No curve without a saved site (a message says why); the plotted
+**What changed.** No curve without a site (a message says why); the plotted
 night is the one containing the midpoint; Find uses Baseline; the real cause is
-shown.
+shown. A site is set when it has a name or coordinates other than 0/0, the rule
+X2 applies everywhere: S26 first required the name, which would have ignored
+coordinates typed without one.
 **How to check.** The four S26 tests in `tests/ui/test_sequence_panel_plan.py`.
 
 ## Live photometry
@@ -398,8 +530,16 @@ target file as `TARGET_SS_CYG_000-BCP-095` instead of `SS CYG`.
 **What changed.** The role comes from the file-name prefix and the star from the
 session's `targets.json`; when either stays unknown, a warning is shown and the
 AAVSO export is disabled for that window.
+**Found in review.** A live-preview CSV (`<sessions>/targets/<object>_<star>.csv`,
+where Observe photometry before any sequence and Open FITS replay write) has
+its target set in `<sessions>/targets/<object>.json`, not in a `targets.json`,
+so it was always "role unknown", even for the real target. That set is now
+used for a CSV in a `targets/` folder. It is the object's current set, not a
+per-run snapshot: a star whose role changed since keeps its own name but takes
+its current role.
 **How to check.** `tests/core/test_session_review.py::test_single_star_csv_restores_role_and_name`
-(the comparison file writes no AAVSO row, the target file writes `NAME SS CYG`).
+(the comparison file writes no AAVSO row, the target file writes `NAME SS CYG`)
+and `tests/ui/test_photometry_window.py::test_open_curve_csv_finds_the_target_set_of_a_preview_curve`.
 
 ### S11 — The AAVSO export leaves flagged points out, needs an observer code and reports errors
 
@@ -492,6 +632,12 @@ marked (it may have reached the mount). Reopening the dialog uses the current
 `Telescope`, and the dialog closes (stopping its axes) when the mount is no
 longer connected. `MoveAxis` stays synchronous on the UI thread in 0.5.0:
 moving it to the thread pool could reorder a start and its stop.
+**Found in review.** A failed `StopAxis` (a network blip) forgot its axis, so
+closing, hiding or leaving the dialog did not try again. The axis now stays
+marked, with a WARN, and the next close, hide, focus loss or ■ tries again;
+after a second failure an ERROR says to use Abort on the Mount card (each try is
+a blocking call, and closing the dialog can send close, hide and focus-loss
+events in a row).
 **How to check.** `tests/ui/test_manual_control_dialog.py`. At the telescope:
 hold Up and Right, release Up: altitude stops, azimuth goes on; release Right:
 everything stops. Hold Left and click the main window: the mount stops.
@@ -578,7 +724,8 @@ requested slot until the next camera action. In 0.4.2 the next Take shots
 wrote that slot to `FILTER` (see *Check your old files*). In 0.5.0 a Take shot
 reads the wheel for `FILTER` (S3), but the S1 Dark/Bias guard reads the
 selector: after a refused move to Dark it would have accepted a Dark shot with
-the wheel on IR (read from the code, not run at the telescope).
+the wheel on IR (read from the code, not run at the telescope). Since the
+review the guard also needs the wheel to have reported it is on Dark (S1).
 **Who was affected.** Rare: it needs the driver to refuse a move.
 **What changed.** A refused move reads the wheel back and reports where it is:
 the selector is re-enabled on the real slot and the wheel reads "connected"
@@ -659,7 +806,14 @@ patch:
   scale), S22 (AF filter and exposure, V-curve plot), S23 (non-blocking stop),
   S11 (`FILT` check, `KNAME` in Review, preview), S10 (whole-session export),
   S15 (geometry controls in Settings), S19 (append-only points), S26 (Baseline
-  edits after Find), S4 (float FITS on open), S5 (`base_dir` in presets).
+  edits after Find), S4 (calibrated or stacked frames in Observe: refused in
+  0.5.0), S5 (`base_dir` in presets).
+- Kept as designed in 0.5.0: a Take shot in Live saves the frame already
+  exposing with its own settings (S2), so after a Light-to-Dark change that
+  frame is saved with its own, truthful `IMAGETYP = 'Light Frame'`. The
+  Take-shot wheel checks (S1, S3) know only the moves made from the Camera
+  form: a move made from the Seestar app is not seen (the save still reads the
+  wheel back for `FILTER`).
 - Inventory items not approved for 0.5.0: S6 (cadence column and validation),
   S8 (Find makes any object a photometry target), S21 (pixel readout and
   statistics labels), S25 (two sources of sensor limits), S27 (dither
@@ -674,8 +828,10 @@ patch:
   (disabling Slew, Sync and Center with the reason), H6 (reading the tracking
   rate back), H8 (bounding the quit time: about 108 s if every worker is
   mid-request, the verifier's sum of the bounded waits in the source, not
-  measured; disconnecting the devices at quit), H9 (a wheel still turning after
-  20 s leaves the selector on the requested slot), H10 (polling the focuser
+  measured; disconnecting the devices at quit; a stopped autofocus still
+  returning the focuser can be abandoned by the 5 s quit budget), H9 (a wheel
+  still turning after 20 s leaves the selector on the requested slot; a Dark
+  shot is refused then, its position being unknown), H10 (polling the focuser
   position and IsMoving, autofocus steps overwriting a typed Go to, Halt during
   autofocus), H11 (holding an arrow on Offset still sends one call per step; a
   site commit still writes the config file five times), H12 (discovery busy
@@ -685,23 +841,34 @@ patch:
 
 ## State of the branch
 
-- 606 tests pass, 45 skipped (0.4.2: 534 and 45). Every fix carries a test that
+- 617 tests pass, 45 skipped (0.4.2: 534 and 45). Every fix carries a test that
   fails on the code before it, checked commit by commit against its parent; one
   guard test (S3, the wheel cannot be read) pins a fallback 0.4.2 already had.
   Each hardware test was written first and run on the unfixed code (H17
   against the v0.4.2 resolver). H7, H8 and H13 extend the single Shell and
-  Settings walkthroughs, so they add assertions rather than tests.
+  Settings walkthroughs, so they add assertions rather than tests; so does the
+  H3 follow-up (the jog dialog's single test).
+- The review re-ran each commit's new tests on its parent tree (71 new tests
+  fail there and pass on the commit). The review follow-ups (X1, X2 and the gaps in S1,
+  S3, S4, S10, S23 and H3) were checked the same way: each new test fails with
+  the commit's source change reverted.
 - `ruff` and `black` clean on CI's scope (`argos/`, `tests/`, `main.py`).
 - Sphinx builds with `-W` and no warnings. The guide, the photometry reference
   and the install page describe 0.5.0 behaviour (the guide's Connect and
-  Observe sections cover the H2, H7, H8, H11 and H12 changes).
+  Observe sections cover the H2, H7, H8, H11 and H12 changes, and the review
+  follow-ups: settled wheel for darks, Stop AF return, raw-only Open FITS, the
+  site rule, preview-curve export).
 
 ## Release
 
 - [x] Hardware-safety items (H1–H17) committed and added to this note (H1, H5,
       H16 deferred).
+- [x] Review findings fixed (X1, X2, gaps in S1, S3, S4, S10, S23, H3) and the
+      notes corrected (S10 file names, S4, S23, the `SOFTWARE` header).
 - [ ] Bump the version to 0.5.0 in `pyproject.toml` and `argos/__init__.py`
-      (both still say 0.4.2).
+      (both still say 0.4.2). Until then the branch writes `SOFTWARE = 'Argos
+      v0.4.2'` and the site-search User-Agent says 0.4.2; *Check your old
+      files* relies on that header to tell fixed frames from affected ones.
 - [ ] Tag `v0.5.0`. The Release workflow builds the DMG and the Debian package
       and attaches them to a **draft** release.
 - [ ] At the telescope: a Dark Take shot with Filter IR is refused; **+ Add**
@@ -712,6 +879,12 @@ patch:
       goes on), release Right (all stop); hold Left and click the main
       window (the mount stops); Cmd+Q during a sequence asks, and No keeps
       the run; the Stellarium server on a port in use says why on its card.
+      Review follow-ups: pick Dark and press Take shot at once (refused: the
+      wheel is still turning); in Live, change the filter and press Take shot
+      (INFO, the next frame is saved, `FILTER` the new slot); in Live,
+      disconnect the mount and press Take shot (no `RA`, `ALTITUDE` or
+      `AIRMASS`); time a Stop AF return from the sweep's far end (how close to
+      10 s the Seestar focuser comes is not known).
 - [ ] Download both installers from the draft, then publish it.
 - [ ] Update the download names, sizes, date and release-tag links in
       `README.md`, `docsrc/install.md` and the public site.
