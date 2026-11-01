@@ -730,3 +730,43 @@ def test_aperture_geometry_locked_during_sequence(qapp) -> None:
         win.close()
         win.deleteLater()
         qapp.processEvents()
+
+
+def test_relative_flux_baseline_ignores_saturated_points(qapp) -> None:
+    """S16: the relative-flux median (and the comparison Δmag median)
+    included saturated (clipped) points."""
+    panel = LightCurvePanel(view="both")
+    try:
+        jd = 2461315.5
+        for i in range(3):
+            panel.add_point("V1", jd + i * 0.01, 11.0, 0.02, relative_flux=1.0)
+            panel.add_point("C1", jd + i * 0.01, 12.0, 0.02, role="comparison")
+        for i in range(4):  # clipped flux recorded on saturated frames
+            t = jd + (3 + i) * 0.01
+            panel.add_point("V1", t, 10.0, 0.02, saturated=True, relative_flux=2.0)
+            panel.add_point("C1", t, 11.0, 0.02, saturated=True, role="comparison")
+        _x, dmag = panel._series["C1"]["curve"].getData()
+        assert list(dmag[:3]) == pytest.approx([0.0, 0.0, 0.0])  # +1.0 on 0.4.2
+        panel._relative_flux.setChecked(True)
+        _x, y = panel._series["V1"]["curve"].getData()
+        assert list(y[:3]) == pytest.approx([1.0, 1.0, 1.0])  # 0.5 on 0.4.2
+    finally:
+        panel.close()
+        panel.deleteLater()
+        qapp.processEvents()
+
+
+def test_nonpositive_flux_baseline_clears_series(qapp) -> None:
+    """S16: with no positive baseline the magnitudes stayed on screen under
+    the relative-flux axis."""
+    panel = LightCurvePanel(view="target")
+    try:
+        for i in range(3):
+            panel.add_point("V1", 2461315.5 + i * 0.01, 14.0, 0.2, relative_flux=-0.1)
+        panel._relative_flux.setChecked(True)
+        x, y = panel._series["V1"]["curve"].getData()
+        assert x is None or len(x) == 0
+    finally:
+        panel.close()
+        panel.deleteLater()
+        qapp.processEvents()

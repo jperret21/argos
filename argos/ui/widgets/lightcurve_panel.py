@@ -164,6 +164,7 @@ class LightCurvePanel(QWidget):
                 "err": [],
                 "flux": [],
                 "flux_err": [],
+                "saturated": [],  # per point, parallel to jd/mag/flux
                 "sat_jd": [],
                 "sat_mag": [],
                 "sat_flux": [],
@@ -200,6 +201,7 @@ class LightCurvePanel(QWidget):
         s["flux"].append(float(relative_flux) if relative_flux is not None else float("nan"))
         flux_err = float(relative_flux_err or 0.0)
         s["flux_err"].append(flux_err if np.isfinite(flux_err) and flux_err >= 0 else 0.0)
+        s["saturated"].append(bool(saturated))
         if saturated:
             s["sat_jd"].append(float(jd))
             s["sat_mag"].append(float(mag))
@@ -222,21 +224,25 @@ class LightCurvePanel(QWidget):
         e = np.asarray(s["flux_err" if flux_mode else "err"], dtype=float)
         sat_y = np.asarray(s["sat_flux" if flux_mode else "sat_mag"], dtype=float)
         finite = np.isfinite(y)
-        if not finite.any():
+        # Baselines come from unsaturated points: clipped fluxes would bias the
+        # median (all points saturated: fall back to every finite point).
+        unsaturated = finite & ~np.asarray(s["saturated"], dtype=bool)
+        reference = unsaturated if unsaturated.any() else finite
+        baseline = float(np.median(y[reference])) if finite.any() else float("nan")
+        if not finite.any() or (flux_mode and not (np.isfinite(baseline) and baseline > 0)):
+            # Nothing to draw in this mode: clear rather than leave the other
+            # mode's values on screen under this axis. ErrorBarItem merges its
+            # options, so the old bar lengths must go too.
             s["curve"].setData([], [])
-            s["errbar"].setData(x=np.array([]), y=np.array([]))
+            s["errbar"].setData(x=np.array([]), y=np.array([]), top=None, bottom=None)
             s["sat"].setData([], [])
             self._apply_series_visibility(name)
             return
         if flux_mode:
-            baseline = float(np.median(y[finite]))
-            if baseline <= 0:
-                return
             y, e, sat_y = y / baseline, e / baseline, sat_y / baseline
             if s["role"] == "comparison":
                 y, sat_y = y - 1.0, sat_y - 1.0
         elif s["role"] == "comparison":
-            baseline = float(np.median(y[finite]))
             y = y - baseline
             sat_y = sat_y - baseline
         s["curve"].setData(x, y, data=[{"err": value} for value in e])
