@@ -89,6 +89,9 @@ Do not take G05 or W08 — they are for fields far outside this range.
 **database folder** if it was not auto-detected. The status line has to confirm
 *both*: ARGOS cannot solve from the executable alone, and the failure mode if
 you get this wrong is a solve that simply never succeeds, at one in the morning.
+The folder says *where* the databases are; the **Star database** choice (D50,
+or *Auto*) still says *which* one ASTAP uses. Before 0.5.0 a folder replaced
+that choice and ASTAP picked a database on its own.
 
 ````{admonition} macOS: point at the binary, not the bundle
 :class: warning

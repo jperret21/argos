@@ -433,9 +433,10 @@ naming rules and the full header list are in {doc}`fits_headers`.
    metadata and AAVSO export.
 3. **Comparison quality** reports the latest leave-one-out assessment: one row
    per comparison with its sample count, scatter, median formal error and a live
-   status of *Stable*, *Noisy* or *Unstable*. Select a row to show its curve. A
-   star that never leaves *Waiting for 10 points* simply has too few usable
-   measurements to judge.
+   status of *Stable*, *Noisy* or *Unstable*, and above them the ensemble's
+   verdict. Select a row to show its curve. A star that never leaves *Waiting
+   for N points* (N is the configured minimum, 10 by default) simply has too few
+   usable measurements to judge.
 4. The curves shown are the differential previews recorded during acquisition.
    Hover a point for its values; select it and press **Open source frame** to
    open that FITS in the viewer. The **Frames** tab gives the same access by
