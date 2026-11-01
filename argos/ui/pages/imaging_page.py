@@ -2425,14 +2425,19 @@ class ImagingPage(QWidget):
 
     def _render_curves(self) -> None:
         """Re-render every curve surface from the engine's store (the ONLY
-        rendering path for whole-store changes: batch adopt, object change)."""
-        self._lightcurve_panel.set_curves(self._engine.lightcurves)
+        rendering path for whole-store changes: batch adopt, object change,
+        uncertainty-floor updates during a run).
+
+        The user's zoom is kept. A hidden Photometry window is skipped, as for
+        single points: ``_open_photometry`` reloads it from the store."""
+        self._lightcurve_panel.set_curves(self._engine.lightcurves, keep_view=True)
         win = self._photometry_window
-        if win is not None:
+        if win is not None and win.isVisible():
             win.load_curves(
                 self._engine.lightcurves,
                 obscode=str(self._cfg("observer.obscode", "XXX") or "XXX"),
                 filt=str(self._cfg("photometry.default_band", "TG") or "TG"),
+                keep_view=True,
             )
             # load_curves snapshots into a copy; keep exports on the live store.
             win.lightcurves = self._engine.lightcurves

@@ -871,3 +871,114 @@ def test_add_point_ignores_point_with_neither_product(qapp) -> None:
         panel.close()
         panel.deleteLater()
         qapp.processEvents()
+
+
+def _live_store(n_frames: int) -> dict:
+    """An engine-like store: one target and one comparison, a point per frame."""
+    target = LightCurve(auid="V1", name="V1", role="target")
+    comparison = LightCurve(auid="C1", name="C1", role="comparison")
+    for i in range(n_frames):
+        jd = 2461315.5 + i * 0.002
+        target.append(LcPoint(jd, 12.0 + 0.01 * (i % 3), 0.02, relative_flux=1.0))
+        comparison.append(LcPoint(jd, 11.0 + 0.01 * (i % 2), 0.02))
+    return {"V1": target, "C1": comparison}
+
+
+def test_set_curves_refreshes_each_series_once(qapp, monkeypatch) -> None:
+    """S19: a whole-store re-render refreshed a series once per point, so
+    each re-render cost O(N²) on the GUI thread."""
+    panel = LightCurvePanel()
+    try:
+        curves = {}
+        for k in range(3):
+            curve = LightCurve(auid=f"S{k}", name=f"S{k}", role="target")
+            for i in range(50):
+                curve.append(LcPoint(2461315.5 + i * 0.002, 12.0, 0.02))
+            curves[f"S{k}"] = curve
+        calls: list[str] = []
+        refresh = panel._refresh_series
+        monkeypatch.setattr(panel, "_refresh_series", lambda n: (calls.append(n), refresh(n)))
+
+        panel.set_curves(curves)
+
+        assert sorted(calls) == ["S0", "S1", "S2"]  # 150 calls on 0.4.2
+        x, _y = panel._series["S1"]["curve"].getData()
+        assert len(x) == 50
+    finally:
+        panel.close()
+        panel.deleteLater()
+        qapp.processEvents()
+
+
+def test_live_rerender_keeps_user_zoom_and_follows_data_otherwise(qapp) -> None:
+    """S19: every live re-render (once per point after the 10th) reset the
+    observer's zoom. Without a zoom the view must keep following the night."""
+    dock = LightCurvePanel()  # the live dock's layout: target + comparison, X-linked
+    dock.resize(700, 700)
+    dock.show()
+    qapp.processEvents()
+    store: dict = {}
+    page = SimpleNamespace(
+        _lightcurve_panel=dock,
+        _photometry_window=None,
+        _engine=SimpleNamespace(lightcurves=store),
+    )
+    target_vb = dock._target_plot.getViewBox()
+    comparison_vb = dock._comparison_plot.getViewBox()
+    try:
+        store.update(_live_store(20))
+        ImagingPage._render_curves(page)
+        qapp.processEvents()
+        store.update(_live_store(60))
+        ImagingPage._render_curves(page)
+        qapp.processEvents()
+        last_jd = store["V1"].points[-1].jd_utc
+        assert target_vb.viewRange()[0][1] >= last_jd  # follows the new points
+
+        zoom = [2461315.52, 2461315.53]
+        target_vb.setXRange(*zoom, padding=0)  # what a wheel zoom / drag does
+        qapp.processEvents()
+        store.update(_live_store(80))
+        ImagingPage._render_curves(page)
+        qapp.processEvents()
+        # abs: pytest's relative tolerance at JD ~2.46e6 would hide a 0.1 d reset.
+        assert target_vb.viewRange()[0] == pytest.approx(zoom, abs=1e-6)  # reset on 0.4.2
+        # The X-linked plot lines up by screen pixels (its axis is a little
+        # wider), so it matches to 1 % of the zoom width, not exactly.
+        assert comparison_vb.viewRange()[0] == pytest.approx(zoom, abs=1e-4)
+    finally:
+        dock.close()
+        dock.deleteLater()
+        qapp.processEvents()
+
+
+def test_live_rerender_skips_a_hidden_photometry_window(qapp) -> None:
+    """S19: the closed Photometry window was rebuilt on every re-render too
+    (it is reloaded from the store whenever it is opened)."""
+    loads: list = []
+    window = SimpleNamespace(
+        visible=False,
+        isVisible=lambda: window.visible,
+        load_curves=lambda curves, **kw: loads.append(kw),
+        lightcurves=None,
+    )
+    dock = LightCurvePanel()
+    store = _live_store(12)
+    page = SimpleNamespace(
+        _lightcurve_panel=dock,
+        _photometry_window=window,
+        _engine=SimpleNamespace(lightcurves=store),
+        _cfg=lambda key, default=None: default,
+    )
+    try:
+        ImagingPage._render_curves(page)
+        assert loads == []  # rebuilt while closed on 0.4.2
+        assert dock.has_data()
+        window.visible = True
+        ImagingPage._render_curves(page)
+        assert len(loads) == 1 and loads[0].get("keep_view") is True
+        assert window.lightcurves is store
+    finally:
+        dock.close()
+        dock.deleteLater()
+        qapp.processEvents()

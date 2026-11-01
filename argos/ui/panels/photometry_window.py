@@ -325,16 +325,20 @@ class PhotometryWindow(QWidget):
             else reason or "AAVSO export unavailable"
         )
 
-    def load_curves(self, curves: dict, obscode: str = "XXX", filt: str = "TG") -> None:
+    def load_curves(
+        self, curves: dict, obscode: str = "XXX", filt: str = "TG", *, keep_view: bool = False
+    ) -> None:
         """Display finished curves (e.g. reloaded from a session CSV by Analyze).
 
         ``curves`` maps a key to a :class:`LightCurve`; its points are plotted
         and kept for export. Replaces any currently shown curves.
+        ``keep_view`` (live re-render) keeps the user's zoom, see
+        :meth:`LightCurvePanel.set_curves`.
         """
         self.lightcurves = dict(curves)
         self.obscode = obscode or "XXX"
         self.filt = filt or "TG"
-        self.lightcurve.set_curves(self.lightcurves)  # same path as the dock
+        self.lightcurve.set_curves(self.lightcurves, keep_view=keep_view)  # same path as the dock
 
     def _export_dir(self) -> Path:
         return Path(self.default_dir) if self.default_dir else Path.home()

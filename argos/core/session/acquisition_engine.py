@@ -241,6 +241,9 @@ class AcquisitionEngine(QObject):
 
         # §6 P4: live photometry preview state.
         self._lightcurves: dict[str, LightCurve] = {}  # key → per-target curve
+        # Set when a frame's uncertainty floor changed earlier points: the
+        # store is re-rendered once at the end of that frame, not per star.
+        self._curves_dirty = False
 
         # P11 flight recorder for the live measurement path — created lazily
         # on the first measured frame, re-created when the object changes.
@@ -1533,6 +1536,10 @@ class AcquisitionEngine(QObject):
             if not (has_mag or has_ratio):
                 continue
             self._emit_live_point(res, jd, air, fwhm, (lat, lon, elev))
+        if self._curves_dirty:
+            # One whole-store re-render per frame, whatever the star count.
+            self._curves_dirty = False
+            self.curves_changed.emit()
         self._write_live_quality_report(tset)
 
     def _write_live_quality_report(self, target_set: TargetSet) -> None:
@@ -1611,8 +1618,9 @@ class AcquisitionEngine(QObject):
         if floor_changed:
             # All prior values may have gained the shared systematic floor,
             # so replay the authoritative store rather than leaving stale bars
-            # in the live panel.
-            self.curves_changed.emit()
+            # in the live panel: once, after the frame's last star
+            # (_measure_photometry emits curves_changed).
+            self._curves_dirty = True
         else:
             self.photometry_point.emit(
                 PhotometryPoint(

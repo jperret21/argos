@@ -576,3 +576,59 @@ def test_quality_report_emitted_in_live_preview(qapp, tmp_path) -> None:
     assert engine.comparison_quality_report is reports[0]
     # Outside a run there is no session folder to write the report into.
     assert list(tmp_path.rglob("photometry_quality.json")) == []
+
+
+def test_floor_change_rerenders_once_per_frame(shot_rig, monkeypatch) -> None:
+    """S19: once the systematic floor applies (10th point), each star of each
+    frame emitted curves_changed, i.e. a whole-store re-render per star."""
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+
+    engine, _session, _form, _logs = shot_rig
+    stars = [TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1")] + [
+        TargetStar(role=ROLE_COMPARISON, ra_deg=10.0 + k / 100, dec_deg=20.0, auid=f"C{k}")
+        for k in (1, 2)
+    ]
+    tset = TargetSet(object_name="V1", stars=stars)
+    frame = {"i": 0}
+
+    def measure(*_args, **_kwargs):
+        mag = 12.0 + 0.01 * ((7 * frame["i"]) % 5 - 2)
+        diff = SimpleNamespace(
+            mag=mag,
+            mag_err=0.01,
+            formal_mag_err=0.01,
+            comps_used=2,
+            zero_point=0.0,
+            zp_rms=0.0,
+            note="",
+        )
+        phot = SimpleNamespace(sky_adu=300.0, saturated=False, suspect=False)
+        return [SimpleNamespace(star=s, diff=diff, relative=None, phot=phot) for s in stars]
+
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    monkeypatch.setattr(engine, "_wcs_for_frame", lambda *a: None)
+    monkeypatch.setattr(engine, "_write_live_quality_report", lambda tset: None)
+    monkeypatch.setattr(ae, "measure_frame", measure)
+    monkeypatch.setattr(ae, "bjd_tdb", lambda *a: None)  # no IERS download
+    monkeypatch.setattr(ae, "airmass_at", lambda *a: None)
+    engine.astrometry._wcs = object()
+    engine._last_raw = np.zeros((16, 16), np.uint16)
+    engine._last_raw_decimated = False
+    renders: list[int] = []
+    engine.curves_changed.connect(lambda: renders.append(frame["i"]))
+
+    t0 = datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc)
+    for i in range(15):
+        frame["i"] = i
+        engine._last_exposure_mid = t0 + timedelta(minutes=i)
+        engine._measure_photometry()
+
+    per_frame = [renders.count(i) for i in range(15)]
+    assert sum(per_frame) > 0  # the floor applied (and re-rendered) from the 10th point
+    assert max(per_frame) == 1, per_frame  # 3 per frame (one per star) on 0.4.2
+    assert sorted(len(lc.points) for lc in engine.lightcurves.values()) == [15, 15, 15]
+    assert all(p.sigma_syst is not None for lc in engine.lightcurves.values() for p in lc.points)
