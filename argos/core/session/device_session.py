@@ -272,10 +272,21 @@ class DeviceSession(QObject):
             handler()
 
     def connect_all(self, host: str, port: int) -> None:
-        self.connect_mount(host, port)
-        self.connect_camera(host, port)
-        self.connect_filterwheel(host, port)
-        self.connect_focuser(host, port)
+        """Connect every device that has no handle yet.
+
+        "Connect equipment" stays enabled until all four are up, so a second
+        press retries the ones that failed. A connected device is left alone:
+        reconnecting it would leak its poller and drop a camera a sequence
+        may be using. A stale handle is recovered with Disconnect, Connect.
+        """
+        if self._telescope is None:
+            self.connect_mount(host, port)
+        if self._camera is None:
+            self.connect_camera(host, port)
+        if self._filterwheel is None:
+            self.connect_filterwheel(host, port)
+        if self._focuser is None:
+            self.connect_focuser(host, port)
 
     def disconnect_all(self) -> None:
         self.disconnect_camera()
@@ -547,6 +558,7 @@ class DeviceSession(QObject):
     def _start_polling(self) -> None:
         if not self._telescope:
             return
+        self._stop_polling()  # a second poller would outlive any disconnect
         self._polling = MountPollingWorker(self._telescope, parent=self)
         self._polling.position_updated.connect(self._on_position)
         self._polling.error_occurred.connect(self._on_poll_error)
