@@ -1,0 +1,223 @@
+<!--
+  Left navigation rail (Qt sidebar.py): the ARGOS mark, then one entry per
+  workflow phase, Settings pushed to the bottom. 24 px icon above an 11 px
+  label, plus a state dot: ready (--success), active (--accent), blocked
+  (--warning). Selected entry: --toggled-fg on --surface with the 3 px brass
+  bar on the left (BRAND section 8).
+-->
+<script lang="ts" module>
+  import type { Section } from '../app/state.svelte';
+
+  export interface NavEntry {
+    id: Section;
+    icon: string;
+    label: string;
+    hint: string;
+    shortcut: string;
+  }
+</script>
+
+<script lang="ts">
+  import { ariaShortcut } from '../app/shortcuts';
+  import { useApp } from '../app/state.svelte';
+  import Icon from '../components/Icon.svelte';
+  import { tooltip } from '../components/tooltip';
+
+  interface Props {
+    entries: readonly NavEntry[];
+  }
+
+  let { entries }: Props = $props();
+  const app = useApp();
+
+  type Dot = 'ready' | 'active' | 'blocked' | null;
+
+  function dotFor(id: Section): Dot {
+    // Link down: the records are stale, claim nothing but the problem.
+    if (app.stale && app.events.link !== 'idle' && app.events.link !== 'connecting') {
+      return id === 'connection' ? 'blocked' : null;
+    }
+    const conn = app.connection?.state;
+    if (id === 'connection') {
+      if (conn === 'connected') return 'ready';
+      if (conn === 'error' || app.events.link === 'unauthorized' || app.events.link === 'forbidden') {
+        return 'blocked';
+      }
+      return null;
+    }
+    if (id === 'imaging') {
+      if (app.cameraBusy || app.slewing) return 'active';
+      if (conn === 'connected') return 'ready';
+      return null;
+    }
+    return null;
+  }
+
+  const DOT_WORDS: Record<Exclude<Dot, null>, string> = {
+    ready: 'ready',
+    active: 'running',
+    blocked: 'needs attention',
+  };
+
+  const main = $derived(entries.filter((e) => e.id !== 'configuration'));
+  const footer = $derived(entries.filter((e) => e.id === 'configuration'));
+</script>
+
+{#snippet entry(e: NavEntry)}
+  {@const dot = dotFor(e.id)}
+  <button
+    type="button"
+    class="entry"
+    class:selected={app.section === e.id}
+    aria-current={app.section === e.id ? 'page' : undefined}
+    aria-label={dot ? `${e.label}, ${DOT_WORDS[dot]}` : e.label}
+    aria-keyshortcuts={ariaShortcut(e.shortcut)}
+    onclick={() => (app.section = e.id)}
+    use:tooltip={{ text: e.hint, shortcut: e.shortcut, placement: 'right' }}
+  >
+    <span class="glyph">
+      <Icon name={e.icon} size="l" />
+      {#if dot}<span class="dot {dot}" aria-hidden="true"></span>{/if}
+    </span>
+    <span class="label" aria-hidden="true">{e.label}</span>
+  </button>
+{/snippet}
+
+<nav class="rail" aria-label="Workspace">
+  <div class="mark">
+    <Icon name="about" size="l" />
+    <span class="wordmark">ARGOS</span>
+  </div>
+  <div class="entries">
+    {#each main as e (e.id)}{@render entry(e)}{/each}
+  </div>
+  <div class="entries footer">
+    {#each footer as e (e.id)}{@render entry(e)}{/each}
+  </div>
+</nav>
+
+<style>
+  .rail {
+    display: flex;
+    flex-direction: column;
+    width: var(--sidebar-w);
+    height: 100%;
+    border-right: var(--border-w) solid var(--border);
+    background: var(--bg-2);
+  }
+
+  /* Brand lockup (BRAND 5): the brass mark, "ARGOS" beside it in Plex Sans 600
+     with -0.065em tracking, as on the website. */
+  .mark {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    height: calc(var(--control-h-m) + 2 * var(--space-2) + var(--border-w));
+    margin-bottom: var(--space-2);
+    border-bottom: var(--border-w) solid var(--border); /* continues the toolbar's edge */
+    color: var(--accent);
+  }
+
+  .wordmark {
+    color: var(--fg);
+    font-size: var(--text-l);
+    font-weight: var(--weight-semibold);
+    letter-spacing: -0.065em;
+  }
+
+  .entries {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-1) 0;
+  }
+
+  .footer {
+    margin-top: auto;
+    padding-bottom: var(--space-3);
+  }
+
+  .entry {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-1);
+    width: 100%;
+    padding: var(--space-3) var(--space-1) var(--space-2);
+    border: none;
+    background: transparent;
+    color: var(--fg-muted);
+    cursor: pointer;
+    transition:
+      background-color var(--duration-fast) var(--ease-standard),
+      color var(--duration-fast) var(--ease-standard);
+  }
+
+  .entry:hover {
+    background: var(--hover-bg);
+    color: var(--fg);
+  }
+
+  .entry:focus-visible {
+    outline: var(--focus-ring-w) solid var(--focus-ring);
+    outline-offset: calc(-1 * var(--focus-ring-w) - 2px);
+  }
+
+  .entry.selected {
+    background: var(--surface);
+    color: var(--toggled-fg);
+  }
+
+  .entry.selected::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--accent);
+  }
+
+  .glyph {
+    position: relative;
+    display: inline-flex;
+  }
+
+  .label {
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+    line-height: var(--leading-tight);
+  }
+  .entry:hover .label {
+    color: var(--fg);
+  }
+  .entry.selected .label {
+    color: var(--toggled-fg);
+  }
+
+  .dot {
+    position: absolute;
+    top: -2px;
+    right: -5px;
+    width: 7px;
+    height: 7px;
+    border: 1.5px solid var(--bg-2);
+    border-radius: var(--radius-round);
+    box-sizing: content-box;
+  }
+  .selected .dot {
+    border-color: var(--surface);
+  }
+  .dot.ready {
+    background: var(--success);
+  }
+  .dot.active {
+    background: var(--accent);
+  }
+  .dot.blocked {
+    background: var(--warning);
+  }
+</style>

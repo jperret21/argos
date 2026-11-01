@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en" data-theme="observatory">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <!-- No favicon request (offline-first); the design team can replace this. -->
+    <link rel="icon" href="data:," />
+    <title>ARGOS</title>
+    <script>
+      // Apply the stored theme before the first paint, so Night Red never
+      // flashes graphite (BRAND.md 4.3). Key and values: src/lib/app/theme.ts.
+      try {
+        var t = localStorage.getItem('argos.theme');
+        if (t === 'observatory' || t === 'charcoal' || t === 'night-red') {
+          document.documentElement.setAttribute('data-theme', t);
+        }
+      } catch (e) {
+        /* storage blocked: keep the default theme */
+      }
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
