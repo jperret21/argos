@@ -408,6 +408,11 @@ A sequence is organised for Siril under the configured sessions folder:
 ensemble described in {doc}`differential_photometry`.
 
 Live measurements and target sets are also kept under `<sessions>/targets/`.
+A batch re-measurement (**Re-run subs…**) writes its per-star CSVs, named
+`<role>_<object>_<star>.csv`, and the target set it used into a new
+`photometry_rerun_<UTC>/` folder of the session; it measures only light frames
+(by `IMAGETYP`), skips frames without `DATE-OBS`, and a cancelled run writes
+nothing.
 When you report an observation, keep the raw FITS, `session.json`, the CSV
 exports and any `*_diagnostics.jsonl` together.
 

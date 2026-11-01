@@ -150,6 +150,7 @@ def test_batch_cancel_stops_early(_scene) -> None:
     assert result_box[0].ok
     assert result_box[0].frames_done == 0
     assert result_box[0].curves == {}
+    assert result_box[0].cancelled is True
 
 
 def test_batch_reports_progress(_scene) -> None:
@@ -533,3 +534,98 @@ def test_discover_light_frames_finds_fit_and_skips_calibration(tmp_path) -> None
     assert discover_light_frames(tmp_path) == [b, a, c]  # recursive, d excluded
     assert discover_light_frames(tmp_path / "lights") == [b, a, c]
     assert discover_light_frames(tmp_path / "darks") == []
+
+
+def _run_batch(req, on_progress=None):
+    worker = PhotometryBatchWorker(req)
+    points, results = [], []
+    worker.point.connect(points.append)
+    worker.finished_batch.connect(results.append)
+    if on_progress is not None:
+        worker.progress.connect(lambda done, total: on_progress(worker, done, total))
+    worker.run()
+    return results[0], points
+
+
+def test_batch_skips_frame_without_date_obs(_scene) -> None:
+    """S13: a frame without DATE-OBS became a JD 0 point, all the way into
+    the AAVSO export."""
+    req, _ = _scene
+    undated = req.fits_paths[1]
+    with fits.open(undated, mode="update") as hdul:
+        del hdul[0].header["DATE-OBS"]
+
+    result, points = _run_batch(req)
+
+    assert all(point.jd > 2.4e6 for point in points)
+    assert all(p.jd_utc > 2.4e6 for lc in result.curves.values() for p in lc.points)
+    assert (result.frames_done, result.frames_skipped) == (2, 1)
+
+
+def test_batch_counts_unreadable_frame_as_skipped(_scene) -> None:
+    """S13: a corrupt file was counted as a measured frame."""
+    req, _ = _scene
+    req.fits_paths[2].write_bytes(b"not a FITS file")
+
+    result, _points = _run_batch(req)
+
+    assert result.ok and len(result.curves["T"].points) == 2
+    assert result.frames_done == 2  # measured frames only
+    assert result.frames_skipped == 1
+
+
+def test_batch_cancel_mid_run_is_reported_and_writes_nothing(_scene) -> None:
+    """S13: a cancelled run reported success and overwrote the CSVs."""
+    req, out_dir = _scene
+
+    def cancel_after_first(worker, done, _total):
+        if done == 1:
+            worker.cancel()
+
+    result, _points = _run_batch(req, on_progress=cancel_after_first)
+
+    assert not list(out_dir.glob("*.csv"))  # nothing replaced on disk
+    assert result.ok and result.frames_done == 1
+    assert result.cancelled is True
+
+
+def test_batch_csv_names_carry_role_prefix(_scene) -> None:
+    """S13: batch CSVs had no role prefix, so a reloaded comparison curve
+    came back as a target."""
+    from argos.core.catalog.targets import TargetSet as _TargetSet
+    from argos.core.photometry.lightcurve import read_curves_csv
+    from argos.core.session.review import identify_curve_file
+
+    req, out_dir = _scene
+    _run_batch(req)
+
+    names = sorted(p.name for p in out_dir.glob("*.csv"))
+    assert names == [
+        "comparison_TST_Tau_C1.csv",
+        "comparison_TST_Tau_C2.csv",
+        "target_TST_Tau_T.csv",
+    ]
+    targets = _TargetSet.load(out_dir / "targets.json")  # saved beside them
+    assert {star.auid for star in targets.stars} == {"T", "C1", "C2"}
+    path = out_dir / "comparison_TST_Tau_C1.csv"
+    curves, problems = identify_curve_file(path, read_curves_csv(path), targets)
+    assert problems == [] and [lc.role for lc in curves.values()] == ["comparison"]
+
+
+def test_rerun_output_dir_is_a_new_folder_in_the_session(tmp_path) -> None:
+    """S13: every re-run wrote <sessions>/../targets/, outside any session,
+    overwriting the previous one."""
+    from datetime import datetime, timezone
+
+    from argos.workers.photometry_batch_worker import rerun_output_dir
+
+    now = datetime(2026, 11, 1, 21, 5, 9, tzinfo=timezone.utc)
+    run = tmp_path / "20261101T200000Z_SS_Cyg"
+    (run / "lights").mkdir(parents=True)
+    (run / "session.json").write_text("{}")
+    expected = run / "photometry_rerun_20261101T210509Z"
+    assert rerun_output_dir(run / "lights", now) == expected
+    assert rerun_output_dir(run, now) == expected
+    loose = tmp_path / "other_frames"
+    loose.mkdir()
+    assert rerun_output_dir(loose, now) == loose / "photometry_rerun_20261101T210509Z"

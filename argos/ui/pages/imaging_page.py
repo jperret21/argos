@@ -42,6 +42,8 @@ import base64
 import logging
 import math
 import time
+from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -199,6 +201,7 @@ class ImagingPage(QWidget):
         self._metrics_t0: float | None = None
         self._batch_worker = None  # WS7 batch re-run (QThread) + its progress dialog
         self._batch_dialog: QProgressDialog | None = None
+        self._batch_total = 0  # frames handed to the running batch re-run
         self._object_resolver_worker: ObjectResolverWorker | None = None
         self._nearby_object_resolver_worker: NearbyObjectResolverWorker | None = None
         self._point_identity_worker: PointIdentityWorker | None = None
@@ -2267,6 +2270,7 @@ class ImagingPage(QWidget):
             BatchRequest,
             PhotometryBatchWorker,
             discover_light_frames,
+            rerun_output_dir,
         )
 
         wcs = self._astrometry.wcs
@@ -2309,7 +2313,8 @@ class ImagingPage(QWidget):
             wcs=wcs,
             target_set=tset,
             params=params,
-            out_dir=self._config.sessions_path.parent / "targets",
+            # A new folder in the session per re-run: never another run's CSVs.
+            out_dir=rerun_output_dir(Path(folder), datetime.now(timezone.utc)),
             object_name=tset.object_name or "untitled",
             site=(
                 self._cfg("site.latitude", None),
@@ -2327,6 +2332,7 @@ class ImagingPage(QWidget):
         worker.finished_batch.connect(self._on_batch_done)
         self._batch_worker = worker
         self._batch_dialog = dialog
+        self._batch_total = len(paths)
         dialog.show()
         worker.start()
 
@@ -2356,16 +2362,37 @@ class ImagingPage(QWidget):
         if not result.ok:
             QMessageBox.warning(self, "Batch failed", result.error)
             return
-        if not result.curves:
+        total = self._batch_total or result.frames_done + result.frames_skipped
+        if result.cancelled:
+            # Partial curves never replace the live ones, and nothing was written.
             self.log_message.emit(
                 "WARN",
-                "Batch photometry: no points measured — see the per-frame notes "
-                "in targets/*_diagnostics.jsonl.",
+                f"Batch photometry cancelled after {result.frames_done + result.frames_skipped}"
+                f"/{total} frame(s) — nothing saved.",
             )
             return
+        if result.frames_skipped:
+            self.log_message.emit(
+                "WARN",
+                f"Batch photometry: {result.frames_skipped} frame(s) skipped "
+                "(unreadable, or no DATE-OBS to date a point).",
+            )
+        if not result.curves:
+            notes = (
+                f" — see the per-frame notes in {result.out_dir}"
+                if result.out_dir is not None and self._cfg("diagnostics.enabled", False)
+                else ""
+            )
+            self.log_message.emit("WARN", f"Batch photometry: no points measured{notes}.")
+            return
+        roles = Counter(getattr(curve, "role", "target") for curve in result.curves.values())
+        counts = ", ".join(
+            f"{roles[role]} {role}" for role in ("target", "check", "comparison") if roles[role]
+        )
+        where = f" → {result.out_dir}" if result.out_dir is not None else ""
         self.log_message.emit(
             "OK",
-            f"Batch photometry: {result.frames_done} frame(s), {len(result.curves)} target(s).",
+            f"Batch photometry: {result.frames_done} frame(s) measured; curves: {counts}{where}.",
         )
         if abs(result.rotation_deg) > 0.05 or result.shift_px > 1.0:
             self.log_message.emit(

@@ -97,3 +97,44 @@ def test_rerun_finds_the_light_frames_of_an_argos_session(tmp_path, rerun) -> No
 
     requests, messages = rerun(run)  # the session root: the darks are left out
     assert [path.name for path in requests[-1].fits_paths] == [first.name, second.name]
+
+
+def test_rerun_writes_into_a_new_folder_of_the_session(tmp_path, rerun) -> None:
+    """S13: the output went to <sessions>/../targets/, the same for every run."""
+    run = tmp_path / "sessions" / "20261101T200000Z_SS_Cyg"
+    _fits(run / "lights" / "a.fit", "Light Frame", "2026-11-01T20:00:00")
+    (run / "session.json").write_text("{}")
+
+    requests, _messages = rerun(run / "lights")
+
+    out_dir = requests[-1].out_dir
+    assert out_dir.parent == run and out_dir.name.startswith("photometry_rerun_")
+
+
+def test_cancelled_batch_is_reported_and_not_adopted() -> None:
+    """S13: a cancelled run was announced as a success and its partial
+    curves replaced the live ones."""
+    import argos.ui.pages.imaging_page as ip
+    from argos.core.photometry.lightcurve import LcPoint, LightCurve
+    from argos.workers.photometry_batch_worker import BatchResult
+
+    logs: list[tuple[str, str]] = []
+    adopted: list = []
+    page = SimpleNamespace(
+        _batch_dialog=None,
+        _batch_worker=object(),
+        _batch_total=3,
+        log_message=SimpleNamespace(emit=lambda level, msg: logs.append((level, msg))),
+        _engine=SimpleNamespace(adopt_curves=adopted.append),
+        _open_photometry=lambda: None,
+        _cfg=lambda key, default: default,
+    )
+    partial = LightCurve(auid="T", name="T", role="target")
+    partial.append(LcPoint(jd_utc=2461315.5, mag=12.0, mag_err=0.02))
+    ip.ImagingPage._on_batch_done(
+        page, BatchResult(curves={"T": partial}, frames_done=1, cancelled=True)
+    )
+
+    assert adopted == []
+    assert any("cancelled" in msg for _level, msg in logs), logs
+    assert not any(level == "OK" for level, _msg in logs), logs
