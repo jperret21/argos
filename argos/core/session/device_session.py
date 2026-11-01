@@ -316,18 +316,25 @@ class DeviceSession(QObject):
                     "WARN",
                     "Mount coordinate system unavailable; assuming the driver accepts J2000.",
                 )
-            if scope.clock_error_seconds is not None and scope.clock_error_seconds > 60.0:
-                self.log_message.emit(
-                    "ERROR",
-                    "Mount clock is %.1f h off — correct date/time in the Seestar app; GoTo and Sync are disabled."
-                    % (scope.clock_error_seconds / 3600.0),
-                )
+            self._log_clock_error(scope)
             self.device_state_changed.emit("mount", "connected", name)
             self.mount_mode.emit(scope.alignment_mode)
             self._start_polling()
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Mount: {exc}")
             self.device_state_changed.emit("mount", "error", str(exc)[:48])
+
+    def _log_clock_error(self, scope: Telescope) -> None:
+        """Say what a stale mount clock does: the Telescope refuses GoTo, Sync
+        and Center on use (``_assert_clock_synchronized``); no button is
+        disabled."""
+        if scope.clock_error_seconds is not None and scope.clock_error_seconds > 60.0:
+            self.log_message.emit(
+                "ERROR",
+                "Mount clock is %.1f h off — correct the date/time in the Seestar app, then "
+                "reconnect. GoTo, Sync and Center will be refused until then."
+                % (scope.clock_error_seconds / 3600.0),
+            )
 
     @pyqtSlot()
     def _retry_mount(self) -> None:
@@ -355,12 +362,7 @@ class DeviceSession(QObject):
                 "WARN",
                 "Mount coordinate system unavailable; assuming the driver accepts J2000.",
             )
-        if scope.clock_error_seconds is not None and scope.clock_error_seconds > 60.0:
-            self.log_message.emit(
-                "ERROR",
-                "Mount clock is %.1f h off — correct date/time in the Seestar app; GoTo and Sync are disabled."
-                % (scope.clock_error_seconds / 3600.0),
-            )
+        self._log_clock_error(scope)
         self.device_state_changed.emit("mount", "connected", name)
         self.mount_mode.emit(scope.alignment_mode)
         self._start_polling()

@@ -215,3 +215,31 @@ def test_restarting_the_mount_poller_stops_the_previous_one(monkeypatch) -> None
     assert second.running
     session.disconnect_mount()
     assert not second.running
+
+
+def test_mount_clock_error_message_says_what_happens(monkeypatch) -> None:
+    """H4: the log said "GoTo and Sync are disabled" while Slew, Sync and
+    Center stayed enabled; the Telescope guard refuses them on use."""
+    import argos.core.session.device_session as ds
+
+    def telescope(host, port):
+        t = MagicMock(equatorial_system="J2000", clock_error_seconds=7200.0)
+        t.connect.return_value = "Seestar mount"
+        return t
+
+    monkeypatch.setattr(ds, "Telescope", telescope)
+    monkeypatch.setattr(ds.DeviceSession, "_start_polling", lambda self: None)
+    session = DeviceSession(Config(dict(_DEFAULTS)))
+    logs: list[tuple[str, str]] = []
+    session.log_message.connect(lambda level, msg: logs.append((level, msg)))
+
+    session.connect_mount("192.168.1.20", 32323)
+    session._telescope = None  # the auto-reconnect path logs the same check
+    session._retry_mount()
+
+    clock = [msg for level, msg in logs if level == "ERROR" and "clock" in msg]
+    assert len(clock) == 2
+    for msg in clock:
+        assert "2.0 h off" in msg
+        assert "refused" in msg
+        assert "disabled" not in msg
