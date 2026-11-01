@@ -149,3 +149,58 @@ def test_preset_load_does_not_restore_a_stale_transit_window(tmp_path, monkeypat
         assert "Prepare transit" in panel._status_lbl.text()
     finally:
         _dispose(panel)
+
+
+def test_add_after_wheel_connect_never_defaults_a_light_step_to_the_opaque_slot() -> None:
+    """S7: every Seestar wheel has 'Dark' at slot 0; '+ Add' and any unknown
+    filter fell back to index 0, so a whole Light step shot black frames."""
+    from argos.core.imaging.sequencer import expand_plan
+    from argos.ui.widgets.sequence_panel import SequencePanel
+
+    panel = SequencePanel()
+    try:
+        panel.set_filter_options(["Dark", "IR", "LP"])  # the wheel connected
+        panel._add_row(False)  # what the "+ Add" button's clicked(bool) delivers
+        step = panel.to_plan().steps[1]
+        assert step.frame_type == "Light"
+        assert next(expand_plan(SequencePlan(steps=[step]))).wheel_filter != "Dark"
+
+        # A row whose filter vanishes from the wheel does not fall onto Dark either.
+        panel.set_filter_options(["IR", "LP", "Halpha"])
+        panel._table.cellWidget(1, 2).setCurrentText("Halpha")
+        panel.set_filter_options(["Dark", "IR", "LP"])
+        assert panel.to_plan().steps[1].filter_name == "IR"
+    finally:
+        _dispose(panel)
+
+
+def test_preset_substitutions_are_reported() -> None:
+    """S7: an unknown filter or a clamped exposure/gain changed silently."""
+    from argos.ui.widgets.sequence_panel import SequencePanel
+
+    panel = SequencePanel()
+    try:
+        panel.set_filter_options(["Dark", "IR", "LP"])
+        notes = panel.load_plan(
+            SequencePlan(
+                steps=[SequenceStep(frame_type="Light", filter_name="V", exposure_s=900.0)]
+            )
+        )
+        step = panel.to_plan().steps[0]
+        assert step.filter_name == "IR"
+        assert notes and any("'V'" in note for note in notes), notes
+        assert any("900" in note for note in notes), notes
+    finally:
+        _dispose(panel)
+
+
+def test_camera_disconnect_keeps_plan_values() -> None:
+    """S7: a disconnect reset the ranges to the defaults and clamped 900 s to 600 s."""
+    page, _engine = _page({})
+    try:
+        page.panel.set_camera_limits(0, 600, 0.0001, 3600.0)
+        page.panel._table.cellWidget(0, 3).setValue(900.0)
+        page._on_device_state("camera", "disconnected", "")
+        assert page.panel.to_plan().steps[0].exposure_s == 900.0
+    finally:
+        _dispose(page)

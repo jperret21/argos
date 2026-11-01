@@ -318,6 +318,7 @@ class SequencerPage(QWidget):
 
     @pyqtSlot(str, str, str)
     def _on_device_state(self, device: str, state: str, _info: str) -> None:
+        # The spin-box ranges are not reset on a camera disconnect: resetting
+        # to the defaults clamped the plan (900 s became 600 s). The next
+        # camera's capabilities_ready retargets them.
         self.panel.set_device_state(device, state)
-        if device == "camera" and state == "disconnected":
-            self.panel.set_camera_limits()  # back to defaults
