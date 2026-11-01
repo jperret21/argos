@@ -481,3 +481,25 @@ def test_opened_fits_without_a_date_measures_no_point(shot_rig, tmp_path, monkey
     assert engine._last_exposure_mid is None
     assert points == [] and engine.lightcurves == {}
     assert any(level == "WARN" and "time" in msg.lower() for level, msg in logs), logs
+
+
+def test_take_shot_qa_headers_describe_the_saved_frame(shot_rig, tmp_path) -> None:
+    """S20: HFD/NSTARS/SKYLEVEL came from the last frame the display had
+    processed (the previous frame at best, a half-res preview otherwise)."""
+    from argos.core.imaging.metrics import detect_stars, frame_metrics
+
+    engine, session, form, logs = shot_rig
+    stale = frame_metrics(_star_frame(sigma=6.0) + np.uint16(2000))  # an earlier, defocused frame
+    engine._last_metrics = stale
+    engine.take_shot()
+    saved = _star_frame(sigma=1.5)
+    _deliver(engine, saved)
+
+    ((_, hdr),) = _saved_headers(tmp_path / "sessions")
+    truth = frame_metrics(saved)
+    assert abs(truth.hfd - stale.hfd) > 1.0 and abs(truth.sky_adu - stale.sky_adu) > 100
+    assert hdr["HFD"] == pytest.approx(truth.hfd, abs=0.01)
+    assert hdr["SKYLEVEL"] == pytest.approx(truth.sky_adu, abs=0.1)
+    assert hdr["NSTARS"] == truth.star_count
+    # As for a sequence frame, FWHM is measured on the saved array too.
+    assert hdr["FWHM"] == pytest.approx(detect_stars(saved).mean_fwhm, abs=0.01)

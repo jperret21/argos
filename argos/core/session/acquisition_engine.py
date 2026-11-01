@@ -48,7 +48,7 @@ from argos.core.imaging import sensor_models
 from argos.core.imaging.astrometry_session import field_geometry
 from argos.core.imaging.fits_writer import FITSWriter, FrameContext
 from argos.core.imaging.green import green_plane
-from argos.core.imaging.metrics import measure_star_at
+from argos.core.imaging.metrics import detect_stars, frame_metrics, measure_star_at
 from argos.core.imaging.platesolve import angular_separation_deg
 from argos.core.imaging.sequencer import DARK_FILTER_NAME
 from argos.core.photometry.airmass import (
@@ -217,7 +217,7 @@ class AcquisitionEngine(QObject):
         self._last_raw: np.ndarray | None = None
         self._last_raw_decimated = False
         self._green_shape: tuple[int, int] | None = None  # of the last processed frame
-        self._last_metrics = None  # last FrameMetrics, for FITS QA headers
+        self._last_metrics = None  # last displayed FrameMetrics (FITS QA uses the saved array)
         self._last_fwhm: float | None = None  # mean detected-star FWHM (green px)
         self._last_exposure_mid: datetime | None = None  # exposure midpoint (UTC)
 
@@ -1676,9 +1676,6 @@ class AcquisitionEngine(QObject):
             "site_lon": self._config.get("site.longitude"),
             "site_elev": self._config.get("site.elevation"),
             "software": _SOFTWARE,
-            "hfd": self._last_metrics.hfd if self._last_metrics else None,
-            "star_count": self._last_metrics.star_count if self._last_metrics else None,
-            "sky_adu": self._last_metrics.sky_adu if self._last_metrics else None,
         }
 
         camera = self._session.camera
@@ -1723,6 +1720,19 @@ class AcquisitionEngine(QObject):
                     filter_name=filter_name,
                     **ctx_kwargs,
                 )
+                # QA headers measured on THIS array, as a sequence frame does
+                # (the display's last metrics belong to another, maybe
+                # decimated, frame). Best-effort: never block the save.
+                try:
+                    metrics = frame_metrics(arr)
+                    field = detect_stars(arr)
+                    ctx.hfd = metrics.hfd
+                    ctx.star_count = metrics.star_count
+                    ctx.sky_adu = metrics.sky_adu
+                    ctx.fwhm = field.mean_fwhm
+                    ctx.eccentricity = field.mean_eccentricity
+                except Exception:  # pragma: no cover - metrics are best-effort
+                    logger.warning("Frame metrics failed — saving without QA", exc_info=True)
                 try:
                     FITSWriter.write(
                         arr=arr,
