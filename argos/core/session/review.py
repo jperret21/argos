@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from argos.core.imaging.session_log import SESSION_FILENAME
-from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet
+from argos.core.catalog.targets import ROLE_CHECK, ROLE_COMPARISON, ROLE_TARGET, TargetSet
 from argos.core.photometry.lightcurve import LightCurve, read_curves_csv
 
 
@@ -212,10 +212,18 @@ def load_session_curves(review: ReviewedSession) -> dict[str, LightCurve]:
     return curves
 
 
+#: File-name prefixes of the engine's per-star CSVs (``{role}_{object}_{tag}``).
+_ROLE_PREFIXES = (
+    ("target_", ROLE_TARGET),
+    ("comparison_", ROLE_COMPARISON),
+    ("check_", ROLE_CHECK),
+)
+
+
 def _curve_identity(path: Path, targets: TargetSet) -> tuple[str, str, str, str]:
     """Recover ``(role, key, label, auid)`` for a per-star curve CSV."""
     stem = path.stem
-    role = ROLE_COMPARISON if stem.startswith("comparison_") else ROLE_TARGET
+    role = next((role for prefix, role in _ROLE_PREFIXES if stem.startswith(prefix)), ROLE_TARGET)
     candidates = [star for star in targets.stars if star.role == role]
     # AUID suffix is unambiguous and takes precedence over display names.
     star = next((item for item in candidates if item.auid and stem.endswith(item.auid)), None)

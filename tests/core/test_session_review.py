@@ -128,3 +128,41 @@ def test_review_loads_persisted_comparison_quality(tmp_path) -> None:
     review = load_session(root, read_temperature=False)
 
     assert review.comparison_quality["comparison_stars"][0]["status"] == "stable"
+
+
+def _engine_like_session(tmp_path, *, with_targets: bool = True):
+    """A run folder as the engine writes it: role-prefixed per-star CSVs."""
+    from argos.core.catalog.targets import TargetSet, TargetStar
+
+    root = tmp_path / "20261101T200000Z_SS_Cyg"
+    photometry = root / "photometry"
+    photometry.mkdir(parents=True)
+    (root / "session.json").write_text(json.dumps({"object": "SS Cyg", "frames": []}))
+    if with_targets:
+        TargetSet(
+            object_name="SS Cyg",
+            stars=[
+                TargetStar("target", 325.6780, 43.5862, auid="000-BCP-095", name="SS Cyg"),
+                TargetStar("comparison", 325.70, 43.60, auid="000-AAA-111", name="111"),
+                TargetStar("check", 325.65, 43.55, auid="000-KKK-222", name="K1"),
+            ],
+        ).save(root / "targets.json")
+    header = "jd_utc,mag,mag_err,saturated\n"
+    (photometry / "target_SS_Cyg_000-BCP-095.csv").write_text(header + "2461315.5,12.0,0.02,0\n")
+    (photometry / "comparison_SS_Cyg_000-AAA-111.csv").write_text(
+        header + "2461315.5,11.0,0.02,0\n"
+    )
+    (photometry / "check_SS_Cyg_000-KKK-222.csv").write_text(header + "2461315.5,12.5,0.02,0\n")
+    return root
+
+
+def test_review_keeps_check_star_role(tmp_path) -> None:
+    """S9: a check_ file became a second science target named after its stem."""
+    root = _engine_like_session(tmp_path)
+
+    curves = load_session_curves(load_session(root, read_temperature=False))
+
+    assert sorted(curve.role for curve in curves.values()) == ["check", "comparison", "target"]
+    check = next(curve for curve in curves.values() if curve.role == "check")
+    assert check.name == "K1" and check.auid == "000-KKK-222"
+    assert not any(str(key).startswith("target:check_") for key in curves)

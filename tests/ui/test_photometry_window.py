@@ -474,3 +474,25 @@ def test_aavso_export_names_the_check_star_and_the_vsp_chart(qapp, tmp_path, mon
         win.close()
         win.deleteLater()
         qapp.processEvents()
+
+
+def test_target_plot_lists_check_curve(qapp) -> None:
+    """S9: once Review gives check curves their role, the source-curve plot
+    must still list them (the comparison plot shows comparisons only)."""
+    target = LightCurve(auid="000-BCP-095", name="SS Cyg", role="target")
+    target.append(LcPoint(jd_utc=2461315.5, mag=12.0, mag_err=0.02))
+    check = LightCurve(auid="000-KKK-222", name="K1", role="check")
+    check.append(LcPoint(jd_utc=2461315.5, mag=12.5, mag_err=0.02))
+    panel = TargetCurvePanel()
+    try:
+        panel.set_curves({"T": target, "K": check})
+        labels = {
+            panel._selector.itemData(i): panel._selector.itemText(i)
+            for i in range(panel._selector.count())
+        }
+        assert labels["K"] == "K1 (check)"
+        assert labels["T"] == "SS Cyg"
+    finally:
+        panel.close()
+        panel.deleteLater()
+        qapp.processEvents()
