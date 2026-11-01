@@ -104,7 +104,7 @@ from argos.ui.widgets.histogram_dock import HistogramDock
 from argos.ui.widgets.image_toolbar import ImageToolbar
 from argos.ui.widgets.lightcurve_panel import LightCurvePanel
 from argos.ui.widgets.mount_dock import MountDock
-from argos.ui.panels.photometry_window import PhotometryWindow
+from argos.ui.panels.photometry_window import PhotometrySetupPanel, PhotometryWindow
 from argos.ui.widgets.overlay_bar import OverlayBar
 from argos.ui.widgets.astrometry_settings import AstrometrySettingsDialog, SECTION_CATALOG
 from argos.ui.widgets.star_info_card import StarInfoCard
@@ -202,6 +202,7 @@ class ImagingPage(QWidget):
         self._batch_worker = None  # WS7 batch re-run (QThread) + its progress dialog
         self._batch_dialog: QProgressDialog | None = None
         self._batch_total = 0  # frames handed to the running batch re-run
+        self._sequence_active = False  # the aperture geometry is locked meanwhile
         self._object_resolver_worker: ObjectResolverWorker | None = None
         self._nearby_object_resolver_worker: NearbyObjectResolverWorker | None = None
         self._point_identity_worker: PointIdentityWorker | None = None
@@ -2097,6 +2098,7 @@ class ImagingPage(QWidget):
     def _open_photometry(self, *, select_variable: bool = False) -> None:
         if self._photometry_window is None:
             self._photometry_window = PhotometryWindow(self)
+            self._photometry_window.setup.set_geometry_locked(self._sequence_active)
             self._photometry_window.lightcurves = self._engine.lightcurves
             self._photometry_window.set_export_meta(
                 str(self._cfg("observer.obscode", "XXX") or "XXX"),
@@ -2162,6 +2164,14 @@ class ImagingPage(QWidget):
 
     @pyqtSlot(str, object)
     def _on_photometry_setting_changed(self, key: str, value: object) -> None:
+        if self._sequence_active and key in PhotometrySetupPanel.GEOMETRY_KEYS:
+            # The controls are disabled during a run; refuse anything that
+            # still arrives, so one curve keeps one aperture.
+            self.log_message.emit(
+                "WARN", "Aperture geometry is locked while a sequence runs — change ignored."
+            )
+            self._sync_photometry_setup()
+            return
         self._config.set(key, value)
         self._sync_photometry_setup()
         # If a catalogue star is selected, redraw its aperture ring immediately
@@ -2583,6 +2593,9 @@ class ImagingPage(QWidget):
         # one no point is measured for the whole run (sequence photometry
         # needs the field identified). Not for calibration-only runs, and not
         # without ASTAP, which would fail on every frame.
+        self._sequence_active = running
+        if self._photometry_window is not None:
+            self._photometry_window.setup.set_geometry_locked(running)
         if running:
             self._auto_solve_before_seq = self._astrometry.auto
             if not self._astrometry.auto and self._engine.sequence_has_light_frames():

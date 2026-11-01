@@ -155,6 +155,31 @@ class PhotometrySetupPanel(QWidget):
         root.addWidget(note)
         root.addStretch(1)
 
+    #: Config keys of the measurement geometry, fixed while a sequence runs.
+    GEOMETRY_KEYS = (
+        "photometry.aperture_fwhm_mult",
+        "photometry.aperture_min_px",
+        "photometry.annulus_in_px",
+        "photometry.annulus_out_px",
+    )
+
+    def set_geometry_locked(self, locked: bool) -> None:
+        """Freeze the aperture/annulus controls while a sequence runs.
+
+        One light curve must use one aperture: a change applied from the next
+        sub would mix two geometries in the same series, unrecorded. The
+        comparison-selection controls stay available.
+        """
+        tip = "Locked while a sequence runs — the curve must use one aperture."
+        for spin, free_tip in (
+            (self._fwhm_mult, "Photometric aperture radius; 2–3 × FWHM is a typical start."),
+            (self._minimum, "Lower limit for the aperture radius in green-plane pixels."),
+            (self._annulus_in, "Inner radius of the local-sky annulus."),
+            (self._annulus_out, "Outer radius of the local-sky annulus."),
+        ):
+            spin.setEnabled(not locked)
+            spin.setToolTip(tip if locked else free_tip)
+
     @staticmethod
     def _radius_spin(lower: float, upper: float) -> QDoubleSpinBox:
         spin = QDoubleSpinBox()

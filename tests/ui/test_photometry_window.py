@@ -686,3 +686,47 @@ def test_aavso_export_reports_rows_and_excluded_points(qapp, tmp_path, monkeypat
         win.close()
         win.deleteLater()
         qapp.processEvents()
+
+
+def test_aperture_geometry_locked_during_sequence(qapp) -> None:
+    """S15: one touch of a geometry spin during a run silently changed the
+    aperture or annulus mid-curve (applied from the next sub)."""
+    from argos.core.config import Config
+
+    config = Config({})
+    logs: list[tuple[str, str]] = []
+    win = PhotometryWindow()
+    page = SimpleNamespace(
+        _astrometry=SimpleNamespace(auto=True, wcs=None),
+        _engine=SimpleNamespace(
+            sequence_has_light_frames=lambda: False,
+            photometry_geometry=lambda: (6.0, 8.0, 12.0),
+        ),
+        _config=config,
+        _cfg=lambda key, default: config.get(key, default),
+        auto_solve_armed=SimpleNamespace(emit=lambda armed: None),
+        log_message=SimpleNamespace(emit=lambda level, msg: logs.append((level, msg))),
+        _sequence_context_lbl=SimpleNamespace(clear=lambda: None),
+        _photometry_window=win,
+        _pending_green=None,
+    )
+    page._sync_photometry_setup = lambda: ImagingPage._sync_photometry_setup(page)
+    setup = win.setup
+    geometry = (setup._fwhm_mult, setup._minimum, setup._annulus_in, setup._annulus_out)
+    try:
+        ImagingPage._on_sequence_running(page, True)
+        assert not any(spin.isEnabled() for spin in geometry)
+        assert setup._comparison_snr.isEnabled()  # comparison selection stays free
+
+        # Even if a change gets through (keyboard, a queued signal), it is refused.
+        before = config.get("photometry.aperture_fwhm_mult", None)
+        ImagingPage._on_photometry_setting_changed(page, "photometry.aperture_fwhm_mult", 3.0)
+        assert config.get("photometry.aperture_fwhm_mult", None) == before
+        assert any(level == "WARN" for level, _msg in logs)
+
+        ImagingPage._on_sequence_running(page, False)
+        assert all(spin.isEnabled() for spin in geometry)
+    finally:
+        win.close()
+        win.deleteLater()
+        qapp.processEvents()
