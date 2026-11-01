@@ -204,7 +204,9 @@ def test_dark_take_shot_refused_unless_the_wheel_is_on_the_dark_slot(shot_rig) -
     assert engine._capture_pending == 0
     engine.stop_live()
 
-    # Filter "Dark" selected: the shot goes, shutter closed.
+    # Filter "Dark" selected (the Camera form moves the wheel; it settles at
+    # once here): the shot goes, shutter closed.
+    session.move_filter(0)
     _FakePreviewWorker.created = []
     form["p"] = CaptureParams("Dark Frame", "V1", "Dark", 10.0, 80)
     engine.take_shot()
@@ -371,6 +373,149 @@ def test_take_shot_keeps_the_form_filter_when_the_wheel_cannot_be_read(shot_rig,
     _deliver(engine)
     ((_, hdr),) = _saved_headers(tmp_path / "sessions")
     assert hdr["FILTER"] == "IR"
+
+
+class _HeldWheelPool(_SyncPool):
+    """Runs every task at once except wheel moves, held until ``settle()``:
+    the wheel turns for as long as the test wants."""
+
+    def __init__(self) -> None:
+        self.held: list = []
+
+    def start(self, task) -> None:
+        if type(task).__name__ == "_FilterMoveRunnable":
+            self.held.append(task)
+        else:
+            task.run()
+
+    def settle(self) -> None:
+        while self.held:
+            self.held.pop(0).run()
+
+
+def _frame_with(engine, tag, start) -> None:
+    """Hand the engine one frame exposed from ``start`` with the form ``tag``."""
+    from datetime import timedelta
+
+    from argos.workers.exposure_worker import FrameSettings
+
+    light = tag.frame_type == "Light Frame"
+    used = FrameSettings(tag.exposure_s, tag.gain, light, tag)
+    frame = _star_frame()
+    engine._on_frame(frame, frame, start, start + timedelta(seconds=10.4), used)
+
+
+def test_dark_take_shot_waits_for_the_wheel_to_settle_on_dark(
+    shot_rig, tmp_path, monkeypatch
+) -> None:
+    """S1 (gap found in review): the Filter combo shows 'Dark' as soon as it
+    is picked, while the wheel still turns. The guard read only the combo,
+    so a Dark shot taken at once exposed through the moving wheel and was
+    saved as a clean IMAGETYP='Dark Frame', FILTER='Dark'. Same when a
+    refused move could not be read back (the combo stayed on 'Dark')."""
+    import argos.core.session.acquisition_engine as ae
+    from argos.ui.widgets.camera_dock import CaptureParams
+    from argos.workers.camera_service import CameraState
+
+    engine, session, form, logs = shot_rig
+    pool = _HeldWheelPool()
+    monkeypatch.setattr(ae.QThreadPool, "globalInstance", staticmethod(lambda: pool))
+    wheel = _FakeWheel(position=1)
+    session._filterwheel = wheel
+    form["p"] = CaptureParams("Dark Frame", "V1", "Dark", 10.0, 80)
+
+    session.move_filter(0)  # Dark picked: the wheel starts turning
+    engine.take_shot()
+    assert _FakePreviewWorker.created == [], "a dark exposed through a turning wheel"
+    assert engine.camera_state is CameraState.IDLE and engine._capture_pending == 0
+    assert any(level == "WARN" and "turning" in msg for level, msg in logs), logs
+
+    pool.settle()  # the wheel reports it is on Dark
+    assert session.filter_slot == "Dark"
+    engine.take_shot()
+    assert len(_FakePreviewWorker.created) == 1
+    assert _FakePreviewWorker.created[0]["light"] is False
+    engine._capture_pending = 0
+    engine._camera_service.release(CameraState.SINGLE)
+
+    # A refused move that cannot be read back: filter_moved(-1, "") leaves
+    # the combo on the slot that was asked for.
+    from argos.core.alpaca.client import AlpacaError
+
+    wheel.set_position = lambda _p: (_ for _ in ()).throw(AlpacaError(1025, "Invalid value"))
+    wheel.get_position = lambda: (_ for _ in ()).throw(AlpacaError(0, "Timeout"))
+    session.move_filter(0)
+    pool.settle()
+    assert session.filter_slot is None and not session.filter_moving
+    _FakePreviewWorker.created = []
+    logs.clear()
+    engine.take_shot()
+    assert _FakePreviewWorker.created == []
+    assert any(level == "WARN" and "unknown" in msg for level, msg in logs), logs
+
+
+def test_dark_shot_is_dropped_if_the_wheel_leaves_the_dark_slot(
+    shot_rig, tmp_path, monkeypatch
+) -> None:
+    """S1: a Dark shot accepted on the Dark slot must not be saved once the
+    wheel has been turned to a light filter before its frame arrives."""
+    from datetime import datetime, timezone
+
+    from argos.ui.widgets.camera_dock import CaptureParams
+    from argos.workers.camera_service import CameraState
+
+    engine, session, form, logs = shot_rig
+    session._filterwheel = _FakeWheel(position=1)
+    session.move_filter(0)  # settles at once (synchronous pool)
+    dark = CaptureParams("Dark Frame", "V1", "Dark", 10.0, 80)
+    form["p"] = dark
+    engine.take_shot()
+    assert engine._capture_pending == 1
+
+    start = datetime.now(timezone.utc)
+    session.move_filter(1)  # IR picked during the exposure
+    _frame_with(engine, dark, start)  # exposed while the wheel turned: skipped
+    assert _saved_headers(tmp_path / "sessions") == []
+    assert engine._capture_pending == 1
+
+    # The loop's next frame starts after the move, the form still on Dark Frame.
+    _frame_with(
+        engine, CaptureParams("Dark Frame", "V1", "IR", 10.0, 80), datetime.now(timezone.utc)
+    )
+    assert _saved_headers(tmp_path / "sessions") == []
+    assert engine._capture_pending == 0
+    assert engine.camera_state is CameraState.IDLE
+    assert any(level == "WARN" and "not saved" in msg for level, msg in logs), logs
+
+
+def test_take_shot_never_saves_a_frame_exposed_while_the_wheel_turned(shot_rig, tmp_path) -> None:
+    """S3 (gap found in review): in Live the Filter combo stays usable, so the
+    wheel could turn during the exposure a Take shot then saved, and FITS
+    FILTER recorded the slot the wheel ended on, read after the exposure."""
+    from datetime import datetime, timezone
+
+    from argos.ui.widgets.camera_dock import CaptureParams
+
+    engine, session, form, logs = shot_rig
+    session._filterwheel = _FakeWheel(position=1)
+    ir = CaptureParams("Light Frame", "V1", "IR", 10.0, 80)
+    form["p"] = ir
+    engine.start_live()
+    in_flight_start = datetime.now(timezone.utc)  # the exposure starts on IR
+    lp = CaptureParams("Light Frame", "V1", "LP", 10.0, 80)
+    form["p"] = lp
+    session.move_filter(2)  # LP picked mid-exposure (settles at once here)
+    engine.take_shot()
+
+    _frame_with(engine, ir, in_flight_start)
+    assert _saved_headers(tmp_path / "sessions") == []
+    assert any(level == "INFO" and "moved during" in msg for level, msg in logs), logs
+
+    _frame_with(engine, lp, datetime.now(timezone.utc))  # the next frame, all on LP
+    ((path, hdr),) = _saved_headers(tmp_path / "sessions")
+    assert hdr["FILTER"] == "LP" and "_lp_" in path.name.lower()
+    assert not any("not on the form" in msg for _level, msg in logs)
+    engine.stop_live()
 
 
 def _write_fits(path, header: dict) -> None:

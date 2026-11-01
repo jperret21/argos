@@ -412,12 +412,13 @@ class AcquisitionEngine(QObject):
         that slot the frame is a light frame labelled IMAGETYP=Dark, and a
         master dark built from it corrupts every calibrated science frame.
         The check reads the Camera form's filter (the wheel is moved from
-        there); it is not moved automatically here.
+        there) and the slot the wheel last reported it settled on: the form
+        shows the new filter as soon as it is picked, while the wheel still
+        turns. The wheel is not moved automatically here.
         """
         if _is_light_frame(params.frame_type):
             return True
-        has_dark_slot = DeviceSession.filter_position_for(DARK_FILTER_NAME) is not None
-        if self._session.filterwheel is None or not has_dark_slot:
+        if not self._wheel_can_block_light():
             self.log_message.emit(
                 "WARN",
                 f"{params.frame_type}: no filter wheel to block the light — the frame is "
@@ -431,7 +432,51 @@ class AcquisitionEngine(QObject):
                 f"Select Filter '{DARK_FILTER_NAME}' first (the Seestar has no shutter).",
             )
             return False
+        problem = self._wheel_not_on_dark()
+        if problem:
+            self.log_message.emit("WARN", f"{params.frame_type} shot refused: {problem}")
+            return False
         return True
+
+    def _wheel_can_block_light(self) -> bool:
+        """A wheel is connected and its profile has an opaque Dark slot."""
+        has_dark_slot = DeviceSession.filter_position_for(DARK_FILTER_NAME) is not None
+        return self._session.filterwheel is not None and has_dark_slot
+
+    def _wheel_not_on_dark(self) -> str | None:
+        """Why the wheel cannot be trusted to sit on its Dark slot, or ``None``."""
+        session = self._session
+        if session.filter_moving:
+            return (
+                f"the filter wheel is still turning. Wait until it has settled on "
+                f"'{DARK_FILTER_NAME}' (the Seestar has no shutter)."
+            )
+        slot = session.filter_slot
+        if slot is None:
+            return (
+                f"the filter wheel's position is unknown. Select Filter "
+                f"'{DARK_FILTER_NAME}' again and wait for the wheel to settle."
+            )
+        if slot.strip().lower() != DARK_FILTER_NAME.lower():
+            return f"the filter wheel reports '{slot}', not '{DARK_FILTER_NAME}'."
+        return None
+
+    def _wheel_moved_during(self, start_dt) -> bool:
+        """The wheel turned, or is turning, since this exposure started.
+
+        Moves made from the Camera form only (a sequence, which moves the
+        wheel itself, owns the camera: no Take shot then).
+        """
+        session = self._session
+        if session.filterwheel is None:
+            return False
+        if session.filter_moving:
+            return True
+        settled = session.filter_settled_at
+        try:
+            return settled is not None and start_dt is not None and settled > start_dt
+        except TypeError:  # a naive start time: cannot compare, assume moved
+            return True
 
     def start_live(self) -> None:
         if not self._session.camera:
@@ -530,6 +575,28 @@ class AcquisitionEngine(QObject):
 
         # Single-shot save: persist the requested number of FULL-RES frames.
         if self._capture_pending > 0:
+            if self._wheel_moved_during(start_dt):
+                # Exposed (partly) while the wheel turned: neither its filter
+                # nor, for a dark, its darkness is known. The loop exposes
+                # another frame, which is the one saved.
+                self.log_message.emit(
+                    "INFO",
+                    "Take shot: the filter wheel moved during this exposure — "
+                    "saving the next frame instead.",
+                )
+                return
+            tag = used.tag if used is not None and used.tag is not None else params
+            if not _is_light_frame(tag.frame_type) and self._wheel_can_block_light():
+                problem = self._wheel_not_on_dark()
+                if problem:
+                    # The wheel left the Dark slot after the shot was accepted
+                    # (moved by hand, or a refused move): never save a light
+                    # frame as a dark.
+                    self._capture_pending = 0
+                    self.log_message.emit("WARN", f"{tag.frame_type} shot not saved: {problem}")
+                    if not self._live_requested:
+                        self._camera_service.release(CameraState.SINGLE)
+                    return
             self._capture_pending -= 1
             self._save_fits_async(full_arr, start_dt, end_dt, used)
             if self._capture_pending == 0 and not self._live_requested:

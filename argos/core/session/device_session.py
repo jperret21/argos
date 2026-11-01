@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timezone
 
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal, pyqtSlot
 
@@ -168,6 +169,14 @@ class DeviceSession(QObject):
         self._stellarium: StellariumWorker | None = None
 
         self._last_position: MountPosition | None = None
+        # Filter wheel, as far as this session knows: the slot it last
+        # reported settled on (None while unknown), whether a move_filter is
+        # in flight, and when the last move ended (UTC). Take shots read
+        # these: a dark needs the Dark slot, and a frame exposed while the
+        # wheel turned is not saved.
+        self._filter_slot: str | None = None
+        self._filter_moving = False
+        self._filter_settled_at: datetime | None = None
         # Pointing intent — one tuple so worker-thread readers (the sequence
         # frame-context provider) see an atomic reference swap.
         self._target_radec: tuple[float, float] | None = None
@@ -209,6 +218,24 @@ class DeviceSession(QObject):
         read from worker threads as a single snapshot); ``None`` before the
         first poll and once the mount is disconnected or lost."""
         return self._last_position
+
+    @property
+    def filter_slot(self) -> str | None:
+        """Name of the slot the wheel last reported it settled on; ``None``
+        while a move or a read is in flight, when the read-back failed, or
+        with no wheel."""
+        return self._filter_slot
+
+    @property
+    def filter_moving(self) -> bool:
+        """A :meth:`move_filter` has not reported back yet."""
+        return self._filter_moving
+
+    @property
+    def filter_settled_at(self) -> datetime | None:
+        """UTC time the last :meth:`move_filter` reported back (settled or
+        failed), or ``None`` if the wheel was never moved from here."""
+        return self._filter_settled_at
 
     @property
     def target_radec(self) -> tuple[float, float] | None:
@@ -478,6 +505,9 @@ class DeviceSession(QObject):
             slots = position_names()
             names = tuple(slots[i] for i in sorted(slots))
             pos = fw.get_position()
+            self._filter_slot = fw.position_name() if pos >= 0 else None
+            self._filter_moving = False
+            self._filter_settled_at = None
             self.filterwheel_state.emit(
                 FilterWheelState(names=names, position=pos, position_name=fw.position_name())
             )
@@ -494,6 +524,8 @@ class DeviceSession(QObject):
             except AlpacaError:
                 pass
             self._filterwheel = None
+        self._filter_slot = None
+        self._filter_moving = False
         self.device_state_changed.emit("filterwheel", "disconnected", "")
         self.log_message.emit("INFO", "Filter wheel disconnected.")
 
@@ -735,6 +767,8 @@ class DeviceSession(QObject):
     def move_filter(self, position: int) -> None:
         if not self._filterwheel:
             return
+        self._filter_slot = None
+        self._filter_moving = True
         self.device_state_changed.emit("filterwheel", "busy", "moving")
         QThreadPool.globalInstance().start(
             _FilterMoveRunnable(
@@ -755,6 +789,7 @@ class DeviceSession(QObject):
         """
         if not self._filterwheel:
             return
+        self._filter_slot = None  # unknown until the read reports back
         QThreadPool.globalInstance().start(
             _FilterMoveRunnable(self._filterwheel, None, self._filter_read, self.log_message)
         )
@@ -765,8 +800,15 @@ class DeviceSession(QObject):
         slots = position_names()
         return next((i for i, n in slots.items() if str(n).lower() == name.lower()), None)
 
+    def _note_filter_move_ended(self, position: int, name: str) -> None:
+        # -1: still turning after the 20 s settle budget, or not readable.
+        self._filter_slot = name if position >= 0 else None
+        self._filter_moving = False
+        self._filter_settled_at = datetime.now(timezone.utc)
+
     @pyqtSlot(int, str)
     def _on_filter_settled(self, position: int, name: str) -> None:
+        self._note_filter_move_ended(position, name)
         self.filter_moved.emit(position, name)
         self.device_state_changed.emit("filterwheel", "connected", name)
         self.log_message.emit("CMD", f"Filter → {name}")
@@ -776,6 +818,7 @@ class DeviceSession(QObject):
         """A refused move (error already logged): end "busy" and resync the
         Camera form to the slot the wheel is really on, so the form (Take-shot
         filter, Dark/Bias guard) never shows the slot that was not reached."""
+        self._note_filter_move_ended(position, name)
         self.filter_moved.emit(position, name)
         if position >= 0:
             self.device_state_changed.emit("filterwheel", "connected", name)
@@ -784,6 +827,8 @@ class DeviceSession(QObject):
 
     @pyqtSlot(int, str)
     def _on_filter_read(self, position: int, name: str) -> None:
+        if not self._filter_moving:  # a move started since: its own report decides
+            self._filter_slot = name if position >= 0 else None
         if position < 0:
             return  # still turning after the 20 s settle budget — nothing to resync to
         self.filter_moved.emit(position, name)
