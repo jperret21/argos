@@ -100,6 +100,13 @@ class AutofocusWorker(QThread):
             self.finished.emit()
 
     def _run(self) -> None:
+        # The sample frames must use the requested gain, not whatever the
+        # camera last had (a preview or a sequence step). A driver without
+        # Gain keeps sweeping at its own.
+        try:
+            self._camera.set_gain(self._gain)
+        except Exception as exc:
+            logger.warning("AF gain %s not applied: %s", self._gain, exc)
         start_pos = self._focuser.get_position()
         low = max(0, start_pos - self._half_range)
         high = min(self._focuser.max_step, start_pos + self._half_range)

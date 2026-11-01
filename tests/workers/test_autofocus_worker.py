@@ -106,3 +106,29 @@ def test_clean_v_curve_moves_to_the_vertex() -> None:
     assert hfd is not None
     assert abs(pos - 25_000) < 300  # vertex near the true best
     assert foc.get_position() == pos
+
+
+class _GainCamera(_FakeCamera):
+    """Records the order of gain and exposure commands."""
+
+    def __init__(self, focuser, **kwargs):
+        super().__init__(focuser, **kwargs)
+        self.calls: list[tuple] = []
+
+    def set_gain(self, gain):
+        self.calls.append(("gain", gain))
+
+    def start_exposure(self, exposure, light=True):
+        self.calls.append(("expose", exposure))
+
+
+def test_sweep_frames_use_the_requested_gain() -> None:
+    """S22: the gain was stored and never applied — AF frames used whatever
+    gain the camera last had (a preview, a sequence step)."""
+    foc = _FakeFocuser(pos=24_500)
+    cam = _GainCamera(foc, best=25_000, coupled=True)
+    worker = AutofocusWorker(foc, cam, exposure_s=0.0, gain=200, half_range=2000, num_steps=7)
+    _run(worker)
+
+    assert cam.calls[0] == ("gain", 200)  # before the first sample
+    assert ("expose", 0.0) in cam.calls
