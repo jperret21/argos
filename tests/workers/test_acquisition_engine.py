@@ -371,3 +371,113 @@ def test_take_shot_keeps_the_form_filter_when_the_wheel_cannot_be_read(shot_rig,
     _deliver(engine)
     ((_, hdr),) = _saved_headers(tmp_path / "sessions")
     assert hdr["FILTER"] == "IR"
+
+
+def _write_fits(path, header: dict) -> None:
+    from astropy.io import fits
+
+    hdu = fits.PrimaryHDU(_star_frame())
+    for key, value in header.items():
+        hdu.header[key] = value
+    hdu.writeto(path)
+
+
+def _open_fits_from_the_page(engine, path, monkeypatch, logs) -> list:
+    """Run ImagingPage._on_open_fits on a stand-in page around the real engine."""
+    from types import SimpleNamespace
+
+    import argos.ui.pages.imaging_page as ip
+
+    cleared: list[bool] = []
+
+    def clear_astrometry() -> None:
+        cleared.append(True)
+        engine.invalidate_astrometry()
+
+    monkeypatch.setattr(
+        ip.QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(path), ""))
+    )
+    page = SimpleNamespace(
+        _cfg=lambda key, default: default,
+        _engine=engine,
+        _frame_context_lbl=SimpleNamespace(setText=lambda text: None),
+        log_message=SimpleNamespace(emit=lambda level, msg: logs.append((level, msg))),
+        _clear_astrometry=clear_astrometry,
+    )
+    ip.ImagingPage._on_open_fits(page)
+    return cleared
+
+
+def test_opened_fits_is_dated_by_its_header_and_drops_the_previous_wcs(
+    shot_rig, tmp_path, monkeypatch
+) -> None:
+    """S4: Open FITS used to keep the previous field's WCS and the previous
+    live frame's epoch, so the point measured after a solve was stamped with
+    the wrong time (and could land in the last run's CSV)."""
+    from datetime import datetime, timezone
+
+    engine, session, form, logs = shot_rig
+    engine._last_exposure_mid = datetime(2026, 11, 1, 3, 0, 5, tzinfo=timezone.utc)  # live
+    engine.astrometry._wcs = object()  # ... solved: the previous field
+    engine._active_run_root = tmp_path / "last_run"  # ... of the last sequence
+    path = tmp_path / "archived.fit"
+    _write_fits(path, {"DATE-OBS": "2026-09-15T21:00:00", "EXPTIME": 10.0})
+
+    cleared = _open_fits_from_the_page(engine, path, monkeypatch, logs)
+
+    assert engine.last_raw is not None and engine.last_raw.shape == (120, 160)
+    assert engine.astrometry.wcs is None
+    assert engine._last_exposure_mid == datetime(2026, 9, 15, 21, 0, 5, tzinfo=timezone.utc)
+    assert engine._active_run_root is None
+    assert cleared  # the page dropped its overlays/markers too
+
+    # DATE-AVG, when present, is the midpoint itself.
+    _write_fits(
+        tmp_path / "avg.fit",
+        {"DATE-OBS": "2026-09-15T21:00:00", "DATE-AVG": "2026-09-15T21:00:07.5", "EXPTIME": 10.0},
+    )
+    engine.open_fits_frame(tmp_path / "avg.fit")
+    assert engine._last_exposure_mid == datetime(2026, 9, 15, 21, 0, 7, 500000, tzinfo=timezone.utc)
+
+
+def test_opened_fits_without_a_date_measures_no_point(shot_rig, tmp_path, monkeypatch) -> None:
+    """S4: no DATE-OBS → no epoch → no point (never 'now', never the last frame's)."""
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.catalog.targets import ROLE_TARGET, TargetSet, TargetStar
+
+    engine, session, form, logs = shot_rig
+    engine._last_exposure_mid = datetime(2026, 11, 1, 3, 0, 5, tzinfo=timezone.utc)  # live
+    path = tmp_path / "undated.fit"
+    _write_fits(path, {"EXPTIME": 10.0})
+    _open_fits_from_the_page(engine, path, monkeypatch, logs)
+
+    star = TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1")
+    tset = TargetSet(object_name="V1", stars=[star])
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    engine.astrometry._wcs = object()  # solved since
+    diff = SimpleNamespace(
+        mag=12.0,
+        mag_err=0.01,
+        formal_mag_err=0.01,
+        comps_used=3,
+        zero_point=0.0,
+        zp_rms=0.0,
+        note="",
+    )
+    phot = SimpleNamespace(sky_adu=300.0, saturated=False, suspect=False)
+    result = SimpleNamespace(star=star, diff=diff, relative=None, phot=phot)
+    monkeypatch.setattr(ae, "measure_frame", lambda *a, **k: [result])
+    monkeypatch.setattr(engine, "_wcs_for_frame", lambda *a: None)
+    monkeypatch.setattr(engine, "_write_live_quality_report", lambda tset: None)
+    points: list = []
+    engine.photometry_point.connect(points.append)
+    engine.curves_changed.connect(lambda: points.append("curves"))
+
+    engine._measure_photometry()
+
+    assert engine._last_exposure_mid is None
+    assert points == [] and engine.lightcurves == {}
+    assert any(level == "WARN" and "time" in msg.lower() for level, msg in logs), logs

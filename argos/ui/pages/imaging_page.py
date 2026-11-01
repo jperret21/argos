@@ -1323,20 +1323,23 @@ class ImagingPage(QWidget):
         if not path:
             return
         try:
-            from astropy.io import fits as _fits
-
-            raw = _fits.getdata(path)
-            if raw is None or getattr(raw, "ndim", 0) != 2:
-                raise ValueError("expected a single 2-D image HDU")
+            # Another field, another night: the engine drops its WCS, dates
+            # the frame from its header and forgets the last run's folder.
+            exposure_mid = self._engine.open_fits_frame(path)
         except Exception as exc:
             self.log_message.emit("ERROR", f"Open FITS: {exc}")
             return
-        # The display/measure pipeline speaks the sensor's raw dtype.
-        self._engine.ingest_frame(np.ascontiguousarray(raw, dtype=np.uint16))
+        self._clear_astrometry()  # the previous field's overlays and markers
         self._frame_context_lbl.setText(f"Opened  {Path(path).name}")
         self.log_message.emit(
             "OK", f"Loaded {Path(path).name} — solve to enable catalog & photometry."
         )
+        if exposure_mid is None:
+            self.log_message.emit(
+                "WARN",
+                f"{Path(path).name} has no DATE-OBS/EXPTIME — no photometry point can be "
+                "dated, so none will be measured on it.",
+            )
 
     def open_fits(self) -> None:
         """Open a FITS image into Capture from the application File menu."""

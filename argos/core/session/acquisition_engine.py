@@ -84,6 +84,44 @@ def _is_light_frame(frame_type: str) -> bool:
     return frame_type not in ("Dark Frame", "Bias Frame")
 
 
+def _fits_utc(value) -> datetime | None:
+    """A FITS ISO date-time keyword as an aware UTC datetime, else None.
+
+    FITS dates are UTC; a value without a time part (old ``DATE-OBS`` with a
+    separate ``TIME-OBS``) is refused rather than read as midnight.
+    """
+    text = str(value or "").strip()
+    if "T" not in text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
+def fits_exposure_mid(header) -> datetime | None:
+    """Exposure midpoint (UTC) of a saved frame, from its header, or None.
+
+    ``DATE-AVG`` when present, else ``DATE-OBS`` + ``EXPTIME``/2 (``EXPOSURE``
+    accepted). ``DATE-OBS`` is the exposure start: Argos writes it so, and so
+    does most capture software, but a third-party file may differ. Without a
+    usable date and exposure the epoch is unknown (None), never guessed.
+    """
+    mid = _fits_utc(header.get("DATE-AVG"))
+    if mid is not None:
+        return mid
+    start = _fits_utc(header.get("DATE-OBS"))
+    exposure = header.get("EXPTIME", header.get("EXPOSURE"))
+    try:
+        exposure_s = float(exposure)
+    except (TypeError, ValueError):
+        return None
+    if start is None or not math.isfinite(exposure_s) or exposure_s < 0:
+        return None
+    return start + timedelta(seconds=exposure_s / 2.0)
+
+
 def _wheel_filter_name(wheel, requested: str, log_emit) -> str:
     """Filter the wheel actually sits on, for a Take-shot header.
 
@@ -590,6 +628,31 @@ class AcquisitionEngine(QObject):
         self.frame_ready.emit(
             LiveFrame(preview=full_arr, full=full_arr, start=None, end=None, decimated=False)
         )
+
+    def open_fits_frame(self, path) -> datetime | None:
+        """Load a saved FITS into the live pipeline (Open FITS, offline replay).
+
+        An opened file is another field and another night: the WCS and the
+        field's catalogue cache are dropped (solve it again), the photometry
+        epoch becomes the file's own exposure midpoint (see
+        :func:`fits_exposure_mid`; None when the header has no usable date,
+        and then no point is measured), and the last run's folder is
+        forgotten so a point never lands in that run's CSVs.
+
+        Returns the midpoint. Raises ``OSError``/``ValueError`` (the engine is
+        untouched) when the file is not a single 2-D image.
+        """
+        from astropy.io import fits
+
+        raw, header = fits.getdata(path, header=True)
+        if raw is None or getattr(raw, "ndim", 0) != 2:
+            raise ValueError("expected a single 2-D image HDU")
+        self.invalidate_astrometry()
+        self._last_exposure_mid = fits_exposure_mid(header)
+        self._active_run_root = None
+        # The display/measure pipeline speaks the sensor's raw dtype.
+        self.ingest_frame(np.ascontiguousarray(raw, dtype=np.uint16))
+        return self._last_exposure_mid
 
     @pyqtSlot(object)
     def _on_seq_frame_image(self, full_arr) -> None:
@@ -1407,6 +1470,13 @@ class AcquisitionEngine(QObject):
         tset = self.target_set()
         if not tset.by_role(ROLE_TARGET):
             return
+        if self._last_exposure_mid is None:
+            # An opened FITS without DATE-OBS/EXPTIME: a point stamped "now"
+            # would reach the curve, its CSV and the AAVSO export.
+            self.log_message.emit(
+                "WARN", "Photometry skipped: the frame has no exposure time (DATE-OBS/EXPTIME)."
+            )
+            return
         if self._phot_fwhm is None and self._last_fwhm:
             self._phot_fwhm = self._last_fwhm
         fwhm = self._phot_fwhm or DEFAULT_FWHM
@@ -1423,7 +1493,7 @@ class AcquisitionEngine(QObject):
             fwhm=fwhm,
             on_star=lambda s, phot, x, y: diag.star(frame_no, s, phot, x, y),
         )
-        jd = julian_date(self._last_exposure_mid or datetime.now(timezone.utc))
+        jd = julian_date(self._last_exposure_mid)
         pos = self._session.last_position
         air = airmass_from_altitude(pos.altitude) if pos else None
         lat, lon = self._cfg("site.latitude", None), self._cfg("site.longitude", None)
