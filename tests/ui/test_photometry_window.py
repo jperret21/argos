@@ -454,8 +454,11 @@ def test_aavso_export_names_the_check_star_and_the_vsp_chart(qapp, tmp_path, mon
 
     from argos.core.catalog.targets import TargetStar
 
+    import argos.ui.panels.photometry_window as pw
+
     out = tmp_path / "aavso.txt"
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(out), ""))
+    monkeypatch.setattr(pw, "QMessageBox", _MessageBoxRecorder(), raising=False)
     win = PhotometryWindow()
     try:
         target = LightCurve(auid="000-BCK-301", name="XX Cyg", role="target")
@@ -584,4 +587,102 @@ def test_open_curve_csv_never_exports_a_comparison_as_the_variable(
     finally:
         window.close()
         window.deleteLater()
+        qapp.processEvents()
+
+
+class _MessageBoxRecorder:
+    """Stands in for QMessageBox: records (kind, text) instead of blocking."""
+
+    def __init__(self) -> None:
+        self.shown: list[tuple[str, str]] = []
+
+    def warning(self, _parent, _title, text, *args, **kwargs):
+        self.shown.append(("warning", str(text)))
+
+    def information(self, _parent, _title, text, *args, **kwargs):
+        self.shown.append(("information", str(text)))
+
+
+def _window_with_one_target(obscode: str) -> PhotometryWindow:
+    target = LightCurve(name="SS Cyg", role="target")
+    target.append(LcPoint(jd_utc=2461315.5, mag=12.0, mag_err=0.02))
+    win = PhotometryWindow()
+    win.load_curves({"T": target}, obscode=obscode)
+    return win
+
+
+def test_aavso_export_refuses_unset_obscode(qapp, tmp_path, monkeypatch) -> None:
+    """S11: an unset observer code was exported as #OBSCODE=XXX, silently."""
+    import argos.ui.panels.photometry_window as pw
+
+    out = tmp_path / "aavso.txt"
+    monkeypatch.setattr(
+        pw.QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(out), ""))
+    )
+    boxes = _MessageBoxRecorder()
+    monkeypatch.setattr(pw, "QMessageBox", boxes, raising=False)
+    for unset in ("XXX", ""):
+        win = _window_with_one_target(unset)
+        try:
+            boxes.shown.clear()
+            win._export_aavso()
+            assert not out.exists()
+            assert [kind for kind, _text in boxes.shown] == ["warning"]
+            assert "observer code" in boxes.shown[0][1]
+        finally:
+            win.close()
+            win.deleteLater()
+            qapp.processEvents()
+
+
+def test_aavso_export_reports_write_error(qapp, tmp_path, monkeypatch) -> None:
+    """S11: a failed write raised out of the slot (crash report only) and
+    looked like a success to the observer."""
+    import argos.ui.panels.photometry_window as pw
+
+    blocker = tmp_path / "not_a_folder"
+    blocker.write_text("")
+    monkeypatch.setattr(
+        pw.QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *a, **k: (str(blocker / "aavso.txt"), "")),
+    )
+    boxes = _MessageBoxRecorder()
+    monkeypatch.setattr(pw, "QMessageBox", boxes, raising=False)
+    win = _window_with_one_target("ABC")
+    try:
+        win._export_aavso()  # must not raise
+        assert [kind for kind, _text in boxes.shown] == ["warning"]
+    finally:
+        win.close()
+        win.deleteLater()
+        qapp.processEvents()
+
+
+def test_aavso_export_reports_rows_and_excluded_points(qapp, tmp_path, monkeypatch) -> None:
+    import argos.ui.panels.photometry_window as pw
+
+    out = tmp_path / "aavso.txt"
+    seen_dirs: list[str] = []
+
+    def save_dialog(_parent, _title, start, *_a, **_k):
+        seen_dirs.append(start)
+        return str(out), ""
+
+    monkeypatch.setattr(pw.QFileDialog, "getSaveFileName", staticmethod(save_dialog))
+    boxes = _MessageBoxRecorder()
+    monkeypatch.setattr(pw, "QMessageBox", boxes, raising=False)
+    win = _window_with_one_target("ABC")
+    try:
+        win.lightcurves["T"].append(
+            LcPoint(jd_utc=2461315.6, mag=9.0, mag_err=0.02, saturated=True)
+        )
+        win.default_dir = tmp_path
+        win._export_aavso()
+        assert seen_dirs and seen_dirs[0].startswith(str(tmp_path))
+        ((kind, text),) = boxes.shown
+        assert kind == "information" and "1 observation" in text and "saturated" in text
+    finally:
+        win.close()
+        win.deleteLater()
         qapp.processEvents()

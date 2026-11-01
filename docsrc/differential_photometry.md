@@ -308,12 +308,15 @@ only some of them act.
 | Excludes it from automatic selection and from tracking anchors | yes | yes |
 | Removes a flagged **target** point from the curve | **no** | **no** |
 | Appears as a column in `photometry.csv` | yes | yes |
+| Leaves a **target** point out of the AAVSO export (since 0.5.0) | yes | yes |
 
 So a comparison star flagged only as *suspect* still contributes to the
 magnitude ensemble, and a *suspect* target point is still measured, plotted and
-exported. What changed in 0.4.2 is that you can now **see** it afterwards: the
-flag is a column, so a suspicious point can be found in the file rather than
-only in the live view. Filtering on it is still your decision, not ARGOS's.
+written to the CSV. What changed in 0.4.2 is that you can now **see** it
+afterwards: the flag is a column, so a suspicious point can be found in the file
+rather than only in the live view. Since 0.5.0 the AAVSO export leaves flagged
+target points out and says how many; a flagged check point never provides
+`KMAG`. Filtering the CSV is still your decision, not ARGOS's.
 ```
 
 ## 4. The comparison ensemble

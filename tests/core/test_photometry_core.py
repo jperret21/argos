@@ -404,3 +404,41 @@ def test_offline_aperture_is_wider_than_the_floor_without_a_fwhm() -> None:
     assert params.aperture_px(None) == params.aperture_fwhm_mult * DEFAULT_FWHM
     assert params.aperture_px(None) > params.aperture_min_px
     assert params.aperture_px(1.0) == params.aperture_min_px
+
+
+def test_aavso_export_excludes_flagged_points(tmp_path) -> None:
+    """S11: saturated (clipped) and suspect (cosmic ray, hot pixel) points
+    went into the submission with nothing to mark them."""
+    from argos.core.photometry.lightcurve import write_aavso
+
+    target = LightCurve(name="SS Cyg", role="target")
+    target.append(LcPoint(jd_utc=2461315.50, mag=12.0, mag_err=0.02))
+    target.append(LcPoint(jd_utc=2461315.51, mag=9.1, mag_err=0.02, saturated=True))
+    target.append(LcPoint(jd_utc=2461315.52, mag=12.1, mag_err=0.02, suspect=True))
+
+    path = tmp_path / "aavso.txt"
+    summary = write_aavso(path, [target], obscode="ABC")
+    rows = [ln.split(",") for ln in path.read_text().splitlines() if not ln.startswith("#")]
+    assert [row[1] for row in rows] == ["2461315.500000"]
+    assert (summary.rows, summary.saturated_excluded, summary.suspect_excluded) == (1, 1, 1)
+
+    # On explicit request they are kept, and marked in NOTES.
+    summary = write_aavso(path, [target], obscode="ABC", include_flagged=True)
+    rows = [ln.split(",") for ln in path.read_text().splitlines() if not ln.startswith("#")]
+    assert summary.rows == 3
+    assert [row[14] for row in rows] == ["na", "saturated", "suspect"]
+
+
+def test_aavso_check_magnitude_ignores_flagged_check_points(tmp_path) -> None:
+    from argos.core.photometry.lightcurve import write_aavso
+
+    target = LightCurve(name="SS Cyg", role="target")
+    check = LightCurve(auid="000-KKK-222", name="K1", role="check")
+    for jd in (2461315.50, 2461315.51):
+        target.append(LcPoint(jd_utc=jd, mag=12.0, mag_err=0.02))
+    check.append(LcPoint(jd_utc=2461315.50, mag=11.5, mag_err=0.01, saturated=True))
+    check.append(LcPoint(jd_utc=2461315.51, mag=11.6, mag_err=0.01))
+    path = tmp_path / "aavso.txt"
+    write_aavso(path, [target, check], obscode="ABC")
+    rows = [ln.split(",") for ln in path.read_text().splitlines() if not ln.startswith("#")]
+    assert [(row[9], row[10]) for row in rows] == [("na", "na"), ("000-KKK-222", "11.6000")]

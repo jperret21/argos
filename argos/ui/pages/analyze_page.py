@@ -771,6 +771,7 @@ class AnalyzeScreen(QWidget):
         )
         if targets is not None:
             window.set_targets(targets.stars)
+        window.default_dir = csv_dir  # exports land beside the curve they came from
         if problems:
             window.set_aavso_export_enabled(
                 False, "The star or role of this light curve is unknown — no AAVSO export."

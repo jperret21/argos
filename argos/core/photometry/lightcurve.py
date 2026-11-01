@@ -201,6 +201,18 @@ def _opt_float(value) -> float | None:
         return None
 
 
+@dataclass(frozen=True)
+class AavsoExportSummary:
+    """What :func:`write_aavso` wrote: data rows, and target points left out.
+
+    A point both saturated and suspect is counted as saturated.
+    """
+
+    rows: int = 0
+    saturated_excluded: int = 0
+    suspect_excluded: int = 0
+
+
 def write_aavso(
     path,
     curves,
@@ -209,7 +221,8 @@ def write_aavso(
     filt: str = "TG",
     chart: str | None = None,
     software: str = "Argos",
-) -> None:
+    include_flagged: bool = False,
+) -> AavsoExportSummary:
     """Write one or more :class:`LightCurve` to an AAVSO Extended File.
 
     A *preview* export — DATE is the JD_UTC midpoint, MTYPE=STD, comparison is the
@@ -219,11 +232,24 @@ def write_aavso(
     its ensemble magnitude on the same frame — the check star the spec asks for
     with ensemble photometry. ``chart`` is the VSP chart of the comparison
     sequence (CHART).
+
+    Target points flagged *saturated* (clipped) or *suspect* (cosmic ray, hot
+    pixel) are left out unless ``include_flagged``; when included, NOTES says
+    which flag they carry. A flagged check point never provides KMAG.
     """
     check = next((lc for lc in curves if lc.role == "check" and lc.points), None)
     kname = _aavso_field(check.auid or check.name) if check is not None else None
     # Target and check points of one frame share its JD.
-    kmags = {p.jd_utc: p.mag for p in check.points if math.isfinite(p.mag)} if kname else {}
+    kmags = (
+        {
+            p.jd_utc: p.mag
+            for p in check.points
+            if math.isfinite(p.mag) and not p.saturated and not p.suspect
+        }
+        if kname
+        else {}
+    )
+    rows = saturated_excluded = suspect_excluded = 0
     chart_field = _aavso_field(chart) or "na"
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -245,13 +271,27 @@ def write_aavso(
             for p in lc.points:
                 if not (math.isfinite(p.mag) and math.isfinite(p.mag_err)):
                     continue
+                flags = [
+                    label
+                    for label, on in (("saturated", p.saturated), ("suspect", p.suspect))
+                    if on
+                ]
+                if flags and not include_flagged:
+                    if p.saturated:
+                        saturated_excluded += 1
+                    else:
+                        suspect_excluded += 1
+                    continue
+                notes = " ".join(flags) or "na"
                 amass = "na" if p.airmass is None else f"{p.airmass:.3f}"
                 kmag = kmags.get(p.jd_utc)
                 check_fields = "na,na" if kmag is None else f"{kname},{kmag:.4f}"
                 f.write(
                     f"{name},{p.jd_utc:.6f},{p.mag:.4f},{p.mag_err:.4f},{filt},NO,STD,"
-                    f"ENSEMBLE,na,{check_fields},{amass},na,{chart_field},na\n"
+                    f"ENSEMBLE,na,{check_fields},{amass},na,{chart_field},{notes}\n"
                 )
+                rows += 1
+    return AavsoExportSummary(rows, saturated_excluded, suspect_excluded)
 
 
 def _aavso_field(value, limit: int = 20) -> str | None:

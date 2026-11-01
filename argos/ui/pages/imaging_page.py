@@ -2133,6 +2133,11 @@ class ImagingPage(QWidget):
         # ``load_curves`` snapshots into a copy; restore the engine's live dict so
         # AAVSO/CSV export reflects points (and targets) added after this open.
         self._photometry_window.lightcurves = self._engine.lightcurves
+        # Exports open in the last run's folder, else the sessions folder.
+        last_dir = self._engine.last_sequence_dir
+        self._photometry_window.default_dir = (
+            last_dir.parent if last_dir is not None else self._config.sessions_path
+        )
         self._refresh_target_table()
         self._photometry_window.comparisons.set_quality_report(
             self._engine.comparison_quality_report

@@ -86,7 +86,7 @@ Do this indoors, with internet. Catalogue lookups are cached, so what you
 resolve now still works in the field with no connection.
 
 **Settings → Observatory.** Enter the observer name and, for AAVSO submissions,
-the observer code — left unset, every AAVSO export is stamped `XXX`. Search for
+the observer code — left unset, ARGOS refuses the AAVSO export. Search for
 your site, pick the right result, correct the altitude if you have a measured
 one, and save it as a favourite.
 
@@ -438,7 +438,7 @@ naming rules and the full header list are in {doc}`fits_headers`.
    written back to the raw frames.
 
 Review works with no telescope connected. Set the AAVSO observer code in
-Settings before exporting; `XXX` means it is missing.
+Settings before exporting: without it the AAVSO export is refused.
 
 ## 12. Can I submit this to the AAVSO?
 
@@ -451,7 +451,11 @@ one row per point, the differential magnitude and its uncertainty, `JD_UTC` as
 the time (which is what AAVSO asks for), the band `TG`, `CNAME=ENSEMBLE`, and
 `TRANS=NO` — an explicit declaration that the magnitudes are untransformed. Only
 curves whose role is *target* are written: a comparison or check curve can never
-leave through this door as an observation.
+leave through this door as an observation. Points flagged *saturated* or
+*suspect* (cosmic ray, hot pixel) are left out, and the export says how many;
+they stay in the CSV. A per-star CSV opened in Review takes its role and star
+from its file name and the run's `targets.json`; if neither identifies it, the
+AAVSO export is disabled for it.
 
 Your check star, if you chose one, goes into `KNAME`/`KMAG`: its AUID and its
 ensemble magnitude on the same frame, which is what the AAVSO asks for with
