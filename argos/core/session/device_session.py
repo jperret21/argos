@@ -74,26 +74,42 @@ class _FilterMoveRunnable(QRunnable):
     off the UI thread keeps the UI responsive; the result is reported back via
     the ``done`` signal as ``(position, name)``. ``position=None`` only reads
     where the wheel is (after something else moved it).
+
+    A move that fails is reported on ``failed_signal`` with the slot the wheel
+    is really on, read back, or ``(-1, "")`` when it cannot be read: whoever
+    marked the wheel busy must always hear back.
     """
 
-    def __init__(self, filterwheel, position: int | None, done_signal, log_signal) -> None:
+    def __init__(
+        self, filterwheel, position: int | None, done_signal, log_signal, failed_signal=None
+    ) -> None:
         super().__init__()
         self._fw = filterwheel
         self._position = position
         self._done = done_signal
         self._log = log_signal
+        self._failed = failed_signal
 
     def run(self) -> None:
         try:
             if self._position is not None:
                 self._fw.set_position(self._position)
-            deadline = time.monotonic() + 20.0
-            while self._fw.get_position() == -1 and time.monotonic() < deadline:
-                time.sleep(0.15)
-            pos = self._fw.get_position()
-            self._done.emit(pos, self._fw.position_name())
+            pos, name = self._settle()
+            self._done.emit(pos, name)
         except AlpacaError as exc:
             self._log.emit("ERROR", f"Filter move: {exc}")
+            if self._failed is not None:
+                try:
+                    pos, name = self._settle()
+                except AlpacaError:
+                    pos, name = -1, ""
+                self._failed.emit(pos, name)
+
+    def _settle(self) -> tuple[int, str]:
+        deadline = time.monotonic() + 20.0
+        while self._fw.get_position() == -1 and time.monotonic() < deadline:
+            time.sleep(0.15)
+        return self._fw.get_position(), self._fw.position_name()
 
 
 class DeviceSession(QObject):
@@ -133,6 +149,7 @@ class DeviceSession(QObject):
     stellarium_error = pyqtSignal(str)
 
     _filter_settled = pyqtSignal(int, str)  # internal: from the pool runnable
+    _filter_failed = pyqtSignal(int, str)  # internal: a refused move, slot read back
     _filter_read = pyqtSignal(int, str)  # internal: refresh_filter's read-back
 
     def __init__(self, config: Config, parent: QObject | None = None) -> None:
@@ -163,6 +180,7 @@ class DeviceSession(QObject):
         self._mount_retry.timeout.connect(self._retry_mount)
 
         self._filter_settled.connect(self._on_filter_settled)
+        self._filter_failed.connect(self._on_filter_failed)
         self._filter_read.connect(self._on_filter_read)
 
     # ------------------------------------------------------------------
@@ -687,7 +705,13 @@ class DeviceSession(QObject):
             return
         self.device_state_changed.emit("filterwheel", "busy", "moving")
         QThreadPool.globalInstance().start(
-            _FilterMoveRunnable(self._filterwheel, position, self._filter_settled, self.log_message)
+            _FilterMoveRunnable(
+                self._filterwheel,
+                position,
+                self._filter_settled,
+                self.log_message,
+                failed_signal=self._filter_failed,
+            )
         )
 
     def refresh_filter(self) -> None:
@@ -714,6 +738,17 @@ class DeviceSession(QObject):
         self.filter_moved.emit(position, name)
         self.device_state_changed.emit("filterwheel", "connected", name)
         self.log_message.emit("CMD", f"Filter → {name}")
+
+    @pyqtSlot(int, str)
+    def _on_filter_failed(self, position: int, name: str) -> None:
+        """A refused move (error already logged): end "busy" and resync the
+        Camera form to the slot the wheel is really on, so the form (Take-shot
+        filter, Dark/Bias guard) never shows the slot that was not reached."""
+        self.filter_moved.emit(position, name)
+        if position >= 0:
+            self.device_state_changed.emit("filterwheel", "connected", name)
+        else:
+            self.device_state_changed.emit("filterwheel", "error", "position unknown")
 
     @pyqtSlot(int, str)
     def _on_filter_read(self, position: int, name: str) -> None:

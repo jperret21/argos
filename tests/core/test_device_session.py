@@ -42,3 +42,50 @@ def test_refresh_filter_reports_where_the_wheel_is(monkeypatch) -> None:
 
     assert moved == [(2, "LP")]
     wheel.set_position.assert_not_called()  # a read, never a move
+
+
+class _SyncPool:
+    """QThreadPool stand-in that runs a runnable at once, on this thread."""
+
+    def start(self, task) -> None:
+        task.run()
+
+
+def test_failed_filter_move_ends_busy_and_reports_the_real_slot(monkeypatch) -> None:
+    """H9: a refused wheel move must not leave the wheel 'busy' and the form stale."""
+    import argos.core.session.device_session as ds
+    from argos.core.alpaca.client import AlpacaError
+
+    monkeypatch.setattr(ds.QThreadPool, "globalInstance", staticmethod(lambda: _SyncPool()))
+    session = DeviceSession(Config(dict(_DEFAULTS)))
+    wheel = MagicMock()
+    wheel.set_position.side_effect = AlpacaError(1025, "Invalid value")
+    wheel.get_position.return_value = 1  # the wheel stayed on IR
+    wheel.position_name.return_value = "IR"
+    session._filterwheel = wheel
+    moved: list[tuple[int, str]] = []
+    states: list[tuple[str, str, str]] = []
+    logs: list[tuple[str, str]] = []
+    session.filter_moved.connect(lambda pos, name: moved.append((pos, name)))
+    session.device_state_changed.connect(lambda d, s, i: states.append((d, s, i)))
+    session.log_message.connect(lambda level, msg: logs.append((level, msg)))
+
+    session.move_filter(2)  # LP requested
+
+    # The page resyncs the combo on filter_moved: it must name the slot the
+    # wheel is on, and the wheel must not stay "busy".
+    assert moved == [(1, "IR")]
+    assert states[-1] == ("filterwheel", "connected", "IR")
+    assert any(level == "ERROR" and "Filter move" in msg for level, msg in logs)
+    assert not any(level == "CMD" for level, _ in logs)  # no "Filter → …" for a refused move
+
+    # A wheel that cannot even be read back ends in error, never in "busy".
+    wheel.get_position.side_effect = AlpacaError(0, "Timeout")
+    wheel.position_name.side_effect = AlpacaError(0, "Timeout")
+    moved.clear()
+    states.clear()
+
+    session.move_filter(2)
+
+    assert moved == [(-1, "")]
+    assert states[-1][:2] == ("filterwheel", "error")
