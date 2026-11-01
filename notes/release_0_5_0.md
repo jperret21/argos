@@ -1,4 +1,4 @@
-# Argos 0.5.0 — data-integrity fixes
+# Argos 0.5.0 — data-integrity and hardware-safety fixes
 
 > Branch: `release/0.5.0`, cut from the published `release/0.4.2`.
 > Last updated: 2026-11-01.
@@ -12,9 +12,10 @@ were approved for this release were each reproduced on 0.4.2 before being fixed
 here, with a regression test that fails on 0.4.2. Everything that
 needs a redesign is left to the web-UI migration and listed at the end.
 
-This note covers the science-data items. The hardware-safety items of the same
-inventory (§6.2, H1–H17) are verified separately; they will be added here when
-they are committed on this branch.
+The hardware-safety items of the same inventory (§6.2, H1–H17) went through the
+same process: fourteen are fixed here, each with a test that fails on the code
+before it (H17 only needed the test: its fix was already on the branch), and
+three (H1, H5, H16) are left to the web UI.
 
 **Several of these defects affect files you already hold.** The table says
 which; *Check your old files* below says how to find them.
@@ -48,6 +49,25 @@ which; *Check your old files* below says how to find them.
 | S13 | Batch re-run: JD 0 for undated frames, cancelled runs saved | JD 0 rows reaching AAVSO; overwritten CSVs | rarely |
 | S24 | An ASTAP database folder replaced the chosen database set | Slower or failed solves | no |
 | S29 | Two unvalidated-profile warnings, hard-coded IMX585 hint | Contradictory wording | no |
+
+Hardware safety and responsiveness:
+
+| Item | Defect in 0.4.2 | Effect | Files you hold |
+|---|---|---|---|
+| H3 | The jog dialog tracked one axis | A diagonal jog, or a key held while the window lost focus, left an axis slewing at up to 5 °/s | no |
+| H2 | **Connect equipment** reconnected connected devices | A second mount poller, a camera dropped without disconnect, a crash at quit | no |
+| H7 | Disconnect during a run, no confirmation | Run ended, frame being exposed lost | no |
+| H8 | Quit during a run, no confirmation | Run ended, frame being exposed lost | no |
+| H9 | A refused filter-wheel move never reported back | Wheel stuck "busy"; Filter selector left on a slot the wheel never reached | **yes** |
+| H10 | Go to / Move live during autofocus; Go to ignored MaxStep | A manual move could enter the V-curve | no |
+| H11 | Offset, binning, site, address committed per keystroke | Intermediate offsets sent to the camera; config rewritten per keystroke | no |
+| H4 | Clock error logged as "GoTo and Sync are disabled" | False message (they are refused on use) | no |
+| H6 | "Tracking ON" on a disconnected mount card | Misleading display | no |
+| H12 | Connection failures silent or cut to 48 characters | No reason on screen | no |
+| H13 | Settings offered a telescope change while connected | Silent snap-back | no |
+| H14 | Stellarium bind error not shown on its card | "stopped", no reason | no |
+| H15 | "Sequence running" hint during a stand-alone autofocus | Misleading display | no |
+| H17 | Site-search User-Agent "Argos/0.4.1" (fixed after the tag, untested) | Stale identification | no |
 
 ## Check your old files
 
@@ -90,6 +110,13 @@ batch re-run.
 - **Batch CSVs (S13).** A row with `jd_utc = 0` came from a frame without
   `DATE-OBS`. This only happened with frames from other software, and only in
   `*.fits` folders (S12 kept the re-run from finding Argos frames).
+- **Take shots after a refused filter change (H9).** When the wheel refused a
+  move (an ERROR "Filter move: …" in the Activity log, the Filter selector
+  greyed), 0.4.2 left the selector on the slot you had asked for, and the Take
+  shots that followed, until the filter was changed again, wrote that slot to
+  `FILTER`. The Activity log is not saved to a file, so no header check finds
+  them: if you remember such an error, treat those Take shots' `FILTER` as
+  unverified.
 
 ---
 
@@ -445,9 +472,185 @@ photometry." on both pages, one suffix, and the camera hint from the profile
 (IMX462 for the S50).
 **How to check.** `tests/ui/test_settings_telescope.py`.
 
+## Hardware safety
+
+### H3 — The jog dialog stops every axis it moves, and drives the current mount
+
+**What was wrong.** The Manual Control dialog (Alpaca `MoveAxis`, 0.5 to
+5 °/s) remembered one moving axis. Holding Up then Right and releasing both
+stopped azimuth only: altitude kept slewing, and neither ■ nor closing the
+dialog could stop it (they called the same one-axis stop). A key held while the
+window lost focus was released in another window and nothing was stopped. The
+dialog kept the `Telescope` it was first opened with, so after a reconnect it
+drove the old handle, and nothing closed it when the mount went away.
+**Who was affected.** Anyone jogging from the keyboard. Only the Mount card's
+stop, Abort or Park ended such a runaway.
+**What changed.** Each axis is tracked on its own; a released key or button
+stops its own axis; ■ stops both axes; deactivating, hiding or closing the
+dialog stops any axis still moving; a `MoveAxis` that raised keeps its axis
+marked (it may have reached the mount). Reopening the dialog uses the current
+`Telescope`, and the dialog closes (stopping its axes) when the mount is no
+longer connected. `MoveAxis` stays synchronous on the UI thread in 0.5.0:
+moving it to the thread pool could reorder a start and its stop.
+**How to check.** `tests/ui/test_manual_control_dialog.py`. At the telescope:
+hold Up and Right, release Up: altitude stops, azimuth goes on; release Right:
+everything stops. Hold Left and click the main window: the mount stops.
+
+### H4 — The clock-error message says GoTo, Sync and Center are refused
+
+**What was wrong.** With the mount clock more than 60 s off, the log said
+"GoTo and Sync are disabled" while Slew, Sync and Center stayed enabled. The
+`Telescope` guard does refuse them on use: the mount never moved; only the
+message was false.
+**Who was affected.** Owners of firmware that keeps a stale clock (display).
+**What changed.** One message for connect and auto-reconnect: "Mount clock is
+N h off — correct the date/time in the Seestar app, then reconnect. GoTo, Sync
+and Center will be refused until then."
+**How to check.** `tests/core/test_device_session.py::test_mount_clock_error_message_says_what_happens`.
+
+### H6 — The tracking button reads "Tracking" until a poll says otherwise
+
+**What was wrong.** The Mount card's button read "Tracking ON" (green) before
+the first position poll and after a disconnect.
+**Who was affected.** Display only; tracking is not written to FITS.
+**What changed.** Neutral "Tracking" until a poll, and again on disconnect
+(without sending a tracking command).
+**How to check.** `tests/ui/test_mount_dock.py`.
+
+### H2 — Connect equipment leaves connected devices alone
+
+**What was wrong.** **Connect equipment** stays enabled until all four devices
+are connected, and pressing it again reconnected all four: a second mount
+poller ran alongside the first (it kept reporting the mount after a
+disconnect), the camera was replaced without being disconnected (and its
+capabilities re-published under a running sequence), and with two pollers
+alive Qt aborted the process at quit (the verifier's probe exited 134; not run
+on the full app).
+**Who was affected.** Anyone who pressed it again to retry a failed device.
+**What changed.** Only devices without a connection are connected; the mount
+poller is stopped before a new one starts. A device that misbehaves while
+connected is reset with its own Disconnect, then Connect.
+**How to check.** The two H2 tests in `tests/core/test_device_session.py`.
+
+### H7, H8 — Disconnect and Quit ask first during a run
+
+**What was wrong.** **Disconnect equipment**, **Disconnect all**, a device
+card's **Disconnect** and **Quit** (Cmd+Q) acted at once while a sequence or an
+autofocus ran. A camera disconnect makes the sequence worker's next Alpaca call
+fail, which ends the run and loses the frame being exposed; quitting stops the
+run. Frames already saved are kept.
+**Who was affected.** Anyone whose hand slipped during a night.
+**What changed.** While a sequence or an autofocus runs, these actions ask a
+Yes/No question, No by default; No leaves everything as it was. Idle
+disconnects and quits are unchanged.
+**How to check.** The H7 and H8 blocks of `tests/ui/test_shell.py`. At the
+telescope: Cmd+Q during a sequence, answer No: the run goes on.
+
+### H12 — Connection failures say why
+
+**What was wrong.** Connect with an empty address did nothing; a lost mount
+showed a bare "Error" while it was being retried; connect errors were cut to
+48 characters ("Cannot connect to 192.168.1.20:3").
+**Who was affected.** Display only; the reason was in the Activity log.
+**What changed.** An empty address shows "Enter the Seestar IP address or press
+Discover." and focuses the field; a lost mount reads "connection lost —
+retrying every 10 s"; the device cards show the whole error, wrapped; the
+status-bar badge shortens it and shows it whole in its tooltip.
+**How to check.** `tests/core/test_device_session.py::test_connection_failures_carry_their_reason`
+and `tests/ui/test_settings_telescope.py`.
+
+### H13 — The Settings telescope picker is locked while connected
+
+**What was wrong.** Changing the telescope model in Settings while connected
+was refused (the profile was safe) but the picker just snapped back, silently.
+**Who was affected.** Display only.
+**What changed.** The Settings picker is disabled while any device is connected
+or busy, with the Connection page's explanation as its tooltip.
+**How to check.** `tests/ui/test_settings_telescope.py` and `tests/ui/test_shell.py`.
+
+## Filter wheel and focuser
+
+### H9 — A refused wheel move ends "busy" and shows the slot the wheel is on
+
+**What was wrong.** When the wheel refused a move, the move task only logged
+the error: the wheel stayed "busy" and the Filter selector stayed greyed on the
+requested slot until the next camera action. In 0.4.2 the next Take shots
+wrote that slot to `FILTER` (see *Check your old files*). In 0.5.0 a Take shot
+reads the wheel for `FILTER` (S3), but the S1 Dark/Bias guard reads the
+selector: after a refused move to Dark it would have accepted a Dark shot with
+the wheel on IR (read from the code, not run at the telescope).
+**Who was affected.** Rare: it needs the driver to refuse a move.
+**What changed.** A refused move reads the wheel back and reports where it is:
+the selector is re-enabled on the real slot and the wheel reads "connected"
+(or "error — position unknown" when it cannot be read).
+**How to check.** `tests/core/test_device_session.py::test_failed_filter_move_ends_busy_and_reports_the_real_slot`.
+
+### H10 — No manual Go to during autofocus; Go to follows MaxStep
+
+**What was wrong.** During autofocus, Go to and Move stayed enabled: a manual
+move could be sent mid-sweep, and a sample taken there would enter the V-curve
+(wrong best focus). Go to accepted 0 to 200 000 whatever the focuser's
+MaxStep, which the driver call clamps silently.
+**Who was affected.** Anyone who touched Go to during autofocus.
+**What changed.** Out, In, Go to and Move are disabled while autofocus runs
+(and stay disabled if the focuser went away meanwhile); Go to's range is
+0 to MaxStep from the connected focuser.
+**How to check.** `tests/ui/test_capture_cards.py::test_focuser_card_refuses_manual_moves_during_autofocus_and_follows_max_step`.
+
+## Camera card and typed values
+
+### H11 — Typed values are applied when the edit is done
+
+**What was wrong.** Offset and Binning sent each keystroke to the camera
+(typing "35" wrote 3, then 35, as a synchronous driver call, also during Live);
+the site coordinates rewrote the config file for each keystroke; the IP address
+was saved, and probed by the network monitor, one character at a time.
+**Who was affected.** Anyone typing in these fields. `OFFSET` in FITS is read
+back from the camera, so headers were truthful; a frame exposed during the edit
+could have used the intermediate offset (plausible, not run).
+**What changed.** These fields commit on Enter or on leaving the field. A
+button that uses one (Connect, Save favourite, Take shot, Live) first applies a
+value still being typed, because a click does not move the focus on macOS.
+**How to check.** `tests/ui/test_capture_cards.py::test_camera_offset_and_binning_reach_the_driver_once_typed`
+and `tests/ui/test_settings_telescope.py`.
+
+### H15 — The Camera card names autofocus when autofocus owns the camera
+
+**What was wrong.** A stand-alone autofocus locked the Camera card with
+"Sequence running — the sequence owns the camera."
+**Who was affected.** Display only.
+**What changed.** "Autofocus running — autofocus owns the camera." while
+autofocus owns it (also during a sequence's autofocus pass).
+**How to check.** `tests/ui/test_capture_cards.py::test_camera_lock_hint_names_the_owner`.
+
+## Planetarium and site search
+
+### H14 — The Stellarium card says why the server is not running
+
+**What was wrong.** When the server's port was taken, the card said "stopped"
+with no reason (only the log said "bind … failed — address already in use"),
+and Stellarium GoTos never arrived. The running label gave the port without the
+host.
+**Who was affected.** Display only.
+**What changed.** The card shows the error, in red; the running label reads
+"listening on host:port".
+**How to check.** `tests/ui/test_stellarium_card.py`. At the computer: start the
+server on a port already in use: the card names the failure.
+
+### H17 — The site search identifies this release
+
+**What was wrong.** The published 0.4.2 sends "Argos/0.4.1" as its User-Agent to
+Nominatim and Open-Meteo. The fix (read `argos.__version__`) landed on
+`release/0.4.2` after the tag, untested.
+**Who was affected.** Nobody's data; Nominatim's usage policy asks for an
+identifying User-Agent.
+**What changed.** A test pins the header to `argos.__version__`; it fails on the
+v0.4.2 resolver.
+**How to check.** `tests/core/test_location_resolver.py::test_search_requests_identify_this_release`.
+
 ---
 
-## Not in this release
+## Deferred to the web UI
 
 Left to the web-UI migration, where they belong to a redesign rather than a
 patch:
@@ -462,19 +665,41 @@ patch:
   statistics labels), S25 (two sources of sensor limits), S27 (dither
   docstring versus worker), S28 (time axes), S30 (Centre target on the
   reference WCS, unverified).
+- Hardware items not approved for 0.5.0: H1 (every Alpaca connect and command
+  runs on the UI thread: an unreachable host freezes the window), H5 (Sync
+  syncs the mount to its own polled position), H16 (network probes of
+  1.1.1.1 / 8.8.8.8 without opt-in; "no host" and "down" look alike).
+- Parts of fixed hardware items: H3 (`MoveAxis` off the UI thread, one jog path
+  with a dead-man, arrow keys going to a focused Speed combo, unverified), H4
+  (disabling Slew, Sync and Center with the reason), H6 (reading the tracking
+  rate back), H8 (bounding the quit time: about 108 s if every worker is
+  mid-request, the verifier's sum of the bounded waits in the source, not
+  measured; disconnecting the devices at quit), H9 (a wheel still turning after
+  20 s leaves the selector on the requested slot), H10 (polling the focuser
+  position and IsMoving, autofocus steps overwriting a typed Go to, Halt during
+  autofocus), H11 (holding an arrow on Offset still sends one call per step; a
+  site commit still writes the config file five times), H12 (discovery busy
+  state, results on the page, choosing among several devices), H14 (editing
+  the host, saving the port when edited, reverting the GoTo flash), H17 (the
+  search's time budget, up to about 48 s, and cancellation).
 
 ## State of the branch
 
-- 594 tests pass, 45 skipped (0.4.2: 534 and 45). Every fix carries a test that
+- 606 tests pass, 45 skipped (0.4.2: 534 and 45). Every fix carries a test that
   fails on the code before it, checked commit by commit against its parent; one
   guard test (S3, the wheel cannot be read) pins a fallback 0.4.2 already had.
+  Each hardware test was written first and run on the unfixed code (H17
+  against the v0.4.2 resolver). H7, H8 and H13 extend the single Shell and
+  Settings walkthroughs, so they add assertions rather than tests.
 - `ruff` and `black` clean on CI's scope (`argos/`, `tests/`, `main.py`).
 - Sphinx builds with `-W` and no warnings. The guide, the photometry reference
-  and the install page describe 0.5.0 behaviour.
+  and the install page describe 0.5.0 behaviour (the guide's Connect and
+  Observe sections cover the H2, H7, H8, H11 and H12 changes).
 
 ## Release
 
-- [ ] Hardware-safety items (H1–H17) committed and added to this note.
+- [x] Hardware-safety items (H1–H17) committed and added to this note (H1, H5,
+      H16 deferred).
 - [ ] Bump the version to 0.5.0 in `pyproject.toml` and `argos/__init__.py`
       (both still say 0.4.2).
 - [ ] Tag `v0.5.0`. The Release workflow builds the DMG and the Debian package
@@ -482,7 +707,11 @@ patch:
 - [ ] At the telescope: a Dark Take shot with Filter IR is refused; **+ Add**
       after the wheel connects gives a Light row on IR; Stop AF mid-sweep leaves
       the focuser at its start; a run started after a GoTo, without Identify
-      field, gets live points once its first frame is solved.
+      field, gets live points once its first frame is solved. Hardware: in
+      the jog dialog, hold Up and Right, release Up (altitude stops, azimuth
+      goes on), release Right (all stop); hold Left and click the main
+      window (the mount stops); Cmd+Q during a sequence asks, and No keeps
+      the run; the Stellarium server on a port in use says why on its card.
 - [ ] Download both installers from the draft, then publish it.
 - [ ] Update the download names, sizes, date and release-tag links in
       `README.md`, `docsrc/install.md` and the public site.
