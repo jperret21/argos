@@ -178,3 +178,43 @@ def test_stop_returns_the_focuser_to_its_start_before_the_worker_ends() -> None:
     assert best == [(25_000, None)]
     foc.halt()  # a Halt after the worker ended can no longer strand it
     assert foc.get_position() == 25_000
+
+
+def test_stop_halts_the_sweep_before_the_worker_can_start_the_return() -> None:
+    """S23 follow-up: stop() runs on the UI thread. It raised the stop flag
+    and only then halted the focuser, so a worker that woke in between could
+    command the return to the start, and that halt then froze it midway."""
+    foc = _MotorFocuser(pos=25_000)
+    worker = AutofocusWorker(foc, _FakeCamera(foc), exposure_s=0.0)
+    flag_at_halt: list[bool] = []
+    foc.halt = lambda: flag_at_halt.append(worker._stop_flag)
+
+    worker.stop()
+
+    assert flag_at_halt == [False]  # [True] before: the worker could already see the stop
+    assert worker._stop_flag is True
+
+
+def test_stop_during_the_move_to_best_focus_returns_to_the_start() -> None:
+    """S23 follow-up: a Stop during the final move to the fitted best focus
+    halted that move, and the worker still reported the fitted position and
+    HFD, so the page logged "Autofocus complete" at a position never reached."""
+    foc = _MotorFocuser(pos=24_500, speed=200)
+    worker = AutofocusWorker(foc, _FakeCamera(foc, best=25_000), exposure_s=0.0, num_steps=9)
+    armed = {"verify_move": False}
+    worker.step_done.connect(
+        lambda step, total, _pos, _hfd: armed.update(verify_move=step == total - 1)
+    )
+    move_to = foc.move_to
+
+    def move_then_stop(pos):
+        move_to(pos)
+        if armed["verify_move"]:  # the observer presses Stop AF on the way
+            armed["verify_move"] = False
+            worker.stop()
+
+    foc.move_to = move_then_stop
+    _errors, best = _run(worker)
+
+    assert best == [(24_500, None)]  # (fitted best, fitted HFD) before
+    assert foc.get_position() == 24_500 and foc.is_moving() is False

@@ -84,11 +84,14 @@ class AutofocusWorker(QThread):
         self._stop_flag = False
 
     def stop(self) -> None:
-        self._stop_flag = True
+        # Halt the sweep move first, then raise the flag: once the worker sees
+        # the flag it commands the return to the start, and a halt arriving
+        # after that command would freeze the return midway.
         try:
             self._focuser.halt()
         except Exception:
             pass
+        self._stop_flag = True
 
     def run(self) -> None:
         try:
@@ -163,6 +166,11 @@ class AutofocusWorker(QThread):
         # ── Stage 3: verify — measure at the final position, report reality
         self._focuser.move_to(best_pos)
         self._wait_for_focuser()
+        if self._stop_flag:
+            # Stopped on the way to best focus: the halt left the focuser short
+            # of best_pos, so return to the start like every other stop.
+            self.best_found.emit(self._restore(start_pos), None)
+            return
         verified = self._capture_hfd()
         self.step_done.emit(total, total, best_pos, verified)
         if verified is not None and result.best_hfd and verified > result.best_hfd * 2.0:
