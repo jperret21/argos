@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import QApplication, QLabel, QToolBox  # noqa: E402
 from argos.core.config import Config  # noqa: E402
 
 
-def test_shell_three_mode_walkthrough() -> None:
+def test_shell_three_mode_walkthrough(monkeypatch) -> None:
     """Build the Shell, switch the 3 modes, exercise the key pages/docks."""
     # Strong reference to the QApplication so it isn't GC'd before the Shell.
     app = QApplication.instance() or QApplication(["test"])
@@ -683,6 +683,38 @@ def test_shell_three_mode_walkthrough() -> None:
         conn._port_spin.setValue(32323)
         conn._cards["mount"]._connect_btn.click()
         assert intents == [("mount", "127.0.0.1", 32323)]
+
+        # ── H7: a disconnect during a run asks first (default No) ────────
+        from unittest.mock import MagicMock
+
+        from PyQt6.QtWidgets import QMessageBox
+
+        asked: list[str] = []
+        answer = [QMessageBox.StandardButton.No]
+
+        def _question(_parent, title, text, *_args, **_kwargs):
+            asked.append(text)
+            return answer[0]
+
+        monkeypatch.setattr(QMessageBox, "question", staticmethod(_question))
+        camera = MagicMock()
+        shell._session._camera = camera
+        shell._sequence_active = True
+        conn._start_disconnect_btn.setEnabled(True)
+        conn._start_disconnect_btn.click()  # "Disconnect equipment"
+        conn.disconnect_requested.emit("camera")  # a device card's Disconnect
+        assert len(asked) == 2 and "sequence is running" in asked[0].lower()
+        camera.disconnect.assert_not_called()
+        assert shell._session.camera is camera
+        answer[0] = QMessageBox.StandardButton.Yes
+        conn.disconnect_all_requested.emit()
+        camera.disconnect.assert_called_once()
+        assert shell._session.camera is None
+        shell._sequence_active = False
+        asked.clear()
+        shell._session._camera = camera
+        conn.disconnect_requested.emit("camera")  # idle: no question
+        assert asked == [] and camera.disconnect.call_count == 2
     finally:
         shell.close()
         shell.deleteLater()
