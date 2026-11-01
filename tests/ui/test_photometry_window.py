@@ -770,3 +770,48 @@ def test_nonpositive_flux_baseline_clears_series(qapp) -> None:
         panel.close()
         panel.deleteLater()
         qapp.processEvents()
+
+
+def test_quality_wait_label_uses_report_min_points(qapp) -> None:
+    """S17: "Waiting for 10 points" was hard-coded whatever the configured
+    minimum, and the ensemble verdict was never shown."""
+    from argos.core.catalog.targets import TargetStar
+    from argos.ui.widgets.comparison_table import ComparisonQualityTable
+
+    report = {
+        "selection_status": "not_ready",
+        "scientific_note": "Leave-one-out live-preview assessment only.",
+        "criteria": {"min_points": 5},
+        "comparison_stars": [
+            {
+                "auid": "000-AAA-001",
+                "name": "106",
+                "n_valid": 3,
+                "scatter_mag": None,
+                "median_formal_error_mag": 0.012,
+                "status": "insufficient_data",
+            }
+        ],
+    }
+    table = ComparisonEnsembleTable()
+    review = ComparisonQualityTable()
+    try:
+        table.set_targets(
+            [TargetStar(role="comparison", ra_deg=300.0, dec_deg=22.0, auid="000-AAA-001")]
+        )
+        table.set_quality_report(report)
+        assert table._table.item(0, 9).text() == "Waiting for 5 points"  # 10 on 0.4.2
+        assert "fewer than 3 stable comparisons" in table._hint.text()
+        assert "Leave-one-out live-preview assessment only." in table._hint.text()
+
+        review.set_quality_report(report)
+        assert review._table.item(0, 4).text() == "Waiting for 5 points"
+        assert "fewer than 3 stable comparisons" in review._hint.text()
+
+        table.set_quality_report({})  # cleared on an object change
+        assert "Ensemble" not in table._hint.text()
+    finally:
+        for widget in (table, review):
+            widget.close()
+            widget.deleteLater()
+        qapp.processEvents()

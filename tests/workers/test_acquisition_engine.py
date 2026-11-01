@@ -548,3 +548,31 @@ def test_engine_reports_whether_the_running_sequence_shoots_lights(shot_rig, mon
     assert engine.sequence_has_light_frames() is True
     engine._on_seq_finished(True)
     assert engine.sequence_has_light_frames() is False
+
+
+def test_quality_report_emitted_in_live_preview(qapp, tmp_path) -> None:
+    """S17: the comparison vetting was computed only once a sequence had
+    saved a frame, so plain live preview never got a report."""
+    from argos.core.catalog.targets import ROLE_COMPARISON, TargetSet, TargetStar
+    from argos.core.photometry.lightcurve import LcPoint, LightCurve
+
+    cfg = Config(dict(_DEFAULTS, sessions_path=str(tmp_path)))
+    engine = AcquisitionEngine(cfg, DeviceSession(cfg))
+    stars = [TargetStar(ROLE_COMPARISON, float(i), 10.0, auid=f"C{i}") for i in (1, 2, 3)]
+    for star in stars:
+        curve = LightCurve(auid=star.auid, name=star.auid, role=ROLE_COMPARISON)
+        for i in range(12):
+            mag = 10.0 + 0.01 * (i % 3 - 1)
+            curve.append(LcPoint(2461315.5 + i / 1440.0, mag, 0.02, formal_mag_err=0.02))
+        engine._lightcurves[star.auid] = curve
+    reports: list = []
+    engine.comparison_quality_updated.connect(reports.append)
+    assert engine._active_run_root is None  # live preview, no sequence yet
+
+    engine._write_live_quality_report(TargetSet(object_name="Test", stars=stars))
+
+    assert len(reports) == 1  # 0 on 0.4.2
+    assert [entry["auid"] for entry in reports[0]["comparison_stars"]] == ["C1", "C2", "C3"]
+    assert engine.comparison_quality_report is reports[0]
+    # Outside a run there is no session folder to write the report into.
+    assert list(tmp_path.rglob("photometry_quality.json")) == []

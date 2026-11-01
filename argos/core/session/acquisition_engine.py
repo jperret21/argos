@@ -1541,9 +1541,9 @@ class AcquisitionEngine(QObject):
         The report deliberately never drops or substitutes a comparison during
         a run. It gives the observer a clear quality state and preserves the
         exact selection already recorded in ``photometry_selection.json``.
+        The report is computed and shown in plain live preview too; it is
+        written to disk only inside a run's folder.
         """
-        if self._active_run_root is None:
-            return
         report = comparison_quality_report(
             target_set,
             self._lightcurves,
@@ -1557,6 +1557,8 @@ class AcquisitionEngine(QObject):
         )
         self._comparison_quality_report = report
         self.comparison_quality_updated.emit(report)
+        if self._active_run_root is None:
+            return
         try:
             save_comparison_quality_report(
                 self._active_run_root / "photometry_quality.json", report
