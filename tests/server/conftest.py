@@ -121,15 +121,42 @@ def reference_stats(pixels: np.ndarray) -> dict:
     }
 
 
+@pytest.fixture(autouse=True)
+def _restore_active_profile():
+    """The active telescope profile is process-wide: no test leaks its choice."""
+    from argos.core.hardware import active, catalog
+
+    before = active.profile()
+    yield
+    active._active = before if before is not None else catalog.DEFAULT_PROFILE
+
+
+def make_settings(config_dir=None, **overrides: Any) -> Settings:
+    """Test settings: a temporary config folder, no background network probe,
+    no TCP pre-check (the Alpaca fakes listen on no socket)."""
+    values: dict[str, Any] = {
+        "token": TOKEN,
+        "sim": FAST_SIM,
+        "config_dir": config_dir,
+        "network_interval_s": 0,
+        "connect_timeout_s": None,
+    }
+    values.update(overrides)
+    return Settings(**values)
+
+
 @pytest.fixture
-def make_client():
-    """Factory of started TestClients (lifespan run), all closed at teardown."""
+def make_client(tmp_path):
+    """Factory of started TestClients (lifespan run), all closed at teardown.
+
+    Every client gets its own temporary config folder (never ``~/.argos``).
+    """
     started: list[TestClient] = []
 
-    def _make(sim: SimOptions = FAST_SIM, simulator: bool = False) -> TestClient:
-        client = LoopbackClient(
-            create_app(Settings(token=TOKEN, simulator=simulator, sim=sim)), base_url=BASE_URL
-        )
+    def _make(sim: SimOptions = FAST_SIM, simulator: bool = False, **overrides: Any) -> TestClient:
+        overrides.setdefault("config_dir", tmp_path / f"config-{len(started)}")
+        settings = make_settings(sim=sim, simulator=simulator, **overrides)
+        client = LoopbackClient(create_app(settings), base_url=BASE_URL)
         client.__enter__()
         started.append(client)
         return client

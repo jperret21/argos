@@ -23,9 +23,18 @@ import numpy as np
 
 from argos.core.alpaca.camera import Camera
 from argos.core.alpaca.client import AlpacaError
+from argos.core.alpaca.filterwheel import FilterWheel
+from argos.core.alpaca.focuser import Focuser
 from argos.core.alpaca.telescope import Telescope
 from argos.core.hardware import active as hardware
-from argos.server.devices.base import DeviceError, ExposureCancelled, MountParked, MountReading
+from argos.core.hardware import detect
+from argos.server.devices.base import (
+    ConnectReport,
+    DeviceError,
+    ExposureCancelled,
+    MountParked,
+    MountReading,
+)
 from argos.server.state import SensorInfo
 
 logger = logging.getLogger(__name__)
@@ -62,6 +71,39 @@ class AlpacaCamera:
         return SensorInfo(
             width=int(self._cam.width), height=int(self._cam.height), bitpix=16, bayer=self._bayer
         )
+
+    def connect_report(self) -> ConnectReport:
+        """The Qt connect messages (``device_session.py:368-415``), as data.
+
+        Profile mismatches are advisory: the profile is never switched here
+        (``detect.py`` module docstring); the observer decides.
+        """
+        report: ConnectReport = []
+        scope = hardware.profile()
+        width = getattr(self._cam, "width", None)
+        height = getattr(self._cam, "height", None)
+        for note in detect.mismatches(scope, camera_name=self.name, width=width, height=height):
+            report.append(("warning", f"Profile mismatch — {note}"))
+        better = detect.suggest(camera_name=self.name, width=width, height=height)
+        if better is not None and better.key != scope.key:
+            report.append(
+                ("warning", f"This looks like a {better.name} — change the telescope profile.")
+            )
+        try:
+            offset = self._cam.get_offset()
+            max_bin = int(getattr(self._cam, "max_bin", 1) or 1)
+            report.append(
+                (
+                    "info",
+                    f"Camera limits: gain {self._cam.gain_min}–{self._cam.gain_max}, "
+                    f"exposure {self._cam.exposure_min:g}–{self._cam.exposure_max:g}s"
+                    + (", offset" if offset is not None else "")
+                    + (f", bin ≤{max_bin}" if max_bin > 1 else ""),
+                )
+            )
+        except Exception as exc:  # a description, never a reason to fail the connect
+            logger.debug("Camera limits unavailable: %s", exc)
+        return report
 
     def expose(
         self,
@@ -110,6 +152,32 @@ class AlpacaMount:
             self.name = self._scope.connect()
         except AlpacaError as exc:
             raise DeviceError(f"Mount: {exc}") from exc
+
+    def connect_report(self) -> ConnectReport:
+        """The Qt mount connect messages (``device_session.py:276-291``), as data."""
+        report: ConnectReport = []
+        system = getattr(self._scope, "equatorial_system", None)
+        if system:
+            report.append(
+                ("info", f"Mount coordinates: {system} → Argos J2000 conversion enabled.")
+            )
+        else:
+            report.append(
+                (
+                    "warning",
+                    "Mount coordinate system unavailable; assuming the driver accepts J2000.",
+                )
+            )
+        clock = getattr(self._scope, "clock_error_seconds", None)
+        if clock is not None and clock > 60.0:
+            report.append(
+                (
+                    "error",
+                    "Mount clock is %.1f h off — correct date/time in the Seestar app; "
+                    "GoTo and Sync are disabled." % (clock / 3600.0),
+                )
+            )
+        return report
 
     def read(self) -> MountReading:
         try:
@@ -171,3 +239,41 @@ class AlpacaMount:
 
     def close(self) -> None:
         self._scope.disconnect()
+
+
+class AlpacaFilterWheel:
+    """Implements :class:`~argos.server.devices.base.AuxDevice` (``device_session.py:430-448``)."""
+
+    name = "Filter wheel"
+
+    def __init__(self, host: str, port: int) -> None:
+        self._fw = FilterWheel(host, port)
+        try:
+            self._fw.connect()
+            self._position_name = self._fw.position_name()
+        except AlpacaError as exc:
+            raise DeviceError(f"Filter wheel: {exc}") from exc
+
+    def info(self) -> str:
+        return self._position_name
+
+    def close(self) -> None:
+        self._fw.disconnect()
+
+
+class AlpacaFocuser:
+    """Implements :class:`~argos.server.devices.base.AuxDevice` (``device_session.py:460-488``)."""
+
+    def __init__(self, host: str, port: int) -> None:
+        self._focuser = Focuser(host, port)
+        try:
+            self.name = self._focuser.connect()
+            self.position = self._focuser.get_position()
+        except AlpacaError as exc:
+            raise DeviceError(f"Focuser: {exc}") from exc
+
+    def info(self) -> str:
+        return self.name
+
+    def close(self) -> None:
+        self._focuser.disconnect()

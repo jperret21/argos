@@ -169,9 +169,10 @@ def test_publish_without_loop_is_a_no_op():
 def test_a_page_opened_later_receives_the_recent_log(connected):
     with connected.websocket_connect(f"/ws/events?token={TOKEN}") as events:
         first = receive_json(events)
-        replayed = receive_json(events)
+        # API 2: the other current snapshots (network, activity) come next.
+        replayed = receive_until(events, lambda m: m["type"] == "log")
     assert first["type"] == "status"  # the contract: status first
-    assert replayed["type"] == "log" and replayed["message"].startswith("Connected")
+    assert replayed["message"].startswith("Connected")
 
 
 def test_log_history_is_bounded():

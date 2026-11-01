@@ -12,11 +12,12 @@ core is reused untouched; the Qt app keeps running unchanged next to it.
 The wire contract is documented in ``argos/server/protocol.md``. Run with::
 
     python -m argos.server [--host 127.0.0.1] [--port 8742] [--simulator] [--dev-token TOKEN]
+                           [--config-dir DIR] [--log-dir DIR] [--connect-timeout S]
 """
 
 #: Version of the wire contract (``GET /api/health`` → ``"api"``). Bump on any
 #: breaking change to routes, payloads or the binary frame layout.
-API_VERSION = 1
+API_VERSION = 2
 
 #: Default TCP port. ``--port 0`` lets the OS pick one (the Tauri sidecar
 #: reads the actual port from the ``ARGOS_PORT=`` line on stdout).

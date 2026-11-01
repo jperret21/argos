@@ -28,7 +28,12 @@ PROTECTED = [
 def test_health_needs_no_token(client):
     response = client.get("/api/health")
     assert response.status_code == 200
-    assert response.json() == {"ok": True, "version": __version__, "api": 1}
+    body = response.json()
+    boot_id = body.pop("boot_id")
+    assert body == {"ok": True, "version": __version__, "api": 2}
+    # One id per server process, the same on every call (log restarts are told by it).
+    assert isinstance(boot_id, str) and len(boot_id) == 16
+    assert client.get("/api/health").json()["boot_id"] == boot_id
 
 
 @pytest.mark.parametrize("method,path", PROTECTED)

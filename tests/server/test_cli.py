@@ -24,11 +24,15 @@ websockets_sync = pytest.importorskip("websockets.sync.client")
 
 
 def _start(stderr_path: Path, *args: str) -> tuple[subprocess.Popen, int, str]:
-    # The CLI loads ~/.argos/config.json for the telescope profile: point HOME
-    # at the test directory so the real user config is never touched.
-    env = {**os.environ, "HOME": str(stderr_path.parent)}
+    # The configuration and the log go to the test directory, never to
+    # ~/.argos or ~/Library/Logs; HOME points there too, as a second fence.
+    base = stderr_path.parent
+    env = {**os.environ, "HOME": str(base)}
+    env.pop("ARGOS_CONFIG_DIR", None)
+    env.pop("ARGOS_LOG_DIR", None)
+    folders = ("--config-dir", str(base / "config"), "--log-dir", str(base / "logs"))
     proc = subprocess.Popen(
-        [sys.executable, "-m", "argos.server", "--port", "0", *args],
+        [sys.executable, "-m", "argos.server", "--port", "0", *folders, *args],
         cwd=REPO,
         env=env,
         stdout=subprocess.PIPE,
@@ -117,7 +121,13 @@ def test_cli_end_to_end_with_simulator(tmp_path):
         # The token never reaches the logs, even in WebSocket URLs.
         assert "dev-tok" not in log and "token=***" in log
         assert "Telescope profile:" in log
-        assert (tmp_path / ".argos" / "config.json").exists()  # isolated HOME
+        # Start-up reads the configuration and never writes it (API 2, A3);
+        # the rotating log file is in --log-dir, token redacted there too.
+        assert not (tmp_path / "config" / "config.json").exists()
+        assert not (tmp_path / ".argos").exists()
+        file_log = (tmp_path / "logs" / "argos.log").read_text()
+        assert "devices released" in file_log
+        assert "dev-tok" not in file_log
     finally:
         if proc.poll() is None:
             proc.kill()

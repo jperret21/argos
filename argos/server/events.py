@@ -13,8 +13,9 @@ server's memory:
 - **events** — a FIFO, so a client that keeps up sees every transition
   (``connecting`` before ``connected``, ``exposing`` before ``idle``…).
   Past :data:`EVENT_BACKLOG` pending messages it is compacted: only the
-  newest snapshot of each type (``status``/``camera``/``mount``) survives,
-  then the oldest log lines go. Snapshots are complete, so a lagging
+  newest snapshot of each kind survives (``status``, ``camera``, ``mount``,
+  ``devices``, ``network``, ``activity``, ``config``, and ``job:<id>`` per
+  job), then the oldest log lines go. Snapshots are complete, so a lagging
   client loses history, never the current state.
 - **frames** — one pending slot per client, latest-frame-wins: a slow
   client skips frames instead of queueing them.
@@ -36,8 +37,16 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-#: Snapshot event types. A ``status`` covers the other two.
-_COVERED_BY = {"status": ("status", "camera", "mount"), "camera": ("camera",), "mount": ("mount",)}
+#: Snapshot event types a newer snapshot makes obsolete. A ``status`` carries
+#: the camera, mount and devices records, so it covers those events too. Any
+#: other kind (``network``, ``activity``, ``config``, ``job:<id>``…) covers
+#: only itself; ``log`` is a stream and is never covered.
+_COVERED_BY = {
+    "status": ("status", "camera", "mount", "devices"),
+    "camera": ("camera",),
+    "mount": ("mount",),
+    "devices": ("devices",),
+}
 
 #: Pending messages per client before the backlog is compacted.
 EVENT_BACKLOG = 256
@@ -156,7 +165,7 @@ class EventBus:
     # -- publishing (any thread) -----------------------------------------
 
     def publish(self, kind: str, seq: int | None, payload: dict[str, Any]) -> None:
-        """Queue one JSON event (``status``/``camera``/``mount``/``log``)."""
+        """Queue one JSON event (a snapshot kind with its *seq*, or ``log``)."""
         self._call_soon(self._dispatch_event, kind, seq, payload)
 
     def publish_frame(self, frame: bytes) -> None:
@@ -190,17 +199,21 @@ class EventBus:
         self,
         initial: tuple[int, dict[str, Any]] | None = None,
         history: list[dict[str, Any]] | None = None,
+        snapshots: list[tuple[str, int, dict[str, Any]]] | None = None,
     ) -> EventSubscriber:
-        """Register a client, pre-loaded with a ``status`` snapshot and past log lines.
+        """Register a client, pre-loaded with a ``status`` snapshot, the other
+        current *snapshots* (``network``, ``activity``) and past log lines.
 
         A log line published just before this call can arrive twice (once from
-        *history*, once from the loop's queue); the front-end drops exact
-        repeats of ``(t, level, message)``.
+        *history*, once from the loop's queue); the front-end drops the lines
+        whose ``seq`` it already holds.
         """
         sub = EventSubscriber()
         if initial is not None:
             seq, payload = initial
             sub.offer("status", seq, payload)
+        for kind, seq, payload in snapshots or ():
+            sub.offer(kind, seq, payload)
         for payload in history or ():
             sub.offer("log", None, payload)
         self._events.add(sub)

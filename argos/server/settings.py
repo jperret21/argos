@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from argos.server import DEFAULT_PORT
 
@@ -38,6 +39,25 @@ class Settings:
         port: Port the CLI bound (informational inside the app).
         simulator: Connect the simulator during startup (``--simulator``).
         sim: Simulator parameters.
+        config_dir: Folder of ``config.json``. ``None`` keeps the configuration
+            in memory (defaults, never written): what tests get unless they
+            pass a temporary folder. The CLI always passes a folder.
+        log_dir: Folder of the rotating log file and crash reports (CLI only;
+            informational inside the app, reported by ``/api/app/info``).
+        log_file: The rotating log file in use, if any (informational).
+        manage_process: Let the app change process-wide state: the root log
+            level (``ui.log_level``) and the core modules' cache and calibration
+            folders (``data_paths.*``). The CLI sets it; in-process tests leave
+            it off so one test's configuration never leaks into the next.
+        connect_timeout_s: TCP pre-check budget before an Alpaca device is
+            opened (``--connect-timeout``); ``None`` skips the pre-check.
+        network_interval_s: Period of the Seestar reachability probe; ``0``
+            turns the background probe off (tests), the on-demand check stays.
+        network_probe_timeout_s: TCP connect timeout of one reachability probe.
+        mount_lost_after: Consecutive failed mount polls that declare the
+            connection lost (``polling_worker.py:49``: 3).
+        mount_retry_s: Period of the mount auto-reconnect
+            (``device_session.py:159``: 10 s).
     """
 
     token: str
@@ -45,3 +65,12 @@ class Settings:
     port: int = DEFAULT_PORT
     simulator: bool = False
     sim: SimOptions = field(default_factory=SimOptions)
+    config_dir: Path | None = None
+    log_dir: Path | None = None
+    log_file: Path | None = None
+    manage_process: bool = False
+    connect_timeout_s: float | None = 3.0
+    network_interval_s: float = 10.0
+    network_probe_timeout_s: float = 1.5
+    mount_lost_after: int = 3
+    mount_retry_s: float = 10.0

@@ -47,17 +47,25 @@ class ApiError(Exception):
     """
 
     def __init__(
-        self, status: int, code: str, message: str, headers: dict[str, str] | None = None
+        self,
+        status: int,
+        code: str,
+        message: str,
+        headers: dict[str, str] | None = None,
+        details: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.status = status
         self.code = code
         self.message = message
         self.headers = headers
+        #: Extra members of the error object (API 2): ``fields`` for a config
+        #: commit, ``owner`` for a job that holds the resource.
+        self.details = details or {}
 
 
-def error_body(code: str, message: str) -> dict[str, Any]:
-    return {"error": {"code": code, "message": message}}
+def error_body(code: str, message: str, details: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {"error": {"code": code, "message": message, **(details or {})}}
 
 
 def _describe_validation(exc: RequestValidationError) -> str:
@@ -78,7 +86,9 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def _api_error(_request: Request, exc: ApiError) -> JSONResponse:
         return JSONResponse(
-            error_body(exc.code, exc.message), status_code=exc.status, headers=exc.headers
+            error_body(exc.code, exc.message, exc.details),
+            status_code=exc.status,
+            headers=exc.headers,
         )
 
     @app.exception_handler(RequestValidationError)

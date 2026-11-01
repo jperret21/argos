@@ -89,3 +89,21 @@ class MountDevice(Protocol):
     def set_tracking(self, enabled: bool) -> None: ...
 
     def close(self) -> None: ...
+
+
+class AuxDevice(Protocol):
+    """A filter wheel or a focuser: connected and described, driven in a later wave."""
+
+    name: str
+
+    def info(self) -> str:
+        """One line for the device table (filter slot, focuser position…)."""
+        ...
+
+    def close(self) -> None: ...
+
+
+#: ``(level, message)`` lines a device reports right after it connected; the
+#: hub logs them, and keeps the ``warning`` / ``error`` ones as the device's
+#: ``warnings``. Adapters expose them as an optional ``connect_report()``.
+ConnectReport = list[tuple[str, str]]

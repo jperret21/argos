@@ -13,18 +13,32 @@ the lines are printed, so a client that reads them can connect at once, and
 
 Ctrl-C (SIGINT) shuts down gracefully and exits with status 0, without the
 KeyboardInterrupt traceback uvicorn's re-raised signal would print.
+
+Start-up (row A3): the configuration is read from ``--config-dir`` (default
+``$ARGOS_CONFIG_DIR``, else ``~/.argos``), the rotating ``argos.log`` and
+crash reports go to ``--log-dir`` (default ``$ARGOS_LOG_DIR``, else the
+platform diagnostics folder of the Qt app), and the hub applies
+``ui.log_level``, the telescope profile and the data paths before the first
+request is served.
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
-import re
 import socket
 import sys
+from pathlib import Path
 
 from argos import __version__
 from argos.server import DEFAULT_PORT
+from argos.server.runtime import (
+    RedactTokens,
+    add_file_log,
+    default_config_dir,
+    default_log_dir,
+    install_crash_reporter,
+)
 
 logger = logging.getLogger("argos.server")
 
@@ -52,41 +66,35 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         metavar="TOKEN",
         help="fixed bearer token for development (default: random per launch)",
     )
+    parser.add_argument(
+        "--config-dir",
+        type=Path,
+        metavar="DIR",
+        help="folder of config.json (default: $ARGOS_CONFIG_DIR, else ~/.argos)",
+    )
+    parser.add_argument(
+        "--log-dir",
+        type=Path,
+        metavar="DIR",
+        help="folder of argos.log and crash reports (default: $ARGOS_LOG_DIR, else the "
+        "platform diagnostics folder)",
+    )
+    parser.add_argument(
+        "--connect-timeout",
+        type=float,
+        default=3.0,
+        metavar="S",
+        help="TCP pre-check of an Alpaca address before a device connect (default 3 s)",
+    )
     parser.add_argument("--version", action="version", version=f"ARGOS {__version__}")
     args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
         parser.error("--port must be between 0 and 65535")
     if args.dev_token is not None and not args.dev_token.strip():
         parser.error("--dev-token must not be empty")
+    if not 0.1 <= args.connect_timeout <= 60:
+        parser.error("--connect-timeout must be between 0.1 and 60 seconds")
     return args
-
-
-class _RedactTokens(logging.Filter):
-    """Keep the bearer token out of logs (uvicorn logs WebSocket URLs with ``?token=``)."""
-
-    _TOKEN = re.compile(r"(token=)[^&\s\"']+")
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        message = record.getMessage()
-        if "token=" in message:
-            record.msg, record.args = self._TOKEN.sub(r"\1***", message), None
-        return True
-
-
-def _load_hardware_profile() -> None:
-    """Make the user's configured telescope profile active, as ``main.py`` does.
-
-    It only matters in Alpaca mode (CFA pattern of the raw frames); a broken
-    config must not stop the server, so failures fall back to the default.
-    """
-    try:
-        from argos.core.config import Config
-        from argos.core.hardware import active
-
-        scope = active.load_from_config(Config.load())
-        logger.info("Telescope profile: %s", scope.describe())
-    except Exception as exc:
-        logger.warning("Could not load the telescope profile from config: %s", exc)
 
 
 def _bind(host: str, port: int) -> socket.socket:
@@ -102,13 +110,18 @@ def _bind(host: str, port: int) -> socket.socket:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    formatter = logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
     logging.basicConfig(
         level=logging.INFO,
         stream=sys.stderr,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
     for handler in logging.getLogger().handlers:
-        handler.addFilter(_RedactTokens())
+        handler.addFilter(RedactTokens())
+    config_dir = (args.config_dir or default_config_dir()).expanduser()
+    log_dir = (args.log_dir or default_log_dir()).expanduser()
+    log_file = add_file_log(log_dir, formatter)
+    install_crash_reporter(log_dir)
 
     import uvicorn
 
@@ -133,10 +146,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"argos.server: cannot bind {args.host}:{args.port}: {exc}", file=sys.stderr)
         return 1
     port = sock.getsockname()[1]
-    _load_hardware_profile()
 
-    settings = Settings(token=token, host=args.host, port=port, simulator=args.simulator)
+    settings = Settings(
+        token=token,
+        host=args.host,
+        port=port,
+        simulator=args.simulator,
+        config_dir=config_dir,
+        log_dir=log_dir,
+        log_file=log_file,
+        manage_process=True,
+        connect_timeout_s=args.connect_timeout,
+    )
+    # The hub reads the configuration and applies the log level, the
+    # telescope profile and the data paths before the first request.
     app = create_app(settings)
+    logger.info("Configuration %s; log %s", config_dir / "config.json", log_file or "stderr only")
     config = uvicorn.Config(
         app,
         log_config=None,  # keep our stderr logging; uvicorn would send access logs to stdout
