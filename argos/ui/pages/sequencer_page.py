@@ -78,13 +78,16 @@ class SequencerPage(QWidget):
 
     def set_target_coordinates(self, name: str, ra_hours: float, dec_degrees: float) -> None:
         """Receive the shared Telescope target for the Plan visibility preview."""
-        self.panel.set_target_coordinates(
-            name,
-            ra_hours,
-            dec_degrees,
-            float(self._config.get("site.latitude", 0.0) or 0.0),
-            float(self._config.get("site.longitude", 0.0) or 0.0),
-        )
+        site = self._site_coordinates()
+        if site is None:
+            # Never plot altitudes for latitude/longitude 0/0: a target that
+            # never rises at the observer's site would look observable.
+            self.panel.set_object_name(name)
+            self.panel.show_visibility_message(
+                "Set and save the observing site in Settings to compute altitudes."
+            )
+            return
+        self.panel.set_target_coordinates(name, ra_hours, dec_degrees, site[0], site[1])
 
     def _lookup_object(self, query: str) -> None:
         if self._object_resolver_worker is not None:
@@ -208,15 +211,26 @@ class SequencerPage(QWidget):
     def _on_exoplanet_resolved(self, target) -> None:
         self._exoplanet_target = target
         now_bjd = self._current_bjd_tdb(target)
+        reason = None
         try:
             self._transit_window = (
-                predict_next_transit(target, now_bjd) if now_bjd is not None else None
+                predict_next_transit(
+                    target,
+                    now_bjd,
+                    baseline_minutes=float(self.panel.transit_settings()["baseline_minutes"]),
+                )
+                if now_bjd is not None
+                else None
             )
-        except ValueError:
+        except ValueError as exc:
             self._transit_window = None
+            reason = f"Coverage unavailable: {exc}"
         local_window = self._local_transit_window(target, self._transit_window)
         self.panel.set_exoplanet_result(
-            target, self._transit_window, local_mid=local_window[1] if local_window else None
+            target,
+            self._transit_window,
+            local_mid=local_window[1] if local_window else None,
+            reason=reason,
         )
 
         # The telescope slews to the star, never the planet.  This retains the

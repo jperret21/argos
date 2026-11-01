@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from datetime import timedelta
 from pathlib import Path
 
 import pyqtgraph as pg
@@ -158,6 +159,12 @@ class TargetVisibilityPlot(QWidget):
         peak = max(range(len(y)), key=y.__getitem__)
         peak_when, peak_alt = samples[peak]
         self._summary.setText(f"Peak {peak_alt:.1f}° · {peak_when.strftime('%H:%M')} local")
+        self._summary.show()
+
+    def show_message(self, text: str) -> None:
+        """Replace the curve by an explanation (e.g. no observing site)."""
+        self.clear()
+        self._summary.setText(text)
         self._summary.show()
 
     def clear(self) -> None:
@@ -634,8 +641,11 @@ class SequencePanel(QWidget):
             self._transit_result.setText("Searching NASA Exoplanet Archive…")
             self._transit_result.show()
 
-    def set_exoplanet_result(self, target, window=None, local_mid=None) -> None:
-        """Show a published ephemeris and its current coverage window."""
+    def set_exoplanet_result(self, target, window=None, local_mid=None, reason=None) -> None:
+        """Show a published ephemeris and its current coverage window.
+
+        ``reason`` says why there is no window; the default blames the site.
+        """
         duration = (
             f"{target.duration_hours:.2f} h"
             if target.duration_hours is not None
@@ -657,7 +667,7 @@ class SequencePanel(QWidget):
             if local_mid is not None:
                 text += f"\nApprox. local midpoint: {local_mid.strftime('%Y-%m-%d %H:%M %Z')}."
         else:
-            text += "\nObserving site required for coverage."
+            text += f"\n{reason or 'Observing site required for coverage.'}"
         self._transit_result.setText(text)
         self._transit_result.show()
         self._prepare_transit_btn.setEnabled(window is not None)
@@ -913,6 +923,10 @@ class SequencePanel(QWidget):
         self.set_object_name(name)
         self._visibility_plot.set_target(name, ra_hours, dec_degrees, site_lat, site_lon)
 
+    def show_visibility_message(self, text: str) -> None:
+        """Show ``text`` in the visibility card instead of an altitude curve."""
+        self._visibility_plot.show_message(text)
+
     def set_transit_visibility(
         self,
         name: str,
@@ -932,7 +946,9 @@ class SequencePanel(QWidget):
             dec_degrees,
             site_lat,
             site_lon,
-            night_date=midpoint,
+            # The 18:00–06:00 night that contains the midpoint: a 02:00
+            # midpoint belongs to the night that began the previous evening.
+            night_date=midpoint - timedelta(hours=12),
         )
         self._visibility_plot.set_transit_coverage(coverage_start, coverage_end)
 

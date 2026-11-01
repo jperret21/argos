@@ -204,3 +204,58 @@ def test_camera_disconnect_keeps_plan_values() -> None:
         assert page.panel.to_plan().steps[0].exposure_s == 900.0
     finally:
         _dispose(page)
+
+
+def test_no_saved_site_draws_no_altitude_curve() -> None:
+    """S26a: without a saved site the curve was computed for latitude and
+    longitude 0/0 (Vega peaking at 51° instead of 84° at 45° N)."""
+    page, _engine = _page({"site": {"name": "", "latitude": 0.0, "longitude": 0.0}})
+    try:
+        page.set_target_coordinates("Vega", 18.6156, 38.7837)
+        x, _y = page.panel._visibility_plot._curve.getData()
+        assert x is None or len(x) == 0
+        assert "site" in page.panel._visibility_plot._summary.text().lower()
+        assert page.panel.to_plan().object_name == "Vega"  # the identity still syncs
+    finally:
+        _dispose(page)
+
+
+def test_transit_after_midnight_is_inside_the_plotted_night() -> None:
+    """S26b: a 00:30-03:30 coverage was shaded outside the plotted 18:00-06:00."""
+    from datetime import datetime, timedelta
+
+    page, _engine = _page(_SITE)
+    try:
+        day = (datetime.now().astimezone() + timedelta(days=1)).date()
+        start = datetime(day.year, day.month, day.day, 0, 30).astimezone()
+        end = start + timedelta(hours=3)
+        page.panel.set_transit_visibility("HD 189733", 20.0121, 22.7099, 45.0, 5.0, start, end)
+        x, _y = page.panel._visibility_plot._curve.getData()
+        assert x[0] <= start.timestamp() and end.timestamp() <= x[-1]
+    finally:
+        _dispose(page)
+
+
+def test_find_planet_uses_the_baseline_field() -> None:
+    """S26c: Find ignored the Baseline field (always 60 min)."""
+    page, _engine = _page(_SITE)
+    try:
+        page.panel._transit_baseline_spin.setValue(20)
+        page._on_exoplanet_resolved(_hd189733())
+        assert page._transit_window.baseline_minutes == 20.0
+    finally:
+        _dispose(page)
+
+
+def test_find_planet_reports_the_real_cause_when_coverage_is_unavailable() -> None:
+    """S26d: a missing published duration was reported as a missing site."""
+    import dataclasses
+
+    page, _engine = _page(_SITE)
+    try:
+        page._on_exoplanet_resolved(dataclasses.replace(_hd189733(), duration_hours=None))
+        text = page.panel._transit_result.text()
+        assert "Observing site required" not in text
+        assert "duration" in text
+    finally:
+        _dispose(page)
