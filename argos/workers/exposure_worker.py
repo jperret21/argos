@@ -9,8 +9,7 @@ Runs in a QThread. Loop:
   6. Repeat until stopped
 
 Signals:
-  frame_ready(preview, full, datetime, datetime, FrameSettings)  — the arrays, the
-      exposure start/end (UTC) and the settings this frame was exposed with
+  frame_ready(preview, full, start, end, FrameSettings)  — arrays, UTC times, settings used
   status_updated(str)      — human-readable state string
   error_occurred(str)      — fatal error, worker stops
   finished()               — loop ended cleanly
@@ -39,18 +38,15 @@ class FrameSettings:
     ``update_settings`` arrives from the UI thread at any time, so whoever
     saves the frame must not re-read the form: the form may already hold the
     next frame's values (wrong EXPTIME/GAIN/IMAGETYP in the header).
-
-    Attributes:
-        exposure_s: Exposure passed to ``start_exposure``.
-        gain:       Gain passed to ``set_gain``.
-        light:      Shutter semantics passed to ``start_exposure``.
-        tag:        Opaque caller data applied together with these settings
-                    (the engine passes its capture-form snapshot).
     """
 
+    #: Exposure (s) passed to ``start_exposure``.
     exposure_s: float
+    #: Gain passed to ``set_gain``.
     gain: int
+    #: Shutter semantics passed to ``start_exposure``.
     light: bool
+    #: Opaque caller data applied with these settings (the engine's form snapshot).
     tag: object = None
 
 
