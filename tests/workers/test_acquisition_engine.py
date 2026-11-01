@@ -503,3 +503,48 @@ def test_take_shot_qa_headers_describe_the_saved_frame(shot_rig, tmp_path) -> No
     assert hdr["NSTARS"] == truth.star_count
     # As for a sequence frame, FWHM is measured on the saved array too.
     assert hdr["FWHM"] == pytest.approx(detect_stars(saved).mean_fwhm, abs=0.01)
+
+
+def test_engine_reports_whether_the_running_sequence_shoots_lights(shot_rig, monkeypatch) -> None:
+    """S14: the page arms field identification only for runs with Light frames."""
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.imaging.sequencer import SequencePlan, SequenceStep
+
+    class _Worker:
+        """Stands in for SequenceWorker: signals to connect, never runs."""
+
+        def __init__(self, **_kwargs) -> None:
+            for name in (
+                "step_started",
+                "frame_image",
+                "frame_saved",
+                "progress",
+                "autofocus_due",
+                "paused",
+                "error_occurred",
+                "finished",
+            ):
+                setattr(self, name, _Sig())
+
+        def start(self) -> None:
+            pass
+
+        def isRunning(self) -> bool:  # noqa: N802 (QThread API)
+            return True
+
+    monkeypatch.setattr(ae, "SequenceWorker", _Worker)
+    engine, session, form, logs = shot_rig
+    assert engine.sequence_has_light_frames() is False  # nothing running
+
+    darks = SequencePlan(steps=[SequenceStep(frame_type="Dark", count=5)])
+    assert engine.start_sequence(darks)
+    assert engine.sequence_has_light_frames() is False
+    engine._on_seq_finished(False)
+
+    mixed = SequencePlan(
+        steps=[SequenceStep(frame_type="Light", count=0), SequenceStep(frame_type="Light")]
+    )
+    assert engine.start_sequence(mixed)
+    assert engine.sequence_has_light_frames() is True
+    engine._on_seq_finished(True)
+    assert engine.sequence_has_light_frames() is False

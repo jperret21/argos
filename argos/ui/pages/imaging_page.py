@@ -88,7 +88,7 @@ from argos.core.imaging.metrics import (
     TRACK_SNAP_SEARCH,
     measure_star_at,
 )
-from argos.core.imaging.platesolve import format_dec_dms, format_ra_hms
+from argos.core.imaging.platesolve import find_astap, format_dec_dms, format_ra_hms
 from argos.core.photometry.airmass import airmass_from_altitude
 from argos.ui import design, theme
 from argos.ui.panels.log_panel import LogPanel
@@ -2542,11 +2542,23 @@ class ImagingPage(QWidget):
         # Arm the periodic re-solve for the run (and restore the user's choice
         # after): it re-bases the WCS + live tracker so rigid-fit error never
         # accumulates, keeping markers and apertures on the stars all night.
+        # Armed whether or not a WCS exists: any GoTo clears it, and without
+        # one no point is measured for the whole run (sequence photometry
+        # needs the field identified). Not for calibration-only runs, and not
+        # without ASTAP, which would fail on every frame.
         if running:
             self._auto_solve_before_seq = self._astrometry.auto
-            if self._astrometry.wcs is not None and not self._astrometry.auto:
-                self.auto_solve_armed.emit(True)  # menu action → set_auto via toggled
-                self.log_message.emit("INFO", "Sequence: auto-solve armed for the run.")
+            if not self._astrometry.auto and self._engine.sequence_has_light_frames():
+                astap = find_astap(str(self._config.get("astrometry.astap_path", "") or ""))
+                if astap is None:
+                    self.log_message.emit(
+                        "WARN",
+                        "Sequence: ASTAP not found — the field cannot be identified, "
+                        "so no live photometry will be measured.",
+                    )
+                else:
+                    self.auto_solve_armed.emit(True)  # menu action → set_auto via toggled
+                    self.log_message.emit("INFO", "Sequence: auto-solve armed for the run.")
         elif not getattr(self, "_auto_solve_before_seq", True):
             self.auto_solve_armed.emit(False)
         if not running:

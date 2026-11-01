@@ -204,6 +204,7 @@ class AcquisitionEngine(QObject):
         self._autofocus: AutofocusWorker | None = None
         self._sequence: SequenceWorker | None = None
         self._seq_object = ""  # object name of the running sequence (for the strip)
+        self._seq_has_lights = False  # the running plan shoots Light frames
         self._on_complete = "Nothing"  # end-of-sequence mount action (plan option)
 
         # Single-shot capture: number of upcoming preview frames to save.
@@ -578,12 +579,19 @@ class AcquisitionEngine(QObject):
         self._sequence.error_occurred.connect(self._on_seq_error)
         self._sequence.finished.connect(self._on_seq_finished)
         self._on_complete = plan.on_complete
+        self._seq_has_lights = any(
+            s.enabled and s.count > 0 and s.frame_type == "Light" for s in plan.steps
+        )
 
         self._sequence.start()
         self.sequence_running.emit(True)
         total = sum(s.count for s in plan.steps if s.enabled and s.count > 0) * max(1, plan.repeat)
         self.log_message.emit("CMD", f"Sequence started — {total} frame(s).")
         return True
+
+    def sequence_has_light_frames(self) -> bool:
+        """Whether the running sequence shoots Light frames (a field to identify)."""
+        return self._sequence is not None and self._seq_has_lights
 
     def stop_sequence(self) -> None:
         if self._sequence and self._sequence.isRunning():
