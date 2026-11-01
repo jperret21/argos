@@ -1,0 +1,364 @@
+{
+  "title": "Wave 1: shell and Connection screen, integrated",
+  "date": "2026-11-01",
+  "summary": "Wave 1 of web/spec/README.md section 7 wired end to end against the ARGOS server (API 2, simulator, temporary config): the Connection screen (Instrument, Link with discovery as a cancellable job, the four-device table with per-device Connect / Disconnect / Retry / Cancel, Planetarium settings, filtered connection log), the start-up screen, status-bar device and network segments, the global Log drawer (L) fed by log v2 with replay, the rail footer (theme, Help) and the keyboard shortcuts sheet (?). Observe lost its Connection card (D10) and its theme button (D15). Checked by script: 57/57 UI checks plus 6 link-loss checks; discovery via a local fake Alpaca responder (no subnet sweep of the LAN), a closed port (127.0.0.1:9) and a black-hole address (192.0.2.1: Connect all fails in 3.1 s, longest frame gap 17 ms, GET /api/status at most 3 ms meanwhile). Night Red screenshots: 0 pixels that are neither black nor red-dominant.",
+  "shots": [
+    {
+      "file": "observatory-1440x900-connection-connected.png",
+      "caption": "Connection, observatory 1440x900: the simulator's four devices ready, profile locked, \"Equipment ready\" disabled, Disconnect all and per-device Disconnect, connection log filled",
+      "tags": [
+        "connection",
+        "connected",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-connection-connecting-blackhole.png",
+      "caption": "Connection, observatory: Connect all to 192.0.2.1 (black-hole address) in progress: header busy, rows \"Waiting\" while the server checks the address once (3 s budget)",
+      "tags": [
+        "connection",
+        "connecting",
+        "unreachable",
+        "observatory"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-connection-device-error.png",
+      "caption": "Connection, observatory 1440x900: Seestar mode at 127.0.0.1:9 (closed port), the camera row in error with the server's full reason and Retry; the other devices untouched; error toast and log line",
+      "tags": [
+        "connection",
+        "error",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-connection-disconnected.png",
+      "caption": "Connection screen, observatory 1440x900: nothing connected, simulator link chosen, profile S30 Pro validated, first-run checklist (observer code, site, ASTAP missing on a fresh config)",
+      "tags": [
+        "connection",
+        "disconnected",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-connection-discovery-cancelled.png",
+      "caption": "Connection, observatory: a discovery cancelled by the observer (state kept with Retry and Dismiss)",
+      "tags": [
+        "connection",
+        "discovery",
+        "cancel",
+        "observatory"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-connection-discovery-results.png",
+      "caption": "Connection, observatory 1440x900: discovery found two Alpaca servers (fake responder on this machine): choice popover, the observer picks one",
+      "tags": [
+        "connection",
+        "discovery",
+        "popover",
+        "observatory"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-connection-discovery-running.png",
+      "caption": "Connection, observatory 1440x900: discovery job running (broadcast stage, 0 of 3, elapsed time, Cancel), address and port read-only meanwhile",
+      "tags": [
+        "connection",
+        "discovery",
+        "job",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-connection-log-drawer.png",
+      "caption": "Connection, observatory: the global Log drawer (L) under the screen, every topic, beside the filtered Connection log",
+      "tags": [
+        "connection",
+        "log",
+        "observatory"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-connection-profile-unvalidated.png",
+      "caption": "Connection, observatory: the S30 profile chosen while disconnected: \"Not validated\" badge, the one Q-C2 wording and the profile's caveats",
+      "tags": [
+        "connection",
+        "profile",
+        "observatory"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-connection-server-back.png",
+      "caption": "Connection, observatory 1440x900: the server is back; the page reconnected by itself (no reload), link open, the log kept its earlier lines.",
+      "tags": [
+        "connection",
+        "server-link",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-connection-server-lost.png",
+      "caption": "Connection, observatory 1440x900: the ARGOS server stopped mid-session. Status bar 'Server link lost, reconnecting…', Link card server line 'link lost, retrying' with Retry server, every device action and the profile disabled with the reason; the last state stays on screen, greyed.",
+      "tags": [
+        "connection",
+        "server-link",
+        "error",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-connection-server-restarted-log.png",
+      "caption": "Connection with the Log drawer (L), observatory: after a server restart the log marks it ('The ARGOS server restarted…') and shows the new server's lines, which restart at seq 1 (they were silently dropped as duplicates before this fix).",
+      "tags": [
+        "connection",
+        "log",
+        "server-link",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-connection-unreachable-all.png",
+      "caption": "Connection, observatory: Connect all to 192.0.2.1 failed after the 3 s address check: four rows in error with the same full reason, Retry per device, toast and ERROR log line",
+      "tags": [
+        "connection",
+        "error",
+        "unreachable",
+        "observatory"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-help-menu.png",
+      "caption": "Rail footer Help menu, observatory: version and API level, Documentation, Keyboard shortcuts (?), Support bundle and About shown disabled with their reason (wave 2)",
+      "tags": [
+        "shell",
+        "help",
+        "observatory"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-observe-disconnected.png",
+      "caption": "Observe, observatory: nothing connected: the viewer prompt offers Connect simulator and the Connection screen; the toolbar keeps one equipment button (D10)",
+      "tags": [
+        "observe",
+        "disconnected",
+        "observatory"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-observe.png",
+      "caption": "Observe, observatory 1440x900: Connection card gone from the rail (D10), equipment button at the left of the toolbar, no theme button in the toolbar (D15), arrange + panels at the right end; status bar device cluster, Seestar / Net, mount, LIVE chip, activity text",
+      "tags": [
+        "observe",
+        "live",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-shortcuts-sheet.png",
+      "caption": "Keyboard shortcuts sheet (\"?\"), observatory 1440x900: generated from the one registry (global, Observe, tables, menus)",
+      "tags": [
+        "shortcuts",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-startup-token-rejected.png",
+      "caption": "Start-up screen, observatory: the server rejected the token; the failure stays with the exact cause, Copy details and Retry (01 2.3.8)",
+      "tags": [
+        "startup",
+        "error",
+        "observatory"
+      ]
+    },
+    {
+      "file": "charcoal-1440x900-connection-connected.png",
+      "caption": "Connection, charcoal 1440x900: the simulator's four devices ready, profile locked, \"Equipment ready\" disabled, Disconnect all and per-device Disconnect, connection log filled",
+      "tags": [
+        "connection",
+        "connected",
+        "charcoal",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "charcoal-1440x900-connection-device-error.png",
+      "caption": "Connection, charcoal 1440x900: Seestar mode at 127.0.0.1:9 (closed port), the camera row in error with the server's full reason and Retry; the other devices untouched; error toast and log line",
+      "tags": [
+        "connection",
+        "error",
+        "charcoal",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "charcoal-1440x900-connection-disconnected.png",
+      "caption": "Connection screen, charcoal 1440x900: nothing connected, simulator link chosen, profile S30 Pro validated, first-run checklist (observer code, site, ASTAP missing on a fresh config)",
+      "tags": [
+        "connection",
+        "disconnected",
+        "charcoal",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "charcoal-1440x900-connection-discovery-running.png",
+      "caption": "Connection, charcoal 1440x900: discovery job running (broadcast stage, 0 of 3, elapsed time, Cancel), address and port read-only meanwhile",
+      "tags": [
+        "connection",
+        "discovery",
+        "job",
+        "charcoal",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "charcoal-1440x900-observe.png",
+      "caption": "Observe, charcoal 1440x900: Connection card gone from the rail (D10), equipment button at the left of the toolbar, no theme button in the toolbar (D15), arrange + panels at the right end; status bar device cluster, Seestar / Net, mount, LIVE chip, activity text",
+      "tags": [
+        "observe",
+        "live",
+        "charcoal",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "charcoal-1440x900-shortcuts-sheet.png",
+      "caption": "Keyboard shortcuts sheet (\"?\"), charcoal 1440x900: generated from the one registry (global, Observe, tables, menus)",
+      "tags": [
+        "shortcuts",
+        "charcoal",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "night-red-1440x900-connection-connected.png",
+      "caption": "Connection, night-red 1440x900: the simulator's four devices ready, profile locked, \"Equipment ready\" disabled, Disconnect all and per-device Disconnect, connection log filled",
+      "tags": [
+        "connection",
+        "connected",
+        "night-red",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "night-red-1440x900-connection-device-error.png",
+      "caption": "Connection, night-red 1440x900: Seestar mode at 127.0.0.1:9 (closed port), the camera row in error with the server's full reason and Retry; the other devices untouched; error toast and log line",
+      "tags": [
+        "connection",
+        "error",
+        "night-red",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "night-red-1440x900-connection-disconnected.png",
+      "caption": "Connection screen, night-red 1440x900: nothing connected, simulator link chosen, profile S30 Pro validated, first-run checklist (observer code, site, ASTAP missing on a fresh config)",
+      "tags": [
+        "connection",
+        "disconnected",
+        "night-red",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "night-red-1440x900-connection-discovery-running.png",
+      "caption": "Connection, night-red 1440x900: discovery job running (broadcast stage, 0 of 3, elapsed time, Cancel), address and port read-only meanwhile",
+      "tags": [
+        "connection",
+        "discovery",
+        "job",
+        "night-red",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "night-red-1440x900-observe.png",
+      "caption": "Observe, night-red 1440x900: Connection card gone from the rail (D10), equipment button at the left of the toolbar, no theme button in the toolbar (D15), arrange + panels at the right end; status bar device cluster, Seestar / Net, mount, LIVE chip, activity text",
+      "tags": [
+        "observe",
+        "live",
+        "night-red",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "night-red-1440x900-shortcuts-sheet.png",
+      "caption": "Keyboard shortcuts sheet (\"?\"), night-red 1440x900: generated from the one registry (global, Observe, tables, menus)",
+      "tags": [
+        "shortcuts",
+        "night-red",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "observatory-1280x800-connection-connected.png",
+      "caption": "Connection, observatory 1280x800: the simulator's four devices ready, profile locked, \"Equipment ready\" disabled, Disconnect all and per-device Disconnect, connection log filled",
+      "tags": [
+        "connection",
+        "connected",
+        "observatory",
+        "1280x800"
+      ]
+    },
+    {
+      "file": "observatory-1280x800-connection-device-error.png",
+      "caption": "Connection, observatory 1280x800: Seestar mode at 127.0.0.1:9 (closed port), the camera row in error with the server's full reason and Retry; the other devices untouched; error toast and log line",
+      "tags": [
+        "connection",
+        "error",
+        "observatory",
+        "1280x800"
+      ]
+    },
+    {
+      "file": "observatory-1280x800-connection-disconnected.png",
+      "caption": "Connection screen, observatory 1280x800: nothing connected, simulator link chosen, profile S30 Pro validated, first-run checklist (observer code, site, ASTAP missing on a fresh config)",
+      "tags": [
+        "connection",
+        "disconnected",
+        "observatory",
+        "1280x800"
+      ]
+    },
+    {
+      "file": "observatory-1280x800-connection-discovery-running.png",
+      "caption": "Connection, observatory 1280x800: discovery job running (broadcast stage, 0 of 3, elapsed time, Cancel), address and port read-only meanwhile",
+      "tags": [
+        "connection",
+        "discovery",
+        "job",
+        "observatory",
+        "1280x800"
+      ]
+    },
+    {
+      "file": "observatory-1280x800-observe.png",
+      "caption": "Observe, observatory 1280x800: Connection card gone from the rail (D10), equipment button at the left of the toolbar, no theme button in the toolbar (D15), arrange + panels at the right end; status bar device cluster, Seestar / Net, mount, LIVE chip, activity text",
+      "tags": [
+        "observe",
+        "live",
+        "observatory",
+        "1280x800"
+      ]
+    },
+    {
+      "file": "observatory-1280x800-shortcuts-sheet.png",
+      "caption": "Keyboard shortcuts sheet (\"?\"), observatory 1280x800: generated from the one registry (global, Observe, tables, menus)",
+      "tags": [
+        "shortcuts",
+        "observatory",
+        "1280x800"
+      ]
+    }
+  ]
+}

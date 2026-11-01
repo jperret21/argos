@@ -1,0 +1,11 @@
+{
+  "title": "Design system: identity and icon set",
+  "date": "2026-11-01",
+  "summary": "The visual identity of the web UI (web/src/design): the charter's three palettes unchanged, IBM Plex Sans and Mono, and 110 original icons drawn on a 24 grid with currentColor, mapped from the Qt buttons. The ARGOS mark is generated from the official logo generator.",
+  "shots": [
+    {"file": "icon-sheet-top-observatory.png", "caption": "Icon review sheet: the icons in context (navigation rail, toolbars, buttons, status chips) and the first groups.", "tags": ["design-system", "icons", "observatory"]},
+    {"file": "icon-sheet-observatory.png", "caption": "The full icon set at 16, 20, 24 and 48 px, Observatory theme.", "tags": ["design-system", "icons", "observatory"]},
+    {"file": "icon-sheet-charcoal.png", "caption": "The full icon set, Charcoal theme.", "tags": ["design-system", "icons", "charcoal"]},
+    {"file": "icon-sheet-night-red.png", "caption": "The full icon set, Night Red theme.", "tags": ["design-system", "icons", "night-red"]}
+  ]
+}
