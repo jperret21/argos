@@ -202,6 +202,8 @@ class AcquisitionEngine(QObject):
 
         self._preview: LivePreviewWorker | None = None
         self._autofocus: AutofocusWorker | None = None
+        # A stopped sweep still driving the focuser back to its start.
+        self._af_returning = False
         self._sequence: SequenceWorker | None = None
         self._seq_object = ""  # object name of the running sequence (for the strip)
         self._seq_has_lights = False  # the running plan shoots Light frames
@@ -931,10 +933,31 @@ class AcquisitionEngine(QObject):
         """True while an autofocus sweep worker is running."""
         return self._autofocus is not None and self._autofocus.isRunning()
 
+    #: How long Stop AF blocks the UI for the worker to end (ms).
+    _AF_STOP_WAIT_MS = 10_000
+
     def stop_autofocus(self) -> None:
-        if self._autofocus and self._autofocus.isRunning():
-            self._autofocus.stop()
-            self._autofocus.wait(10_000)
+        worker = self._autofocus
+        if worker is not None and worker.isRunning():
+            if self._af_returning:
+                self.log_message.emit(
+                    "INFO", "Autofocus stopping — the focuser is still returning to its start."
+                )
+                return
+            worker.stop()
+            if not worker.wait(self._AF_STOP_WAIT_MS):
+                # The worker drives the focuser back to its start (bounded by
+                # its own 30 s deadline) before it ends. Keep it, and its hold
+                # on the camera, until then: _on_af_finished releases the
+                # camera. Dropping it here let a new autofocus start a second
+                # worker driving the same focuser.
+                self._af_returning = True
+                self.log_message.emit(
+                    "INFO",
+                    "Autofocus stopping — the focuser is still returning to its start; "
+                    "the camera is released when it is back.",
+                )
+                return
         self._autofocus = None
         self.autofocus_state.emit(False)
         # Hand the camera back promptly (the worker's queued finished signal
@@ -946,6 +969,7 @@ class AcquisitionEngine(QObject):
         self.log_message.emit("ERROR", f"AF: {message}")
 
     def _on_af_finished(self) -> None:
+        self._af_returning = False
         self.autofocus_state.emit(False)
         # The focus (and hence the PSF) may have changed — re-sample the
         # series aperture FWHM on the next measured frame (P7).

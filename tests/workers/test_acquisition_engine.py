@@ -860,3 +860,66 @@ def test_floor_change_rerenders_once_per_frame(shot_rig, monkeypatch) -> None:
     assert max(per_frame) == 1, per_frame  # 3 per frame (one per star) on 0.4.2
     assert sorted(len(lc.points) for lc in engine.lightcurves.values()) == [15, 15, 15]
     assert all(p.sigma_syst is not None for lc in engine.lightcurves.values() for p in lc.points)
+
+
+class _ReturningAfWorker:
+    """Stands in for an AutofocusWorker still driving the focuser back to its
+    start after a stop (its return may take up to 30 s; Stop AF waits 10 s)."""
+
+    created: list = []
+
+    def __init__(self, **_kwargs) -> None:
+        _ReturningAfWorker.created.append(self)
+        self.running = False
+        self.stops = 0
+        self.waits: list[int] = []
+        for name in ("step_done", "best_found", "error_occurred", "finished"):
+            setattr(self, name, _Sig())
+
+    def start(self) -> None:
+        self.running = True
+
+    def isRunning(self) -> bool:  # noqa: N802 (QThread API)
+        return self.running
+
+    def stop(self) -> None:
+        self.stops += 1
+
+    def wait(self, ms: int = 0) -> bool:
+        self.waits.append(ms)
+        return not self.running
+
+
+def test_stop_af_keeps_a_returning_worker_and_refuses_a_second_sweep(shot_rig, monkeypatch) -> None:
+    """S23 (gap found in review): when the return to the start outlasted the
+    10 s wait, Stop AF dropped the worker and released the camera while the
+    worker still drove the focuser; a new Start AF then ran a second worker
+    on the same focuser, both commanding moves."""
+    from unittest.mock import MagicMock
+
+    import argos.core.session.acquisition_engine as ae
+    from argos.workers.camera_service import CameraState
+
+    engine, session, form, logs = shot_rig
+    _ReturningAfWorker.created = []
+    monkeypatch.setattr(ae, "AutofocusWorker", _ReturningAfWorker)
+    session._focuser = MagicMock()
+
+    engine.start_autofocus()
+    (first,) = _ReturningAfWorker.created
+    engine.stop_autofocus()  # the return outlasts the wait
+
+    assert first.stops == 1 and first.running
+    assert engine._autofocus is first
+    assert engine.camera_state is CameraState.AUTOFOCUS
+    assert any(level == "INFO" and "returning" in msg for level, msg in logs), logs
+    engine.start_autofocus()
+    engine.request_autofocus()  # the Focus screen's toggle: a second Stop
+    assert len(_ReturningAfWorker.created) == 1  # no second sweep
+    assert first.waits == [engine._AF_STOP_WAIT_MS]  # no second 10 s freeze
+
+    first.running = False  # back at the start: the worker ends
+    engine._on_af_finished()
+    assert engine.camera_state is CameraState.IDLE
+    engine.start_autofocus()
+    assert len(_ReturningAfWorker.created) == 2
