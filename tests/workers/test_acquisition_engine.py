@@ -628,6 +628,51 @@ def test_opened_fits_without_a_date_measures_no_point(shot_rig, tmp_path, monkey
     assert any(level == "WARN" and "time" in msg.lower() for level, msg in logs), logs
 
 
+def test_opened_fits_that_is_not_raw_16_bit_data_is_refused(
+    shot_rig, tmp_path, monkeypatch
+) -> None:
+    """S4 (part left open, found in review): Open FITS cast any data to
+    uint16. A negative value (dark-subtracted, calibrated frame) wrapped to
+    about 65535 and 70000 to 4464; the frame still solved and was measured
+    with wrong sky and aperture sums, now dated as if trustworthy."""
+    from datetime import datetime, timezone
+
+    from astropy.io import fits
+
+    engine, session, form, logs = shot_rig
+    live = _star_frame()
+    engine.ingest_frame(live)
+    mid = datetime(2026, 11, 1, 3, 0, 5, tzinfo=timezone.utc)
+    engine._last_exposure_mid = mid
+    wcs = object()
+    engine.astrometry._wcs = wcs
+    header = {"DATE-OBS": "2026-09-15T21:00:00", "EXPTIME": 10.0}
+
+    calibrated = _star_frame().astype(np.float32) - 300.5  # negative sky, fractions
+    stacked = _star_frame().astype(np.int32) * 4  # beyond 16 bits
+    for name, data in (("calibrated.fit", calibrated), ("stacked.fit", stacked)):
+        path = tmp_path / name
+        hdu = fits.PrimaryHDU(data)
+        for key, value in header.items():
+            hdu.header[key] = value
+        hdu.writeto(path)
+        logs.clear()
+        _open_fits_from_the_page(engine, path, monkeypatch, logs)
+        assert any(level == "ERROR" and "raw" in msg for level, msg in logs), logs
+        # The engine is untouched: the live frame, its time and its WCS stay.
+        assert engine.last_raw is live
+        assert engine._last_exposure_mid == mid and engine.astrometry.wcs is wcs
+
+    # Raw counts stored in another type are accepted as they are.
+    path = tmp_path / "raw_as_float.fit"
+    hdu = fits.PrimaryHDU(_star_frame().astype(np.float32))
+    hdu.header["DATE-OBS"] = "2026-09-15T21:00:00"
+    hdu.writeto(path)
+    engine.open_fits_frame(path)
+    assert engine.last_raw.dtype == np.uint16
+    assert np.array_equal(engine.last_raw, _star_frame())
+
+
 def test_take_shot_qa_headers_describe_the_saved_frame(shot_rig, tmp_path) -> None:
     """S20: HFD/NSTARS/SKYLEVEL came from the last frame the display had
     processed (the previous frame at best, a half-res preview otherwise)."""

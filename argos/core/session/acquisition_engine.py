@@ -122,6 +122,35 @@ def fits_exposure_mid(header) -> datetime | None:
     return start + timedelta(seconds=exposure_s / 2.0)
 
 
+def _raw_adu(data) -> np.ndarray:
+    """An opened frame as the sensor's 16-bit ADU, or ``ValueError``.
+
+    The live pipeline (photometry gain, saturation flags, solve) assumes raw
+    camera counts. A plain ``uint16`` cast wraps what it cannot hold: a
+    negative value (a dark-subtracted or calibrated frame) becomes about
+    65535 and 70000 becomes 4464, so the sky and aperture sums are wrong
+    while the frame still solves. Integer values in 0..65535 are accepted,
+    whatever the stored type; anything else is refused.
+    """
+    arr = np.asarray(data)
+    if arr.dtype.kind not in "uif":
+        raise ValueError(f"unsupported pixel type {arr.dtype}")
+    if arr.dtype.kind == "f" and not (
+        np.isfinite(arr).all() and np.array_equal(arr, np.floor(arr))
+    ):
+        raise ValueError(
+            "floating-point pixels (a calibrated or stacked frame?) are not raw "
+            "16-bit camera counts — open the raw .fit frame instead"
+        )
+    low, high = arr.min(), arr.max()
+    if low < 0 or high > 65535:
+        raise ValueError(
+            f"pixel values {low:g} to {high:g} do not fit raw 16-bit camera counts "
+            "(0 to 65535) — open the raw .fit frame instead"
+        )
+    return np.ascontiguousarray(arr, dtype=np.uint16)
+
+
 def _wheel_filter_name(wheel, requested: str, log_emit) -> str:
     """Filter the wheel actually sits on, for a Take-shot header.
 
@@ -720,18 +749,20 @@ class AcquisitionEngine(QObject):
         forgotten so a point never lands in that run's CSVs.
 
         Returns the midpoint. Raises ``OSError``/``ValueError`` (the engine is
-        untouched) when the file is not a single 2-D image.
+        untouched) when the file is not a single 2-D image of raw 16-bit
+        data (see :func:`_raw_adu`).
         """
         from astropy.io import fits
 
         raw, header = fits.getdata(path, header=True)
         if raw is None or getattr(raw, "ndim", 0) != 2:
             raise ValueError("expected a single 2-D image HDU")
+        # The display/measure pipeline speaks the sensor's raw dtype.
+        frame = _raw_adu(raw)
         self.invalidate_astrometry()
         self._last_exposure_mid = fits_exposure_mid(header)
         self._active_run_root = None
-        # The display/measure pipeline speaks the sensor's raw dtype.
-        self.ingest_frame(np.ascontiguousarray(raw, dtype=np.uint16))
+        self.ingest_frame(frame)
         return self._last_exposure_mid
 
     @pyqtSlot(object)
