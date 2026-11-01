@@ -179,6 +179,7 @@ class ConfigurationPage(QWidget):
         self._elev_spin.setRange(-500.0, 9000.0)
         self._elev_spin.setDecimals(1)
         self._elev_spin.setSuffix(" m")
+        self._elev_spin.setKeyboardTracking(False)
         self._elev_spin.valueChanged.connect(self._save_site)
         grid.addWidget(design.MutedLabel("Elevation"), 3, 0)
         grid.addWidget(self._elev_spin, 3, 1)
@@ -270,6 +271,7 @@ class ConfigurationPage(QWidget):
         spin.setRange(low, high)
         spin.setDecimals(5)
         spin.setSuffix(" °")
+        spin.setKeyboardTracking(False)  # save the typed value, not each keystroke
         return spin
 
     @staticmethod
@@ -952,6 +954,8 @@ class ConfigurationPage(QWidget):
         if not name:
             self._site_search_status.setText("Name the site before saving it as a favourite.")
             return
+        for spin in (self._lat_spin, self._lon_spin, self._elev_spin):
+            spin.interpretText()  # a value typed without Enter (focus stays on macOS)
         favorite = {
             "name": name,
             "latitude": float(self._lat_spin.value()),

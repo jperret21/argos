@@ -22,16 +22,22 @@ from argos.core.hardware import active, catalog  # noqa: E402
 
 
 class _FakeConfig:
-    """Config stub — the page only reads and writes through get/set."""
+    """Config stub — the page only reads and writes through get/set.
+
+    ``writes`` records every ``set`` (the real Config rewrites its JSON file
+    on each one).
+    """
 
     def __init__(self):
         self._values = {}
+        self.writes = []
 
     def get(self, key, default=None):
         return self._values.get(key, default)
 
     def set(self, key, value):
         self._values[key] = value
+        self.writes.append((key, value))
 
     def save(self):
         pass
@@ -40,8 +46,25 @@ class _FakeConfig:
     def sessions_path(self):
         return "/tmp/sessions"
 
-    alpaca_host = ""  # read by the Connection page
-    alpaca_port = 32323
+    # Read and written by the Connection page, through set() as in Config.
+    @property
+    def alpaca_host(self):
+        return self.get("alpaca.host", "")
+
+    @alpaca_host.setter
+    def alpaca_host(self, value):
+        self.set("alpaca.host", value)
+
+    @property
+    def alpaca_port(self):
+        return self.get("alpaca.port", 32323)
+
+    @alpaca_port.setter
+    def alpaca_port(self, value):
+        self.set("alpaca.port", value)
+
+    def written(self, key):
+        return [value for k, value in self.writes if k == key]
 
 
 #: The one unvalidated-profile warning (Q-C2), on both pages.
@@ -136,5 +159,48 @@ def test_telescope_picker_walkthrough() -> None:
         page._astap_db_edit.setText("/Volumes/Astro/astap")
         page._save_astrometry()
         assert config.get("astrometry.database_path") == "/Volumes/Astro/astap"
+
+        # H11: a typed value is committed when the edit is done (Enter or
+        # focus out), not on every keystroke: "48" wrote latitude 4, then 48.
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtTest import QTest
+
+        config.writes.clear()
+        page._lat_spin.selectAll()
+        QTest.keyClicks(page._lat_spin, "48")
+        assert config.written("site.latitude") == []
+        QTest.keyClick(page._lat_spin, Qt.Key.Key_Return)
+        assert config.written("site.latitude") == [48.0]
+        # A button click does not take the focus on macOS: a value typed
+        # without Enter must still be the one a click uses.
+        page._lon_spin.selectAll()
+        QTest.keyClicks(page._lon_spin, "2")
+        page._favorite_name_edit.setText("Typed")
+        page._save_current_favorite()
+        typed = next(f for f in config.get("site.favorites") if f["name"] == "Typed")
+        assert (typed["latitude"], typed["longitude"]) == (48.0, 2.0)
+
+        # The Alpaca address was saved, and probed by the network monitor,
+        # one keystroke at a time ("1", "19", "192", …).
+        connection = ConnectionPage(config)
+        config.writes.clear()
+        QTest.keyClicks(connection._host_edit, "192.168.1.5")
+        assert config.written("alpaca.host") == []
+        QTest.keyClick(connection._host_edit, Qt.Key.Key_Return)
+        assert config.written("alpaca.host") == ["192.168.1.5"]
+        connection._port_spin.selectAll()
+        QTest.keyClicks(connection._port_spin, "4700")
+        QTest.keyClick(connection._port_spin, Qt.Key.Key_Return)
+        assert config.written("alpaca.port") == [4700]
+        endpoints: list[tuple[str, int]] = []
+        connection.connect_all_requested.connect(lambda h, p: endpoints.append((h, p)))
+        connection._port_spin.selectAll()
+        QTest.keyClicks(connection._port_spin, "11111")
+        connection._start_connect_btn.click()  # no Enter first
+        assert endpoints == [("192.168.1.5", 11111)]
+        # A discovered address is saved without any edit.
+        connection.set_discovered_address("10.0.0.7", 32323)
+        assert config.alpaca_host == "10.0.0.7"
+        connection.deleteLater()
     finally:
         active.set_profile(before)

@@ -181,12 +181,14 @@ class ConnectionPage(QWidget):
         self._host_edit = QLineEdit()
         self._host_edit.setPlaceholderText("192.168.x.x")
         self._host_edit.setToolTip("IPv4 address of the Seestar on the current network")
-        self._host_edit.textChanged.connect(self._on_host_changed)
+        # Saved (and probed by the network monitor) once typed, not per keystroke.
+        self._host_edit.editingFinished.connect(self._on_host_edited)
         row.addWidget(self._host_edit, 1)
         row.addWidget(design.MutedLabel("Port"))
         self._port_spin = QSpinBox()
         self._port_spin.setRange(1, 65535)
         self._port_spin.setMaximumWidth(96)
+        self._port_spin.setKeyboardTracking(False)
         self._port_spin.valueChanged.connect(self._on_port_changed)
         row.addWidget(self._port_spin)
         self._discover_btn = design.PrimaryButton("⚡  Discover")
@@ -239,6 +241,7 @@ class ConnectionPage(QWidget):
     def set_discovered_address(self, host: str, port: int) -> None:
         """Fill in the form when a discovery worker returns an address."""
         self._host_edit.setText(host)
+        self._on_host_edited()  # setText is not an edit: save it explicitly
         self._port_spin.setValue(port)
 
     def apply_telescope_profile(self, key: str) -> bool:
@@ -359,26 +362,32 @@ class ConnectionPage(QWidget):
         self._port_spin.setValue(self._config.alpaca_port or 32323)
         self._loading = False
 
-    def _on_host_changed(self, text: str) -> None:
+    def _on_host_edited(self) -> None:
         if self._loading:
             return
-        self._config.alpaca_host = text.strip()
+        host = self._host_edit.text().strip()
+        if host != self._config.alpaca_host:
+            self._config.alpaca_host = host
 
     def _on_port_changed(self, value: int) -> None:
         if self._loading:
             return
         self._config.alpaca_port = value
 
+    def _endpoint(self) -> tuple[str, int]:
+        """The typed address and port. A port typed without Enter is
+        committed first: a button click does not take the focus on macOS."""
+        self._port_spin.interpretText()
+        return self._host_edit.text().strip(), int(self._port_spin.value())
+
     def _on_connect_one(self, device_id: str) -> None:
-        host = self._host_edit.text().strip()
-        port = int(self._port_spin.value())
+        host, port = self._endpoint()
         if not host:
             return
         self.connect_requested.emit(device_id, host, port)
 
     def _on_connect_all(self) -> None:
-        host = self._host_edit.text().strip()
-        port = int(self._port_spin.value())
+        host, port = self._endpoint()
         if not host:
             return
         self.connect_all_requested.emit(host, port)

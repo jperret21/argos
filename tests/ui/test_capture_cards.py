@@ -9,6 +9,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from types import SimpleNamespace  # noqa: E402
 
 import pytest  # noqa: E402
+from PyQt6.QtCore import Qt  # noqa: E402
+from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QPushButton  # noqa: E402
 
 from argos.core.session.types import FocuserState  # noqa: E402
@@ -90,6 +92,46 @@ def test_camera_lock_hint_names_the_owner(qapp) -> None:
 
         ImagingPage._on_camera_state(page, CameraState.IDLE)
         assert dock._lock_hint.isHidden()
+    finally:
+        dock.deleteLater()
+        qapp.processEvents()
+
+
+def test_camera_offset_and_binning_reach_the_driver_once_typed(qapp) -> None:
+    """H11: typing "35" in Offset wrote offset 3, then 35, to the camera
+    (a synchronous driver PUT each time, allowed during Live)."""
+    dock = CameraDock()
+    try:
+        offsets: list[int] = []
+        bins: list[int] = []
+        dock.offset_changed.connect(offsets.append)
+        dock.binning_changed.connect(bins.append)
+        dock.set_offset_support(0, 300, 10)
+        dock.set_binning_support(4, 1)
+        offsets.clear()
+        bins.clear()
+
+        dock._offset_spin.selectAll()
+        QTest.keyClicks(dock._offset_spin, "35")
+        assert offsets == []
+        QTest.keyClick(dock._offset_spin, Qt.Key.Key_Return)
+        assert offsets == [35]
+
+        dock._bin_spin.selectAll()
+        QTest.keyClicks(dock._bin_spin, "2")
+        QTest.keyClick(dock._bin_spin, Qt.Key.Key_Return)
+        assert bins == [2]
+
+        # Take shot clicked with a value still typed (no Enter; a click does
+        # not take the focus on macOS): the typed offset is applied first.
+        events: list[object] = []
+        dock.offset_changed.connect(lambda v: events.append(("offset", v)))
+        dock.take_shot_clicked.connect(lambda: events.append("take"))
+        dock.set_enabled(True)
+        dock._offset_spin.selectAll()
+        QTest.keyClicks(dock._offset_spin, "40")
+        dock._take_btn.click()
+        assert events == [("offset", 40), "take"]
     finally:
         dock.deleteLater()
         qapp.processEvents()
