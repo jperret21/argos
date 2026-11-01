@@ -137,7 +137,10 @@ the official app's startup procedure or its pointing calibration.
    `10.0.0.1` in Seestar access-point mode — or press **Discover**, which
    searches for the telescope and remembers the last address.
 3. Press **Connect equipment**. Telescope, Camera, Filter Wheel and Focuser must
-   all read *Ready*.
+   all read *Ready*. If one fails, its card under **Show connection and device
+   details** says why; press **Connect equipment** again to retry it: devices
+   already connected are left alone. A device that misbehaves while connected
+   is reset with its own **Disconnect**, then **Connect**.
 4. **Show connection and device details** exposes the individual device controls
    and the Stellarium server if you need to diagnose one of them.
 
@@ -292,6 +295,11 @@ filter is a selector inside **Acquisition**, and in the sequence rows.
   date and time in the Seestar app, then reconnect.
 - The context bar under the image shows the frame name and session progress;
   detailed statistics stay in their own panel.
+- A value typed in **Offset** or **Binning** (and in the site coordinates, the
+  IP address and the port) is applied when you press Enter or leave the field,
+  or when you press a button that uses it — not at each keystroke.
+- While a sequence or an autofocus runs, **Disconnect** and **Quit** ask first;
+  the default answer, *No*, leaves the run going.
 
 ```{important}
 Display is not data. Debayer mode, stretch and channel are preview settings. The
