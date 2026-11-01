@@ -1,0 +1,55 @@
+/*
+  ARGOS bundled typefaces: IBM Plex Sans + IBM Plex Mono, the same files the
+  public site ships (docs/fonts). Bundled locally so the app renders the same
+  offline in the field; no network font service is ever contacted.
+
+  IBM Plex is Copyright 2017-2018 IBM Corp., licensed under the SIL Open Font
+  License 1.1, with Reserved Font Name "Plex". Full licence: ./fonts/OFL.txt.
+
+  Coverage notes (checked with fontTools on these exact files):
+  - Plex Sans covers Greek (alpha, delta, sigma, Delta...), degree, primes and
+    the minus sign; Plex Mono has NO Greek: set Greek symbols in --font-ui.
+  - Neither face has the geometric bullets U+25CF / U+25CB: draw status dots
+    with CSS or SVG, never with those characters.
+  - Digits are tabular by default in both faces (all 600 units wide).
+*/
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('./fonts/IBMPlexSans-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('./fonts/IBMPlexSans-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('./fonts/IBMPlexSans-SemiBold.woff2') format('woff2');
+  font-weight: 600 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('./fonts/IBMPlexMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('./fonts/IBMPlexMono-Medium.woff2') format('woff2');
+  font-weight: 500 700;
+  font-style: normal;
+  font-display: swap;
+}

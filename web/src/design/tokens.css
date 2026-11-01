@@ -1,0 +1,438 @@
+/*
+  ARGOS design tokens (web UI). Owned by the design team; see BRAND.md.
+
+  - Palette hexes are copied unchanged from argos/ui/palettes.py (Observatory =
+    EQUILUX, Charcoal, Night (Red)); the mandatory names mirror its fields.
+  - Themes: :root and [data-theme="observatory"] (default), [data-theme="charcoal"],
+    [data-theme="night-red"]. Set data-theme on <html>.
+  - Components consume tokens only, never raw hexes, so every theme (and the
+    Night Red dark-adaptation rule: nothing may emit non-red light) holds.
+  - Contrast figures quoted below are WCAG 2 ratios computed on these exact
+    hexes (dataviz validate_palette.js contrast()).
+*/
+
+@import './fonts.css';
+
+/* --------------------------------------------------------------------------
+   Theme-independent tokens
+   -------------------------------------------------------------------------- */
+
+:root {
+  /* Type. Plex first (bundled, shared with the public site), then the Qt
+     palette stacks as fallbacks. */
+  --font-ui: 'IBM Plex Sans', 'Helvetica Neue', 'Segoe UI', 'Noto Sans', sans-serif;
+  --font-mono:
+    'IBM Plex Mono', 'SF Mono', 'Cascadia Mono', 'JetBrains Mono', 'Noto Sans Mono', 'Menlo',
+    'Consolas', monospace;
+  /* Use with font-variant-numeric on every number, coordinate and unit. */
+  --numeric: tabular-nums lining-nums;
+
+  /* Type scale (px, like the Qt app; body 13 px). */
+  --text-2xs: 10px; /* micro labels (uppercase mono), plot ticks */
+  --text-xs: 11px; /* captions, chips, rail labels, tooltips */
+  --text-s: 12px; /* form keys, status bar, table cells, log */
+  --text-m: 13px; /* body, buttons, inputs */
+  --text-l: 14px; /* section titles inside a card */
+  --text-xl: 17px; /* live readouts (mono): RA/Dec, HFD, magnitudes */
+  --text-2xl: 22px; /* page titles */
+
+  --leading-tight: 1.2;
+  --leading-normal: 1.4;
+  --leading-relaxed: 1.55;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  --tracking-caps: 0.06em; /* uppercase micro labels only */
+
+  /* Spacing: the Qt 4/6/8/12/18 scale (argos/ui/design.py SPACING_*), plus 24. */
+  --space-half: 2px;
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-5: 18px;
+  --space-6: 24px;
+
+  /* Radii: instrument-tight, as in the Qt stylesheet. */
+  --radius-s: 2px; /* buttons, inputs, chips */
+  --radius-m: 4px; /* cards, popovers, dialogs */
+  --radius-round: 999px; /* status dots, pills */
+
+  /* Icons: drawn on a 24-unit grid with a 1.5-unit stroke. 16 px and 24 px are
+     the pixel-exact sizes (1 px / 1.5 px strokes); 20 px is the optical default. */
+  --icon-s: 16px;
+  --icon-m: 20px;
+  --icon-l: 24px;
+  --icon-stroke: 1.5;
+
+  /* Control metrics (Qt: INPUT_HEIGHT 28, BUTTON_HEIGHT 30, PRIMARY 34). */
+  --control-h-s: 30px; /* 16 px icon + 2 x 6 px padding + 2 px border */
+  --control-h-m: 34px; /* 20 px icon + 2 x 6 px padding + 2 px border */
+  --input-h: 28px;
+  --border-w: 1px;
+
+  /* Layout landmarks (Qt: sidebar 92 px, status strip 32 px, rail 420-580 px). */
+  --sidebar-w: 92px;
+  --statusbar-h: 32px;
+  --rail-min-w: 420px;
+  --rail-max-w: 580px;
+  --page-max-w: 880px;
+
+  /* Focus ring: always visible on keyboard focus, never removed. */
+  --focus-ring-w: 2px;
+  --focus-ring-offset: 2px;
+
+  /* Elevation: black shadows only (black emits no light, safe in Night Red). */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.5);
+
+  /* Motion: short, functional, never decorative. Zeroed for reduced motion. */
+  --duration-instant: 80ms;
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 280ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-out: cubic-bezier(0.2, 0.75, 0.25, 1);
+
+  /* Stacking. */
+  --z-dock: 10;
+  --z-sticky: 20;
+  --z-popover: 100;
+  --z-tooltip: 200;
+  --z-modal: 300;
+  --z-toast: 400;
+
+  /* Chart marks. Light curves are dense (hundreds of points): 6 px markers,
+     8 px for sparse series (< 50 points) and 10 px for the hovered point. */
+  --chart-line-w: 1.5px;
+  --chart-grid-w: 1px;
+  --chart-marker: 6px;
+  --chart-marker-sparse: 8px;
+  --chart-marker-hover: 10px;
+  --chart-error-opacity: 0.55;
+}
+
+/* --------------------------------------------------------------------------
+   Observatory: graphite + brass (default). argos/ui/palettes.py EQUILUX.
+   -------------------------------------------------------------------------- */
+
+:root,
+[data-theme='observatory'] {
+  color-scheme: dark;
+  accent-color: var(--accent);
+
+  --bg: #191b1f;
+  --bg-2: #121417;
+  --surface: #22262c;
+  --border: #47515c;
+  --border-soft: #343c45;
+  --fg: #e8e5df;
+  --fg-muted: #aaa8a2;
+  --fg-disabled: #6d7278;
+  --accent: #c49a3c;
+  --accent-hover: #d6b25d;
+  --accent-deep: #8d6b2b;
+  --cyan: #7da8b2;
+  --success: #83a68b;
+  --warning: #d0a85a;
+  --danger: #bf7772;
+  --variable: #8fb7ca;
+
+  /* Content on filled colours. Light text on brass is 2.08:1 (fails), so
+     anything drawn on --accent / --accent-hover / --danger is dark:
+     --bg on --accent 6.60:1, on --accent-hover 8.53:1, on --danger 5.01:1.
+     --fg on --accent-deep is 3.91:1 (non-text and large text only). */
+  --on-accent: #191b1f;
+  --on-accent-deep: #e8e5df;
+  --on-danger: #191b1f;
+
+  /* Secondary text that must pass WCAG AA (4.5:1) on --bg, --bg-2 and
+     --surface at body sizes. Here --fg-muted passes (>= 6.39:1); Night Red
+     remaps it because its --fg-muted is 3.61-4.02:1. Use --fg-muted for
+     glyphs, rules and dots, --text-muted for words. */
+  --text-muted: var(--fg-muted);
+
+  /* Primary (deliberate) control. Rest: brass fill, dark content
+     (--on-accent on --accent 6.60:1); hover: --accent-hover (8.53:1).
+     Light text on --accent-deep is 3.91:1, so deep brass is never a rest
+     fill for a label (pressed flash only). */
+  --primary-bg: var(--accent);
+  --primary-fg: var(--on-accent);
+  --primary-border: var(--accent-deep);
+  --primary-bg-hover: var(--accent-hover);
+  --primary-fg-hover: var(--on-accent);
+
+  /* Interaction states (mirror the Qt QSS). --toggled-fg is read on
+     --toggled-bg or on a 14 % brass tint of --surface: 4.61:1 or more. */
+  --hover-bg: var(--surface);
+  --pressed-bg: var(--bg-2);
+  --toggled-bg: var(--surface);
+  --toggled-fg: var(--accent);
+  --toggled-border: var(--accent);
+  --focus-ring: var(--accent);
+  /* Brass-tinted, dark enough for --fg text (7.10:1 here; plain
+     --accent-deep would give 3.91:1). */
+  --selection-bg: color-mix(in srgb, var(--accent-deep) 55%, var(--bg));
+  --selection-fg: var(--fg);
+  --scrim: rgba(18, 20, 23, 0.72); /* --bg-2 at 72 % */
+
+  /* Device / job status (connection page + status strip). */
+  --status-idle: var(--fg-muted);
+  --status-ok: var(--success);
+  --status-busy: var(--warning);
+  --status-error: var(--danger);
+
+  /* Activity log levels (argos/ui/theme.py LOG_COLORS). */
+  --log-debug: var(--fg-muted);
+  --log-info: var(--accent);
+  --log-ok: var(--success);
+  --log-warning: var(--warning);
+  --log-error: var(--danger);
+  --log-cmd: var(--cyan);
+
+  /* Photometric roles, shared by image overlays and plots so a colour always
+     means the same star role. Shape is the primary code (target = circle,
+     comparison = square, check = triangle); colour is the second channel.
+     Validated as a 3-slot all-pairs categorical palette on every dark surface
+     of Observatory and Charcoal: worst CVD dE 9.8 (deutan), worst normal-vision
+     dE 15.0, all >= 3:1 against the surface. */
+  --role-target: #b48e2c;
+  --role-comparison: #6298cf;
+  --role-check: #38ab81;
+
+  /* Catalogue overlays on the image (argos/ui/widgets/fits_viewer.py). */
+  --overlay-field-star: var(--fg-muted);
+  --overlay-variable: var(--variable);
+  --overlay-galaxy: var(--cyan);
+  --overlay-nebula: var(--warning);
+  --overlay-exoplanet: var(--success);
+  --overlay-other: var(--fg-muted);
+  --overlay-grid: var(--cyan);
+  --overlay-label: var(--fg);
+
+  /* Charts. */
+  --chart-surface: var(--bg-2);
+  --chart-grid: var(--border-soft);
+  --chart-axis: var(--border);
+  --chart-text: var(--fg-muted);
+  --chart-reference: var(--fg-muted); /* zero line, fit, ensemble mean */
+  --chart-highlight: var(--fg); /* hover crosshair, selected point ring */
+  --chart-1: var(--role-target);
+  --chart-2: var(--role-comparison);
+  --chart-3: var(--role-check);
+
+  /* Image viewer: a stretched pixel value v in [0, 1] is drawn as v x tint. */
+  --viewer-bg: #000000;
+  --viewer-tint: #ffffff;
+}
+
+/* --------------------------------------------------------------------------
+   Charcoal: higher-contrast graphite. argos/ui/palettes.py CHARCOAL.
+   -------------------------------------------------------------------------- */
+
+[data-theme='charcoal'] {
+  color-scheme: dark;
+  accent-color: var(--accent);
+
+  --bg: #232529;
+  --bg-2: #181a1d;
+  --surface: #2c3035;
+  --border: #545c65;
+  --border-soft: #3d444c;
+  --fg: #ece9e2;
+  --fg-muted: #b0aea7;
+  --fg-disabled: #73777b;
+  --accent: #c49a3c;
+  --accent-hover: #d8b75f;
+  --accent-deep: #977331;
+  --cyan: #86a9af;
+  --success: #8ca58c;
+  --warning: #d1aa5e;
+  --danger: #c57b76;
+  --variable: #9abfcd;
+
+  --on-accent: #232529;
+  --on-accent-deep: #ece9e2;
+  --on-danger: #232529;
+
+  --text-muted: var(--fg-muted); /* >= 5.98:1 on every surface */
+
+  --primary-bg: var(--accent); /* --on-accent 5.87:1 */
+  --primary-fg: var(--on-accent);
+  --primary-border: var(--accent-deep);
+  --primary-bg-hover: var(--accent-hover); /* 7.94:1 */
+  --primary-fg-hover: var(--on-accent);
+
+  --hover-bg: var(--surface);
+  --pressed-bg: var(--bg-2);
+  --toggled-bg: var(--surface);
+  /* --accent on the 14 % brass tint is 4.04:1 here; --accent-hover 5.46:1. */
+  --toggled-fg: var(--accent-hover);
+  --toggled-border: var(--accent);
+  --focus-ring: var(--accent);
+  --selection-bg: color-mix(in srgb, var(--accent-deep) 55%, var(--bg)); /* --fg 6.38:1 */
+  --selection-fg: var(--fg);
+  --scrim: rgba(24, 26, 29, 0.72);
+
+  --status-idle: var(--fg-muted);
+  --status-ok: var(--success);
+  --status-busy: var(--warning);
+  --status-error: var(--danger);
+
+  --log-debug: var(--fg-muted);
+  --log-info: var(--accent);
+  --log-ok: var(--success);
+  --log-warning: var(--warning);
+  --log-error: var(--danger);
+  --log-cmd: var(--cyan);
+
+  --role-target: #b48e2c;
+  --role-comparison: #6298cf;
+  --role-check: #38ab81;
+
+  --overlay-field-star: var(--fg-muted);
+  --overlay-variable: var(--variable);
+  --overlay-galaxy: var(--cyan);
+  --overlay-nebula: var(--warning);
+  --overlay-exoplanet: var(--success);
+  --overlay-other: var(--fg-muted);
+  --overlay-grid: var(--cyan);
+  --overlay-label: var(--fg);
+
+  --chart-surface: var(--bg-2);
+  --chart-grid: var(--border-soft);
+  --chart-axis: var(--border);
+  --chart-text: var(--fg-muted);
+  --chart-reference: var(--fg-muted);
+  --chart-highlight: var(--fg);
+  --chart-1: var(--role-target);
+  --chart-2: var(--role-comparison);
+  --chart-3: var(--role-check);
+
+  --viewer-bg: #000000;
+  --viewer-tint: #ffffff;
+}
+
+/* --------------------------------------------------------------------------
+   Night (Red): dark adaptation. argos/ui/palettes.py NIGHT_RED.
+   Every visible colour must come from this block (or be black): no grey, no
+   white, no blue/green. States differ by luminance, never by hue, so every
+   state also carries an icon or label.
+   -------------------------------------------------------------------------- */
+
+[data-theme='night-red'] {
+  color-scheme: dark;
+  accent-color: var(--accent);
+
+  --bg: #1a0304;
+  --bg-2: #100102;
+  --surface: #2b080a;
+  --border: #501719;
+  --border-soft: #350c0e;
+  --fg: #d88f8f;
+  --fg-muted: #a65758;
+  --fg-disabled: #5a2829;
+  --accent: #c14d50;
+  --accent-hover: #df6264;
+  --accent-deep: #7d2327;
+  --cyan: #bb6667;
+  --success: #8b3437;
+  --warning: #ad494c;
+  --danger: #e05e61;
+  --variable: #985055;
+
+  /* --bg-2 on --accent 4.33:1; --fg on --accent-deep 3.85:1. */
+  --on-accent: #100102;
+  --on-accent-deep: #d88f8f;
+  --on-danger: #100102;
+
+  /* The palette's --fg-muted is 3.61-4.02:1 here, below AA for words. The
+     palette's mid red (named --cyan for symmetry, #bb6667) reaches 4.56:1
+     on --surface, 4.92:1 on --bg and 5.07:1 on --bg-2. No new hex. */
+  --text-muted: var(--cyan);
+
+  /* Primary: outlined at rest (less emitted light, label --accent-hover
+     5.31:1 on --surface), filled on hover (--on-accent on --accent-hover
+     5.91:1). A rest fill of --accent would carry its label at 4.33:1. */
+  --primary-bg: var(--surface);
+  --primary-fg: var(--accent-hover);
+  --primary-border: var(--accent-hover);
+  --primary-bg-hover: var(--accent-hover);
+  --primary-fg-hover: var(--on-accent);
+
+  --hover-bg: var(--surface);
+  --pressed-bg: var(--bg-2);
+  --toggled-bg: var(--surface);
+  /* --accent is 3.89:1 on --surface (3.38:1 on the brass tint); the brighter
+     red keeps toggled glyphs and the selected rail label at 4.62:1 or more. */
+  --toggled-fg: var(--accent-hover);
+  --toggled-border: var(--accent);
+  --focus-ring: var(--accent-hover);
+  --selection-bg: color-mix(in srgb, var(--accent-deep) 55%, var(--bg)); /* --fg 5.64:1 */
+  --selection-fg: var(--fg);
+  --scrim: rgba(16, 1, 2, 0.78);
+
+  /* Dots and glyphs only, always next to a label: --success is 2.32-2.57:1
+     here (below the 3:1 non-text minimum), so the label carries the state. */
+  --status-idle: var(--fg-muted);
+  --status-ok: var(--success);
+  --status-busy: var(--warning);
+  --status-error: var(--danger);
+
+  /* Log text must stay readable (>= 4.5:1 on --bg-2): routine lines in the
+     dimmer --text-muted (5.07:1), warnings and errors in the bright reds
+     (5.91:1, 5.79:1). Levels are told apart by their level tag, not hue. */
+  --log-debug: var(--text-muted);
+  --log-info: var(--text-muted);
+  --log-ok: var(--text-muted);
+  --log-warning: var(--accent-hover);
+  --log-error: var(--danger);
+  --log-cmd: var(--text-muted);
+
+  /* Single hue by design: roles separate by luminance and, above all, by
+     marker shape. Not a valid categorical palette on colour alone. */
+  --role-target: #df6264;
+  --role-comparison: #bb6667;
+  --role-check: #985055;
+
+  --overlay-field-star: var(--fg-muted);
+  --overlay-variable: var(--variable);
+  --overlay-galaxy: var(--cyan);
+  --overlay-nebula: var(--warning);
+  /* --success is 2.44:1 on the black canvas; markers are shape-coded, so the
+     exoplanet layer borrows the variable-star red (3.62:1). */
+  --overlay-exoplanet: var(--variable);
+  --overlay-other: var(--fg-muted);
+  --overlay-grid: var(--cyan);
+  --overlay-label: var(--fg);
+
+  --chart-surface: var(--bg-2);
+  --chart-grid: var(--border-soft);
+  --chart-axis: var(--border);
+  --chart-text: var(--text-muted); /* tick labels are words: 5.07:1 on --bg-2 */
+  --chart-reference: var(--fg-muted);
+  --chart-highlight: var(--fg);
+  --chart-1: var(--role-target);
+  --chart-2: var(--role-comparison);
+  --chart-3: var(--role-check);
+
+  /* Images render in the red channel only; full scale = the red channel of
+     --fg (0xd8), so the brightest star never outshines the interface text. */
+  --viewer-bg: #000000;
+  --viewer-tint: #d80000;
+}
+
+/* --------------------------------------------------------------------------
+   Reduced motion: no transitions or animations beyond an instant state swap.
+   -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-instant: 0ms;
+    --duration-fast: 0ms;
+    --duration-base: 0ms;
+    --duration-slow: 0ms;
+  }
+}

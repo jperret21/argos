@@ -1,0 +1,1669 @@
+[
+  {
+    "id": "nav-connection",
+    "labels": [
+      "Connection"
+    ],
+    "sources": [
+      "argos/ui/sidebar.py:39",
+      "argos/ui/shell.py:231"
+    ],
+    "group": "A",
+    "concept": "Rail entry: the equipment set-up page (Seestar over ASCOM Alpaca).",
+    "metaphor": "The connect coupling turned 45 degrees: plug half-ellipse at lower-left and socket half-ellipse at upper-right meeting on the diagonal, the two prongs bridging the gap, cable stubs running out to the lower-left and upper-right corners. Same parts as `connect`, rotated so the rail entry differs from the action.",
+    "display": "icon+label",
+    "shortcut": "F1",
+    "shortcut_origin": "qt"
+  },
+  {
+    "id": "nav-imaging",
+    "labels": [
+      "Observe"
+    ],
+    "sources": [
+      "argos/ui/sidebar.py:40",
+      "argos/ui/shell.py:231"
+    ],
+    "group": "A",
+    "concept": "Rail entry: the observing cockpit (image, camera, mount, focuser, live curve).",
+    "metaphor": "An eye whose iris is the ARGOS mark: two lid arcs forming an almond 19.5 wide and 9 tall at stroke centre (round joins at the corners), an iris ring r=4.5 touching both lids and a filled pupil r=1.5 at the centre. Argos Panoptes, the watcher. The eye is reserved for this entry: no other icon (no show/hide toggle) may use an eye.",
+    "display": "icon+label",
+    "shortcut": "F2",
+    "shortcut_origin": "qt"
+  },
+  {
+    "id": "nav-sequencer",
+    "labels": [
+      "Plan",
+      "Sequence control"
+    ],
+    "sources": [
+      "argos/ui/sidebar.py:41",
+      "argos/ui/shell.py:231",
+      "argos/ui/widgets/sequence_panel.py:522"
+    ],
+    "group": "A",
+    "concept": "Rail entry: planning and running the night's acquisition sequence.",
+    "metaphor": "A night schedule: a time baseline at y=20.25 with three short ticks below it, and three exposure blocks (capsules, radius 1.5, height 3) staggered left to right like a Gantt chart. The planned block was a broken outline; it read as a chain link at 24 px.",
+    "display": "icon+label",
+    "shortcut": "F3",
+    "shortcut_origin": "qt"
+  },
+  {
+    "id": "nav-analyze",
+    "labels": [
+      "Review"
+    ],
+    "sources": [
+      "argos/ui/sidebar.py:42",
+      "argos/ui/shell.py:231"
+    ],
+    "group": "A",
+    "concept": "Rail entry: reviewing the light curve and exporting to AAVSO.",
+    "metaphor": "A light curve on axes: an L-shaped axis (left and bottom, 3.75 to 20.25) and six faint data dots (r=1.125, at least 3.75 apart) that hold a level, dip to a minimum and recover: an eclipse plotted with magnitude increasing downwards.",
+    "display": "icon+label",
+    "shortcut": "F4",
+    "shortcut_origin": "qt",
+    "keystone": true
+  },
+  {
+    "id": "nav-configuration",
+    "labels": [
+      "Settings"
+    ],
+    "sources": [
+      "argos/ui/sidebar.py:43",
+      "argos/ui/shell.py:231"
+    ],
+    "group": "A",
+    "concept": "Rail entry: observer, site, paths and appearance settings.",
+    "metaphor": "A calibration gauge: an open scale arc r=8.25 over 270 degrees (gap at the bottom), graduation ticks inside it at 225, 180, 135, 90, 0 and -45 degrees (cardinal 2.25 long, diagonal 1.5), a needle from the hub towards 45 degrees ending 1.5 inside the arc, and a filled hub r=1.5. An instrument dial, not a clock face, never a cog wheel.",
+    "display": "icon+label",
+    "shortcut": "F5",
+    "shortcut_origin": "qt"
+  },
+  {
+    "id": "connect",
+    "labels": [
+      "Connect equipment",
+      "Equipment ready",
+      "▶  Connect all",
+      "↗  Connect"
+    ],
+    "sources": [
+      "argos/ui/pages/connection_page.py:159",
+      "argos/ui/pages/connection_page.py:293",
+      "argos/ui/pages/connection_page.py:209",
+      "argos/ui/pages/connection_page.py:425"
+    ],
+    "group": "A",
+    "concept": "Open the ASCOM Alpaca link to the devices.",
+    "metaphor": "A plug and its socket engaged on the horizontal axis: two half-ellipses (rx 3.75, ry 5.25) with flat faces at x=9.75 and x=14.25, two prongs (y=9.75 and y=14.25) bridging the 4.5 gap, cable stubs 2.25-6 and 18-21.75 on y=12.",
+    "display": "icon+label",
+    "note": "Icon-only (with tooltip) on per-device rows; with label on the page's primary button.",
+    "keystone": true
+  },
+  {
+    "id": "disconnect",
+    "labels": [
+      "Disconnect equipment",
+      "■  Disconnect all",
+      "✗  Disconnect"
+    ],
+    "sources": [
+      "argos/ui/pages/connection_page.py:162",
+      "argos/ui/pages/connection_page.py:211",
+      "argos/ui/pages/connection_page.py:450"
+    ],
+    "group": "A",
+    "concept": "Close the link to the devices (stops anything running on them).",
+    "metaphor": "The connect pair pulled apart: plug half-ellipse with its face at x=8.25 (back at 4.5) and its two prongs protruding to x=10.5; socket half-ellipse with its face at x=15.75 (back at 19.5); a clear 5.25 gap; cable stubs 2.25-4.5 and 19.5-21.75. Reference geometry was rendered with the keystones and pairs cleanly with `connect`.",
+    "display": "icon+label"
+  },
+  {
+    "id": "simulator",
+    "labels": [
+      "Simulator"
+    ],
+    "sources": [],
+    "group": "A",
+    "concept": "Connect to the built-in simulated equipment (no Seestar needed).",
+    "metaphor": "The connect plug (solid, left, prongs out) facing a socket half-ellipse drawn as three explicit dash segments (a virtual device), no cable on the socket side.",
+    "display": "icon+label",
+    "note": "New in the web UI: no Qt equivalent."
+  },
+  {
+    "id": "discover",
+    "labels": [
+      "⚡  Discover"
+    ],
+    "sources": [
+      "argos/ui/pages/connection_page.py:187"
+    ],
+    "group": "A",
+    "concept": "Send an Alpaca UDP discovery broadcast to find the telescope on the network.",
+    "metaphor": "A sweep from a source ring (r=2.25) at lower-left: two concentric arcs spanning 70 degrees opening to the upper-right, and a found-device dot (r=1.875) just beyond the outer arc. Not the RSS symbol, no lightning bolt.",
+    "display": "icon+label"
+  },
+  {
+    "id": "network",
+    "labels": [
+      "Seestar / Net reachability dots"
+    ],
+    "sources": [
+      "argos/ui/statusbar.py:84"
+    ],
+    "group": "A",
+    "concept": "Reachability status: the Seestar answers on the Alpaca port; the internet is reachable (catalogue look-ups). ARGOS works offline; this only reports it.",
+    "metaphor": "Three nodes (rings r=2.25) at upper-centre, lower-left and lower-right joined by two straight links from the top node, each link stopping 1.5 short of the rings. The offline state is the same glyph with the right link removed, plus the label.",
+    "display": "icon+label"
+  },
+  {
+    "id": "mount",
+    "labels": [
+      "Mount",
+      "Telescope"
+    ],
+    "sources": [
+      "argos/ui/statusbar.py:23",
+      "argos/ui/pages/imaging_page.py:334"
+    ],
+    "group": "A",
+    "concept": "The telescope mount (status badge, Telescope panel).",
+    "metaphor": "An alt-az mount in profile: optical tube as a rounded rect (radius 1.5, 13.5 x 4.5) tilted 30 degrees up to the right, the shared hub dot (r=1.5) at (12.75, 17.25) on a post down to the base line at y=21.75 (2.25 of post visible, so dot and base do not fuse at 16 px).",
+    "display": "icon+label"
+  },
+  {
+    "id": "camera",
+    "labels": [
+      "Camera",
+      "Acquisition",
+      "Acquisition options"
+    ],
+    "sources": [
+      "argos/ui/statusbar.py:24",
+      "argos/ui/pages/imaging_page.py:333",
+      "argos/ui/widgets/sequence_panel.py:519"
+    ],
+    "group": "A",
+    "concept": "The imaging camera (status badge, Acquisition panel, acquisition options).",
+    "metaphor": "A sensor chip face-on: rounded square 5.25-18.75 (radius 2.25), an inner photosite square 7.5 (radius 1.5), three short pins on the left and right edges. Not a consumer camera body.",
+    "display": "icon+label"
+  },
+  {
+    "id": "filter-wheel",
+    "labels": [
+      "Filter Wheel"
+    ],
+    "sources": [
+      "argos/ui/statusbar.py:25"
+    ],
+    "group": "A",
+    "concept": "The filter wheel (status badge; filter slots are driven from the camera form).",
+    "metaphor": "A wheel: outer ring r=9, four filter apertures (rings r=2.25) on the diagonals touching the rim (pitch 6.75), and a filled hub: the four-fold symmetry of the logo.",
+    "display": "icon+label"
+  },
+  {
+    "id": "focuser",
+    "labels": [
+      "Focuser",
+      "Focusing"
+    ],
+    "sources": [
+      "argos/ui/statusbar.py:26",
+      "argos/ui/pages/imaging_page.py:335"
+    ],
+    "group": "A",
+    "concept": "The focuser (status badge, Focusing panel).",
+    "metaphor": "An optical ray diagram: a biconvex lens at x=7.5 (sagitta 2.25, open at 16 px), two parallel rays from the left edge at y=6.75 and y=17.25 (pixel lattice) bending at the lens onto a focal-point dot (r=1.5) at (15.75, 12), then crossing and diverging to x=20.25.",
+    "display": "icon+label"
+  },
+  {
+    "id": "capture",
+    "labels": [
+      "◉  Take shot"
+    ],
+    "sources": [
+      "argos/ui/widgets/camera_dock.py:207"
+    ],
+    "group": "A",
+    "concept": "Take one exposure with the current settings.",
+    "metaphor": "A sensor frame (rounded square 3.75-20.25, radius 2.25) holding the ARGOS ring (r=4.5) and filled centre dot (r=1.5): one exposure on the sensor; heir of the Qt '◉' glyph and of the logo's centre.",
+    "display": "icon",
+    "shortcut": "E",
+    "shortcut_origin": "proposed",
+    "keystone": true
+  },
+  {
+    "id": "live",
+    "labels": [
+      "▶  Live",
+      "■  Stop live"
+    ],
+    "sources": [
+      "argos/ui/widgets/camera_dock.py:204",
+      "argos/ui/widgets/camera_dock.py:274"
+    ],
+    "group": "A",
+    "concept": "Start or stop the continuous live preview loop.",
+    "metaphor": "The capture frame (same rounded square) with an outlined play triangle (round joins, 7.5 tall, optically centred 0.75 right of centre) in place of the ring. Toggle: pressed state while running; the running button may swap to `stop`.",
+    "display": "icon",
+    "shortcut": "V",
+    "shortcut_origin": "proposed"
+  },
+  {
+    "id": "stop",
+    "labels": [
+      "■  Stop",
+      "■  Stop live",
+      "■  Halt",
+      "■  Stop AF",
+      "■  Stop server",
+      "■ (jog stop)"
+    ],
+    "sources": [
+      "argos/ui/widgets/sequence_panel.py:472",
+      "argos/ui/widgets/camera_dock.py:274",
+      "argos/ui/widgets/focuser_dock.py:116",
+      "argos/ui/widgets/focuser_dock.py:178",
+      "argos/ui/panels/stellarium_card.py:126",
+      "argos/ui/widgets/mount_dock.py:252",
+      "argos/ui/panels/manual_control_dialog.py:137"
+    ],
+    "group": "A",
+    "concept": "Stop the running activity (sequence, live view, focuser move, autofocus, jog).",
+    "metaphor": "Transport stop: a solid rounded square 9 x 9 (7.5-16.5, radius 1.5), pixel-exact at 16 and 24 px. One of the three solid transport glyphs.",
+    "display": "icon+label",
+    "note": "Label required for stopping a sequence; icon-only allowed where it is the running state of a toolbar toggle (live, autofocus) or the jog pad centre."
+  },
+  {
+    "id": "abort",
+    "labels": [
+      "■  Abort"
+    ],
+    "sources": [
+      "argos/ui/widgets/mount_dock.py:212"
+    ],
+    "group": "A",
+    "concept": "Emergency abort of mount motion (slew).",
+    "metaphor": "An emergency stop: ring r=9 around the stop square (9 x 9, radius 1.5). Danger colour when a slew is in progress (as in Qt).",
+    "display": "icon+label",
+    "shortcut": "Escape",
+    "shortcut_origin": "proposed"
+  },
+  {
+    "id": "start",
+    "labels": [
+      "▶  Start sequence",
+      "▶  Resume"
+    ],
+    "sources": [
+      "argos/ui/widgets/sequence_panel.py:466",
+      "argos/ui/widgets/sequence_panel.py:1003"
+    ],
+    "group": "A",
+    "concept": "Start (or resume) the acquisition sequence.",
+    "metaphor": "Transport play: a solid triangle pointing right (round joins, 12 tall), optically centred (shifted 0.75 right of the geometric centre).",
+    "display": "icon+label"
+  },
+  {
+    "id": "pause",
+    "labels": [
+      "⏸  Pause"
+    ],
+    "sources": [
+      "argos/ui/widgets/sequence_panel.py:468"
+    ],
+    "group": "A",
+    "concept": "Pause the sequence after the current exposure.",
+    "metaphor": "Transport pause: two solid rounded bars 3 x 12 (radius 0.75) at 7.5-10.5 and 13.5-16.5, 3 apart, pixel-exact at 16 and 24 px.",
+    "display": "icon"
+  },
+  {
+    "id": "goto",
+    "labels": [
+      "▶  Slew",
+      "Slew to selected object"
+    ],
+    "sources": [
+      "argos/ui/widgets/mount_dock.py:210",
+      "argos/ui/widgets/mount_dock.py:156"
+    ],
+    "group": "A",
+    "concept": "Slew the telescope to the target coordinates.",
+    "metaphor": "A slew trajectory: a quadratic path (the logo's hooked arcs) rising from the lower-left corner (3.75, 20.25) to an open chevron head at (9, 10.5), pointing at a target ring (r=4.5, centre 16.5, 7.5) with its filled star dot (r=1.5). The head stops 2.08 short of the ring (1.5 minimum visible gap).",
+    "display": "icon+label",
+    "note": "Moves hardware: deliberate primary action (brass), label kept in the mount panel; icon-only in a context menu next to a star.",
+    "keystone": true
+  },
+  {
+    "id": "park",
+    "labels": [
+      "⊙  Park"
+    ],
+    "sources": [
+      "argos/ui/widgets/mount_dock.py:273"
+    ],
+    "group": "A",
+    "concept": "Park the mount (physically closes the Seestar arm).",
+    "metaphor": "The mount with its tube folded down horizontal (5.25-20.25 x 8.25-12.75, radius 1.5, centred on the hub) and a short downward chevron (arms 3) above it; same hub, post and base as `mount`.",
+    "display": "icon+label"
+  },
+  {
+    "id": "unpark",
+    "labels": [
+      "Unpark"
+    ],
+    "sources": [],
+    "group": "A",
+    "concept": "Unpark the mount (opens the arm, ready to slew).",
+    "metaphor": "The mount with its tube raised to 45 degrees and a short upward chevron at the upper-left; same hub, post and base as `mount`; the counterpart of `park`.",
+    "display": "icon+label",
+    "note": "New in the web UI: the Qt app only exposes Park."
+  },
+  {
+    "id": "tracking",
+    "labels": [
+      "Tracking ON",
+      "Tracking OFF"
+    ],
+    "sources": [
+      "argos/ui/widgets/mount_dock.py:116",
+      "argos/ui/widgets/mount_dock.py:325"
+    ],
+    "group": "A",
+    "concept": "Toggle sidereal tracking.",
+    "metaphor": "Following the sky's rotation: a small open pole ring (r=1.5) at the centre, a diurnal arc r=8.25 wrapping 225 degrees counter-clockwise round it in three explicit pieces, with a star dot (r=1.875) riding at the leading end. Toggle: pressed = tracking on.",
+    "display": "icon",
+    "shortcut": "T",
+    "shortcut_origin": "proposed",
+    "note": "Web UI: T is not wired: starting or stopping the sidereal drive moves the mount, which BRAND 7 forbids for single keys."
+  },
+  {
+    "id": "sync",
+    "labels": [
+      "⟳  Sync"
+    ],
+    "sources": [
+      "argos/ui/widgets/mount_dock.py:270"
+    ],
+    "group": "A",
+    "concept": "Sync the mount's pointing model to the solved position.",
+    "metaphor": "A pointing correction: a dashed ring (r=4.5, explicit segments: where the mount believes it points) at lower-left, a solid ring with a star dot (r=4.5 / r=1.5: where it really points) at upper-right, a short arrow from the first to the second.",
+    "display": "icon"
+  },
+  {
+    "id": "center-target",
+    "labels": [
+      "Center selected target"
+    ],
+    "sources": [
+      "argos/ui/widgets/mount_dock.py:215"
+    ],
+    "group": "A",
+    "concept": "Slew so that the selected star lands at the frame centre.",
+    "metaphor": "The target ring with its star dot (r=3.75 / r=1.5) at the centre, and four open chevrons at the corners pointing inwards at it (they also stand for the field; brackets, chevrons and ring cannot keep 1.5 gaps together).",
+    "display": "icon"
+  },
+  {
+    "id": "jog-pad",
+    "labels": [
+      "✥  Jog dialog…"
+    ],
+    "sources": [
+      "argos/ui/widgets/mount_dock.py:276"
+    ],
+    "group": "A",
+    "concept": "Open the floating jog pad (arrow-key mount control).",
+    "metaphor": "A hand paddle: four open chevrons (arms 3) pointing N/E/S/W outwards, arranged around a centre dot (r=1.5).",
+    "display": "icon"
+  },
+  {
+    "id": "jog-north",
+    "labels": [
+      "↑",
+      "North"
+    ],
+    "sources": [
+      "argos/ui/widgets/mount_dock.py:241",
+      "argos/ui/panels/manual_control_dialog.py:125"
+    ],
+    "group": "A",
+    "concept": "Move the mount north while pressed (Alpaca MoveAxis).",
+    "metaphor": "A single open chevron pointing up, arms 6 long at 90 degrees, centred, no shaft (shafted arrows are reserved for list re-ordering).",
+    "display": "icon",
+    "shortcut": "ArrowUp",
+    "shortcut_origin": "qt",
+    "note": "Accessible names must say North/South/East/West. Do not assume east is on the right: on a north-up sky image east is on the LEFT; the pad maps mount axes."
+  },
+  {
+    "id": "jog-south",
+    "labels": [
+      "↓",
+      "South"
+    ],
+    "sources": [
+      "argos/ui/widgets/mount_dock.py:244",
+      "argos/ui/panels/manual_control_dialog.py:126"
+    ],
+    "group": "A",
+    "concept": "Move the mount south while pressed (Alpaca MoveAxis).",
+    "metaphor": "A single open chevron pointing down, arms 6 long at 90 degrees, centred, no shaft (shafted arrows are reserved for list re-ordering).",
+    "display": "icon",
+    "shortcut": "ArrowDown",
+    "shortcut_origin": "qt",
+    "note": "Accessible names must say North/South/East/West. Do not assume east is on the right: on a north-up sky image east is on the LEFT; the pad maps mount axes."
+  },
+  {
+    "id": "jog-west",
+    "labels": [
+      "←",
+      "West"
+    ],
+    "sources": [
+      "argos/ui/widgets/mount_dock.py:242",
+      "argos/ui/panels/manual_control_dialog.py:127"
+    ],
+    "group": "A",
+    "concept": "Move the mount west while pressed (Alpaca MoveAxis).",
+    "metaphor": "A single open chevron pointing left, arms 6 long at 90 degrees, centred, no shaft (shafted arrows are reserved for list re-ordering).",
+    "display": "icon",
+    "shortcut": "ArrowLeft",
+    "shortcut_origin": "qt",
+    "note": "Accessible names must say North/South/East/West. Do not assume east is on the right: on a north-up sky image east is on the LEFT; the pad maps mount axes."
+  },
+  {
+    "id": "jog-east",
+    "labels": [
+      "→",
+      "East"
+    ],
+    "sources": [
+      "argos/ui/widgets/mount_dock.py:243",
+      "argos/ui/panels/manual_control_dialog.py:128"
+    ],
+    "group": "A",
+    "concept": "Move the mount east while pressed (Alpaca MoveAxis).",
+    "metaphor": "A single open chevron pointing right, arms 6 long at 90 degrees, centred, no shaft (shafted arrows are reserved for list re-ordering).",
+    "display": "icon",
+    "shortcut": "ArrowRight",
+    "shortcut_origin": "qt",
+    "note": "Accessible names must say North/South/East/West. Do not assume east is on the right: on a north-up sky image east is on the LEFT; the pad maps mount axes."
+  },
+  {
+    "id": "focus-in",
+    "labels": [
+      "In ▶"
+    ],
+    "sources": [
+      "argos/ui/widgets/focuser_dock.py:91"
+    ],
+    "group": "A",
+    "concept": "Step the focuser inwards.",
+    "metaphor": "Two converging rays (from x=3.75, y=6.75 / 17.25) meeting at a focal dot (r=1.5) at x=12.75, followed by a right-pointing open chevron at x=16.5-19.5 (the Qt 'In ▶' direction).",
+    "display": "icon",
+    "shortcut": "]",
+    "shortcut_origin": "proposed"
+  },
+  {
+    "id": "focus-out",
+    "labels": [
+      "◀ Out"
+    ],
+    "sources": [
+      "argos/ui/widgets/focuser_dock.py:88"
+    ],
+    "group": "A",
+    "concept": "Step the focuser outwards.",
+    "metaphor": "Mirror of focus-in: a left-pointing open chevron at x=4.5-7.5, then a focal dot at x=11.25 with two rays diverging to the right edge (x=20.25, y=6.75 / 17.25).",
+    "display": "icon",
+    "shortcut": "[",
+    "shortcut_origin": "proposed"
+  },
+  {
+    "id": "focus-move",
+    "labels": [
+      "Move"
+    ],
+    "sources": [
+      "argos/ui/widgets/focuser_dock.py:103"
+    ],
+    "group": "A",
+    "concept": "Move the focuser to the typed absolute position.",
+    "metaphor": "A position scale: horizontal baseline at y=17.25 with five ticks, and an outlined downward pointer triangle (round joins) above the fourth tick.",
+    "display": "icon"
+  },
+  {
+    "id": "autofocus",
+    "labels": [
+      "⚡  Autofocus",
+      "■  Stop AF"
+    ],
+    "sources": [
+      "argos/ui/widgets/focuser_dock.py:118",
+      "argos/ui/widgets/focuser_dock.py:178"
+    ],
+    "group": "A",
+    "concept": "Run the V-curve autofocus routine.",
+    "metaphor": "A V-curve (HFD against focuser position): five data dots (r=1.5) on two fitted lines meeting at (10.5, 15), and the automatic A badge in the lower-right cell. No best-focus tick (it turned the V into a Y), no lightning bolt.",
+    "display": "icon"
+  },
+  {
+    "id": "focus-metrics",
+    "labels": [
+      "Focus diagnostics (HFD/FWHM)",
+      "FWHM"
+    ],
+    "sources": [
+      "argos/ui/pages/imaging_page.py:338",
+      "argos/ui/pages/analyze_page.py:244"
+    ],
+    "group": "A",
+    "concept": "Star-size diagnostics over time (HFD, FWHM).",
+    "metaphor": "A stellar profile: a Gaussian bell whose tails start on its baseline, and two inward chevrons outside the profile at half maximum (the FWHM measurement). A bar inside the bell read as a capital A.",
+    "display": "icon"
+  },
+  {
+    "id": "zoom-in",
+    "labels": [
+      "Zoom in"
+    ],
+    "sources": [],
+    "group": "A",
+    "concept": "Magnify the image view.",
+    "metaphor": "Four corner brackets (the viewport, 3.75-20.25, arms 4.5, radius 2.25) with a plus (arms 3.75) at the centre. No magnifying glass (the lens belongs to `search`).",
+    "display": "icon",
+    "shortcut": "+",
+    "shortcut_origin": "proposed",
+    "note": "New control: the Qt viewer zooms with the mouse wheel only."
+  },
+  {
+    "id": "zoom-out",
+    "labels": [
+      "Zoom out"
+    ],
+    "sources": [],
+    "group": "A",
+    "concept": "Reduce the image view.",
+    "metaphor": "The same corner brackets with a minus (7.5 long) at the centre.",
+    "display": "icon",
+    "shortcut": "-",
+    "shortcut_origin": "proposed",
+    "note": "New control: the Qt viewer zooms with the mouse wheel only."
+  },
+  {
+    "id": "zoom-fit",
+    "labels": [
+      "Fit to window"
+    ],
+    "sources": [
+      "argos/ui/widgets/fits_viewer.py:318"
+    ],
+    "group": "A",
+    "concept": "Fit the whole frame in the window.",
+    "metaphor": "The zoom family's viewport brackets (3.75-20.25, arms 4.5, radius 2.25) each pushed out by a diagonal shaft from the centre region (9, 9) that meets the bracket's corner arc: the frame grown to the window's corners.",
+    "display": "icon",
+    "shortcut": "F",
+    "shortcut_origin": "proposed",
+    "note": "The Qt viewer only auto-ranges internally; new button."
+  },
+  {
+    "id": "zoom-fill",
+    "labels": [
+      "Fill the viewer"
+    ],
+    "sources": [
+      "web/src/lib/imaging/ImagingToolbar.svelte"
+    ],
+    "group": "A",
+    "concept": "Fit mode that fills the viewer with the frame, cropping its long sides equally (BRAND 11.1: no dead bands); a chip on the image says 'Fill' while it crops.",
+    "metaphor": "The zoom family's viewport corners (radius 2.25 at 3.75-20.25) with the frame's long edges, y = 3.75 and 20.25, running straight through them out to the live-area edge (2.25-21.75): the frame is wider than the window. A vertical double arrow on the centre axis (x = 12, 6.75-17.25, chevron heads 2.25 wide) says it was grown to the top and bottom.",
+    "display": "icon",
+    "shortcut": "Shift+F",
+    "shortcut_origin": "proposed",
+    "note": "New in the web UI (no Qt equivalent). F stays 'fit: whole frame'."
+  },
+  {
+    "id": "zoom-1to1",
+    "labels": [
+      "1:1 (100 %)"
+    ],
+    "sources": [
+      "argos/ui/widgets/fits_viewer.py:184"
+    ],
+    "group": "A",
+    "concept": "Show one image pixel per screen pixel.",
+    "metaphor": "Corner brackets around '1:1' drawn in strokes: two vertical '1' strokes (8.25 tall, small flag at the top) and a colon of two dots (r=1.125) between them.",
+    "display": "icon",
+    "shortcut": "1",
+    "shortcut_origin": "proposed",
+    "note": "Only numerals allowed in the set, with `stretch-auto`'s A."
+  },
+  {
+    "id": "stretch-auto",
+    "labels": [
+      "Auto stretch"
+    ],
+    "sources": [
+      "argos/ui/widgets/histogram_dock.py:128"
+    ],
+    "group": "A",
+    "concept": "Compute a display stretch automatically for the current frame.",
+    "metaphor": "A transfer curve inside an L axis: steep rise from bottom-left then flattening (an asinh/midtones shape), with the 'auto' badge, a stroked capital A 6 tall, in the lower-right badge cell (the curve is cut 1.5 around it).",
+    "display": "icon",
+    "shortcut": "A",
+    "shortcut_origin": "proposed"
+  },
+  {
+    "id": "stretch-reset",
+    "labels": [
+      "Reset stretch (linear)"
+    ],
+    "sources": [
+      "argos/ui/widgets/histogram_dock.py:113"
+    ],
+    "group": "A",
+    "concept": "Return to a linear display stretch.",
+    "metaphor": "The L axis with a shortened straight identity line (linear transfer) and a return arc (r=3.75, counter-clockwise, chevron head) at the upper-right.",
+    "display": "icon",
+    "shortcut": "Shift+A",
+    "shortcut_origin": "proposed",
+    "note": "New button; Qt offers the mode combo only."
+  },
+  {
+    "id": "histogram",
+    "labels": [
+      "Adjust image",
+      "Image display"
+    ],
+    "sources": [
+      "argos/ui/analysis_window.py:260",
+      "argos/ui/analysis_window.py:232",
+      "argos/ui/pages/imaging_page.py:336"
+    ],
+    "group": "A",
+    "concept": "Open the histogram and display (black / white / midtone) tools.",
+    "metaphor": "An image histogram: six vertical bars (1.5 strokes) on a baseline with a skewed sky distribution (sharp peak at the left, long tail to the right), and two small upward pointer ticks below the baseline for the black and white points.",
+    "display": "icon",
+    "shortcut": "H",
+    "shortcut_origin": "proposed",
+    "note": "Web UI: H shows or hides the levels strip docked under the image (histogram with draggable B / M / W handles, the three levels, transfer, rotation)."
+  },
+  {
+    "id": "crosshair",
+    "labels": [
+      "Crosshair on image"
+    ],
+    "sources": [
+      "argos/ui/widgets/histogram_dock.py:134"
+    ],
+    "group": "A",
+    "concept": "Toggle the measuring crosshair over the image.",
+    "metaphor": "The ARGOS reticle: a ring r=7.5 broken at the four cardinal points, four ticks through the gaps from the edge (2.25) to an open centre (r=3.75). Each arc ends 3 from the tick centreline (1.5 visible gap), so the four arcs span 42.8 degrees.",
+    "display": "icon",
+    "shortcut": "X",
+    "shortcut_origin": "proposed",
+    "keystone": true
+  },
+  {
+    "id": "loupe",
+    "labels": [
+      "Loupe (100% zoom at cursor)"
+    ],
+    "sources": [
+      "argos/ui/widgets/histogram_dock.py:147"
+    ],
+    "group": "A",
+    "concept": "Toggle the 1:1 magnified inset that follows the cursor.",
+    "metaphor": "A call-out: a small square (4.5) at lower-left, a large square (9, radius 1.5) at upper-right with a star dot inside, two straight lines joining their corresponding corners. Not a magnifying glass.",
+    "display": "icon",
+    "shortcut": "Z",
+    "shortcut_origin": "proposed"
+  },
+  {
+    "id": "saturation",
+    "labels": [
+      "Highlight saturation"
+    ],
+    "sources": [
+      "argos/ui/widgets/histogram_dock.py:138"
+    ],
+    "group": "A",
+    "concept": "Toggle highlighting of saturated (clipped) pixels.",
+    "metaphor": "A clipped star profile: a bell whose tails start on the baseline and whose straight flanks are cut flat by a horizontal ceiling line (full well), with three short diagonal hatch strokes above the ceiling.",
+    "display": "icon"
+  },
+  {
+    "id": "region-stats",
+    "labels": [
+      "Region statistics (drag the box on the image)"
+    ],
+    "sources": [
+      "argos/ui/widgets/histogram_dock.py:142"
+    ],
+    "group": "A",
+    "concept": "Toggle the draggable region-of-interest statistics box.",
+    "metaphor": "A drawn region: a landscape rounded marquee (2.25-21.75 x 5.25-18.75, radius 2.25) made of even dashes (1.5 long, 1.5 visible gaps) holding a three-bar mini histogram. Landscape and evenly dashed so it never reads as the zoom family's square brackets.",
+    "display": "icon"
+  },
+  {
+    "id": "statistics",
+    "labels": [
+      "Image statistics"
+    ],
+    "sources": [
+      "argos/ui/pages/imaging_page.py:337"
+    ],
+    "group": "A",
+    "concept": "Show image statistics (mean, median, sigma, min, max).",
+    "metaphor": "A box-and-whisker: a vertical whisker line with short end caps, a box (rounded rect 6 x 7.5) across its middle and a median line through the box.",
+    "display": "icon"
+  },
+  {
+    "id": "planetarium",
+    "labels": [
+      "▶  Start server",
+      "■  Stop server"
+    ],
+    "sources": [
+      "argos/ui/panels/stellarium_card.py:76",
+      "argos/ui/panels/stellarium_card.py:126"
+    ],
+    "group": "A",
+    "concept": "Start or stop the Stellarium telescope-control bridge.",
+    "metaphor": "A planetarium dome: semicircle r=7.5 standing on a ground line at y=17.25, two meridian arcs inside the dome and one star dot (r=1.125) in its upper half.",
+    "display": "icon+label"
+  },
+  {
+    "id": "visibility",
+    "labels": [
+      "Visibility"
+    ],
+    "sources": [
+      "argos/ui/widgets/sequence_panel.py:520"
+    ],
+    "group": "A",
+    "concept": "The target's altitude over the night.",
+    "metaphor": "An altitude path: a horizon baseline at y=18.75, an arc rising from it and setting back into it, a star dot (r=1.5) at culmination, and a dashed 'now' line at x=15.75 rising from the horizon to the curve in two explicit dashes (it ends on the curve).",
+    "display": "icon"
+  },
+  {
+    "id": "transit",
+    "labels": [
+      "Prepare transit sequence"
+    ],
+    "sources": [
+      "argos/ui/widgets/sequence_panel.py:418"
+    ],
+    "group": "A",
+    "concept": "Build a sequence around a predicted exoplanet transit.",
+    "metaphor": "A transit light curve: a flat baseline that steps down into a flat-bottomed box and back up (one stroke, round joins), with a small filled planet disc (r=1.875) above the dip.",
+    "display": "icon+label"
+  },
+  {
+    "id": "plate-solve",
+    "labels": [
+      "Identify field",
+      "Plate solving"
+    ],
+    "sources": [
+      "argos/ui/shell.py:244",
+      "argos/ui/analysis_window.py:251",
+      "argos/ui/widgets/astrometry_settings.py:73"
+    ],
+    "group": "B",
+    "concept": "Plate-solve the frame (ASTAP): find its sky coordinates and scale.",
+    "metaphor": "A matched asterism in the field: four corner brackets (3.75-20.25, arms 4.5, radius 2.25) around three stars of graded size (r=2.25, 1.875, 1.5, star-chart magnitude convention) joined by the triangle that the solver matches.",
+    "display": "icon",
+    "shortcut": "S",
+    "shortcut_origin": "proposed",
+    "keystone": true
+  },
+  {
+    "id": "plate-solve-auto",
+    "labels": [
+      "Keep field identified automatically"
+    ],
+    "sources": [
+      "argos/ui/shell.py:248"
+    ],
+    "group": "B",
+    "concept": "Toggle automatic re-solving so the grid and markers follow the field.",
+    "metaphor": "The plate-solve glyph with its lower-right bracket replaced by the 'auto' badge (stroked capital A in the badge cell).",
+    "display": "icon"
+  },
+  {
+    "id": "catalogue",
+    "labels": [
+      "Configure catalogues…",
+      "Catalogues / depth…",
+      "Field catalogue"
+    ],
+    "sources": [
+      "argos/ui/shell.py:263",
+      "argos/ui/widgets/overlay_bar.py:120",
+      "argos/ui/widgets/astrometry_settings.py:74"
+    ],
+    "group": "B",
+    "concept": "Catalogue sources and depth (Gaia, VSX, SIMBAD, NASA, offline caches).",
+    "metaphor": "A star register: a bound ledger (rounded rect, radius 1.5, with a spine line 3 in from the left) holding three entry rows, each a star dot (r=1.125) followed by a short line.",
+    "display": "icon"
+  },
+  {
+    "id": "sky-grid",
+    "labels": [
+      "Coordinate grid",
+      "WCS grid overlay"
+    ],
+    "sources": [
+      "argos/ui/widgets/overlay_bar.py:32",
+      "argos/ui/widgets/histogram_dock.py:153"
+    ],
+    "group": "B",
+    "concept": "Toggle the RA/Dec (WCS) grid over the solved image.",
+    "metaphor": "A WCS graticule as it lies on a solved frame: a rounded square field crossed by RA lines converging on a pole off the field to the upper-left (straight on a camera frame) and Dec lines that are arcs centred on that pole; every line ends on the frame. Not a globe.",
+    "display": "icon",
+    "shortcut": "G",
+    "shortcut_origin": "proposed"
+  },
+  {
+    "id": "photometry",
+    "labels": [
+      "Photometry setup…",
+      "Aperture · references"
+    ],
+    "sources": [
+      "argos/ui/shell.py:270",
+      "argos/ui/panels/photometry_window.py:235"
+    ],
+    "group": "B",
+    "concept": "Aperture photometry set-up: target, comparisons, apertures.",
+    "metaphor": "An aperture on a star: star dot (r=2.25), solid aperture ring (r=4.5), and the sky annulus as an outer ring (r=8.25) drawn as eight explicit arc dashes.",
+    "display": "icon"
+  },
+  {
+    "id": "light-curve",
+    "labels": [
+      "Live curves & diagnostics…",
+      "Light curve",
+      "Differential photometry",
+      "Source curve"
+    ],
+    "sources": [
+      "argos/ui/shell.py:278",
+      "argos/ui/panels/photometry_window.py:231",
+      "argos/ui/pages/imaging_page.py:340",
+      "argos/ui/pages/analyze_page.py:243"
+    ],
+    "group": "B",
+    "concept": "The differential light curve of the target.",
+    "metaphor": "A pulsating-star curve without axes: seven dots (r=1.5) tracing a Cepheid-like sawtooth (fast rise, slow decline), with short vertical error bars on two of them. Distinct from nav-analyze, which keeps the axes.",
+    "display": "icon"
+  },
+  {
+    "id": "session-metrics",
+    "labels": [
+      "Metrics"
+    ],
+    "sources": [
+      "argos/ui/panels/photometry_window.py:232"
+    ],
+    "group": "B",
+    "concept": "Session metrics over time: airmass, FWHM, sky level, HFD, star count, temperature.",
+    "metaphor": "Three stacked sparklines (polylines of four segments, each 15 wide) separated by 4.5, each with a different shape.",
+    "display": "icon"
+  },
+  {
+    "id": "rerun-photometry",
+    "labels": [
+      "Re-run subs…"
+    ],
+    "sources": [
+      "argos/ui/shell.py:282"
+    ],
+    "group": "B",
+    "concept": "Re-run differential photometry over a folder of saved subs.",
+    "metaphor": "A stack of two offset frames (rounded squares) with a circular re-run arrow (270 degree arc, chevron head) in front, knocked out 1.5 from the frames.",
+    "display": "icon+label"
+  },
+  {
+    "id": "field-stars",
+    "labels": [
+      "Stars"
+    ],
+    "sources": [
+      "argos/ui/widgets/overlay_bar.py:24"
+    ],
+    "group": "B",
+    "concept": "Toggle Gaia DR3 field-star markers.",
+    "metaphor": "Three star dots of graded size (r=2.25, 1.5, 1.125) in a loose triangle, no lines and no frame: a patch of sky.",
+    "display": "icon"
+  },
+  {
+    "id": "variable-star",
+    "labels": [
+      "Variables",
+      "Variable stars"
+    ],
+    "sources": [
+      "argos/ui/widgets/overlay_bar.py:25",
+      "argos/ui/panels/photometry_window.py:230"
+    ],
+    "group": "B",
+    "concept": "Toggle VSX variable-star markers; the variable-star list.",
+    "metaphor": "A star whose light varies: a star dot (r=2.25) at (12, 7.5) above one full period of a sine wave (15 wide, amplitude 2.25) centred on y=16.5.",
+    "display": "icon"
+  },
+  {
+    "id": "target-star",
+    "labels": [
+      "Target",
+      "Set as target",
+      "Targets",
+      "Selected stars",
+      "Scientific source"
+    ],
+    "sources": [
+      "argos/ui/widgets/star_info_card.py:80",
+      "argos/ui/widgets/variable_table.py:111",
+      "argos/ui/panels/photometry_window.py:233",
+      "argos/ui/widgets/overlay_bar.py:34",
+      "argos/ui/widgets/sequence_panel.py:518"
+    ],
+    "group": "B",
+    "concept": "The science target (role marker), and the actions that assign it.",
+    "metaphor": "The target marker of the image overlay: a star dot (r=2.25) centred in a solid circle (r=6.75). Shape = role, as on the image: circle = target.",
+    "display": "icon"
+  },
+  {
+    "id": "comparison-star",
+    "labels": [
+      "Comparison star",
+      "Comparison stars",
+      "VSP references"
+    ],
+    "sources": [
+      "argos/ui/widgets/star_info_card.py:83",
+      "argos/ui/panels/photometry_window.py:234",
+      "argos/ui/pages/analyze_page.py:245",
+      "argos/ui/widgets/overlay_bar.py:33"
+    ],
+    "group": "B",
+    "concept": "Comparison stars (role marker), lists and plots.",
+    "metaphor": "The comparison marker of the image overlay: a star dot (r=2.25) centred in a square (13.5 side, radius 1.5). Square = comparison.",
+    "display": "icon"
+  },
+  {
+    "id": "check-star",
+    "labels": [
+      "Check star"
+    ],
+    "sources": [
+      "argos/ui/widgets/star_info_card.py:88"
+    ],
+    "group": "B",
+    "concept": "Check star (role marker): constant star used to verify the ensemble.",
+    "metaphor": "The check marker of the image overlay: a star dot (r=1.875) inside an upward equilateral triangle (15 wide, round joins), the dot at the triangle's centroid. Triangle = check.",
+    "display": "icon"
+  },
+  {
+    "id": "recommend-comparisons",
+    "labels": [
+      "Recommend from pilot"
+    ],
+    "sources": [
+      "argos/ui/widgets/comparison_table.py:119"
+    ],
+    "group": "B",
+    "concept": "Recommend a comparison ensemble from the pilot frames.",
+    "metaphor": "The comparison marker (square with star dot) reduced to the upper-left, and the 'auto' badge (stroked A) in the lower-right badge cell.",
+    "display": "icon+label"
+  },
+  {
+    "id": "comparison-quality",
+    "labels": [
+      "Comparison quality"
+    ],
+    "sources": [
+      "argos/ui/pages/analyze_page.py:246"
+    ],
+    "group": "B",
+    "concept": "Quality of each comparison star (residual scatter).",
+    "metaphor": "A residual plot: a horizontal zero line, five dots (r=1.125) scattered tightly above and below it, a small comparison square at the line's left end.",
+    "display": "icon"
+  },
+  {
+    "id": "galaxy",
+    "labels": [
+      "Galaxies"
+    ],
+    "sources": [
+      "argos/ui/widgets/overlay_bar.py:26"
+    ],
+    "group": "B",
+    "concept": "Toggle galaxy markers (SIMBAD / Messier-NGC-IC).",
+    "metaphor": "The star-atlas galaxy symbol: an ellipse (rx 8.25, ry 3.75) tilted -30 degrees with a filled core dot (r=1.125).",
+    "display": "icon"
+  },
+  {
+    "id": "nebula",
+    "labels": [
+      "Nebulae + clusters"
+    ],
+    "sources": [
+      "argos/ui/widgets/overlay_bar.py:27"
+    ],
+    "group": "B",
+    "concept": "Toggle nebula and star-cluster markers.",
+    "metaphor": "The star-atlas open-cluster symbol: a circle r=7.5 drawn as eight explicit dashes, containing four star dots of graded size.",
+    "display": "icon"
+  },
+  {
+    "id": "exoplanet",
+    "labels": [
+      "Exoplanets",
+      "Find planet"
+    ],
+    "sources": [
+      "argos/ui/widgets/overlay_bar.py:28",
+      "argos/ui/widgets/sequence_panel.py:367"
+    ],
+    "group": "B",
+    "concept": "Toggle exoplanet-host markers; search the NASA Exoplanet Archive.",
+    "metaphor": "A host star dot (r=2.25) with an inclined orbit ellipse (rx 9, ry 3.75, tilted -20 degrees) and a planet disc (r=1.5) on the near side; the orbit stops 1.5 short of the planet.",
+    "display": "icon"
+  },
+  {
+    "id": "other-objects",
+    "labels": [
+      "Other objects"
+    ],
+    "sources": [
+      "argos/ui/widgets/overlay_bar.py:29"
+    ],
+    "group": "B",
+    "concept": "Toggle other classified SIMBAD sources (radio, X-ray...).",
+    "metaphor": "A generic source marker: a diamond (square rotated 45 degrees, 13.5 across, round joins) with a centre dot (r=1.125).",
+    "display": "icon"
+  },
+  {
+    "id": "labels",
+    "labels": [
+      "Labels",
+      "Use as target name"
+    ],
+    "sources": [
+      "argos/ui/widgets/overlay_bar.py:35",
+      "argos/ui/widgets/mount_dock.py:176"
+    ],
+    "group": "B",
+    "concept": "Show object name labels; use a catalogue name as the target name.",
+    "metaphor": "A name tag: a tag outline (rectangle with a pointed left end, round joins) with an eyelet ring (r=1.125) near the point and one text line inside.",
+    "display": "icon"
+  },
+  {
+    "id": "error-bars",
+    "labels": [
+      "Show uncertainties"
+    ],
+    "sources": [
+      "argos/ui/widgets/lightcurve_panel.py:85"
+    ],
+    "group": "B",
+    "concept": "Toggle error bars on the light curve.",
+    "metaphor": "Three data dots (r=1.5) each crossed by a vertical error bar with short horizontal caps (3 wide), bars of different lengths.",
+    "display": "icon"
+  },
+  {
+    "id": "relative-flux",
+    "labels": [
+      "Relative flux"
+    ],
+    "sources": [
+      "argos/ui/widgets/lightcurve_panel.py:90"
+    ],
+    "group": "B",
+    "concept": "Plot relative flux instead of differential magnitude.",
+    "metaphor": "A ratio drawn as a diagonal fraction: the target marker (circle r=3.75 with its dot) upper-left, a slash, the comparison marker (square 7.5 with its dot) lower-right.",
+    "display": "icon"
+  },
+  {
+    "id": "frames",
+    "labels": [
+      "Frames"
+    ],
+    "sources": [
+      "argos/ui/pages/analyze_page.py:247"
+    ],
+    "group": "B",
+    "concept": "The list of frames in the session.",
+    "metaphor": "A stack of three frames: rounded squares (10.5) offset by 3 diagonally, only the front one complete, the two behind drawn as their visible edges.",
+    "display": "icon"
+  },
+  {
+    "id": "metadata",
+    "labels": [
+      "FITS header",
+      "Metadata",
+      "Frame · selected star"
+    ],
+    "sources": [
+      "argos/ui/analysis_window.py:231",
+      "argos/ui/pages/analyze_page.py:248",
+      "argos/ui/analysis_window.py:230"
+    ],
+    "group": "B",
+    "concept": "FITS header and frame / session metadata.",
+    "metaphor": "A header card: rounded rect sheet with four key = value rows, each a short key stroke and a longer value stroke in two aligned columns.",
+    "display": "icon"
+  },
+  {
+    "id": "export-aavso",
+    "labels": [
+      "Export target (AAVSO)…",
+      "AAVSO export"
+    ],
+    "sources": [
+      "argos/ui/panels/photometry_window.py:244",
+      "argos/ui/pages/analyze_page.py:249"
+    ],
+    "group": "B",
+    "concept": "Export the target's measurements in AAVSO extended format.",
+    "metaphor": "The export document (folded corner) carrying a four-dot light curve (descent into minimum and partial recovery, r=1.125), with the export arrow leaving its right edge.",
+    "display": "icon+label"
+  },
+  {
+    "id": "export",
+    "labels": [
+      "Export measurements…"
+    ],
+    "sources": [
+      "argos/ui/panels/photometry_window.py:240"
+    ],
+    "group": "B",
+    "concept": "Export the measurements table to a file.",
+    "metaphor": "A document (rounded rect with a folded top-right corner) with two ruled lines, its right edge interrupted by a horizontal arrow leaving to the right (shaft to x=21, open chevron head).",
+    "display": "icon+label"
+  },
+  {
+    "id": "copy",
+    "labels": [
+      "Copy TSV"
+    ],
+    "sources": [
+      "argos/ui/widgets/comparison_table.py:125",
+      "argos/ui/widgets/target_table.py:49"
+    ],
+    "group": "B",
+    "concept": "Copy the table to the clipboard as TSV.",
+    "metaphor": "Two overlapping rounded-rect sheets offset by 3; the back sheet is drawn only where it is not covered.",
+    "display": "icon"
+  },
+  {
+    "id": "open-image",
+    "labels": [
+      "Open FITS image…",
+      "Open image…",
+      "Open FITS…",
+      "Open source frame"
+    ],
+    "sources": [
+      "argos/ui/shell.py:192",
+      "argos/ui/widgets/image_toolbar.py:51",
+      "argos/ui/pages/analyze_page.py:261",
+      "argos/ui/pages/analyze_page.py:179"
+    ],
+    "group": "B",
+    "concept": "Open a FITS frame from disk.",
+    "metaphor": "An image frame (rounded square 3.75-17.25) with two star dots (r=1.875, 1.125), and an arrow entering through the upper-right corner (diagonal shaft, chevron pointing into the frame).",
+    "display": "icon",
+    "shortcut": "Ctrl+O",
+    "shortcut_origin": "qt"
+  },
+  {
+    "id": "open-session",
+    "labels": [
+      "Open session photometry…",
+      "Open session…"
+    ],
+    "sources": [
+      "argos/ui/shell.py:197",
+      "argos/ui/pages/analyze_page.py:140",
+      "argos/ui/pages/analyze_page.py:257"
+    ],
+    "group": "B",
+    "concept": "Open a saved observing session and its photometry.",
+    "metaphor": "The session folder (rounded, tab at top-left, as `browse`) carrying a flat-bottomed dip drawn as one line with 45-degree flanks (an eclipse in a session's light curve). Dots were dropped: three or four dots in a folder read as `browse`'s ellipsis at 16 px.",
+    "display": "icon",
+    "shortcut": "Ctrl+Shift+O",
+    "shortcut_origin": "qt"
+  },
+  {
+    "id": "open-file",
+    "labels": [
+      "Open curve CSV…",
+      "Load preset…"
+    ],
+    "sources": [
+      "argos/ui/pages/analyze_page.py:259",
+      "argos/ui/widgets/sequence_panel.py:457"
+    ],
+    "group": "B",
+    "concept": "Open a data or preset file.",
+    "metaphor": "An open folder: back panel with tab, front flap drawn as a parallelogram tilted forward.",
+    "display": "icon+label"
+  },
+  {
+    "id": "save",
+    "labels": [
+      "Save preset…"
+    ],
+    "sources": [
+      "argos/ui/widgets/sequence_panel.py:455"
+    ],
+    "group": "B",
+    "concept": "Save the current settings to a file.",
+    "metaphor": "Storing: a downward arrow (shaft + open chevron) entering an open-top tray (U shape, radius 2.25). No floppy disk.",
+    "display": "icon+label"
+  },
+  {
+    "id": "browse",
+    "labels": [
+      "Browse…"
+    ],
+    "sources": [
+      "argos/ui/pages/configuration_page.py:282",
+      "argos/ui/pages/configuration_page.py:307",
+      "argos/ui/pages/configuration_page.py:651",
+      "argos/ui/pages/configuration_page.py:670",
+      "argos/ui/widgets/astrometry_settings.py:96"
+    ],
+    "group": "B",
+    "concept": "Pick a folder or executable on disk.",
+    "metaphor": "A closed folder with three dots (r=1.125) in a row on its face (choose...).",
+    "display": "icon"
+  },
+  {
+    "id": "search",
+    "labels": [
+      "Search",
+      "Find"
+    ],
+    "sources": [
+      "argos/ui/pages/configuration_page.py:195",
+      "argos/ui/widgets/mount_dock.py:145",
+      "argos/ui/widgets/sequence_panel.py:293"
+    ],
+    "group": "B",
+    "concept": "Search a catalogue or a place by name.",
+    "metaphor": "A magnifier: lens ring r=6 centred (10.5, 10.5), handle at 45 degrees from the ring to (20.25, 20.25). The only lens in the set.",
+    "display": "icon"
+  },
+  {
+    "id": "site",
+    "labels": [
+      "Use selected"
+    ],
+    "sources": [
+      "argos/ui/pages/configuration_page.py:208"
+    ],
+    "group": "B",
+    "concept": "The observing site (use the selected location).",
+    "metaphor": "A location pin whose head is the ARGOS ring and dot (ring r=4.5, dot r=1.5), its point touching a short horizon line (7.5 wide) at y=20.25.",
+    "display": "icon"
+  },
+  {
+    "id": "bookmark",
+    "labels": [
+      "Save current",
+      "Set default",
+      "Presets"
+    ],
+    "sources": [
+      "argos/ui/pages/configuration_page.py:247",
+      "argos/ui/pages/configuration_page.py:228",
+      "argos/ui/widgets/sequence_panel.py:521"
+    ],
+    "group": "B",
+    "concept": "Saved sites and presets (save, make default).",
+    "metaphor": "A ribbon bookmark: vertical rectangle 10.5 x 16.5 with a V notch at the bottom (round joins). Stars are data, never favourites.",
+    "display": "icon"
+  },
+  {
+    "id": "add",
+    "labels": [
+      "＋ Add"
+    ],
+    "sources": [
+      "argos/ui/widgets/sequence_panel.py:249"
+    ],
+    "group": "B",
+    "concept": "Add a sequence step.",
+    "metaphor": "A plus, arms 6.75 from the centre.",
+    "display": "icon"
+  },
+  {
+    "id": "duplicate",
+    "labels": [
+      "⧉ Dup"
+    ],
+    "sources": [
+      "argos/ui/widgets/sequence_panel.py:250"
+    ],
+    "group": "B",
+    "concept": "Duplicate the selected step.",
+    "metaphor": "Two overlapping rounded squares offset by 3, a small plus (arms 2.25) inside the front one.",
+    "display": "icon"
+  },
+  {
+    "id": "remove",
+    "labels": [
+      "－ Remove",
+      "Remove selected",
+      "Remove"
+    ],
+    "sources": [
+      "argos/ui/widgets/sequence_panel.py:251",
+      "argos/ui/widgets/comparison_table.py:110",
+      "argos/ui/widgets/target_table.py:47",
+      "argos/ui/widgets/star_info_card.py:100",
+      "argos/ui/pages/configuration_page.py:231"
+    ],
+    "group": "B",
+    "concept": "Remove the selected item from a list.",
+    "metaphor": "A minus, 13.5 long.",
+    "display": "icon"
+  },
+  {
+    "id": "move-up",
+    "labels": [
+      "↑"
+    ],
+    "sources": [
+      "argos/ui/widgets/sequence_panel.py:252"
+    ],
+    "group": "B",
+    "concept": "Move the selected step up.",
+    "metaphor": "An arrow up: vertical shaft 13.5 long with an open chevron head (arms 4.5).",
+    "display": "icon"
+  },
+  {
+    "id": "move-down",
+    "labels": [
+      "↓"
+    ],
+    "sources": [
+      "argos/ui/widgets/sequence_panel.py:253"
+    ],
+    "group": "B",
+    "concept": "Move the selected step down.",
+    "metaphor": "An arrow down: vertical shaft 13.5 long with an open chevron head (arms 4.5).",
+    "display": "icon"
+  },
+  {
+    "id": "clear",
+    "labels": [
+      "Clear"
+    ],
+    "sources": [
+      "argos/ui/panels/log_panel.py:42",
+      "argos/ui/widgets/hfd_history_dock.py:90"
+    ],
+    "group": "B",
+    "concept": "Clear the log or the history plot.",
+    "metaphor": "A list being emptied: three horizontal lines of decreasing length at the upper-left and a small x (arms 2.25) at the lower-right.",
+    "display": "icon"
+  },
+  {
+    "id": "close",
+    "labels": [
+      "×",
+      "Dismiss",
+      "Ignore"
+    ],
+    "sources": [
+      "argos/ui/widgets/star_info_card.py:59",
+      "argos/ui/widgets/star_info_card.py:105",
+      "argos/ui/widgets/mount_dock.py:181"
+    ],
+    "group": "B",
+    "concept": "Dismiss a card or suggestion.",
+    "metaphor": "An x: two diagonals spanning 10.5, centred.",
+    "display": "icon",
+    "shortcut": "Escape",
+    "shortcut_origin": "proposed"
+  },
+  {
+    "id": "refresh",
+    "labels": [
+      "Refresh catalogue",
+      "Refresh",
+      "↗  Retry"
+    ],
+    "sources": [
+      "argos/ui/widgets/comparison_table.py:113",
+      "argos/ui/pages/configuration_page.py:287",
+      "argos/ui/pages/connection_page.py:458"
+    ],
+    "group": "B",
+    "concept": "Reload or retry (catalogue query, cache, device connection).",
+    "metaphor": "A 300 degree open arc r=7.5 with an open chevron head at its clockwise end, the gap at the upper-right.",
+    "display": "icon"
+  },
+  {
+    "id": "add-plot",
+    "labels": [
+      "+ Comparison plot below"
+    ],
+    "sources": [
+      "argos/ui/pages/analyze_page.py:263"
+    ],
+    "group": "B",
+    "concept": "Add another comparison-star plot below the last one.",
+    "metaphor": "A plot panel (rounded rect, upper 60 %) with a mini curve inside and a plus (arms 3) centred below it.",
+    "display": "icon"
+  },
+  {
+    "id": "panels",
+    "labels": [
+      "Panels ▾"
+    ],
+    "sources": [
+      "argos/ui/pages/imaging_page.py:367",
+      "argos/ui/pages/analyze_page.py:279"
+    ],
+    "group": "B",
+    "concept": "Show optional panels.",
+    "metaphor": "A window with a docked side panel: rounded rect 3.75-20.25, a vertical divider at x=14.25, two short rows in the side panel.",
+    "display": "icon",
+    "shortcut": "P",
+    "shortcut_origin": "proposed",
+    "note": "Web UI: toggles the right instrument rail; the choice is remembered per viewer (BRAND 11.1)."
+  },
+  {
+    "id": "arrange",
+    "labels": [
+      "Arrange ▾"
+    ],
+    "sources": [
+      "argos/ui/pages/imaging_page.py:381",
+      "argos/ui/pages/analyze_page.py:288"
+    ],
+    "group": "B",
+    "concept": "Float, re-dock or reset panels.",
+    "metaphor": "A 2 x 2 grid of rounded tiles with the upper-right tile lifted (drawn offset up and right by 1.5).",
+    "display": "icon"
+  },
+  {
+    "id": "layout-tile",
+    "labels": [
+      "Tile plots — 2 columns"
+    ],
+    "sources": [
+      "argos/ui/pages/analyze_page.py:295",
+      "argos/ui/pages/analyze_page.py:429"
+    ],
+    "group": "B",
+    "concept": "Tile the plots in a two-column grid.",
+    "metaphor": "The layout window (rounded landscape rect 2.25-21.75 x 5.25-18.75, radius 2.25, as `panels`) split on its two axes into two columns of two panes. Distinct from `arrange`, which keeps four loose tiles.",
+    "display": "icon"
+  },
+  {
+    "id": "layout-reset",
+    "labels": [
+      "Reset Window Layout",
+      "Reset layout",
+      "Restore default layout",
+      "Reset panels"
+    ],
+    "sources": [
+      "argos/ui/shell.py:237",
+      "argos/ui/pages/imaging_page.py:388",
+      "argos/ui/pages/imaging_page.py:396",
+      "argos/ui/pages/analyze_page.py:298",
+      "argos/ui/pages/analyze_page.py:431",
+      "argos/ui/widgets/sequence_panel.py:527"
+    ],
+    "group": "B",
+    "concept": "Restore the default panel arrangement.",
+    "metaphor": "The panels window glyph with a counter-clockwise return arc (chevron head) overlapping its lower-left corner, the window cut 1.5 around the arc.",
+    "display": "icon+label"
+  },
+  {
+    "id": "panel-float",
+    "labels": [
+      "Float <panel>"
+    ],
+    "sources": [
+      "argos/ui/pages/imaging_page.py:402",
+      "argos/ui/pages/analyze_page.py:437",
+      "argos/ui/pages/analyze_page.py:443"
+    ],
+    "group": "B",
+    "concept": "Detach a panel into its own window.",
+    "metaphor": "A window outline cut 1.5 around a smaller panel (10.5 square) that sits in front of its upper-right corner, with an up-right arrow inside the panel.",
+    "display": "icon+label"
+  },
+  {
+    "id": "panel-dock",
+    "labels": [
+      "Dock <panel>"
+    ],
+    "sources": [
+      "argos/ui/pages/imaging_page.py:402",
+      "argos/ui/pages/analyze_page.py:437",
+      "argos/ui/pages/analyze_page.py:443"
+    ],
+    "group": "B",
+    "concept": "Return a floating panel to the window.",
+    "metaphor": "The same window and panel as `panel-float`, with a down-left arrow inside the panel (back into the window).",
+    "display": "icon+label"
+  },
+  {
+    "id": "disclosure",
+    "labels": [
+      "Show connection and device details"
+    ],
+    "sources": [
+      "argos/ui/pages/connection_page.py:82",
+      "argos/ui/pages/connection_page.py:263"
+    ],
+    "group": "B",
+    "concept": "Expand or collapse a details section.",
+    "metaphor": "A small open chevron pointing down (arms 4.5, 90 degrees), rotated -90 degrees when collapsed. Smaller than the jog chevrons.",
+    "display": "icon"
+  },
+  {
+    "id": "log",
+    "labels": [
+      "Activity log"
+    ],
+    "sources": [
+      "argos/ui/pages/imaging_page.py:339"
+    ],
+    "group": "B",
+    "concept": "The activity log panel.",
+    "metaphor": "A console: rounded rect with a prompt chevron at the upper-left and three text lines of varying lengths.",
+    "display": "icon"
+  },
+  {
+    "id": "settings",
+    "labels": [
+      "Configure field identification…"
+    ],
+    "sources": [
+      "argos/ui/shell.py:260"
+    ],
+    "group": "B",
+    "concept": "Open the settings of the current context.",
+    "metaphor": "Two horizontal slider tracks (y=8.25 and y=15.75), each interrupted by a ring knob (r=2.25; left knob at x=8.25 on the top track, right knob at x=15.75 on the bottom track); the track stops 1.5 short of the ring. Never a cog wheel.",
+    "display": "icon"
+  },
+  {
+    "id": "theme",
+    "labels": [
+      "Theme"
+    ],
+    "sources": [
+      "argos/ui/pages/configuration_page.py:726"
+    ],
+    "group": "B",
+    "concept": "Switch the colour theme (Observatory, Charcoal, Night Red).",
+    "metaphor": "A disc r=8.25 split by a vertical diameter, the left half filled solid, the right half outline: one of the two glyphs (with transport) where a large fill is the symbol.",
+    "display": "icon"
+  },
+  {
+    "id": "help",
+    "labels": [
+      "Documentation & website"
+    ],
+    "sources": [
+      "argos/ui/shell.py:212"
+    ],
+    "group": "B",
+    "concept": "Open the documentation (local copy when offline).",
+    "metaphor": "An open book: two pages meeting at a vertical spine, top edges as shallow arcs like the logo's, two text lines on each page.",
+    "display": "icon+label"
+  },
+  {
+    "id": "about",
+    "labels": [
+      "About & credits"
+    ],
+    "sources": [
+      "argos/ui/shell.py:223"
+    ],
+    "group": "B",
+    "concept": "About ARGOS, version and credits.",
+    "metaphor": "The official ARGOS mark, generated from tools/gen_presets.py by web/src/design/tools/build_brand_mark.py (never redrawn; exempt from the icon grammar).",
+    "display": "icon+label"
+  },
+  {
+    "id": "support-bundle",
+    "labels": [
+      "Create local support bundle…"
+    ],
+    "sources": [
+      "argos/ui/shell.py:216"
+    ],
+    "group": "B",
+    "concept": "Create a local ZIP of redacted logs (nothing is uploaded).",
+    "metaphor": "An archive box: a full-width lid (rounded rect 4.5 tall) over a box body with a short vertical zipper of three alternating ticks down its centre.",
+    "display": "icon+label"
+  },
+  {
+    "id": "quit",
+    "labels": [
+      "Quit Argos"
+    ],
+    "sources": [
+      "argos/ui/shell.py:203"
+    ],
+    "group": "B",
+    "concept": "Quit the application.",
+    "metaphor": "A doorway (rounded rect open on its right side) with an arrow leaving to the right through the opening.",
+    "display": "icon+label",
+    "shortcut": "Ctrl+Q",
+    "shortcut_origin": "qt"
+  }
+]
