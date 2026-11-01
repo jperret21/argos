@@ -683,6 +683,7 @@ class ImagingPage(QWidget):
 
     @pyqtSlot(object)
     def _on_focuser_state(self, foc: FocuserState) -> None:
+        self._focuser_dock.set_max_step(foc.max_step)
         self._focuser_dock.set_position(foc.position)
 
     def _on_filter_move(self, position: int) -> None:
