@@ -1,175 +1,91 @@
 <!--
-  Activity log drawer, fed by /ws/events "log" messages plus client-side
-  failures. Opens under the image (the viewer shrinks, nothing is covered).
-  Follows the newest line unless the observer has scrolled up to read.
+  Drawer with the global Log tab (D17), on the shared Drawer component: the
+  one log store (app.log: server lines, v2 levels when the server sends
+  them, client failures), level filter, search, copy, save, clear, follow /
+  pause. Opens under the image (the viewer shrinks, nothing is covered).
+
+  Without props it is the Observe screen's log drawer as before (a height
+  fixed by ImagingScreen's grid). A section that owns a SectionLayout passes
+  its other tabs, the tab content and a bound height to make it resizable.
 -->
-<script lang="ts">
-  import { tick } from 'svelte';
-  import type { LogEntry } from '../api/events.svelte';
-  import { useApp } from '../app/state.svelte';
-  import IconButton from '../components/IconButton.svelte';
-  import Icon from '../components/Icon.svelte';
+<script lang="ts" module>
+  import { LogFilter } from '../app/log.svelte';
 
-  const app = useApp();
-  let list: HTMLOListElement | undefined = $state();
-  let follow = true;
-
-  const LEVEL_TAG: Record<LogEntry['level'], string> = {
-    info: 'INFO',
-    warning: 'WARN',
-    error: 'ERROR',
-  };
-
-  /** "21:34:05" in UTC (the column header says UTC). */
-  function hhmmss(iso: string): string {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return '--:--:--';
-    return d.toISOString().slice(11, 19);
+  /** One filter for every Log tab: the level choice follows the observer across sections. */
+  let shared: LogFilter | null = null;
+  function sharedFilter(): LogFilter {
+    shared ??= new LogFilter({ persist: 'argos.log.filter' });
+    return shared;
   }
-
-  function onScroll(): void {
-    if (!list) return;
-    follow = list.scrollHeight - list.scrollTop - list.clientHeight < 24;
-  }
-
-  $effect(() => {
-    void app.events.logs.length;
-    if (!follow || !list) return;
-    void tick().then(() => list?.scrollTo({ top: list.scrollHeight }));
-  });
 </script>
 
-<section class="drawer" aria-label="Activity log">
-  <header>
-    <Icon name="log" size="s" />
-    <h2>Activity log</h2>
-    <span class="meta num">{app.events.logs.length} lines · UTC</span>
-    <span class="actions">
-      <IconButton
-        icon="clear"
-        label="Clear the log"
-        variant="ghost"
-        size="s"
-        tooltip="top"
-        disabled={app.events.logs.length === 0}
-        onclick={() => app.events.clearLogs()}
-      />
-      <IconButton
-        icon="close"
-        label="Close the log"
-        variant="ghost"
-        size="s"
-        tooltip="top"
-        onclick={() => app.setLogOpen(false)}
-      />
-    </span>
-  </header>
-  {#if app.events.logs.length === 0}
-    <p class="empty">
-      Nothing logged yet. Server events (including the last 200 before this window opened),
-      warnings and failed commands appear here.
-    </p>
-  {:else}
-    <ol bind:this={list} onscroll={onScroll}>
-      {#each app.events.logs as entry (entry.id)}
-        <li class="level-{entry.level}">
-          <time class="num" datetime={entry.t}>{hhmmss(entry.t)}</time>
-          <span class="tag">{LEVEL_TAG[entry.level]}</span>
-          <span class="msg">{entry.message}</span>
-        </li>
-      {/each}
-    </ol>
-  {/if}
-</section>
+<script lang="ts">
+  import type { Snippet } from 'svelte';
+  import { useApp } from '../app/state.svelte';
+  import Drawer, { type DrawerTab } from '../components/Drawer.svelte';
+  import LogControls from '../components/LogControls.svelte';
+  import LogView from '../components/LogView.svelte';
 
-<style>
-  .drawer {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    border-top: var(--border-w) solid var(--border);
-    background: var(--bg-2);
+  interface Props {
+    /** Tabs before the Log tab (the Log tab is always last, 01 2.3.9). */
+    tabs?: readonly DrawerTab[];
+    tab?: string;
+    /** Content of the other tabs. */
+    content?: Snippet<[string]>;
+    tools?: Snippet<[string]>;
+    height?: number;
+    maxHeight?: number;
+    resizable?: boolean;
+    label?: string;
+    ontab?: (id: string) => void;
+    onheight?: (px: number) => void;
   }
 
-  header {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    height: 32px;
-    padding: 0 var(--space-1) 0 var(--space-4);
-    border-bottom: var(--border-w) solid var(--border-soft);
-    color: var(--fg-muted);
-  }
+  let {
+    tabs = [],
+    tab = $bindable('log'),
+    content,
+    tools: otherTools,
+    height = $bindable(216),
+    maxHeight = 480,
+    resizable = false,
+    label = 'Bottom drawer',
+    ontab,
+    onheight,
+  }: Props = $props();
 
-  h2 {
-    margin: 0;
-    color: var(--fg);
-    font-size: var(--text-s);
-    font-weight: var(--weight-semibold);
-  }
+  const app = useApp();
+  const filter = sharedFilter();
+  const allTabs = $derived<DrawerTab[]>([
+    ...tabs,
+    { id: 'log', label: 'Log', icon: 'log', badge: tab === 'log' ? null : app.unseenProblems || null },
+  ]);
+</script>
 
-  .meta {
-    color: var(--text-muted);
-    font-size: var(--text-xs);
-  }
-
-  .actions {
-    display: flex;
-    margin-left: auto;
-  }
-
-  ol {
-    flex: 1;
-    min-height: 0;
-    margin: 0;
-    padding: var(--space-1) 0;
-    overflow-y: auto;
-    list-style: none;
-    font-family: var(--font-mono);
-    font-size: var(--text-s);
-    line-height: 20px;
-  }
-
-  li {
-    display: grid;
-    grid-template-columns: 64px 48px minmax(0, 1fr);
-    gap: var(--space-3);
-    padding: 0 var(--space-4);
-  }
-  li:hover {
-    background: var(--bg);
-  }
-
-  time {
-    color: var(--text-muted);
-  }
-
-  .tag {
-    font-size: var(--text-2xs);
-    font-weight: var(--weight-medium);
-    letter-spacing: var(--tracking-caps);
-    line-height: 20px;
-  }
-  .level-info .tag {
-    color: var(--log-info);
-  }
-  .level-warning .tag {
-    color: var(--log-warning);
-  }
-  .level-error .tag {
-    color: var(--log-error);
-  }
-
-  .msg {
-    color: var(--fg);
-    overflow-wrap: anywhere;
-  }
-
-  .empty {
-    margin: 0;
-    padding: var(--space-4);
-    color: var(--text-muted);
-    font-size: var(--text-s);
-  }
-</style>
+<Drawer
+  {label}
+  tabs={allTabs}
+  bind:tab
+  bind:height
+  {maxHeight}
+  {resizable}
+  {ontab}
+  {onheight}
+  closeShortcut="L"
+  onclose={() => app.setLogOpen(false)}
+>
+  {#snippet tools(id: string)}
+    {#if id === 'log'}
+      <LogControls store={app.log} {filter} />
+    {:else if otherTools}
+      {@render otherTools(id)}
+    {/if}
+  {/snippet}
+  {#snippet children(id: string)}
+    {#if id === 'log'}
+      <LogView store={app.log} {filter} markSeen />
+    {:else if content}
+      {@render content(id)}
+    {/if}
+  {/snippet}
+</Drawer>

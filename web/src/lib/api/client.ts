@@ -10,14 +10,27 @@
 
 import type { ArgosConfig } from '../config';
 import type {
+  AppInfo,
   CameraState,
+  ConfigPatchResult,
+  ConfigSnapshot,
+  ConfigValue,
   ConnectRequest,
   ConnectionState,
+  DeviceConnectBody,
+  DeviceId,
+  DevicesState,
+  DiscoveryBody,
   ErrorBody,
   ExposureRequest,
   Health,
+  JobWire,
+  LogPage,
   MountState,
+  NetworkState,
+  ProfilesState,
   Status,
+  StellariumState,
 } from './types';
 
 /** Synthetic codes for failures that never reached a server answer. */
@@ -31,12 +44,23 @@ export class ApiError extends Error {
   readonly status: number;
   /** Server error code (snake_case, e.g. "not_connected") or a synthetic one. */
   readonly code: string;
+  /** API 2: per-key messages of a refused `PATCH /api/config`. */
+  readonly fields: Record<string, string> | null;
+  /** API 2: id of the job holding the resource (`409 busy` on a job start). */
+  readonly owner: string | null;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    extra: { fields?: Record<string, string> | null; owner?: string | null } = {},
+  ) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.fields = extra.fields ?? null;
+    this.owner = extra.owner ?? null;
   }
 
   get isUnauthorized(): boolean {
@@ -71,7 +95,11 @@ export function errorFromResponse(status: number, statusText: string, bodyText: 
     parsed = undefined;
   }
   if (isErrorBody(parsed)) {
-    return new ApiError(status, parsed.error.code, parsed.error.message);
+    const { fields, owner } = parsed.error;
+    return new ApiError(status, parsed.error.code, parsed.error.message, {
+      fields: fields && typeof fields === 'object' ? fields : null,
+      owner: typeof owner === 'string' ? owner : null,
+    });
   }
   const fallbackCode = status === 401 ? 'unauthorized' : `http_${status}`;
   const message = bodyText.trim().slice(0, 200) || statusText || `HTTP ${status}`;
@@ -107,7 +135,7 @@ export class ArgosClient {
 
   /** Low-level typed request. `path` starts with "/api/". */
   async request<T>(
-    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
     path: string,
     body?: unknown,
     options: RequestOptions = {},
@@ -226,5 +254,111 @@ export class ArgosClient {
 
   setTracking(enabled: boolean, options?: RequestOptions): Promise<MountState> {
     return this.request('POST', '/api/mount/tracking', { enabled }, options);
+  }
+
+  // -- API 2: application, log, configuration --------------------------------
+
+  appInfo(options?: RequestOptions): Promise<AppInfo> {
+    return this.request('GET', '/api/app/info', undefined, options);
+  }
+
+  /** Log lines with `seq > after`, oldest first (protocol.md A2). */
+  logs(query: { after?: number; limit?: number; level?: string } = {}, options?: RequestOptions): Promise<LogPage> {
+    const q = new URLSearchParams();
+    if (query.after !== undefined) q.set('after', String(Math.max(0, Math.floor(query.after))));
+    if (query.limit !== undefined) q.set('limit', String(Math.floor(query.limit)));
+    if (query.level) q.set('level', query.level);
+    const qs = q.toString();
+    return this.request('GET', `/api/logs${qs ? `?${qs}` : ''}`, undefined, options);
+  }
+
+  getConfig(options?: RequestOptions): Promise<ConfigSnapshot> {
+    return this.request('GET', '/api/config', undefined, options);
+  }
+
+  /** One validated, all-or-nothing commit (400 with `fields` when a key is refused). */
+  patchConfig(changes: Record<string, ConfigValue>, options?: RequestOptions): Promise<ConfigPatchResult> {
+    return this.request('PATCH', '/api/config', changes, options);
+  }
+
+  // -- API 2: devices (A13-A15) ----------------------------------------------
+
+  devices(options?: RequestOptions): Promise<DevicesState> {
+    return this.request('GET', '/api/devices', undefined, options);
+  }
+
+  /**
+   * Connect one device. The server answers once that device is connected or
+   * failed (≤ connect-timeout + 10 s on Alpaca; it never blocks the other
+   * routes meanwhile).
+   */
+  connectDevice(id: DeviceId, body?: DeviceConnectBody, options?: RequestOptions): Promise<DevicesState> {
+    return this.request('POST', `/api/devices/${id}/connect`, body, { timeoutMs: 45_000, ...options });
+  }
+
+  disconnectDevice(id: DeviceId, options?: RequestOptions): Promise<DevicesState> {
+    return this.request('DELETE', `/api/devices/${id}`, undefined, { timeoutMs: 30_000, ...options });
+  }
+
+  /** Connect the four devices in order, skipping those already connected; 200 with every state. */
+  connectAll(body?: DeviceConnectBody, options?: RequestOptions): Promise<DevicesState> {
+    return this.request('POST', '/api/devices/connect-all', body, { timeoutMs: 120_000, ...options });
+  }
+
+  disconnectAll(options?: RequestOptions): Promise<DevicesState> {
+    return this.request('DELETE', '/api/devices', undefined, { timeoutMs: 30_000, ...options });
+  }
+
+  // -- API 2: discovery (A16), profiles (A17), network (A18), jobs (A80) ------
+
+  /** Starts a cancellable `discovery` job (409 busy with `owner` while one runs). */
+  startDiscovery(body?: DiscoveryBody, options?: RequestOptions): Promise<{ job_id: string; job: JobWire }> {
+    return this.request('POST', '/api/discovery', body, options);
+  }
+
+  profiles(options?: RequestOptions): Promise<ProfilesState> {
+    return this.request('GET', '/api/profiles', undefined, options);
+  }
+
+  /** 409 busy while a device is connected (the message says why). */
+  setProfile(key: string, options?: RequestOptions): Promise<ProfilesState> {
+    return this.request('PUT', '/api/profile', { key }, options);
+  }
+
+  network(options?: RequestOptions): Promise<NetworkState> {
+    return this.request('GET', '/api/network', undefined, options);
+  }
+
+  /** Re-probe the Seestar; with `internet: true`, also check the internet (on demand only, Q-G13). */
+  checkNetwork(internet = false, options?: RequestOptions): Promise<NetworkState> {
+    return this.request('POST', '/api/network/check', { internet }, { timeoutMs: 20_000, ...options });
+  }
+
+  jobs(options?: RequestOptions): Promise<{ jobs: JobWire[] }> {
+    return this.request('GET', '/api/jobs', undefined, options);
+  }
+
+  job(id: string, options?: RequestOptions): Promise<JobWire> {
+    return this.request('GET', `/api/jobs/${encodeURIComponent(id)}`, undefined, options);
+  }
+
+  /** Asks for a cancel; the final `cancelled` state follows on /ws/events. */
+  cancelJob(id: string, options?: RequestOptions): Promise<JobWire> {
+    return this.request('DELETE', `/api/jobs/${encodeURIComponent(id)}`, undefined, options);
+  }
+
+  // -- API 2: Stellarium bridge (A19) ----------------------------------------------
+
+  stellarium(options?: RequestOptions): Promise<StellariumState> {
+    return this.request('GET', '/api/stellarium', undefined, options);
+  }
+
+  /** Start listening (host and port default to the config); 502 bind_failed with the reason. */
+  startStellarium(body: { host?: string; port?: number } = {}, options?: RequestOptions): Promise<StellariumState> {
+    return this.request('POST', '/api/stellarium', body, options);
+  }
+
+  stopStellarium(options?: RequestOptions): Promise<StellariumState> {
+    return this.request('DELETE', '/api/stellarium', undefined, options);
   }
 }

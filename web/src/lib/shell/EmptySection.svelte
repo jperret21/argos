@@ -32,7 +32,7 @@
       label="Back to Observe"
       showLabel
       shortcut="F2"
-      onclick={() => (app.section = 'imaging')}
+      onclick={() => app.go('imaging')}
     />
   </div>
 </section>

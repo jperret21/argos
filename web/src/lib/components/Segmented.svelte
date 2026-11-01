@@ -15,13 +15,15 @@
     value: T;
     disabled?: boolean;
     onchange?: (value: T) => void;
+    /** 's': 20 px segments for drawer headers and toolbars. */
+    size?: 's' | 'm';
   }
 
-  let { label, options, value = $bindable(), disabled = false, onchange }: Props = $props();
+  let { label, options, value = $bindable(), disabled = false, onchange, size = 'm' }: Props = $props();
   const name = `seg-${Math.random().toString(36).slice(2, 9)}`;
 </script>
 
-<div class="segmented" role="radiogroup" aria-label={label}>
+<div class="segmented size-{size}" role="radiogroup" aria-label={label}>
   {#each options as option (option.value)}
     <label class:checked={value === option.value} class:disabled>
       <input
@@ -73,6 +75,20 @@
     transition:
       background-color var(--duration-fast) var(--ease-standard),
       color var(--duration-fast) var(--ease-standard);
+  }
+
+  .size-s span {
+    height: 20px;
+    padding: 0 var(--space-2);
+    font-size: var(--text-xs);
+  }
+  /* Compact (log headers): each segment as wide as its word, with the 2 px gap,
+     so "All" never touches "Warnings" while "Errors" floats away. */
+  .size-s label {
+    flex: 0 0 auto;
+  }
+  .size-s {
+    display: inline-flex;
   }
 
   label:hover:not(.disabled) span {

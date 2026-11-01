@@ -1,13 +1,17 @@
 <!--
   Observe (imaging) screen: toolbar; the 16-bit image viewer with the levels
   strip docked under it (sized to the band a 16:9 frame leaves, BRAND 11.1)
-  and the optional activity log; the right rail of cards (connection,
-  camera, mount).
+  and the optional activity log; the right rail of cards (camera, mount).
+  The Connection card left the rail (D10): the toolbar's equipment button
+  connects or disconnects everything, the details live on the Connection
+  screen (F1).
 
-  Single-key shortcuts (icon-inventory.json, BRAND section 7) only fire when
-  focus is not in a text field and never move hardware; Escape aborts a slew
-  (and nothing else). Tracking keeps no single key (the inventory proposes T,
-  but starting or stopping the sidereal drive moves the mount).
+  Single-key shortcuts (icon-inventory.json, BRAND section 7) are bound in
+  the one registry (scope "imaging", active while this screen is shown):
+  they only fire when focus is not in a text field and never move hardware;
+  Escape aborts a slew (global binding, D21). Tracking keeps no single key
+  (the inventory proposes T, but starting or stopping the sidereal drive
+  moves the mount).
 
   A frame that is not current (equipment disconnected, server link down, or
   no new frame for max(5 s, three exposures)) says so: its source chip reads
@@ -15,7 +19,7 @@
   connect sits at the bottom of the image, never over its centre.
 -->
 <script lang="ts">
-  import { isTypingTarget, matchesShortcut } from '../app/shortcuts';
+  import { SectionLayout } from '../app/layout.svelte';
   import { useApp } from '../app/state.svelte';
   import Icon from '../components/Icon.svelte';
   import IconButton from '../components/IconButton.svelte';
@@ -23,7 +27,6 @@
   import FitsViewer from '../viewer/FitsViewer.svelte';
   import { displaySize, effectiveTurns } from '../viewer/rotation';
   import CameraCard from './CameraCard.svelte';
-  import ConnectionCard from './ConnectionCard.svelte';
   import ImagingToolbar from './ImagingToolbar.svelte';
   import { stripLayout } from './layout';
   import LevelsStrip from './LevelsStrip.svelte';
@@ -53,7 +56,7 @@
   const displayed = $derived.by(() => {
     let w = header?.width;
     let h = header?.height;
-    const sensor = app.connected ? app.camera?.sensor : null;
+    const sensor = app.cameraReady ? app.camera?.sensor : null;
     if (!w || !h) [w, h] = sensor ? [sensor.width, sensor.height] : [1080, 1920];
     return displaySize(w, h, effectiveTurns(app.rotation, w, h));
   });
@@ -95,41 +98,36 @@
     } else viewer.oneToOne();
   }
 
-  const SHORTCUTS: [string, () => void][] = [
-    ['E', () => !app.cameraBusy && app.canCommand && void app.capture()],
-    ['V', () => app.canCommand && void app.toggleLive()],
-    ['Escape', () => app.abortMotion()],
-    ['+', () => zoom('in')],
-    ['-', () => zoom('out')],
-    ['F', () => zoom('fit')],
-    ['Shift+F', () => zoom('fill')],
-    ['1', () => zoom('1to1')],
-    ['A', () => app.setAutoStretch(!app.autoStretch)],
-    ['Shift+A', () => app.resetStretch()],
-    ['H', () => app.toggleStrip()],
-    ['X', () => (app.crosshair = !app.crosshair)],
-    ['P', () => app.toggleRail()],
-  ];
+  /** Rail cards shown (Panels popover) and Reset layout (D16): card folds included. */
+  const layout = new SectionLayout('imaging', {
+    panels: { camera: true, mount: true },
+    extraKeys: ['argos.card.camera', 'argos.card.mount'],
+  });
 
-  function onKey(e: KeyboardEvent): void {
-    if (e.defaultPrevented || e.repeat) return;
-    // In a text field letters are text; Escape leaves the field and still
-    // aborts a slew (a safety key works from anywhere).
-    if (isTypingTarget(e.target)) {
-      if (e.key === 'Escape') {
-        (e.target as HTMLElement).blur();
-        app.abortMotion();
-      }
-      return;
-    }
-    for (const [spec, action] of SHORTCUTS) {
-      if (matchesShortcut(e, spec)) {
-        e.preventDefault();
-        action();
-        return;
-      }
-    }
-  }
+  // Observe keys, through the one registry (scope "imaging"): bound while
+  // this screen is mounted, so the "?" sheet and the tooltips read the same map.
+  $effect(() => {
+    const r = app.shortcuts;
+    const off = [
+      r.handle('observe.capture', () => {
+        if (!app.cameraBusy && app.canCamera && !app.exposureProblem()) void app.capture();
+      }),
+      r.handle('observe.live', () => {
+        if (app.canCamera && (app.live || !app.exposureProblem())) void app.toggleLive();
+      }),
+      r.handle('view.zoom-in', () => zoom('in')),
+      r.handle('view.zoom-out', () => zoom('out')),
+      r.handle('view.fit', () => zoom('fit')),
+      r.handle('view.fill', () => zoom('fill')),
+      r.handle('view.one-to-one', () => zoom('1to1')),
+      r.handle('view.stretch-auto', () => app.setAutoStretch(!app.autoStretch)),
+      r.handle('view.stretch-reset', () => app.resetStretch()),
+      r.handle('view.levels', () => app.toggleStrip()),
+      r.handle('view.crosshair', () => (app.crosshair = !app.crosshair)),
+      r.handle('rail.toggle', () => app.toggleRail()),
+    ];
+    return () => off.forEach((f) => f());
+  });
 
   function onPerf(): void {
     const info = app.shown;
@@ -142,30 +140,48 @@
     );
   }
 
-  const connectLabel = $derived(app.connectMode === 'alpaca' ? 'Connect Seestar' : 'Connect simulator');
+  // One verb for the bulk action everywhere (Connection, toolbar, prompt); the link is in the tooltip.
+  const connectTip = $derived(
+    app.connectMode === 'alpaca'
+      ? `Connect every device not connected yet at ${app.alpacaHost || 'the Seestar address'}:${app.alpacaPort}`
+      : 'Connect every device of the simulator not connected yet',
+  );
+  /** Some equipment is connected, but not the camera (the mount alone, or the camera failed). */
+  const cameraMissing = $derived(app.connected && !app.cameraReady);
   const connectReason = $derived.by(() => {
     const problem = app.connectProblem();
-    return problem && app.linkOpen ? `${problem} in the Connection card` : problem;
+    return problem && app.linkOpen ? `${problem} on the Connection screen` : problem;
   });
 </script>
-
-<svelte:window onkeydown={onKey} />
 
 {#snippet connectButton()}
   <IconButton
     icon={app.connectMode === 'alpaca' ? 'connect' : 'simulator'}
-    label={connectLabel}
+    label="Connect all"
+    tooltipText={connectTip}
     showLabel
     variant="primary"
     tooltip="top"
-    busy={!!app.busy.connection || app.connection?.state === 'connecting'}
+    busy={!!app.busy.connectAll || app.equipment.anyConnecting}
     disabledReason={connectReason}
-    onclick={() => app.connect()}
+    onclick={() => app.connectAll()}
+  />
+{/snippet}
+
+{#snippet openConnection()}
+  <IconButton
+    icon="nav-connection"
+    label="Connection screen"
+    showLabel
+    variant="ghost"
+    shortcut={app.shortcuts.keyFor('nav.connection')}
+    tooltip="top"
+    onclick={() => app.go('connection')}
   />
 {/snippet}
 
 <div class="imaging">
-  <ImagingToolbar {hasFrame} onzoom={zoom} />
+  <ImagingToolbar {hasFrame} onzoom={zoom} {layout} />
 
   <div class="workspace" class:rail-closed={!app.railOpen}>
     <div
@@ -238,11 +254,17 @@
                   Expected at <span class="num">{app.config.apiBase}</span>. Start it with
                   <span class="num">python -m argos.server</span>; this page reconnects by itself.
                 </p>
-              {:else if !app.connected}
+              {:else if !app.cameraReady}
                 <Icon name={app.connectMode === 'alpaca' ? 'connect' : 'simulator'} size={48} />
-                <p class="title">No equipment connected</p>
-                <p class="hint">Choose the simulator or a Seestar in the Connection card.</p>
-                <div class="cta">{@render connectButton()}</div>
+                <p class="title">{cameraMissing ? 'Camera not connected' : 'No equipment connected'}</p>
+                <p class="hint">
+                  {app.connectMode === 'alpaca'
+                    ? app.alpacaHost
+                      ? `Link: Seestar at ${app.alpacaHost}:${app.alpacaPort}.`
+                      : 'Link: Seestar, no address yet.'
+                    : 'Link: the built-in simulator.'} The telescope profile and each device are on the Connection screen.
+                </p>
+                <div class="cta">{@render connectButton()}{@render openConnection()}</div>
               {:else}
                 <Icon name="capture" size={48} />
                 <p class="title">Ready for a first frame</p>
@@ -288,14 +310,15 @@
           </div>
 
           <!-- A frame on screen but no equipment: the prompt sits at the bottom, off the image centre. -->
-          {#if app.linkOpen && !app.connected}
-            <div class="prompt" role="group" aria-label="No equipment connected">
-              <span class="prompt-text">No equipment connected</span>
+          {#if app.linkOpen && !app.cameraReady}
+            <div class="prompt" role="group" aria-label={cameraMissing ? 'Camera not connected' : 'No equipment connected'}>
+              <span class="prompt-text">{cameraMissing ? 'Camera not connected' : 'No equipment connected'}</span>
               {@render connectButton()}
             </div>
           {:else if app.stale && app.events.link !== 'idle'}
             <div class="prompt" role="status">
-              <span class="prompt-text">Server offline: the last frame and states are shown greyed</span>
+              <!-- Says what is on screen: the frame chip reads "Last frame", the edge is dashed, readouts are muted. -->
+              <span class="prompt-text">Server link lost: last frame and readouts received, commands paused</span>
               <IconButton
                 icon="refresh"
                 label="Retry server"
@@ -323,9 +346,13 @@
     {#if app.railOpen}
       <!-- Observing cards first (camera), then the mount; set-up folds away once connected (BRAND 11.1). -->
       <aside class="rail" aria-label="Instrument panels">
-        <ConnectionCard />
-        <CameraCard />
-        <MountCard />
+        {#key layout.generation}
+          {#if layout.visible('camera')}<CameraCard />{/if}
+          {#if layout.visible('mount')}<MountCard />{/if}
+          {#if !layout.visible('camera') && !layout.visible('mount')}
+            <p class="rail-empty">Every card is hidden: show them again from the Panels menu at the right of the toolbar.</p>
+          {/if}
+        {/key}
       </aside>
     {/if}
   </div>
@@ -394,8 +421,16 @@
   }
   /* The viewer's message layer ignores the pointer; the call to action does not. */
   .cta {
+    display: flex;
+    gap: var(--space-2);
     margin-top: var(--space-3);
     pointer-events: auto;
+  }
+  .rail-empty {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--text-s);
+    line-height: var(--leading-relaxed);
   }
 
   /* Frame chips sit over the image, in its top-left corner (BRAND 11.1). */

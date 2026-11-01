@@ -105,35 +105,145 @@ describe('parseEventMessage', () => {
     expect(
       parseEventMessage(JSON.stringify({ type: 'log', level: 'info', message: 'hi', t: '2026-11-01T00:00:00Z' })),
     ).not.toBeNull();
-    expect(parseEventMessage(JSON.stringify({ type: 'log', level: 'debug', message: 'x' }))).toBeNull();
+    // API 2 levels are accepted; an unknown level is not.
+    for (const level of ['debug', 'cmd', 'ok']) {
+      expect(parseEventMessage(JSON.stringify({ type: 'log', level, message: 'x', seq: 3 }))).not.toBeNull();
+    }
+    expect(parseEventMessage(JSON.stringify({ type: 'log', level: 'trace', message: 'x' }))).toBeNull();
     expect(parseEventMessage(JSON.stringify({ type: 'future_thing' }))).toBeNull();
     expect(parseEventMessage(JSON.stringify({ type: 'status', connection: {} }))).toBeNull();
     expect(parseEventMessage('not json')).toBeNull();
     expect(parseEventMessage(new ArrayBuffer(4))).toBeNull();
   });
+
+  it('accepts the API 2 snapshot and stream events', () => {
+    const accepted = [
+      { type: 'devices', devices: {} },
+      { type: 'network', seestar: null, internet: null, host: null, port: null, t: null, internet_t: null },
+      { type: 'activity', text: 'Connecting mount 192.168.1.42:32323…', source: 'mount', t: 'x' },
+      { type: 'config', changed: { 'alpaca.port': 1 }, values: {}, revision: 2, source: 'api' },
+      { type: 'job', job: { id: 'j1', kind: 'discovery', state: 'running' } },
+    ];
+    for (const m of accepted) expect(parseEventMessage(JSON.stringify(m))).not.toBeNull();
+    expect(parseEventMessage(JSON.stringify({ type: 'devices' }))).toBeNull();
+    expect(parseEventMessage(JSON.stringify({ type: 'job', job: { kind: 'x' } }))).toBeNull();
+    expect(parseEventMessage(JSON.stringify({ type: 'config', changed: {} }))).toBeNull();
+  });
 });
 
-describe('ArgosEvents log replay', () => {
-  it('drops server log lines it already holds (replayed after a reconnection)', async () => {
-    const { ArgosEvents } = await import('./events.svelte');
-    const events = new ArgosEvents({
-      apiBase: 'http://127.0.0.1:8742',
-      wsBase: 'ws://127.0.0.1:8742',
-      token: 't',
-      source: { api: 'default', token: 'default' },
+describe('ArgosEvents', () => {
+  const config = {
+    apiBase: 'http://127.0.0.1:8742',
+    wsBase: 'ws://127.0.0.1:8742',
+    token: 't',
+    source: { api: 'default', token: 'default' },
+  } as const;
+  const status = (devices?: unknown) =>
+    JSON.stringify({
+      type: 'status',
+      connection: { state: 'disconnected', mode: null, device_name: null, message: null },
+      camera: { state: 'idle', exposure_s: 2, gain: 80, last_frame_seq: null, sensor: null },
+      mount: { state: 'idle', ra_hours: 0, dec_deg: 0, alt_deg: null, az_deg: null, tracking: false, pier_side: null, target: null },
+      ...(devices ? { devices, profile: { key: 's30pro', name: 'ZWO Seestar S30 Pro', validated: true } } : {}),
     });
+
+  it('forwards every log line (v1 and v2) to onLog; the log store deduplicates', async () => {
+    const { ArgosEvents } = await import('./events.svelte');
+    const seen: unknown[] = [];
+    const events = new ArgosEvents({ ...config, source: { ...config.source } }, { onLog: (m) => seen.push(m) });
     const feed = (data: unknown) => (events as unknown as { handle(d: unknown): void }).handle(data);
-    const line = (message: string, t: string) => JSON.stringify({ type: 'log', level: 'info', message, t });
-    feed(line('Connected', '2026-11-01T21:00:00.000Z'));
-    feed(line('Live view: 1 s, gain 80', '2026-11-01T21:00:01.000Z'));
-    // Reconnection: the server replays its history, then a new line.
-    feed(line('Connected', '2026-11-01T21:00:00.000Z'));
-    feed(line('Live view: 1 s, gain 80', '2026-11-01T21:00:01.000Z'));
-    feed(line('Connected', '2026-11-01T21:05:00.000Z')); // same text, new event: kept
-    expect(events.logs.map((l) => l.t)).toEqual([
-      '2026-11-01T21:00:00.000Z',
-      '2026-11-01T21:00:01.000Z',
-      '2026-11-01T21:05:00.000Z',
+    feed(JSON.stringify({ type: 'log', level: 'info', message: 'Connected', t: '2026-11-01T21:00:00.000Z' }));
+    feed(
+      JSON.stringify({
+        type: 'log',
+        id: 7,
+        seq: 7,
+        level: 'ok',
+        source: 'mount',
+        topic: 'connection',
+        message: 'Mount connected: Seestar',
+        t: '2026-11-01T21:00:01.000Z',
+      }),
+    );
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toMatchObject({ seq: 7, level: 'ok', source: 'mount', topic: 'connection' });
+  });
+
+  it('keeps devices and profile from the status record and fires onFirstStatus once per connection', async () => {
+    const { ArgosEvents } = await import('./events.svelte');
+    let firsts = 0;
+    const events = new ArgosEvents({ ...config, source: { ...config.source } }, { onFirstStatus: () => firsts++ });
+    const feed = (data: unknown) => (events as unknown as { handle(d: unknown): void }).handle(data);
+    const dev = { state: 'disconnected', name: null, info: null, error: null, retrying: false, warnings: [], link: null, since: 'x' };
+    feed(status({ mount: dev, camera: dev, filterwheel: dev, focuser: dev }));
+    feed(status({ mount: dev, camera: dev, filterwheel: dev, focuser: dev }));
+    expect(firsts).toBe(1);
+    expect(events.devices?.focuser.state).toBe('disconnected');
+    expect(events.profile?.key).toBe('s30pro');
+    feed(JSON.stringify({ type: 'devices', devices: { mount: { ...dev, state: 'connecting' }, camera: dev, filterwheel: dev, focuser: dev } }));
+    expect(events.devices?.mount.state).toBe('connecting');
+    feed(JSON.stringify({ type: 'network', seestar: false, internet: null, host: '10.0.0.1', port: 32323, t: 'x', internet_t: null }));
+    expect(events.network).toMatchObject({ seestar: false, host: '10.0.0.1' });
+    expect((events.network as unknown as Record<string, unknown>).type).toBeUndefined();
+  });
+});
+
+describe('ArgosClient API 2 routes', () => {
+  function recorder() {
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    const fetch = async (url: string, init?: RequestInit) => {
+      calls.push({ url, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      return new Response('{}', { status: 200 });
+    };
+    return { calls, fetch };
+  }
+
+  it('sends the documented methods, paths and bodies', async () => {
+    const { ArgosClient } = await import('./client');
+    const r = recorder();
+    const c = new ArgosClient(
+      { apiBase: 'http://h:1', wsBase: 'ws://h:1', token: 't', source: { api: 'default', token: 'default' } },
+      { fetch: r.fetch },
+    );
+    await c.connectDevice('camera', { mode: 'alpaca', host: '10.0.0.1', port: 32323 });
+    await c.disconnectDevice('mount');
+    await c.connectAll({ mode: 'simulator' });
+    await c.disconnectAll();
+    await c.startDiscovery();
+    await c.setProfile('s50');
+    await c.checkNetwork(true);
+    await c.cancelJob('a/b');
+    await c.logs({ after: 12, limit: 5000 });
+    await c.patchConfig({ 'alpaca.host': '10.0.0.1' });
+    expect(r.calls.map((x) => `${x.method} ${x.url.replace('http://h:1', '')}`)).toEqual([
+      'POST /api/devices/camera/connect',
+      'DELETE /api/devices/mount',
+      'POST /api/devices/connect-all',
+      'DELETE /api/devices',
+      'POST /api/discovery',
+      'PUT /api/profile',
+      'POST /api/network/check',
+      'DELETE /api/jobs/a%2Fb',
+      'GET /api/logs?after=12&limit=5000',
+      'PATCH /api/config',
     ]);
+    expect(r.calls[0].body).toEqual({ mode: 'alpaca', host: '10.0.0.1', port: 32323 });
+    expect(r.calls[5].body).toEqual({ key: 's50' });
+    expect(r.calls[6].body).toEqual({ internet: true });
+  });
+
+  it('keeps the API 2 error extras (fields, owner)', async () => {
+    const e = errorFromResponse(
+      409,
+      'Conflict',
+      JSON.stringify({ error: { code: 'busy', message: 'Discovery is running', owner: 'job-1' } }),
+    );
+    expect(e.owner).toBe('job-1');
+    const f = errorFromResponse(
+      400,
+      'Bad Request',
+      JSON.stringify({ error: { code: 'invalid_argument', message: 'x', fields: { 'alpaca.port': 'Range 1–65535' } } }),
+    );
+    expect(f.fields).toEqual({ 'alpaca.port': 'Range 1–65535' });
   });
 });

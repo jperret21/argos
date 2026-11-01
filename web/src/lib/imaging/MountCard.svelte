@@ -23,12 +23,14 @@
 
   const app = useApp();
 
-  const badge = $derived(mountStatus(app.mount, app.connected, app.stale));
-  const m = $derived(app.connected ? app.mount : null);
+  // The mount's own device record decides: with the camera alone the v1
+  // connection reads "connected" while the mount record is a placeholder.
+  const badge = $derived(mountStatus(app.mount, app.mountReady, app.stale));
+  const m = $derived(app.mountReady ? app.mount : null);
   const parked = $derived(m?.state === 'parked');
   /** Why mount commands are refused right now, or null. */
   const offline = $derived(
-    app.stale ? 'the ARGOS server is not reachable' : !m ? 'not connected' : null,
+    app.stale ? 'the ARGOS server is not reachable' : !m ? 'the mount is not connected' : null,
   );
 
   let raText = $state('');
@@ -48,7 +50,7 @@
 
   const gotoReason = $derived.by(() => {
     if (app.stale) return 'the ARGOS server is not reachable';
-    if (!app.connected) return 'connect the equipment first';
+    if (!app.mountReady) return 'connect the mount first';
     if (parked) return 'unpark the mount first';
     if (!target) return 'enter a valid RA and Dec';
     return null;

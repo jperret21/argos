@@ -24,6 +24,10 @@
     persist?: string;
     /** id of the section, for a caller that needs to reach it (focus, scroll). */
     anchor?: string;
+    /** Tighter header and body (set-up screens that must fit without scrolling). */
+    dense?: boolean;
+    /** The body fills the card's height (a table or a log that scrolls inside). */
+    fill?: boolean;
   }
 
   let {
@@ -35,6 +39,8 @@
     open = $bindable(true),
     persist,
     anchor,
+    dense = false,
+    fill = false,
   }: Props = $props();
 
   // Restore the remembered state once, at creation (the key never changes).
@@ -51,6 +57,8 @@
 
 <section
   class="card"
+  class:dense
+  class:fill
   class:closed={collapsible && !open}
   id={anchor}
   aria-labelledby="{id}-title"
@@ -160,5 +168,23 @@
     flex-direction: column;
     gap: var(--space-4);
     padding: var(--space-4);
+  }
+
+  .dense header {
+    min-height: 34px;
+  }
+  .dense .body {
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .fill {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .fill .body {
+    flex: 1;
+    min-height: 0;
   }
 </style>

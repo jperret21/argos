@@ -97,7 +97,7 @@ All colours are tokens; components never contain a hex value. Themes switch with
 | `--variable` | VSX variable-star markers. |
 | `--success` / `--warning` / `--danger` | Status only: ready / busy-attention / error-destructive. Always with an icon or a label. |
 | `--on-accent`, `--on-accent-deep`, `--on-danger` | Text and glyphs drawn on those fills. |
-| `--status-*`, `--log-*` | Device states and log levels (mirror the Qt mapping). |
+| `--status-*`, `--log-*` | Device states and log levels (mirror the Qt mapping, except INFO: `--log-info` is `--text-muted` in every theme, as Night Red already had it, since 2026-11-01. INFO is the most frequent routine level; in brass it spent the brass budget on the least important lines. CMD, OK, WARN and ERROR keep their colours). |
 | `--role-target`, `--role-comparison`, `--role-check` | Photometric roles, on the image and in plots. |
 | `--overlay-*` | Catalogue layers on the image (mirror `fits_viewer.py`). |
 | `--chart-*`, `--viewer-*` | Plots and the image canvas (sections 10 and 11). |

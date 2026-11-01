@@ -23,8 +23,8 @@
   /** Commit pause of the fields (also on Enter and blur). */
   const SETTLE_MS = 600;
 
-  const badge = $derived(cameraStatus(app.camera, app.connected, app.stale));
-  const cam = $derived(app.connected ? app.camera : null);
+  const badge = $derived(cameraStatus(app.camera, app.cameraReady, app.stale));
+  const cam = $derived(app.cameraReady ? app.camera : null);
   const sensor = $derived(cam?.sensor ?? null);
 
   const seconds = (s: number) => `${s.toFixed(s < 1 ? 3 : 1)} s`;

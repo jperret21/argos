@@ -1,9 +1,17 @@
 <!--
   Left navigation rail (Qt sidebar.py): the ARGOS mark, then one entry per
   workflow phase, Settings pushed to the bottom. 24 px icon above an 11 px
-  label, plus a state dot: ready (--success), active (--accent), blocked
-  (--warning). Selected entry: --toggled-fg on --surface with the 3 px brass
-  bar on the left (BRAND section 8).
+  label, plus a state mark whose SHAPE says the state (BRAND 4.3, README
+  3.12: every status double-coded; brass and amber are close hues, and all
+  three are red in Night Red): ready = filled disc (--success), running =
+  half disc (--accent), needs attention = ring (--warning), the same
+  grammar as the device marks. The state word is in the tooltip and the
+  accessible name. Selected entry: --toggled-fg on --surface with the 3 px
+  brass bar on the left (BRAND section 8).
+
+  Footer (README 1.1, D14, D15): [help] and [theme] above Settings; the Help
+  menu opens the keyboard shortcuts sheet, which lives here so that "?"
+  works from every section.
 -->
 <script lang="ts" module>
   import type { Section } from '../app/state.svelte';
@@ -22,6 +30,9 @@
   import { useApp } from '../app/state.svelte';
   import Icon from '../components/Icon.svelte';
   import { tooltip } from '../components/tooltip';
+  import { firstRunChecklist } from '../connection/model';
+  import RailFooter from './RailFooter.svelte';
+  import ShortcutSheet from './ShortcutSheet.svelte';
 
   interface Props {
     entries: readonly NavEntry[];
@@ -32,23 +43,38 @@
 
   type Dot = 'ready' | 'active' | 'blocked' | null;
 
+  /**
+   * Rail state dots (01 2.4.4, README 3.10.1):
+   * - Connection: ready = mount and camera connected; active = discovering or
+   *   connecting; attention = a device in error, or the server link lost /
+   *   token rejected.
+   * - Observe: ready = camera connected; active = live view, an exposure or
+   *   a slew (no amber when nothing is connected: that is the normal start).
+   * - Settings: attention while the observer code or the site is missing
+   *   (Q-G11): FITS and AAVSO metadata would be wrong.
+   * - Plan, Review: nothing to report until their waves ship.
+   */
   function dotFor(id: Section): Dot {
     // Link down: the records are stale, claim nothing but the problem.
     if (app.stale && app.events.link !== 'idle' && app.events.link !== 'connecting') {
       return id === 'connection' ? 'blocked' : null;
     }
-    const conn = app.connection?.state;
+    const devices = app.devices;
+    const ready = (d: 'mount' | 'camera') => devices?.[d]?.state === 'connected' || devices?.[d]?.state === 'busy';
     if (id === 'connection') {
-      if (conn === 'connected') return 'ready';
-      if (conn === 'error' || app.events.link === 'unauthorized' || app.events.link === 'forbidden') {
-        return 'blocked';
-      }
+      if (app.equipment.anyError) return 'blocked';
+      if (app.discovering || app.equipment.anyConnecting) return 'active';
+      if (ready('mount') && ready('camera')) return 'ready';
       return null;
     }
     if (id === 'imaging') {
       if (app.cameraBusy || app.slewing) return 'active';
-      if (conn === 'connected') return 'ready';
+      if (ready('camera')) return 'ready';
       return null;
+    }
+    if (id === 'configuration' && app.configValues) {
+      const missing = firstRunChecklist(app.configValues, true).some((c) => c.id !== 'astap' && !c.done);
+      return missing ? 'blocked' : null;
     }
     return null;
   }
@@ -72,8 +98,8 @@
     aria-current={app.section === e.id ? 'page' : undefined}
     aria-label={dot ? `${e.label}, ${DOT_WORDS[dot]}` : e.label}
     aria-keyshortcuts={ariaShortcut(e.shortcut)}
-    onclick={() => (app.section = e.id)}
-    use:tooltip={{ text: e.hint, shortcut: e.shortcut, placement: 'right' }}
+    onclick={() => app.go(e.id)}
+    use:tooltip={{ text: dot ? `${e.hint} · ${DOT_WORDS[dot]}` : e.hint, shortcut: e.shortcut, placement: 'right' }}
   >
     <span class="glyph">
       <Icon name={e.icon} size="l" />
@@ -92,9 +118,17 @@
     {#each main as e (e.id)}{@render entry(e)}{/each}
   </div>
   <div class="entries footer">
+    <RailFooter
+      theme={app.theme}
+      ontheme={(t) => app.setTheme(t)}
+      version={app.serverVersion}
+      api={app.serverApi}
+      onshortcuts={() => (app.shortcutSheetOpen = true)}
+    />
     {#each footer as e (e.id)}{@render entry(e)}{/each}
   </div>
 </nav>
+<ShortcutSheet bind:open={app.shortcutSheetOpen} registry={app.shortcuts} />
 
 <style>
   .rail {
@@ -199,25 +233,39 @@
   }
 
   .dot {
+    --c: var(--success);
+    --halo: var(--bg-2);
     position: absolute;
     top: -2px;
     right: -5px;
-    width: 7px;
-    height: 7px;
-    border: 1.5px solid var(--bg-2);
+    width: 8px;
+    height: 8px;
     border-radius: var(--radius-round);
-    box-sizing: content-box;
+    overflow: hidden;
+    /* A halo in the rail's colour keeps the mark off the glyph's strokes. */
+    outline: 1.5px solid var(--halo);
   }
   .selected .dot {
-    border-color: var(--surface);
+    --halo: var(--surface);
   }
+  /* Ready: a filled disc. */
   .dot.ready {
-    background: var(--success);
+    background: var(--c);
   }
+  /* Running: a ring, its left half filled. */
   .dot.active {
-    background: var(--accent);
+    --c: var(--accent);
+    box-shadow: inset 0 0 0 1.5px var(--c);
   }
+  .dot.active::before {
+    content: '';
+    position: absolute;
+    inset: 0 50% 0 0;
+    background: var(--c);
+  }
+  /* Needs attention: a ring. */
   .dot.blocked {
-    background: var(--warning);
+    --c: var(--warning);
+    box-shadow: inset 0 0 0 1.5px var(--c);
   }
 </style>

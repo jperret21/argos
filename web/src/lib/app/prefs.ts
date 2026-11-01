@@ -41,3 +41,41 @@ export function savePref(key: string, value: unknown, store: StorageLike | null 
 }
 
 export const isBoolean = (v: unknown): v is boolean => typeof v === 'boolean';
+
+type StorageFull = Pick<Storage, 'getItem' | 'setItem' | 'removeItem' | 'key' | 'length'>;
+
+function fullStorage(): StorageFull | null {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function removePref(key: string, store: Pick<Storage, 'removeItem'> | null = fullStorage()): void {
+  try {
+    store?.removeItem(key);
+  } catch {
+    /* blocked storage: nothing was remembered either */
+  }
+}
+
+/** Remove every preference whose key starts with `prefix`; returns the keys removed. */
+export function removePrefsWithPrefix(prefix: string, store: StorageFull | null = fullStorage()): string[] {
+  const removed: string[] = [];
+  try {
+    if (!store) return removed;
+    const keys: string[] = [];
+    for (let i = 0; i < store.length; i++) {
+      const k = store.key(i);
+      if (k !== null && k.startsWith(prefix)) keys.push(k);
+    }
+    for (const k of keys) {
+      store.removeItem(k);
+      removed.push(k);
+    }
+  } catch {
+    /* blocked storage */
+  }
+  return removed;
+}

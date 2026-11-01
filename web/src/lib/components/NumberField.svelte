@@ -33,6 +33,8 @@
     invalid?: boolean;
     /** Commit after this pause in typing (and on Enter / blur) instead of per keystroke. */
     settleMs?: number;
+    /** Commit only on Enter or blur (config values written to disk: README 3.4). */
+    lazy?: boolean;
     onchange?: (value: number) => void;
   }
 
@@ -50,6 +52,7 @@
     hideLabel = false,
     invalid = $bindable(false),
     settleMs,
+    lazy = false,
     onchange,
   }: Props = $props();
 
@@ -98,6 +101,10 @@
 
   /** Commit now, or after the settle pause. */
   function offer(v: number): void {
+    if (lazy) {
+      pending = v; // flushed by Enter or blur
+      return;
+    }
     if (settleMs === undefined) return commit(v);
     pending = v;
     clearSettle();

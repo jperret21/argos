@@ -13,7 +13,24 @@
  */
 
 import type { LinkState } from '../api/socket';
-import type { CameraState, ConnectionState, MountState } from '../api/types';
+import type { CameraState, ConnectionState, DeviceId, DevicesState, MountState } from '../api/types';
+
+/**
+ * The device is open and can take commands: its own API 2 record says
+ * connected or busy. The v1 connection record is NOT enough: since API 2 it
+ * reads "connected" when either the camera or the mount is, so a camera
+ * alone would make the placeholder mount record (RA 0, Dec 0) look real.
+ * An API 1 server has no per-device record: its connection is the pair.
+ */
+export function deviceUsable(
+  devices: DevicesState | null | undefined,
+  id: DeviceId,
+  connection: ConnectionState | null | undefined,
+): boolean {
+  const d = devices?.[id];
+  if (!d) return connection?.state === 'connected';
+  return d.state === 'connected' || d.state === 'busy';
+}
 
 export type Tone = 'idle' | 'ok' | 'busy' | 'error' | 'active';
 

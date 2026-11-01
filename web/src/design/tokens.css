@@ -186,7 +186,7 @@
 
   /* Activity log levels (argos/ui/theme.py LOG_COLORS). */
   --log-debug: var(--fg-muted);
-  --log-info: var(--accent);
+  --log-info: var(--text-muted); /* routine lines: no brass (BRAND 3), as Night Red */
   --log-ok: var(--success);
   --log-warning: var(--warning);
   --log-error: var(--danger);
@@ -282,7 +282,7 @@
   --status-error: var(--danger);
 
   --log-debug: var(--fg-muted);
-  --log-info: var(--accent);
+  --log-info: var(--text-muted); /* routine lines: no brass (BRAND 3), as Night Red */
   --log-ok: var(--success);
   --log-warning: var(--warning);
   --log-error: var(--danger);
