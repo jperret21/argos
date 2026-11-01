@@ -678,6 +678,8 @@ more than rounding.
 
 The point falls back to the frame-level value when no observing site is
 configured — without a latitude and longitude there is no altitude to compute.
+A site counts as configured when it has a name or coordinates other than the
+0/0 default; before 0.5.0 the default was used as a real site.
 ```
 
 ## 8. What the export actually contains

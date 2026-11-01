@@ -88,7 +88,10 @@ resolve now still works in the field with no connection.
 **Settings → Observatory.** Enter the observer name and, for AAVSO submissions,
 the observer code — left unset, ARGOS refuses the AAVSO export. Search for
 your site, pick the right result, correct the altitude if you have a measured
-one, and save it as a favourite.
+one, and save it as a favourite. Without a site (a name, or coordinates other
+than the 0/0 default) ARGOS computes no BJD_TDB and no altitude curve, the live
+curve's airmass is the mount's (`na` without a mount), and frames carry no
+`SITELAT`/`SITELONG`.
 
 **Settings → Equipment · camera.** Select the telescope you actually own. The
 S30 Pro is the reference profile; S30 and S50 are selectable but flagged
@@ -300,6 +303,18 @@ filter is a selector inside **Acquisition**, and in the sequence rows.
   or when you press a button that uses it — not at each keystroke.
 - While a sequence or an autofocus runs, **Disconnect** and **Quit** ask first;
   the default answer, *No*, leaves the run going.
+- A Dark or Bias **Take shot** needs Filter `Dark` *and* the wheel settled on
+  it: the Seestar has no shutter. Picking a filter starts the wheel and greys
+  the selector until it arrives; a Dark or Bias shot asked for meanwhile is
+  refused with a warning. A frame exposed while the wheel turned is never saved: Take shot
+  saves the next one.
+- **Stop AF** returns the focuser to where the sweep started. If that takes
+  longer than 10 s, autofocus keeps the camera until the focuser is back, and
+  no new sweep can start before.
+- **File → Open FITS image…** opens raw 16-bit frames (Argos `.fit` or any
+  integer data from 0 to 65535). A calibrated or stacked frame (negative or
+  fractional values, or sums beyond 65535) is refused: its photometry would be
+  wrong. Inspect such a file with **Review → Open FITS…** instead.
 
 ```{important}
 Display is not data. Debayer mode, stretch and channel are preview settings. The
@@ -468,8 +483,11 @@ curves whose role is *target* are written: a comparison or check curve can never
 leave through this door as an observation. Points flagged *saturated* or
 *suspect* (cosmic ray, hot pixel) are left out, and the export says how many;
 they stay in the CSV. A per-star CSV opened in Review takes its role and star
-from its file name and the run's `targets.json`; if neither identifies it, the
-AAVSO export is disabled for it.
+from its file name and the run's `targets.json` (for a live-preview CSV in
+`<sessions>/targets/`, the object's `<object>.json` beside it); if neither
+identifies it, the AAVSO export is disabled for it. `AMASS` is the point's
+airmass: computed for the site in Settings, the mount's altitude without one,
+`na` without either.
 
 Your check star, if you chose one, goes into `KNAME`/`KMAG`: its AUID and its
 ensemble magnitude on the same frame, which is what the AAVSO asks for with
