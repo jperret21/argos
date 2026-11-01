@@ -72,6 +72,35 @@ def test_jog_dialog_stops_every_moving_axis() -> None:
         ImagingPage._on_session_device_state(page, "mount", "disconnected", "")
         assert not dlg.isVisible()
         new_scope.stop_axis.assert_called_once_with(1)
+
+        # A StopAxis that fails (network blip) leaves the axis marked: closing
+        # the dialog tries again (it used to forget the axis at once).
+        from argos.core.alpaca.client import AlpacaError
+
+        flaky = MagicMock()
+        flaky.stop_axis.side_effect = [AlpacaError(0, "timeout"), None]
+        logs: list[tuple[str, str]] = []
+        dlg.log_message.connect(lambda level, msg: logs.append((level, msg)))
+        dlg.set_telescope(flaky)
+        dlg.show()
+        QTest.keyPress(dlg, Qt.Key.Key_Up)
+        QTest.keyRelease(dlg, Qt.Key.Key_Up)  # the stop fails
+        assert any(level == "WARN" and "Stop failed" in msg for level, msg in logs), logs
+        dlg.close()
+        assert flaky.stop_axis.call_args_list == [call(1), call(1)]
+
+        # A mount that stays unreachable is tried twice, then reported, not
+        # retried at every close, hide and focus change (blocking calls).
+        dead = MagicMock()
+        dead.stop_axis.side_effect = AlpacaError(0, "timeout")
+        dlg.set_telescope(dead)
+        dlg.show()
+        QTest.keyPress(dlg, Qt.Key.Key_Up)
+        QTest.keyRelease(dlg, Qt.Key.Key_Up)
+        dlg.close()
+        QApplication.sendEvent(dlg, QEvent(QEvent.Type.WindowDeactivate))
+        assert dead.stop_axis.call_count == 2
+        assert any(level == "ERROR" and "Abort" in msg for level, msg in logs), logs
     finally:
         dlg.deleteLater()
         app.processEvents()

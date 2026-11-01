@@ -93,6 +93,8 @@ class ManualControlDialog(QDialog):
         self._telescope = telescope
         self._speed: float = list(SPEEDS.values())[1]
         self._active_axes: set[int] = set()
+        # Failed StopAxis calls per axis since it was last started or stopped.
+        self._stop_failures: dict[int, int] = {}
 
         self._setup_window()
         self._build_ui()
@@ -176,6 +178,7 @@ class ManualControlDialog(QDialog):
         # Marked before the call and kept on failure: a MoveAxis that raised
         # may still have reached the mount, and a stop is harmless.
         self._active_axes.add(axis)
+        self._stop_failures.pop(axis, None)
         logger.info("ManualControl: %s  axis=%d rate=%.2f", direction, axis, rate)
         try:
             self._telescope.move_axis(axis, rate)
@@ -183,17 +186,42 @@ class ManualControlDialog(QDialog):
             logger.error("MoveAxis failed: %s", exc)
             self._log("ERROR", f"Move failed: {exc}")
 
+    #: StopAxis attempts per axis before the dialog stops retrying.
+    _STOP_ATTEMPTS = 2
+
     def _stop_axis(self, axis: int) -> None:
-        """Stop *axis* if this dialog moved it (key or button released)."""
+        """Stop *axis* if this dialog moved it (key or button released).
+
+        A failed stop keeps the axis marked: it may still be moving, so the
+        next close, hide, focus loss or ■ tries again, once. Each attempt is a
+        blocking call, so a mount that stays unreachable is not retried on
+        every event.
+        """
         if axis not in self._active_axes:
             return
-        self._active_axes.discard(axis)
         try:
             self._telescope.stop_axis(axis)
-            logger.info("ManualControl: stopped axis %d", axis)
         except AlpacaError as exc:
-            logger.warning("Stop axis %d failed: %s", axis, exc)
-            self._log("WARN", f"Stop failed: {exc}")
+            failures = self._stop_failures.get(axis, 0) + 1
+            logger.warning("Stop axis %d failed (%d): %s", axis, failures, exc)
+            if failures < self._STOP_ATTEMPTS:
+                self._stop_failures[axis] = failures
+                self._log(
+                    "WARN",
+                    f"Stop failed: {exc} — tried again when this window closes or loses focus.",
+                )
+            else:
+                self._active_axes.discard(axis)
+                self._stop_failures.pop(axis, None)
+                self._log(
+                    "ERROR",
+                    f"Stop failed again: {exc} — the mount may still be moving; "
+                    "use Abort on the Mount card.",
+                )
+            return
+        self._active_axes.discard(axis)
+        self._stop_failures.pop(axis, None)
+        logger.info("ManualControl: stopped axis %d", axis)
 
     def _stop_active(self) -> None:
         """Stop every axis this dialog still moves (close, hide, focus lost)."""
