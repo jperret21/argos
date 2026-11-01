@@ -13,7 +13,9 @@ from PyQt6.QtWidgets import QApplication, QPushButton  # noqa: E402
 
 from argos.core.session.types import FocuserState  # noqa: E402
 from argos.ui.pages.imaging_page import ImagingPage  # noqa: E402
+from argos.ui.widgets.camera_dock import CameraDock  # noqa: E402
 from argos.ui.widgets.focuser_dock import FocuserDock  # noqa: E402
+from argos.workers.camera_service import CameraState  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -63,6 +65,31 @@ def test_focuser_card_refuses_manual_moves_during_autofocus_and_follows_max_step
         )
         assert dock._goto_spin.maximum() == 60_000
         assert dock._goto_spin.value() == 24_500
+    finally:
+        dock.deleteLater()
+        qapp.processEvents()
+
+
+def test_camera_lock_hint_names_the_owner(qapp) -> None:
+    """H15: a stand-alone autofocus locked the Camera card with the text
+    "Sequence running", sending the observer looking for a sequence to stop."""
+    dock = CameraDock()
+    try:
+        actions: list[str] = []
+        page = SimpleNamespace(
+            _camera_dock=dock, action_changed=SimpleNamespace(emit=actions.append)
+        )
+
+        ImagingPage._on_camera_state(page, CameraState.AUTOFOCUS)
+        assert not dock._lock_hint.isHidden()
+        assert "Autofocus" in dock._lock_hint.text()
+        assert "Sequence" not in dock._lock_hint.text()
+
+        ImagingPage._on_camera_state(page, CameraState.SEQUENCE)
+        assert dock._lock_hint.text() == "Sequence running — the sequence owns the camera."
+
+        ImagingPage._on_camera_state(page, CameraState.IDLE)
+        assert dock._lock_hint.isHidden()
     finally:
         dock.deleteLater()
         qapp.processEvents()

@@ -67,6 +67,12 @@ DEFAULT_EXPOSURE_RANGE = (0.01, 600.0)
 #: Preview-quality combo entries → LivePreviewWorker decimation factor.
 _PREVIEW_QUALITIES = (("Full res", 1), ("Half res", 2))
 
+#: Camera-card lock hint, by the owner holding the camera.
+_LOCK_HINTS = {
+    "sequence": "Sequence running — the sequence owns the camera.",
+    "autofocus": "Autofocus running — autofocus owns the camera.",
+}
+
 
 @dataclass(frozen=True)
 class CaptureParams:
@@ -209,8 +215,8 @@ class CameraDock(design.Card):
         self._take_btn.clicked.connect(self.take_shot_clicked)
         outer.addLayout(design.button_row(self._live_btn, self._take_btn))
 
-        # Shown while a sequence owns the camera (set_sequence_lock).
-        self._lock_hint = design.MutedLabel("Sequence running — the sequence owns the camera.")
+        # Shown while a sequence or an autofocus owns the camera (set_sequence_lock).
+        self._lock_hint = design.MutedLabel(_LOCK_HINTS["sequence"])
         self._lock_hint.setWordWrap(True)
         self._lock_hint.hide()
         outer.addWidget(self._lock_hint)
@@ -247,8 +253,11 @@ class CameraDock(design.Card):
         self._take_btn.setEnabled(connected)
         self._live_btn.setEnabled(connected)
 
-    def set_sequence_lock(self, locked: bool) -> None:
+    def set_sequence_lock(self, locked: bool, owner: str = "sequence") -> None:
         """Freeze the capture form while a sequence owns the camera (WS8).
+
+        ``owner`` ("sequence" or "autofocus") names the owner in the hint: a
+        stand-alone autofocus must not read "Sequence running".
 
         The running SequenceWorker reads its own plan — edits here would only
         desynchronise what the user sees from what the camera does. Take
@@ -266,6 +275,7 @@ class CameraDock(design.Card):
             self._quality_combo,
         ):
             w.setEnabled(not locked)
+        self._lock_hint.setText(_LOCK_HINTS.get(owner, _LOCK_HINTS["sequence"]))
         self._lock_hint.setVisible(locked)
 
     def set_live_running(self, running: bool) -> None:

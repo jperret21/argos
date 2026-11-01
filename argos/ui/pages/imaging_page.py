@@ -637,9 +637,13 @@ class ImagingPage(QWidget):
         self.action_changed.emit(_STATE_ACTION[state])
         self._camera_dock.set_live_running(state is CameraState.LIVE)
         # WS8 cockpit: freeze the capture form while the sequence owns the
-        # camera (SEQUENCE and its nested AUTOFOCUS pass); any release —
-        # complete, stopped or error — transitions state and unfreezes.
-        self._camera_dock.set_sequence_lock(state in (CameraState.SEQUENCE, CameraState.AUTOFOCUS))
+        # camera (SEQUENCE and its nested AUTOFOCUS pass) or a stand-alone
+        # autofocus runs; any release — complete, stopped or error —
+        # transitions state and unfreezes. The hint names the owner.
+        self._camera_dock.set_sequence_lock(
+            state in (CameraState.SEQUENCE, CameraState.AUTOFOCUS),
+            owner="autofocus" if state is CameraState.AUTOFOCUS else "sequence",
+        )
 
     # ------------------------------------------------------------------
     # Device session state → docks (the session owns the device handles)
