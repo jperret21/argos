@@ -2816,6 +2816,12 @@ class ImagingPage(QWidget):
     def _on_focuser_halt(self) -> None:
         if not self._session.focuser:
             return
+        if self._engine.autofocus_running:
+            # Stop AF (and Halt, which shares this slot while AF runs): the
+            # worker stops the sweep and drives the focuser back to its start.
+            # A Halt after that would freeze the return anywhere in the sweep.
+            self._engine.stop_autofocus()
+            return
         self._engine.stop_autofocus()
         self._session.focuser_halt()
 
@@ -2844,10 +2850,16 @@ class ImagingPage(QWidget):
     @pyqtSlot(int, object)
     def _on_af_done(self, best_pos: int, best_hfd) -> None:
         self._focuser_dock.set_position(best_pos)
-        hfd_str = f"{best_hfd:.1f}" if best_hfd is not None else "—"
         self._focuser_dock.vcurve.set_best(best_pos, best_hfd)
         self.autofocus_best.emit(best_pos, best_hfd)
-        self.log_message.emit("OK", f"Autofocus complete — best pos={best_pos}  HFD={hfd_str}")
+        if best_hfd is None:
+            # A stop, a rejected (non-V) sweep or too few frames: the worker
+            # drove the focuser back to its start and reports where it ended.
+            self.log_message.emit(
+                "INFO", f"Autofocus ended without a result — focuser back at {best_pos}."
+            )
+            return
+        self.log_message.emit("OK", f"Autofocus complete — best pos={best_pos}  HFD={best_hfd:.1f}")
         self.action_changed.emit(f"Focused  pos={best_pos}")
 
     # ------------------------------------------------------------------

@@ -124,8 +124,7 @@ class AutofocusWorker(QThread):
 
         valid = [(p, h) for p, h in measurements if not np.isnan(h)]
         if self._stop_flag or len(valid) < 3:
-            self._restore(start_pos)
-            self.best_found.emit(start_pos, None)
+            self.best_found.emit(self._restore(start_pos), None)
             return
 
         # P6: never move the focus on a curve that isn't a V — a flat sweep
@@ -134,9 +133,9 @@ class AutofocusWorker(QThread):
         reason = sweep_is_degenerate(tuple(sorted(valid)))
         if reason is not None:
             logger.warning("Autofocus rejected: %s — focus unchanged", reason)
-            self._restore(start_pos)
+            restored = self._restore(start_pos)
             self.error_occurred.emit(f"Autofocus: {reason} — focus unchanged")
-            self.best_found.emit(start_pos, None)
+            self.best_found.emit(restored, None)
             return
 
         raw_min_pos, raw_min_hfd = min(valid, key=lambda t: t[1])
@@ -146,8 +145,7 @@ class AutofocusWorker(QThread):
         fine_meas = self._measure_positions(fine, step_idx, total)
         step_idx += len(fine)
         if self._stop_flag:
-            self._restore(start_pos)
-            self.best_found.emit(start_pos, None)
+            self.best_found.emit(self._restore(start_pos), None)
             return
 
         # Fit on the V zone only: the fine samples plus the coarse minimum.
@@ -191,22 +189,39 @@ class AutofocusWorker(QThread):
             logger.debug("AF step %d/%d  pos=%d  HFD=%s", done + i + 1, total, pos, hfd)
         return out
 
-    def _restore(self, start_pos: int) -> None:
-        """Move back to the sweep's starting position."""
-        self._focuser.move_to(start_pos)
-        self._wait_for_focuser()
+    def _restore(self, start_pos: int) -> int:
+        """Move back to the sweep's starting position; return where it ended.
 
-    def _wait_for_focuser(self) -> None:
-        """Poll until the focuser stops, then wait a settle period."""
+        Waits for the return move even after a stop: returning at once left
+        the focuser moving, and the Halt that follows a Stop AF then froze it
+        anywhere in the sweep range while the panel showed the start.
+        """
+        self._focuser.move_to(start_pos)
+        self._wait_for_focuser(ignore_stop=True)
+        try:
+            position = int(self._focuser.get_position())
+        except Exception as exc:
+            logger.warning("AF: focuser position unreadable after the return (%s)", exc)
+            return start_pos
+        if position != start_pos:
+            logger.warning("AF: focuser at %d, not back at its start %d", position, start_pos)
+        return position
+
+    def _wait_for_focuser(self, ignore_stop: bool = False) -> None:
+        """Poll until the focuser stops, then wait a settle period.
+
+        ``ignore_stop`` keeps polling after a stop request (the return to the
+        start position), still bounded by the 30 s deadline, with no settle.
+        """
         deadline = time.monotonic() + 30.0
-        while time.monotonic() < deadline and not self._stop_flag:
+        while time.monotonic() < deadline and (ignore_stop or not self._stop_flag):
             try:
                 if not self._focuser.is_moving():
                     break
             except Exception:
                 break
             self.msleep(_POLL_INTERVAL_MS)
-        if not self._stop_flag:
+        if not self._stop_flag and not ignore_stop:
             self.msleep(int(_SETTLE_S * 1000))
 
     def _capture_hfd(self) -> float | None:

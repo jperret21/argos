@@ -847,6 +847,11 @@ class AcquisitionEngine(QObject):
         self.log_message.emit("CMD", "Autofocus started…")
         return True
 
+    @property
+    def autofocus_running(self) -> bool:
+        """True while an autofocus sweep worker is running."""
+        return self._autofocus is not None and self._autofocus.isRunning()
+
     def stop_autofocus(self) -> None:
         if self._autofocus and self._autofocus.isRunning():
             self._autofocus.stop()
