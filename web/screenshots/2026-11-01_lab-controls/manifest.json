@@ -1,0 +1,566 @@
+{
+  "title": "Lab: control system (buttons, toolbars, values, focuser, jog, hold-to-confirm, status)",
+  "date": "2026-11-01",
+  "summary": "Interactive specimen at web/lab/controls.html (sources web/src/lab/controls/). Seven plates show every control in every state in the three themes, on simulated hardware with realistic timing: one button component with error, progress-ring and hold states; data-driven toolbars with priority overflow and key hints while Cmd/Ctrl is held; scrub fields with a commit model that never sends per keystroke; sliders with ticks, detents, fine drag and Esc-to-start; steppers with repeat; a two-scale focuser gauge with queued taps; a jog pad with per-axis tracking and a visible dead-man; hold-to-confirm with a time ring and a keyboard confirmation. Interaction shots come from real input in headless Chrome 156; 29 behaviour checks pass. Every Night Red PNG, Chrome and WKWebView, audits at 0 non-red pixels. No new dependency.",
+  "shots": [
+    {
+      "file": "buttons-observatory.png",
+      "caption": "Plate 01, Buttons, Observatory, Chrome 1440x900. The state matrix: 8 button kinds (ghost toolbar, ghost layout, secondary, instrument toggle, primary, danger, routine stop, text) in 8 states (rest, hover, pressed, focus, toggled, unavailable, busy, error), pinned with the same CSS rules live hover/press/focus use. Also sizes S 30 / M 34 / L 40 px with dimension marks, the time ring (exposure, live frame, autofocus sweep, hold affordance), the icon/label grammar of BRAND 7 and unavailable controls with their reason tip. Why: one control component replaces IconButton + Button and adds error, progress and hold states the instrument needs.",
+      "tags": [
+        "lab-controls",
+        "buttons",
+        "observatory",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "toolbar-observatory.png",
+      "caption": "Plate 02, Toolbars, Observatory, Chrome 1440x900. The Observe toolbar rebuilt from data (id, group, priority, shortcut): split Capture button showing \"2.0 s\", Live toggle with the frame ring, Stop, zoom readout, stretch, field and tool groups, layout toggles at the right end; the same model in a 760 px frame with the overflow trigger \"9\", a compact 40 px row, split buttons in every state and the key-hint demo. Why: one row at any width, run-critical tools never move, nothing disappears silently.",
+      "tags": [
+        "lab-controls",
+        "toolbar",
+        "observatory",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "values-observatory.png",
+      "caption": "Plate 03, Values, Observatory, Chrome 1440x900. Scrub fields (Exposure on the preferred-value ladder, Offset) live, then the Exposure field pinned in each commit state: rest, scrubbing with the dial tape, not sent (dashed edge), sending, applied, refused by the device, invalid (never clamped), unavailable; sliders with ticks, magnetic detents (2x / 3x FWHM) and fine adjustment; steppers (hold to repeat, x10 after 1.6 s, limit reasons); segmented choices with manual activation for hardware; the one modifier convention. Why: device values are sent once, never per keystroke or pixel of drag.",
+      "tags": [
+        "lab-controls",
+        "values",
+        "observatory",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "focuser-observatory.png",
+      "caption": "Plate 04, Focuser, Observatory, Chrome 1440x900. The proposed Focuser card at rail width 396 px: live, moving with taps queued, autofocus running (Stop AF ring 11/14, Halt available), offline, near the end of travel (In refused, out-of-range Go to refused in words), and the design notes. The two-scale gauge: hairline = whole 0-100,000 travel with the window bracket, scale below = one tick per step size, needle = polled position, hollow triangle = commanded target, diamond = last autofocus best. Why: fixes Qt P4-P7 (unpolled position, Go to overwritten or moving on blur, Halt disabled during AF).",
+      "tags": [
+        "lab-controls",
+        "focuser",
+        "observatory",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "mount-observatory.png",
+      "caption": "Plate 05, Mount jog, Observatory, Chrome 1440x900. The Mount card with the jog pad: live (with lab switches to break the link or start a run), armed with North + East held (two axes at once, brass edge, renewal age 0.12 s), and a key held after the link was lost (dashed key, \"Stopped by the server: no renewal for 1.0 s\"); below, the dead-man timing diagram (renewals every 250 ms, server stop 1.0 s after the last one). Why: press-and-hold that cannot leave the mount moving, per-axis tracking (fixes Qt P22), rate shown in deg/s.",
+      "tags": [
+        "lab-controls",
+        "mount",
+        "observatory",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "confirm-observatory.png",
+      "caption": "Plate 06, Confirm and progress, Observatory, Chrome 1440x900. Hold-to-confirm: live Park, then pinned phases (rest with the ring track that says \"hold\", holding 46 %, released early \"nothing sent\", tapped \"Hold to park, or press Enter\", busy, unavailable); where a hold is worth it (Pause-the-run-and-slew beside a Slew refused during a run, Stop sequence, the keyboard inline confirmation); progress and busy inside buttons (exposure ring, Connect spinner, Identify field spinner, Slew to Abort with angle to go, Stop AF 7/14, export job ring). Why: physical actions get a deliberate gesture without a modal; time is shown, never eased.",
+      "tags": [
+        "lab-controls",
+        "confirm",
+        "observatory",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "status-observatory.png",
+      "caption": "Plate 07, Status and keys, Observatory, Chrome 1440x900. Device state chips (hollow ring = idle, dot + word for the rest, dashed = stale), HUD chips over a black canvas (\"Fill · cropped\", \"Manual zoom kept\"), attention levels told apart by shape (disc, triangle, ring) and word, counts, the key-cap table (macOS glyphs vs Windows/Linux words), static tips, focus rings on every control kind, unavailable controls, role glyphs, and a 32 px status bar with the attention chip. Why: every state double-coded so Night Red (luminance only) keeps them apart.",
+      "tags": [
+        "lab-controls",
+        "status",
+        "observatory",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "buttons-charcoal.png",
+      "caption": "Plate 01, Buttons, Charcoal, Chrome 1440x900. The state matrix: 8 button kinds (ghost toolbar, ghost layout, secondary, instrument toggle, primary, danger, routine stop, text) in 8 states (rest, hover, pressed, focus, toggled, unavailable, busy, error), pinned with the same CSS rules live hover/press/focus use. Also sizes S 30 / M 34 / L 40 px with dimension marks, the time ring (exposure, live frame, autofocus sweep, hold affordance), the icon/label grammar of BRAND 7 and unavailable controls with their reason tip. Why: one control component replaces IconButton + Button and adds error, progress and hold states the instrument needs.",
+      "tags": [
+        "lab-controls",
+        "buttons",
+        "charcoal",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "toolbar-charcoal.png",
+      "caption": "Plate 02, Toolbars, Charcoal, Chrome 1440x900. The Observe toolbar rebuilt from data (id, group, priority, shortcut): split Capture button showing \"2.0 s\", Live toggle with the frame ring, Stop, zoom readout, stretch, field and tool groups, layout toggles at the right end; the same model in a 760 px frame with the overflow trigger \"9\", a compact 40 px row, split buttons in every state and the key-hint demo. Why: one row at any width, run-critical tools never move, nothing disappears silently.",
+      "tags": [
+        "lab-controls",
+        "toolbar",
+        "charcoal",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "values-charcoal.png",
+      "caption": "Plate 03, Values, Charcoal, Chrome 1440x900. Scrub fields (Exposure on the preferred-value ladder, Offset) live, then the Exposure field pinned in each commit state: rest, scrubbing with the dial tape, not sent (dashed edge), sending, applied, refused by the device, invalid (never clamped), unavailable; sliders with ticks, magnetic detents (2x / 3x FWHM) and fine adjustment; steppers (hold to repeat, x10 after 1.6 s, limit reasons); segmented choices with manual activation for hardware; the one modifier convention. Why: device values are sent once, never per keystroke or pixel of drag.",
+      "tags": [
+        "lab-controls",
+        "values",
+        "charcoal",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "focuser-charcoal.png",
+      "caption": "Plate 04, Focuser, Charcoal, Chrome 1440x900. The proposed Focuser card at rail width 396 px: live, moving with taps queued, autofocus running (Stop AF ring 11/14, Halt available), offline, near the end of travel (In refused, out-of-range Go to refused in words), and the design notes. The two-scale gauge: hairline = whole 0-100,000 travel with the window bracket, scale below = one tick per step size, needle = polled position, hollow triangle = commanded target, diamond = last autofocus best. Why: fixes Qt P4-P7 (unpolled position, Go to overwritten or moving on blur, Halt disabled during AF).",
+      "tags": [
+        "lab-controls",
+        "focuser",
+        "charcoal",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "mount-charcoal.png",
+      "caption": "Plate 05, Mount jog, Charcoal, Chrome 1440x900. The Mount card with the jog pad: live (with lab switches to break the link or start a run), armed with North + East held (two axes at once, brass edge, renewal age 0.12 s), and a key held after the link was lost (dashed key, \"Stopped by the server: no renewal for 1.0 s\"); below, the dead-man timing diagram (renewals every 250 ms, server stop 1.0 s after the last one). Why: press-and-hold that cannot leave the mount moving, per-axis tracking (fixes Qt P22), rate shown in deg/s.",
+      "tags": [
+        "lab-controls",
+        "mount",
+        "charcoal",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "confirm-charcoal.png",
+      "caption": "Plate 06, Confirm and progress, Charcoal, Chrome 1440x900. Hold-to-confirm: live Park, then pinned phases (rest with the ring track that says \"hold\", holding 46 %, released early \"nothing sent\", tapped \"Hold to park, or press Enter\", busy, unavailable); where a hold is worth it (Pause-the-run-and-slew beside a Slew refused during a run, Stop sequence, the keyboard inline confirmation); progress and busy inside buttons (exposure ring, Connect spinner, Identify field spinner, Slew to Abort with angle to go, Stop AF 7/14, export job ring). Why: physical actions get a deliberate gesture without a modal; time is shown, never eased.",
+      "tags": [
+        "lab-controls",
+        "confirm",
+        "charcoal",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "status-charcoal.png",
+      "caption": "Plate 07, Status and keys, Charcoal, Chrome 1440x900. Device state chips (hollow ring = idle, dot + word for the rest, dashed = stale), HUD chips over a black canvas (\"Fill · cropped\", \"Manual zoom kept\"), attention levels told apart by shape (disc, triangle, ring) and word, counts, the key-cap table (macOS glyphs vs Windows/Linux words), static tips, focus rings on every control kind, unavailable controls, role glyphs, and a 32 px status bar with the attention chip. Why: every state double-coded so Night Red (luminance only) keeps them apart.",
+      "tags": [
+        "lab-controls",
+        "status",
+        "charcoal",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "buttons-night-red.png",
+      "caption": "Plate 01, Buttons, Night Red, Chrome 1440x900. The state matrix: 8 button kinds (ghost toolbar, ghost layout, secondary, instrument toggle, primary, danger, routine stop, text) in 8 states (rest, hover, pressed, focus, toggled, unavailable, busy, error), pinned with the same CSS rules live hover/press/focus use. Also sizes S 30 / M 34 / L 40 px with dimension marks, the time ring (exposure, live frame, autofocus sweep, hold affordance), the icon/label grammar of BRAND 7 and unavailable controls with their reason tip. Why: one control component replaces IconButton + Button and adds error, progress and hold states the instrument needs. Night Red pixel audit: 0 pixels emit non-red light.",
+      "tags": [
+        "lab-controls",
+        "buttons",
+        "night-red",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "toolbar-night-red.png",
+      "caption": "Plate 02, Toolbars, Night Red, Chrome 1440x900. The Observe toolbar rebuilt from data (id, group, priority, shortcut): split Capture button showing \"2.0 s\", Live toggle with the frame ring, Stop, zoom readout, stretch, field and tool groups, layout toggles at the right end; the same model in a 760 px frame with the overflow trigger \"9\", a compact 40 px row, split buttons in every state and the key-hint demo. Why: one row at any width, run-critical tools never move, nothing disappears silently. Night Red pixel audit: 0 pixels emit non-red light.",
+      "tags": [
+        "lab-controls",
+        "toolbar",
+        "night-red",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "values-night-red.png",
+      "caption": "Plate 03, Values, Night Red, Chrome 1440x900. Scrub fields (Exposure on the preferred-value ladder, Offset) live, then the Exposure field pinned in each commit state: rest, scrubbing with the dial tape, not sent (dashed edge), sending, applied, refused by the device, invalid (never clamped), unavailable; sliders with ticks, magnetic detents (2x / 3x FWHM) and fine adjustment; steppers (hold to repeat, x10 after 1.6 s, limit reasons); segmented choices with manual activation for hardware; the one modifier convention. Why: device values are sent once, never per keystroke or pixel of drag. Night Red pixel audit: 0 pixels emit non-red light.",
+      "tags": [
+        "lab-controls",
+        "values",
+        "night-red",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "focuser-night-red.png",
+      "caption": "Plate 04, Focuser, Night Red, Chrome 1440x900. The proposed Focuser card at rail width 396 px: live, moving with taps queued, autofocus running (Stop AF ring 11/14, Halt available), offline, near the end of travel (In refused, out-of-range Go to refused in words), and the design notes. The two-scale gauge: hairline = whole 0-100,000 travel with the window bracket, scale below = one tick per step size, needle = polled position, hollow triangle = commanded target, diamond = last autofocus best. Why: fixes Qt P4-P7 (unpolled position, Go to overwritten or moving on blur, Halt disabled during AF). Night Red pixel audit: 0 pixels emit non-red light.",
+      "tags": [
+        "lab-controls",
+        "focuser",
+        "night-red",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "mount-night-red.png",
+      "caption": "Plate 05, Mount jog, Night Red, Chrome 1440x900. The Mount card with the jog pad: live (with lab switches to break the link or start a run), armed with North + East held (two axes at once, brass edge, renewal age 0.12 s), and a key held after the link was lost (dashed key, \"Stopped by the server: no renewal for 1.0 s\"); below, the dead-man timing diagram (renewals every 250 ms, server stop 1.0 s after the last one). Why: press-and-hold that cannot leave the mount moving, per-axis tracking (fixes Qt P22), rate shown in deg/s. Night Red pixel audit: 0 pixels emit non-red light.",
+      "tags": [
+        "lab-controls",
+        "mount",
+        "night-red",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "confirm-night-red.png",
+      "caption": "Plate 06, Confirm and progress, Night Red, Chrome 1440x900. Hold-to-confirm: live Park, then pinned phases (rest with the ring track that says \"hold\", holding 46 %, released early \"nothing sent\", tapped \"Hold to park, or press Enter\", busy, unavailable); where a hold is worth it (Pause-the-run-and-slew beside a Slew refused during a run, Stop sequence, the keyboard inline confirmation); progress and busy inside buttons (exposure ring, Connect spinner, Identify field spinner, Slew to Abort with angle to go, Stop AF 7/14, export job ring). Why: physical actions get a deliberate gesture without a modal; time is shown, never eased. Night Red pixel audit: 0 pixels emit non-red light.",
+      "tags": [
+        "lab-controls",
+        "confirm",
+        "night-red",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "status-night-red.png",
+      "caption": "Plate 07, Status and keys, Night Red, Chrome 1440x900. Device state chips (hollow ring = idle, dot + word for the rest, dashed = stale), HUD chips over a black canvas (\"Fill · cropped\", \"Manual zoom kept\"), attention levels told apart by shape (disc, triangle, ring) and word, counts, the key-cap table (macOS glyphs vs Windows/Linux words), static tips, focus rings on every control kind, unavailable controls, role glyphs, and a 32 px status bar with the attention chip. Why: every state double-coded so Night Red (luminance only) keeps them apart. Night Red pixel audit: 0 pixels emit non-red light.",
+      "tags": [
+        "lab-controls",
+        "status",
+        "night-red",
+        "1440x900",
+        "chrome"
+      ]
+    },
+    {
+      "file": "buttons-1280x800-observatory.png",
+      "caption": "Plate 01, Buttons, Observatory, Chrome 1280x800 (the smaller reference size). The matrix keeps its 8 columns; the right column (sizes, ring, try-it) stays beside it.",
+      "tags": [
+        "lab-controls",
+        "buttons",
+        "observatory",
+        "1280x800",
+        "chrome"
+      ]
+    },
+    {
+      "file": "toolbar-1280x800-observatory.png",
+      "caption": "Plate 02, Toolbars, Observatory, Chrome 1280x800 (the smaller reference size). The full toolbar still fits one row at 1248 px of content; the narrow frame keeps its 760 px.",
+      "tags": [
+        "lab-controls",
+        "toolbar",
+        "observatory",
+        "1280x800",
+        "chrome"
+      ]
+    },
+    {
+      "file": "values-1280x800-observatory.png",
+      "caption": "Plate 03, Values, Observatory, Chrome 1280x800 (the smaller reference size). Three columns at 1248 px: scrub states 2-up, sliders, steppers and segmented controls without truncation.",
+      "tags": [
+        "lab-controls",
+        "values",
+        "observatory",
+        "1280x800",
+        "chrome"
+      ]
+    },
+    {
+      "file": "focuser-1280x800-observatory.png",
+      "caption": "Plate 04, Focuser, Observatory, Chrome 1280x800 (the smaller reference size). Three 396 px cards per row still fit; the notes column wraps.",
+      "tags": [
+        "lab-controls",
+        "focuser",
+        "observatory",
+        "1280x800",
+        "chrome"
+      ]
+    },
+    {
+      "file": "mount-1280x800-observatory.png",
+      "caption": "Plate 05, Mount jog, Observatory, Chrome 1280x800 (the smaller reference size). Three Mount cards per row fit at 1280 px; the timing diagram moves below the fold.",
+      "tags": [
+        "lab-controls",
+        "mount",
+        "observatory",
+        "1280x800",
+        "chrome"
+      ]
+    },
+    {
+      "file": "confirm-1280x800-observatory.png",
+      "caption": "Plate 06, Confirm and progress, Observatory, Chrome 1280x800 (the smaller reference size). Hold phases, uses and progress keep three columns.",
+      "tags": [
+        "lab-controls",
+        "confirm",
+        "observatory",
+        "1280x800",
+        "chrome"
+      ]
+    },
+    {
+      "file": "status-1280x800-observatory.png",
+      "caption": "Plate 07, Status and keys, Observatory, Chrome 1280x800 (the smaller reference size). Three columns and the full-width status bar fit.",
+      "tags": [
+        "lab-controls",
+        "status",
+        "observatory",
+        "1280x800",
+        "chrome"
+      ]
+    },
+    {
+      "file": "toolbar-hints-held-observatory.png",
+      "caption": "Key hints, Observatory: Cmd held alone for 0.8 s (real key press) shows every shortcut as a cap on its control (E, V, -, +, F, Shift+F as ⇧F, 1, A, ⇧A, H, S, G, N, O, X, Z, C, R, L, P), in the full, narrow and compact toolbars. Park in B.5 shows none: hardware is never one key (BRAND 7). Why: teaches the keyboard where it acts, without opening the sheet.",
+      "tags": [
+        "lab-controls",
+        "toolbar",
+        "observatory",
+        "interaction",
+        "keys"
+      ]
+    },
+    {
+      "file": "toolbar-hints-held-night-red.png",
+      "caption": "Key hints, Night Red: the same held-Cmd state; caps use --accent edges and token text, so they stay red-only. Night Red pixel audit: 0 pixels emit non-red light.",
+      "tags": [
+        "lab-controls",
+        "toolbar",
+        "night-red",
+        "interaction",
+        "keys"
+      ]
+    },
+    {
+      "file": "toolbar-overflow-menu-charcoal.png",
+      "caption": "Priority overflow, Charcoal: the 760 px toolbar moved 9 tools into the menu opened from the \"9\" trigger. Disconnect, Fill and 1:1, then the field and tool groups keep their grouping, toggles keep their state as check marks (Coordinate grid on), every row keeps its shortcut. Capture, Live, Stop and the rail toggle never leave the row. Uses the app's Menu component.",
+      "tags": [
+        "lab-controls",
+        "toolbar",
+        "charcoal",
+        "interaction",
+        "menu"
+      ]
+    },
+    {
+      "file": "toolbar-split-menu-night-red.png",
+      "caption": "Split button menu, Night Red: the Capture options (exposure 0.50 to 30 s as radio items, frame type with \"Moves the wheel to Dark first\" under Dark and Bias, \"Save the next live frame\"). Choosing an option never takes a shot. Night Red pixel audit: 0 pixels emit non-red light.",
+      "tags": [
+        "lab-controls",
+        "toolbar",
+        "night-red",
+        "interaction",
+        "menu"
+      ]
+    },
+    {
+      "file": "values-scrub-exposure-charcoal.png",
+      "caption": "Scrubbing the Exposure label, Charcoal (real drag, mouse still down): the value walked the preferred-value ladder to 180 s; the dashed edge says it is not sent yet; the dial tape shows 60 · 90 · 120 · [180] · 300 · 600; the tip gives the modifiers. One value is sent on release.",
+      "tags": [
+        "lab-controls",
+        "values",
+        "charcoal",
+        "interaction",
+        "scrub"
+      ]
+    },
+    {
+      "file": "values-slider-fine-drag-observatory.png",
+      "caption": "Fine slider drag, Observatory (real drag with Alt held): \"fine ×0.1\" chip, the thumb in brass under the pointer, a hollow dashed mark at the start value 9.4 and \"Esc returns to 9.4\". Why: a precise value on a 300 px track without a separate dialog, and a safe way back.",
+      "tags": [
+        "lab-controls",
+        "values",
+        "observatory",
+        "interaction",
+        "slider"
+      ]
+    },
+    {
+      "file": "focuser-moving-observatory.png",
+      "caption": "Focuser moving, Observatory (real input: step 1,000, three taps on Focus in): badge Moving, position 12,947 \"polled 2 Hz\", target 15,450 with \"+2,000 queued\", the needle short of the hollow brass target with the dashed travel still to go. Why: taps during a move are never lost and never sent as Move-while-moving.",
+      "tags": [
+        "lab-controls",
+        "focuser",
+        "observatory",
+        "interaction"
+      ]
+    },
+    {
+      "file": "focuser-autofocus-night-red.png",
+      "caption": "Autofocus started on the live card, Night Red (real click): badge Autofocus, Stop AF with the sweep ring at 2/14, Out / In / Go to unavailable with \"Autofocus owns the focuser\", Halt still available; the tip says Stop AF returns to the start position. Night Red pixel audit: 0 pixels emit non-red light.",
+      "tags": [
+        "lab-controls",
+        "focuser",
+        "night-red",
+        "interaction"
+      ]
+    },
+    {
+      "file": "mount-jogging-armed-observatory.png",
+      "caption": "Keyboard jog, Observatory (real keys: J, then ArrowUp + ArrowRight held 1.5 s): pad armed (brass edge, \"Armed · arrows jog\"), North and East keys pressed as reported by the simulated server, Alt and Az changed at the 5 Hz poll, offset plot trail, dead-man renewal age under 0.25 s.",
+      "tags": [
+        "lab-controls",
+        "mount",
+        "observatory",
+        "interaction",
+        "jog"
+      ]
+    },
+    {
+      "file": "mount-deadman-stop-night-red.png",
+      "caption": "Dead-man, Night Red (real input: \"Break the link\", then North held 1.7 s): the axis moved for 1 s, then the server stopped it; the held key turns dashed and the card says \"Stopped by the server: no renewal for 1.0 s. Release and press again.\" Night Red pixel audit: 0 pixels emit non-red light.",
+      "tags": [
+        "lab-controls",
+        "mount",
+        "night-red",
+        "interaction",
+        "jog",
+        "safety"
+      ]
+    },
+    {
+      "file": "confirm-holding-observatory.png",
+      "caption": "Hold to confirm in progress, Observatory (real mouse held 0.38 s on Park): the ring around the glyph is filled to the exact elapsed fraction (linear), caption \"Keep holding 0.3 s\". Releasing now would send nothing.",
+      "tags": [
+        "lab-controls",
+        "confirm",
+        "observatory",
+        "interaction",
+        "hold"
+      ]
+    },
+    {
+      "file": "confirm-holding-night-red.png",
+      "caption": "Hold to confirm in progress, Night Red: the same live hold; the ring arc uses --accent (red) on the --border track. Night Red pixel audit: 0 pixels emit non-red light.",
+      "tags": [
+        "lab-controls",
+        "confirm",
+        "night-red",
+        "interaction",
+        "hold"
+      ]
+    },
+    {
+      "file": "confirm-keyboard-inline-charcoal.png",
+      "caption": "Keyboard path, Charcoal (real keys: focus Park, Enter): no timed hold for the keyboard; the inline confirmation \"Park the mount?\" opens in place with the consequence and focus on Cancel (README 3.3 default focus).",
+      "tags": [
+        "lab-controls",
+        "confirm",
+        "charcoal",
+        "interaction",
+        "keyboard"
+      ]
+    },
+    {
+      "file": "buttons-reduced-motion-observatory.png",
+      "caption": "Reduced motion, Observatory (prefers-reduced-motion emulated): the exposure and live-frame rings advance in quarters instead of continuously, the AF ring shows 2 of 4 quarters; values and states are the same as with motion.",
+      "tags": [
+        "lab-controls",
+        "buttons",
+        "observatory",
+        "reduced-motion"
+      ]
+    },
+    {
+      "file": "status-tip-reason-observatory.png",
+      "caption": "Press on an unavailable control, Observatory (real mouse down on Slew): the reason \"The sequence is running: slewing now breaks the time series\" appears at once, without the 500 ms hover delay. Why: a click that does nothing is the moment the reason is needed.",
+      "tags": [
+        "lab-controls",
+        "status",
+        "observatory",
+        "interaction",
+        "reason"
+      ]
+    },
+    {
+      "file": "webkit-buttons-night-red.png",
+      "caption": "Plate 01, Buttons, Night Red, rendered in a real WKWebView (macOS 26.5 system WebKit, the engine Tauri uses on macOS; probe binary stamped for the SDK 26), 1440x900 at 2x. Same layout as Chrome; no page error reported by the page. Night Red pixel audit on the 2880x1800 PNG: 0 non-red pixels. Static render only: no pointer or keyboard input was driven in WebKit.",
+      "tags": [
+        "lab-controls",
+        "buttons",
+        "night-red",
+        "1440x900",
+        "webkit"
+      ]
+    },
+    {
+      "file": "webkit-mount-night-red.png",
+      "caption": "Plate 05, Mount jog, Night Red, rendered in a real WKWebView (macOS 26.5 system WebKit, the engine Tauri uses on macOS; probe binary stamped for the SDK 26), 1440x900 at 2x. Same layout as Chrome; no page error reported by the page. Night Red pixel audit on the 2880x1800 PNG: 0 non-red pixels. Static render only: no pointer or keyboard input was driven in WebKit.",
+      "tags": [
+        "lab-controls",
+        "mount",
+        "night-red",
+        "1440x900",
+        "webkit"
+      ]
+    },
+    {
+      "file": "webkit-focuser-night-red.png",
+      "caption": "Plate 04, Focuser, Night Red, rendered in a real WKWebView (macOS 26.5 system WebKit, the engine Tauri uses on macOS; probe binary stamped for the SDK 26), 1440x900 at 2x. Same layout as Chrome; no page error reported by the page. Night Red pixel audit on the 2880x1800 PNG: 0 non-red pixels. Static render only: no pointer or keyboard input was driven in WebKit.",
+      "tags": [
+        "lab-controls",
+        "focuser",
+        "night-red",
+        "1440x900",
+        "webkit"
+      ]
+    },
+    {
+      "file": "webkit-values-night-red.png",
+      "caption": "Plate 03, Values, Night Red, rendered in a real WKWebView (macOS 26.5 system WebKit, the engine Tauri uses on macOS; probe binary stamped for the SDK 26), 1440x900 at 2x. Same layout as Chrome; no page error reported by the page. Night Red pixel audit on the 2880x1800 PNG: 0 non-red pixels. Static render only: no pointer or keyboard input was driven in WebKit.",
+      "tags": [
+        "lab-controls",
+        "values",
+        "night-red",
+        "1440x900",
+        "webkit"
+      ]
+    },
+    {
+      "file": "webkit-status-night-red.png",
+      "caption": "Plate 07, Status and keys, Night Red, rendered in a real WKWebView (macOS 26.5 system WebKit, the engine Tauri uses on macOS; probe binary stamped for the SDK 26), 1440x900 at 2x. Same layout as Chrome; no page error reported by the page. Night Red pixel audit on the 2880x1800 PNG: 0 non-red pixels. Static render only: no pointer or keyboard input was driven in WebKit.",
+      "tags": [
+        "lab-controls",
+        "status",
+        "night-red",
+        "1440x900",
+        "webkit"
+      ]
+    },
+    {
+      "file": "webkit-toolbar-charcoal.png",
+      "caption": "Plate 02, Toolbars, Charcoal, rendered in a real WKWebView (macOS 26.5 system WebKit, the engine Tauri uses on macOS; probe binary stamped for the SDK 26), 1440x900 at 2x. Same layout as Chrome; no page error reported by the page. Static render only: no pointer or keyboard input was driven in WebKit.",
+      "tags": [
+        "lab-controls",
+        "toolbar",
+        "charcoal",
+        "1440x900",
+        "webkit"
+      ]
+    },
+    {
+      "file": "webkit-confirm-observatory.png",
+      "caption": "Plate 06, Confirm and progress, Observatory, rendered in a real WKWebView (macOS 26.5 system WebKit, the engine Tauri uses on macOS; probe binary stamped for the SDK 26), 1440x900 at 2x. Same layout as Chrome; no page error reported by the page. Static render only: no pointer or keyboard input was driven in WebKit.",
+      "tags": [
+        "lab-controls",
+        "confirm",
+        "observatory",
+        "1440x900",
+        "webkit"
+      ]
+    },
+    {
+      "file": "webkit-values-observatory.png",
+      "caption": "Plate 03, Values, Observatory, rendered in a real WKWebView (macOS 26.5 system WebKit, the engine Tauri uses on macOS; probe binary stamped for the SDK 26), 1440x900 at 2x. Same layout as Chrome; no page error reported by the page. Static render only: no pointer or keyboard input was driven in WebKit.",
+      "tags": [
+        "lab-controls",
+        "values",
+        "observatory",
+        "1440x900",
+        "webkit"
+      ]
+    }
+  ]
+}

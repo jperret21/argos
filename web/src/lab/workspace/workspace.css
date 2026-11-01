@@ -1,0 +1,105 @@
+/*
+  Workspace lab base. Tokens come from design/tokens.css (read-only here);
+  app.css gives the global base and the shared tooltip.
+
+  New tokens are PROPOSALS, defined here with a --lab- prefix so nothing
+  collides with the design system. Each one is listed in the lab report;
+  promote it to tokens.css (without the prefix) only after the design
+  team's review. Every proposal is theme-independent or derived from an
+  existing token, so the three palettes and the Night Red contract hold.
+*/
+
+:root {
+  /* -- Frame metrics of the workspace ------------------------------------- */
+  --lab-toolbar-h: 44px; /* one row; 47 px today: 3 px given back to the image */
+  --lab-statusbar-h: 28px; /* 32 px today: one 12 px row needs no more */
+  --lab-band-header-h: 28px; /* title row of the task band and of drawer tabs */
+  --lab-splitter-hit: 7px; /* hit area of a 1 px separator */
+  --lab-rail-min: 340px;
+  --lab-rail-default: 400px;
+  --lab-rail-max: 580px;
+
+  /* -- Readout sizes (density) ---------------------------------------------
+     Compact keeps BRAND's --text-xl; Comfortable lifts key values to about
+     20' of arc at 0.6 m (functional-spaces 2.5). Watch sizes are for 2 m on
+     a 13-inch 1440 x 900 laptop (Plex Mono digit 0.71 em high). */
+  --lab-readout: var(--text-xl); /* 17 px */
+  --lab-readout-key: var(--text-xl); /* Run and Photometry key values */
+  --lab-row-h: 24px; /* table rows */
+  --lab-watch-xl: 88px; /* primary values, 21' at 2 m */
+  --lab-watch-l: 66px; /* secondary values, 16' at 2 m */
+  --lab-watch-m: 40px; /* value lines and units */
+  --lab-watch-s: 30px; /* labels, read from about 1 m */
+  --lab-watch-tick: 22px; /* chart ticks in Watch */
+
+  /* -- Elevation for floating layers (black only: Night Red safe) ---------- */
+  --lab-elev-hud: 0 1px 0 rgba(0, 0, 0, 0.55); /* HUD chips over stars */
+  --lab-elev-float: var(--shadow-2); /* palette, popovers */
+
+  /* -- Motion ---------------------------------------------------------------
+     Orientation only. Data never tweens. Hold-to-confirm is elapsed time,
+     not decoration: it is NOT zeroed by reduced motion (it steps instead). */
+  --lab-duration-mode: var(--duration-base); /* mode switch cross-fade */
+  --lab-hold: 700ms;
+
+  /* -- Charts ---------------------------------------------------------------
+     Alphas over --chart-* colours, resolved at draw time on the canvas. */
+  --lab-chart-band-alpha: 0.16; /* check-star stability envelope */
+  --lab-chart-flag-alpha: 0.22; /* hatch of a flagged period (rule fired) */
+}
+
+/* Comfortable density (proposal; Q-G4 is the owner's): rows and readouts
+   only, never the toolbar, icons or the image. */
+:root[data-density='comfortable'] {
+  --lab-readout: 20px;
+  --lab-readout-key: 26px;
+  --lab-row-h: 28px;
+}
+
+/* Motion override for the lab (html[data-motion]); the OS preference is
+   handled by tokens.css. */
+html[data-motion='reduced'] {
+  --duration-instant: 0ms;
+  --duration-fast: 0ms;
+  --duration-base: 0ms;
+  --duration-slow: 0ms;
+}
+
+#lab-workspace {
+  height: 100%;
+}
+
+/* Older WebKit without scrollbar-color: token scrollbars (Night Red). */
+@supports not (scrollbar-color: red red) {
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+    background: var(--bg);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border: 2px solid var(--bg);
+    border-radius: 6px;
+  }
+  ::-webkit-scrollbar-corner {
+    background: var(--bg);
+  }
+}
+
+/* Micro label: 10 px mono caps (BRAND 5, --text-2xs). */
+.lab-caps {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Mode switch cross-fade (View Transitions, Chromium and WebKit 18+). The
+   lab only calls startViewTransition when motion is allowed. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--lab-duration-mode);
+  animation-timing-function: var(--ease-out);
+}

@@ -1,0 +1,57 @@
+{
+  "title": "Lab synthesis: the refreshed ARGOS interface (hero set)",
+  "date": "2026-11-01",
+  "summary": "Ten curated screenshots of the design team's labs after the art director's harmonisation fixes (web/lab/PROPOSAL.md), chosen to show the new direction: Observe in task modes (Run, Field, Focus during a run) with the band under the image that follows the task, the Watch view read from 2 m, the Review plot wall, the autofocus V-curve, the focuser control, the command palette, and the Run layout at 1280 x 800. All are prototypes on synthetic data in headless Chrome 156 at DPR 1 (1440 x 900 unless noted), captured from the lab on port 5205 with the designers' capture scripts and the simulated clock frozen. The RR Lyr night is a seeded replay modelled on the totals of the owner's 2026-09-25 run (195 frames, 51.5 s cadence, HFD jump from frame 148), not his data; comparison ids 000-LAB-xxx are invented. SW And (charts) is a synthetic ephemeris seen from Paris. Night Red audit (web/lab/synthesis/audit-png.mjs) on the three Night Red files: 0 pixels with green or blue above red (rule A, 1 296 000 pixels each); hero-02 has 23 pixels over the research labs' palette rule (G/R above 0.68, brightest max(G,B) = 15/255) on anti-aliased edges of overlay labels drawn in --fg #d88f8f over their black halo, and passes once the 8-bit rounding of each channel is allowed for. Harmonisation fixes visible here: thousands grouped with U+202F everywhere, the multiplication sign in rule texts, the Run card progress bar neutral instead of brass (Observatory accent pixels on the Run screen 1 289 -> 513), the Watch attention row keeps the last-frame age, the focuser plate's text grouped like the readouts. Not shown here and not tested: WebKitGTK (Linux), WebView2 (Windows), touch, screen readers.",
+  "shots": [
+    {
+      "file": "hero-01-observe-run-observatory.png",
+      "caption": "Observe › Run, Observatory, frame 160 of 195 at 22:22:07 UTC, eight minutes after the HFD rule fired. The image keeps the largest area (947 x 533 px, no black band); the band under it (294 px, exactly the space the fitted 16:9 frame leaves, BRAND 11.1) holds the live light curve as two facets on the planned run window: RR Lyr magnitude (inverted, error bars, newest point a static ring) over the check star with its trailing ±1σ band; the period where the rule holds is hatched and labelled 'HFD rule · 22:13'. Right panel in Run mode: Run card (frames 160 / 195 with a neutral progress bar, last frame 12 s ago at the observed 51.5 s cadence, end 22:52 UTC from that cadence, the attention item with Focus view and Acknowledge, Pause, Stop…), Photometry, Conditions with sparklines and the rule line. The mode bar (Framing, Focus, Field, Run) sits after the equipment chip; the status bar carries the REC chip and the attention chip. Why it matters: the screen an observer watches for hours answers 'is my run fine?' in one place, and the focus loss that went unnoticed on a real night is visible where it happens.",
+      "tags": ["observe", "run", "task-band", "light-curve", "attention", "observatory", "1440x900", "workspace-lab"]
+    },
+    {
+      "file": "hero-02-observe-run-night-red.png",
+      "caption": "The same Run state in Night Red: the frame rendered in the red channel only (value x --viewer-tint #d80000), photometric roles told apart by shape (target circle, comparison squares, check triangle) on the image and in the plots, single-hue chart roles, the rule line and hatch in the red --warning, every state double-coded by a word. Pixel audit: 0 of 1 296 000 pixels with green or blue above red; 23 pixels exceed the palette rule (G/R above 0.68, at most 15/255) on anti-aliased overlay-label edges, 0 once 8-bit rounding is allowed for. Why it matters: dark adaptation is a contract, checked pixel by pixel, not a tint.",
+      "tags": ["observe", "run", "night-red", "audit", "roles", "1440x900", "workspace-lab"]
+    },
+    {
+      "file": "hero-03-watch-attention-night-red.png",
+      "caption": "Watch (W), Night Red, with an attention item: the run read from 2 m on a 13-inch screen. First row: the level word and mark, the rule's short form 'HFD 16.0 px · 2.5× baseline' with its time and frame, and, added by the synthesis, the run's pulse kept at the right (last frame 12 s ago, 160 / 195), then Acknowledge. Below: target 7.627 ± 0.034 TG in 88 px digits, check-star σ 0.028 in 66 px, end 22:52 UTC; the light curve; stars, HFD 17.1 px flagged 'rule', altitude 53° in 48 px. Footer: link dots, Dim 100 / 60 / 30 % (a brightness filter, so red stays red), Pause by hold-to-confirm, 'W or Esc: back'. Pixel audit: 0 failing pixels by both rules. Why it matters: hours of a run are spent in glances from across the room, and an alert must never hide the one signal that tells a frozen run from a healthy one.",
+      "tags": ["watch", "attention", "night-red", "glance", "audit", "1440x900", "workspace-lab"]
+    },
+    {
+      "file": "hero-04-observe-field-observatory.png",
+      "caption": "Observe › Field, Observatory, field identified (2.39″/px, rotation 91.2°, target 1.5′ from centre): the band becomes the comparison workspace. The candidates table lists role shape, star, V, B−V, Δ(B−V) against the target, separation, peak ADU measured on this frame, SNR, Nbr (catalogue stars inside the 31″ aperture) and status (leave-one-out 'waiting 7/10', 'blend risk'); hovering a row rings the star on the image, the selected row (000-LAB-665) carries the compact star card on the image (identity and role buttons only) and the Inspector card at the top of the panel (catalogue values, peak, an aperture thumbnail drawn from the frame's own pixels). Why it matters: choosing comparisons is a comparison between stars (B−V within 0.3, within 25′, no blend), and the table puts those numbers side by side next to the image they come from. Catalogue values are synthetic.",
+      "tags": ["observe", "field", "comparisons", "table", "inspector", "observatory", "1440x900", "workspace-lab"]
+    },
+    {
+      "file": "hero-05-observe-focus-during-run-charcoal.png",
+      "caption": "Focus mode opened during the run (the path of the alert's 'Focus view'), Charcoal: HFD rings with their values on the brightest stars of frame 160; in the band, the last autofocus V-curve (best 1 305 steps) beside 'HFD now 17.08 px' against 'best 5.80 px' and this run's HFD over the last 30 minutes with its baseline (6.38 px) and the dashed 'rule 1.5× baseline' line, the jump to about 16-17 px at 22:13 explained where focus is judged. The Focuser card comes first in this mode; the Camera card says the sequence owns the camera. Why it matters: the attention item leads to its diagnosis in one keystroke, without leaving the image.",
+      "tags": ["observe", "focus", "v-curve", "hfd", "attention", "charcoal", "1440x900", "workspace-lab"]
+    },
+    {
+      "file": "hero-06-review-plot-wall-charcoal.png",
+      "caption": "Review plot wall (chart lab, tab 2), Charcoal: the morning after a synthetic SW And night (2026-11-01 18:40 → 02:05 UTC, 500 lights of 10 s). One star per cell (target, check, five comparisons C1-C5 with leave-one-out residuals) plus HFD, on one linked UTC axis; a three-lane session health strip above (frames and gaps, the HFD alert period, frames with fewer comparisons than planned); each cell states n, σ and a status word, C4 'Unstable' (σ 0.026) in the warning outline; a Comparison quality card on the right. At most three series per plot (BRAND 10). Why it matters: a bad stretch of a run or a variable comparison must be visible before an AAVSO export. The lab's header and clock controls are lab chrome, not product.",
+      "tags": ["review", "plot-wall", "health-strip", "small-multiples", "charcoal", "1440x900", "charts-lab"]
+    },
+    {
+      "file": "hero-07-autofocus-vcurve-night-red.png",
+      "caption": "Autofocus V-curve (chart lab, tab 3), Night Red, after the decision: coarse samples hollow and not fitted, fine samples with error bars, a weighted hyperbola fit with its ±1σ envelope over the fitted window only, the asymptotes dotted, the start position and the chosen position. Readouts: best focus 1 281 ± 4 steps, HFD at best 2.63 ± 0.11 px, 9 fine samples, R² 0.996, χ²red 0.39, and the verdict in words ('Measured. Focuser moved to 1 281; verification frame 2.56 px'). The vertex stays neutral and 'provisional' during the sweep; only the accepted decision is marked as the deliberate choice. Pixel audit: 0 failing pixels by both rules. Why it matters: the observer sees how much to trust a focus move, not only where it went. The autofocus is simulated.",
+      "tags": ["autofocus", "v-curve", "fit", "uncertainty", "night-red", "audit", "1440x900", "charts-lab"]
+    },
+    {
+      "file": "hero-08-focuser-control-charcoal.png",
+      "caption": "Focuser control (controls lab, plate 04), Charcoal, in five states: live, moving with taps queued ('+300 queued', needle = polled position at 2 Hz, hollow triangle = commanded target, dashed travel still to go), autofocus running (Stop AF with its time ring at 11/14, Halt still available), offline (dashes and the reason in words), and near the end of travel (a typed target out of range is refused and nothing is sent, never clamped). The two-scale gauge shows the whole 0-100 000 travel and, below, one tick per step size, so one tap moves the needle one tick. Thousands grouped with U+202F as in every lab after the synthesis. Why it matters: instrument controls that never lose a tap, never move on blur and always stop. Hardware is simulated; the server API (A15 / A16) is not built.",
+      "tags": ["controls", "focuser", "gauge", "time-ring", "charcoal", "1440x900", "controls-lab"]
+    },
+    {
+      "file": "hero-09-command-palette-confirm-charcoal.png",
+      "caption": "Command palette (⌘K / Ctrl+K) in Framing, Charcoal, query 'park', after Enter: 3 of 79 commands match (ranked by prefix, word start, substring, then subsequence, matched letters underlined); the hardware row 'Park the mount' did not run on Enter: it opened its confirmation in place ('Park the mount? Parking closes the Seestar arm and stops tracking.' Cancel / Park · Enter). The footer explains the keys in words. Why it matters: hardware actions have no single-key shortcut on purpose (BRAND 7), so the palette is the keyboard path to them, with the same safety as the button.",
+      "tags": ["command-palette", "keyboard", "confirmation", "hardware-safety", "charcoal", "1440x900", "workspace-lab"]
+    },
+    {
+      "file": "hero-10-observe-run-1280x800-charcoal.png",
+      "caption": "Observe › Run at 1280 x 800, Charcoal: the mode bar drops its labels and the command field collapses to its icon (container query on the toolbar below 1240 px); the image stays 787 x 443 px with no black band, the band 284 px, the right panel 400 px. Why it matters: the smaller reference laptop keeps the same functional space without scrolling the cards the run needs.",
+      "tags": ["observe", "run", "space", "responsive", "charcoal", "1280x800", "workspace-lab"]
+    }
+  ]
+}

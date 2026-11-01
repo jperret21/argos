@@ -1,0 +1,187 @@
+{
+  "title": "Lab: stack research (what Svelte 5, uPlot, WebGL2 and modern CSS give the ARGOS UI)",
+  "date": "2026-11-01",
+  "summary": "Seven live demos in web/lab/research.html (synthetic data, no server), each proving a technique recommended in web/lab/research/stack-capabilities.md: a live light-curve wall in uPlot (shape-coded markers, error bars, a native uPlot band of the check star's trailing scatter, an HFD quality threshold with a draggable handle, synced crosshair and linked zoom), a 2 Mpx frame at 1 fps through a worker and WebGL2 with OKLCH false-colour LUTs, motion that orients without moving data (svelte/motion, animate:flip, hold-to-confirm), resizable rail and drawer with container-query cards, an anchored popover with two fallbacks, a 10 000-row virtual table with the CSS Custom Highlight API, and a support matrix measured in Chromium 156 and in a real WKWebView (macOS 26.5). Chromium shots: headless Chrome 156 on the Metal GPU. WebKit shots: WKWebView driven by lab/research/demos/webkit-probe.swift, downscaled from 2x. Every Night Red shot was audited pixel by pixel: 0 pixels with green or blue above 0.68 x red. WebKitGTK (Linux) is not tested.",
+  "shots": [
+    {
+      "file": "curve-observatory.png",
+      "caption": "Light-curve wall, Observatory, 1440x900, live (one point every 0.5 s in the lab): target (circles, inverted magnitude axis), check star (triangles, error bars at --chart-error-opacity, and a native uPlot band of the trailing 15-point mean ± 1 sigma, dashed mean in --chart-reference) and HFD with a dashed quality threshold at 2.60 px. The 4 frames of a cloud passage that cross it get a ring and a rug tick on the x axis, and the chip says '4 frames ≥ 2.60 px' (status in words, not colour alone). Redraw of the three facets: about 1-2 ms.",
+      "tags": ["curve", "uplot", "observatory", "1440x900", "live", "band", "threshold"]
+    },
+    {
+      "file": "curve-zoomed-observatory.png",
+      "caption": "Same wall after a programmatic zoom on 19:30-20:40: the x range is linked across the three facets (setScale hook), the crosshair is synced (cursor.sync) with one ring per facet on the measured series only, and live points keep arriving without resetting the zoom (setData(data, false)); the 'Manual zoom kept · F fits' chip says so. The HFD axis widened to keep the threshold in view.",
+      "tags": ["curve", "uplot", "zoom", "cursor-sync", "observatory"]
+    },
+    {
+      "file": "curve-threshold-night-red.png",
+      "caption": "Night Red, a 10 h night at 10 s cadence (3 600 points per facet) with the threshold moved to 2.45 px: 148 frames flagged, rug ticks show where in the night. Single-hue roles told apart by marker shape; the cursor crosshair is --chart-highlight. Pixel audit: 0 non-red pixels.",
+      "tags": ["curve", "night-red", "threshold", "3600-points"]
+    },
+    {
+      "file": "curve-season-observatory.png",
+      "caption": "Stress test: 50 000 points per facet (5.8 synthetic days at 10 s cadence, daytime included, so the shape is not a real season), each live redraw of the three facets takes 41-58 ms ('last update' chip). Before a fix found here, loading it took 9.3 s (89 ms after): Path2D.closePath() is quadratic in Chromium 156 (4.4 s for 50 000 triangles, 18 ms without it; linear in WebKit).",
+      "tags": ["curve", "performance", "50000-points", "observatory"]
+    },
+    {
+      "file": "curve-charcoal.png",
+      "caption": "Light-curve wall in Charcoal: the role colours and the band read the same on the higher-contrast graphite.",
+      "tags": ["curve", "charcoal"]
+    },
+    {
+      "file": "curve-1280x800-observatory.png",
+      "caption": "Light-curve wall at 1280x800: facet heights follow the wall (ResizeObserver -> setSize, no rebuild), y ticks thin out by spacing, the axis title line stays visible.",
+      "tags": ["curve", "1280x800", "observatory"]
+    },
+    {
+      "file": "frame-observatory.png",
+      "caption": "A 1920x1080 16-bit synthetic frame every second: worker synthesis 11-19 ms and statistics (median, MAD, histogram, star count, HFD) 9-10 ms off the main thread, buffer transferred both ways (zero copy); on the main thread texSubImage2D R16UI 0.2 ms and one draw call; GPU upload + draw synced 2.3 ms. Conditions sparklines on Canvas 2D (last value a dot, no pulse).",
+      "tags": ["frame", "webgl2", "worker", "observatory", "1440x900"]
+    },
+    {
+      "file": "frame-night-red.png",
+      "caption": "Same pipeline in Night Red: the shader multiplies the neutral LUT by --viewer-tint (#d80000), false-colour palettes are disabled with the reason given in words. Pixel audit: 0 non-red pixels.",
+      "tags": ["frame", "night-red", "webgl2"]
+    },
+    {
+      "file": "frame-zoomed-observatory.png",
+      "caption": "Wheel zoom about the pointer to 289 % (gestures attachment: wheel and trackpad pinch, drag pan with pointer capture, double-click fit, long-press or right-click menu); the readout gives pixel x, y and ADU under the cursor. Stars stay sharp: texelFetch with a max-of-taps minification.",
+      "tags": ["frame", "gestures", "zoom", "observatory"]
+    },
+    {
+      "file": "frame-fire-observatory.png",
+      "caption": "Fire LUT built in OKLCH (no library, 256-entry texture): OKLab lightness equals the stretched value exactly, hue 20 to 100 degrees, chroma clipped to the sRGB gamut. The previous hand-picked RGB stops had lightness steps varying 21x (0.0025 to 0.0528 per level), which exaggerated faint sky noise. Unit-tested for monotone lightness.",
+      "tags": ["frame", "lut", "oklch", "false-colour", "observatory"]
+    },
+    {
+      "file": "frame-ice-charcoal.png",
+      "caption": "Ice LUT (OKLCH hue 275 to 200 degrees) in Charcoal: same lightness ramp as Neutral, colour only adds separation.",
+      "tags": ["frame", "lut", "oklch", "charcoal"]
+    },
+    {
+      "file": "frame-1280x800-observatory.png",
+      "caption": "Frame pipeline at 1280x800: the canvas is sized from ResizeObserver device-pixel-content-box (exact in Chromium; WebKit falls back to rounded CSS size x devicePixelRatio).",
+      "tags": ["frame", "1280x800"]
+    },
+    {
+      "file": "motion-observatory.png",
+      "caption": "Motion for orientation only. 1: star card on a Spring, under the pointer exactly while dragged (set instant), settles to the nearest corner on release, arrow keys move it between corners. 2: levels jump to new values at once; 3: ensemble ranking reorders with animate:flip while the RMS values inside change instantly. 4: Park needs a 0.9 s hold whose fill is linear time (information), and the segmented control's fill is placed by CSS anchor positioning.",
+      "tags": ["motion", "spring", "flip", "observatory"]
+    },
+    {
+      "file": "motion-ghost-observatory.png",
+      "caption": "90 ms after Auto stretch: the B and W handles and the numbers are already at 1688 / 2140 ADU; only a dashed ghost of the previous levels fades (Tween on opacity, 900 ms) to show where they came from. The 'spring the handles' option, off, is the rejected alternative.",
+      "tags": ["motion", "tween", "levels", "observatory"]
+    },
+    {
+      "file": "motion-reduced-observatory.png",
+      "caption": "Same moment with reduced motion (lab switch, same path as prefers-reduced-motion): no ghost, no flip travel, the spring is instant; the state shown is identical.",
+      "tags": ["motion", "reduced-motion", "accessibility"]
+    },
+    {
+      "file": "motion-night-red.png",
+      "caption": "Motion demo in Night Red. A native checkbox here drew a grey box (rgb 115,113,113: 165 non-red pixels) even with accent-color; it is now the app's token-drawn Checkbox. Pixel audit: 0 non-red pixels.",
+      "tags": ["motion", "night-red", "audit"]
+    },
+    {
+      "file": "space-observatory.png",
+      "caption": "Functional space on the Observe layout: right rail 420 px and bottom drawer 216 px resized by separator attachments (pointer capture, snaps at 420/500/580, arrows and Home/End/Enter); the image bands are measured live (16 px). The very same Conditions component is a list in the rail and a strip of four cards in the drawer, reflowed by @container. Camera form: one label column across groups (subgrid), the invalid exposure marks its row through :has(:invalid) with no script.",
+      "tags": ["space", "container-queries", "subgrid", "has", "splitter", "observatory"]
+    },
+    {
+      "file": "space-1280x800-observatory.png",
+      "caption": "Space demo at 1280x800 with the same rail: bands 29 px; the cards keep their 2x2 Mount readouts.",
+      "tags": ["space", "1280x800"]
+    },
+    {
+      "file": "space-rail-580-observatory.png",
+      "caption": "Rail at 580 px: the Mount card's container passes 520 px and its readouts reflow to one row of four; the image is letterboxed (36 px bands), which the band readout makes visible.",
+      "tags": ["space", "container-queries", "rail"]
+    },
+    {
+      "file": "space-drawer-tall-charcoal.png",
+      "caption": "Drawer at 50 %, Charcoal: the cost in image is explicit (684x385, 167 px side bands).",
+      "tags": ["space", "drawer", "charcoal"]
+    },
+    {
+      "file": "space-night-red.png",
+      "caption": "Space demo in Night Red. Note the exposure field shows '0,0004' in Chromium (region France) and '0.0004' in WebKit: <input type=number> follows the engine's locale, which is why the app's NumberField is a text input with inputmode=decimal.",
+      "tags": ["space", "night-red", "locale"]
+    },
+    {
+      "file": "popover-observatory.png",
+      "caption": "Catalogue layers popover on an Observe toolbar, native path: Popover API (top layer, light dismiss, Esc, focus return) + CSS anchor positioning (position-area, position-try-fallbacks) + @starting-style entry; no placement script. Token-drawn checkboxes and range (native ones draw grey).",
+      "tags": ["popover", "anchor-positioning", "observatory"]
+    },
+    {
+      "file": "popover-fallback-observatory.png",
+      "caption": "Forced 'JS only' path (for an engine without the Popover API, e.g. WKWebView in an app linked on a pre-macOS 14 SDK): fixed element placed by lib/components/position.ts with manual light dismiss. Renders the same.",
+      "tags": ["popover", "fallback", "observatory"]
+    },
+    {
+      "file": "popover-night-red.png",
+      "caption": "Popover in Night Red: brass becomes the bright red of the palette, checkboxes and slider are token-drawn. Pixel audit: 0 non-red pixels.",
+      "tags": ["popover", "night-red"]
+    },
+    {
+      "file": "table-observatory.png",
+      "caption": "Frames table: 10 000 rows of 24 px with 41 rows in the DOM whatever the scroll (row windowing), rows in $state.raw. Filter 'cloud' (161 rows) painted with the CSS Custom Highlight API, no DOM rewrite; one tab stop, arrows / PageUp / PageDown / Home / End, sort with aria-sort; HFD as a data bar from zero.",
+      "tags": ["table", "virtual", "highlight-api", "observatory"]
+    },
+    {
+      "file": "table-night-red.png",
+      "caption": "Frames table in Night Red: the highlight, the selection and the data bars come from tokens. Pixel audit: 0 non-red pixels.",
+      "tags": ["table", "night-red"]
+    },
+    {
+      "file": "support-observatory.png",
+      "caption": "Support matrix: 66 feature probes and 13 micro-benchmarks run live, beside the runs recorded in Chromium 156 (Metal GPU) and in a WKWebView of macOS 26.5; the WebKitGTK column comes from WebKit's UnifiedWebPreferences.yaml of each GTK branch (not tested). Selected: the Popover API is on in WKWebView only for an app linked on a recent SDK (off at SDK 13.3, the only probe that differs).",
+      "tags": ["support", "webkit", "chromium", "benchmarks"]
+    },
+    {
+      "file": "support-night-red.png",
+      "caption": "Support matrix in Night Red (dots and selection from tokens). Pixel audit: 0 non-red pixels.",
+      "tags": ["support", "night-red"]
+    },
+    {
+      "file": "webkit-curve-observatory.png",
+      "caption": "WebKit (WKWebView, macOS 26.5, Apple GPU): the light-curve wall renders the same as in Chromium, band, threshold handle and sub/superscript readouts included.",
+      "tags": ["webkit", "curve", "observatory"]
+    },
+    {
+      "file": "webkit-curve-night-red.png",
+      "caption": "WebKit, Night Red light-curve wall. Pixel audit on the 2x original: 0 non-red pixels.",
+      "tags": ["webkit", "curve", "night-red"]
+    },
+    {
+      "file": "webkit-frame-night-red.png",
+      "caption": "WebKit, Night Red frame pipeline: WebGL2 R16UI and the LUT work; device-pixel-content-box is missing, so the canvas size falls back to rounded CSS px x devicePixelRatio (the chip says so). Worker statistics 15 ms, GPU upload + draw 3 ms (WebKit timers are clamped to 1 ms). Pixel audit: 0 non-red pixels.",
+      "tags": ["webkit", "frame", "night-red", "webgl2"]
+    },
+    {
+      "file": "webkit-motion-observatory.png",
+      "caption": "WebKit, motion demo: Spring, flip and the anchored segment indicator behave as in Chromium.",
+      "tags": ["webkit", "motion"]
+    },
+    {
+      "file": "webkit-space-observatory.png",
+      "caption": "WebKit, space demo: container queries, subgrid and :has() identical; the exposure field shows '0.0004' where Chromium shows '0,0004' (locale of <input type=number>).",
+      "tags": ["webkit", "space", "locale"]
+    },
+    {
+      "file": "webkit-popover-night-red.png",
+      "caption": "WebKit, native path of the popover (Popover API + anchor positioning + @starting-style, all present in WebKit 26.5 with an app linked on SDK 26). Pixel audit: 0 non-red pixels.",
+      "tags": ["webkit", "popover", "night-red"]
+    },
+    {
+      "file": "webkit-table-observatory.png",
+      "caption": "WebKit, virtual table with the CSS Custom Highlight API: same rendering, 41 rows in the DOM.",
+      "tags": ["webkit", "table"]
+    },
+    {
+      "file": "webkit-support-observatory.png",
+      "caption": "Support matrix opened in WebKit: the Live column is WebKit, so missing features (overlay, interpolate-size, popover=hint, closedby, CloseWatcher, device-pixel-content-box, requestIdleCallback, scheduler.yield, timer queries) show as 'no'.",
+      "tags": ["webkit", "support"]
+    }
+  ]
+}

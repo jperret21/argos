@@ -4,3 +4,4 @@ dist/
 .vite/
 screenshots/**/*.png
 screenshots/index.html
+screenshots/**/report.json
