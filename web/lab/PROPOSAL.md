@@ -610,6 +610,9 @@ verified in this synthesis.
 
 Each with art direction's recommendation.
 
+**Status (2026-11-01): the owner accepted every recommendation below (D1-D11).** Apply
+section 4 to BRAND.md, add the tokens of section 5 and promote by the waves of section 6.
+
 | # | Decision | Recommendation |
 |---|---|---|
 | D1 | Observe task modes (Framing, Focus, Field, Run) and a task band whose content follows the mode (amends BRAND 11.1). | **Yes.** Names as in the UX research (the brief's "Photometry / Monitoring" are covered by Field and Run). |

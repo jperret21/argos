@@ -933,6 +933,12 @@ answer; the implementation follows it unless the owner says otherwise.
 **Status (2026-11-01): the owner accepted every recommended answer below, and the D-rows of
 §1.3, D2 included.** They are decisions now, not open questions: implement them as written.
 
+The art-direction decisions D1-D11 of `web/lab/PROPOSAL.md` section 10 (not the D-rows of
+§1.3) were also accepted on 2026-11-01. Where they differ from an answer below they win:
+D7 (a Comfortable density in Settings › Appearance) revisits Q-G4, D1 amends BRAND 11.1
+(the levels strip becomes a task band), D8 sets the toolbar, status bar and right-panel
+sizes.
+
 ### 8.1 Global, shell, platform
 
 | # | Question | Recommended answer | Raised by |
