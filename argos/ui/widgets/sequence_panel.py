@@ -192,6 +192,11 @@ class SequencePanel(QWidget):
         self._paused = False
         self._active_row = -1
         self._device_states: dict[str, str] = {}
+        # Planning hand-off of the loaded plan (Prepare transit), kept for the
+        # object it was computed for. Set before _build_ui: the estimate
+        # refresh during construction already calls to_plan().
+        self._plan_metadata: dict = {}
+        self._plan_metadata_object = ""
         self._build_ui()
         self._add_row()  # start with one editable row
         self._refresh_estimate()
@@ -822,7 +827,20 @@ class SequencePanel(QWidget):
             autofocus_every_n=int(self._af_spin.value()),
             autofocus_on_filter_change=self._af_filter_chk.isChecked(),
             on_complete=self._on_complete_combo.currentText(),
+            metadata=self._current_plan_metadata(),
         )
+
+    def _current_plan_metadata(self) -> dict:
+        """The loaded plan's planning metadata, while the object is unchanged.
+
+        A transit ephemeris (observation.json) must never be written for
+        another object picked afterwards in Plan or Observe.
+        """
+        if not self._plan_metadata:
+            return {}
+        if self._object_edit.text().strip() != self._plan_metadata_object:
+            return {}
+        return dict(self._plan_metadata)
 
     def load_plan(self, plan: SequencePlan) -> None:
         """Replace the whole editor state with ``plan`` (preset load)."""
@@ -830,6 +848,8 @@ class SequencePanel(QWidget):
         for step in plan.steps or [SequenceStep()]:
             self._add_row(step)
         self.set_object_name(plan.object_name, emit=True)
+        self._plan_metadata = dict(plan.metadata or {})
+        self._plan_metadata_object = (plan.object_name or "").strip()
         self._repeat_spin.setValue(max(1, plan.repeat))
         self._af_spin.setValue(max(0, plan.autofocus_every_n))
         self._af_filter_chk.setChecked(plan.autofocus_on_filter_change)
@@ -920,8 +940,18 @@ class SequencePanel(QWidget):
         except (OSError, ValueError, TypeError) as exc:
             self.set_status(f"Preset load failed: {exc}")
             return
+        # A transit window is computed for one event: a preset reused on
+        # another night must not declare that stale window in
+        # observation.json. Prepare transit computes tonight's.
+        had_metadata = bool(plan.metadata)
+        plan.metadata = {}
         self.load_plan(plan)
-        self.set_status(f"Preset loaded: {Path(path).name}")
+        note = (
+            " — planning metadata not restored (use Prepare transit for tonight's window)"
+            if had_metadata
+            else ""
+        )
+        self.set_status(f"Preset loaded: {Path(path).name}{note}")
 
     # ------------------------------------------------------------------
     # Public API (called by ImagingPage)
