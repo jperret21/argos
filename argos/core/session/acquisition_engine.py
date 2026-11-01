@@ -84,6 +84,35 @@ def _is_light_frame(frame_type: str) -> bool:
     return frame_type not in ("Dark Frame", "Bias Frame")
 
 
+def _wheel_filter_name(wheel, requested: str, log_emit) -> str:
+    """Filter the wheel actually sits on, for a Take-shot header.
+
+    Same policy as ``SequenceWorker._read_back_filter``: without a wheel the
+    form's name stands; an unreadable or still-turning wheel keeps it with a
+    warning; a readable wheel that differs wins over the form. Runs off the
+    UI thread (it is a device read).
+    """
+    if wheel is None:
+        return requested
+    try:
+        actual = wheel.position_name()
+    except Exception as exc:
+        log_emit(
+            "WARN", f"Filter read-back failed ({exc}) — FITS FILTER is the form's '{requested}'"
+        )
+        return requested
+    if not actual or actual == "Moving…":
+        log_emit("WARN", f"Filter wheel still moving — FITS FILTER is the form's '{requested}'")
+        return requested
+    if actual.lower() != requested.lower():
+        log_emit(
+            "WARN",
+            f"The wheel is on '{actual}', not on the form's '{requested}' — "
+            f"FITS FILTER records '{actual}'.",
+        )
+    return actual
+
+
 class AcquisitionEngine(QObject):
     """Owns the capture workers and the solve/photometry session state."""
 
@@ -624,6 +653,9 @@ class AcquisitionEngine(QObject):
         # the sequence died while a mid-run autofocus held the camera, this
         # just cancels the pending resume — AF releases to IDLE on its own.
         self._camera_service.release(CameraState.SEQUENCE)
+        # The worker moved the wheel directly; re-read it so the Camera form
+        # (Take-shot metadata) shows the slot the wheel really sits on.
+        self._session.refresh_filter()
         self.sequence_running.emit(False)
         self.log_message.emit(
             "OK" if completed else "INFO",
@@ -1569,7 +1601,6 @@ class AcquisitionEngine(QObject):
             "target_ra": target[0] if target else None,
             "target_dec": target[1] if target else None,
             "object_name": params.object_name,
-            "filter_name": params.filter_name,
             "observer": (self._config.get("observer.name") or "").strip(),
             "site_lat": self._config.get("site.latitude"),
             "site_lon": self._config.get("site.longitude"),
@@ -1581,29 +1612,10 @@ class AcquisitionEngine(QObject):
         }
 
         camera = self._session.camera
+        wheel = self._session.filterwheel
         base = self._sessions_base()
-        folder = FITSWriter.session_folder(
-            base,
-            params.object_name,
-            start_dt,
-            params.frame_type,
-            params.filter_name,
-        )
-        frame_idx = 1
-        while True:
-            filename = FITSWriter.build_filename(
-                params.object_name,
-                params.frame_type,
-                start_dt,
-                exposure,
-                params.filter_name,
-                frame_idx,
-                gain,
-            )
-            path = folder / filename
-            if not path.exists():
-                break
-            frame_idx += 1
+        object_name = params.object_name
+        form_filter = params.filter_name
         # Capture the engine's signal (long-lived) — never a page method.
         log_emit = self.log_message.emit
 
@@ -1611,6 +1623,23 @@ class AcquisitionEngine(QObject):
 
         class _Task(QRunnable):
             def run(self) -> None:
+                # Header truthfulness, as the sequence does: FILTER (and the
+                # folder/file name) come from the wheel, not from the form,
+                # which a sequence or any outside move leaves stale.
+                filter_name = _wheel_filter_name(wheel, form_filter, log_emit)
+                folder = FITSWriter.session_folder(
+                    base, object_name, start_dt, frame_type, filter_name
+                )
+                frame_idx = 1
+                while True:
+                    filename = FITSWriter.build_filename(
+                        object_name, frame_type, start_dt, exposure, filter_name, frame_idx, gain
+                    )
+                    path = folder / filename
+                    if not path.exists():
+                        break
+                    frame_idx += 1
+
                 ccd_temp = camera.get_ccd_temperature() if camera else None
                 egain_d = camera.get_electrons_per_adu() if camera else None
                 offset_v = camera.get_offset() if camera else None
@@ -1621,6 +1650,7 @@ class AcquisitionEngine(QObject):
                     egain_driver=egain_d,
                     offset=offset_v,
                     readout_mode=readout,
+                    filter_name=filter_name,
                     **ctx_kwargs,
                 )
                 try:

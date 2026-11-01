@@ -299,3 +299,75 @@ def test_live_take_shot_saves_the_in_flight_frame_with_its_own_exposure(
     assert camera.exposures == [(10.0, True)]
     ((_, hdr),) = _saved_headers(root)
     assert hdr["EXPTIME"] == 10.0
+
+
+def _deliver(engine, frame=None) -> None:
+    """Hand the engine one frame as the preview worker would, with the
+    settings snapshot the worker took when it started the exposure."""
+    from datetime import datetime, timedelta, timezone
+
+    from argos.workers.exposure_worker import FrameSettings
+
+    params = engine._preview.kw["tag"]
+    used = FrameSettings(params.exposure_s, params.gain, engine._preview.kw["light"], params)
+    frame = _star_frame() if frame is None else frame
+    start = datetime(2026, 10, 1, 22, 0, 0, tzinfo=timezone.utc)
+    engine._on_frame(frame, frame, start, start + timedelta(seconds=10.4), used)
+
+
+def test_take_shot_after_a_sequence_records_the_filter_the_wheel_is_on(shot_rig, tmp_path) -> None:
+    """S3: a sequence moves the wheel itself; the Camera form is not told.
+
+    A Take shot afterwards wrote the form's filter (IR) into FILTER and the
+    folder/file name while the wheel sat on LP.
+    """
+    from argos.core.imaging.sequencer import SequencePlan, SequenceStep
+    from argos.ui.widgets.camera_dock import CaptureParams
+    from argos.workers.sequence_worker import SequenceWorker
+
+    engine, session, form, logs = shot_rig
+    wheel = _FakeWheel(position=1)  # IR; the Camera form shows IR
+    session._filterwheel = wheel
+    moved: list[tuple[int, str]] = []
+    session.filter_moved.connect(lambda pos, name: moved.append((pos, name)))
+
+    plan = SequencePlan(
+        steps=[SequenceStep(frame_type="Light", filter_name="LP", exposure_s=0.0, count=1)],
+        object_name="V1",
+        base_dir=tmp_path / "seq",
+    )
+    SequenceWorker(
+        camera=session.camera,
+        telescope=None,
+        filterwheel=wheel,
+        plan=plan,
+        frame_context_provider=engine._sequence_frame_context,
+        base_dir=tmp_path / "seq",
+    ).run()  # synchronous
+    assert wheel.position_name() == "LP"
+    assert moved == []  # the sequence moved the wheel behind the Camera form's back
+
+    # (1) The header reads the wheel, whatever the form still shows.
+    form["p"] = CaptureParams("Light Frame", "V1", "IR", 10.0, 80)
+    engine.take_shot()
+    _deliver(engine)
+    ((path, hdr),) = _saved_headers(tmp_path / "sessions")
+    assert hdr["FILTER"] == "LP"
+    assert "_lp_" in path.name.lower()  # the file name carries the filter (not the folder)
+    assert any(level == "WARN" and "LP" in msg for level, msg in logs), logs
+
+    # (2) The end of the run re-reads the wheel so the Camera form resyncs.
+    engine._on_seq_finished(True)  # what the worker's finished signal triggers
+    assert moved == [(2, "LP")]
+
+
+def test_take_shot_keeps_the_form_filter_when_the_wheel_cannot_be_read(shot_rig, tmp_path) -> None:
+    engine, session, form, logs = shot_rig
+    wheel = _FakeWheel(position=1)
+    wheel.position = -1  # still turning: position_name() would say "Moving…"
+    wheel.names = {**_FakeWheel.names, -1: "Moving…"}
+    session._filterwheel = wheel
+    engine.take_shot()
+    _deliver(engine)
+    ((_, hdr),) = _saved_headers(tmp_path / "sessions")
+    assert hdr["FILTER"] == "IR"

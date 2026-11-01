@@ -72,10 +72,11 @@ class _FilterMoveRunnable(QRunnable):
 
     The move is async (the wheel reports position -1 while turning). Running it
     off the UI thread keeps the UI responsive; the result is reported back via
-    the ``done`` signal as ``(position, name)``.
+    the ``done`` signal as ``(position, name)``. ``position=None`` only reads
+    where the wheel is (after something else moved it).
     """
 
-    def __init__(self, filterwheel, position: int, done_signal, log_signal) -> None:
+    def __init__(self, filterwheel, position: int | None, done_signal, log_signal) -> None:
         super().__init__()
         self._fw = filterwheel
         self._position = position
@@ -84,7 +85,8 @@ class _FilterMoveRunnable(QRunnable):
 
     def run(self) -> None:
         try:
-            self._fw.set_position(self._position)
+            if self._position is not None:
+                self._fw.set_position(self._position)
             deadline = time.monotonic() + 20.0
             while self._fw.get_position() == -1 and time.monotonic() < deadline:
                 time.sleep(0.15)
@@ -131,6 +133,7 @@ class DeviceSession(QObject):
     stellarium_error = pyqtSignal(str)
 
     _filter_settled = pyqtSignal(int, str)  # internal: from the pool runnable
+    _filter_read = pyqtSignal(int, str)  # internal: refresh_filter's read-back
 
     def __init__(self, config: Config, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -160,6 +163,7 @@ class DeviceSession(QObject):
         self._mount_retry.timeout.connect(self._retry_mount)
 
         self._filter_settled.connect(self._on_filter_settled)
+        self._filter_read.connect(self._on_filter_read)
 
     # ------------------------------------------------------------------
     # Handles + cached state
@@ -686,6 +690,19 @@ class DeviceSession(QObject):
             _FilterMoveRunnable(self._filterwheel, position, self._filter_settled, self.log_message)
         )
 
+    def refresh_filter(self) -> None:
+        """Re-read the wheel off the UI thread and emit ``filter_moved``.
+
+        For moves made outside :meth:`move_filter` (a sequence drives the
+        wheel directly): the Camera form resyncs on ``filter_moved``. A read,
+        never a move.
+        """
+        if not self._filterwheel:
+            return
+        QThreadPool.globalInstance().start(
+            _FilterMoveRunnable(self._filterwheel, None, self._filter_read, self.log_message)
+        )
+
     @staticmethod
     def filter_position_for(name: str) -> int | None:
         """Wheel position whose slot name matches ``name`` (case-insensitive)."""
@@ -697,6 +714,13 @@ class DeviceSession(QObject):
         self.filter_moved.emit(position, name)
         self.device_state_changed.emit("filterwheel", "connected", name)
         self.log_message.emit("CMD", f"Filter → {name}")
+
+    @pyqtSlot(int, str)
+    def _on_filter_read(self, position: int, name: str) -> None:
+        if position < 0:
+            return  # still turning after the 20 s settle budget — nothing to resync to
+        self.filter_moved.emit(position, name)
+        self.device_state_changed.emit("filterwheel", "connected", name)
 
     # ------------------------------------------------------------------
     # Focuser commands
