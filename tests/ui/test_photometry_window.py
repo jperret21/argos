@@ -815,3 +815,59 @@ def test_quality_wait_label_uses_report_min_points(qapp) -> None:
             widget.close()
             widget.deleteLater()
         qapp.processEvents()
+
+
+def test_live_ratio_only_point_reaches_dock_and_window(qapp) -> None:
+    """S18: the live dock was fed without the relative flux, so a ratio-only
+    point (comparisons without a catalogue magnitude) raised TypeError in
+    add_point and the Photometry window never got it."""
+    from argos.core.session.types import PhotometryPoint
+
+    fed: list = []
+    window = SimpleNamespace(isVisible=lambda: True, feed_point=fed.append)
+    dock = LightCurvePanel()
+    page = SimpleNamespace(_lightcurve_panel=dock, _photometry_window=window)
+    try:
+        ratio_only = PhotometryPoint(
+            key="V1",
+            name="V1",
+            jd=2461315.5,
+            mag=float("nan"),
+            mag_err=float("nan"),
+            saturated=False,
+            relative_flux=0.83,
+            relative_flux_err=0.01,
+        )
+        ImagingPage._on_photometry_point(page, ratio_only)  # TypeError on 0.4.2
+        assert fed == [ratio_only]
+        assert dock.has_data()
+        assert dock._series["V1"]["flux"] == [pytest.approx(0.83)]
+
+        both = PhotometryPoint(
+            key="V2",
+            name="V2",
+            jd=2461315.5,
+            mag=12.0,
+            mag_err=0.02,
+            saturated=False,
+            relative_flux=0.91,
+            relative_flux_err=0.01,
+        )
+        ImagingPage._on_photometry_point(page, both)
+        assert dock._series["V2"]["flux"] == [pytest.approx(0.91)]  # NaN on 0.4.2
+    finally:
+        dock.close()
+        dock.deleteLater()
+        qapp.processEvents()
+
+
+def test_add_point_ignores_point_with_neither_product(qapp) -> None:
+    """S18: no magnitude and no relative flux: skipped, not a TypeError."""
+    panel = LightCurvePanel()
+    try:
+        panel.add_point("V1", 2461315.5, float("nan"), 0.02, relative_flux=None)
+        assert not panel.has_data()
+    finally:
+        panel.close()
+        panel.deleteLater()
+        qapp.processEvents()

@@ -124,7 +124,8 @@ class LightCurvePanel(QWidget):
         relative_flux_err: float | None = None,
     ) -> None:
         """Append a point to its scientific or comparison-diagnostic plot."""
-        if not np.isfinite(jd) or not (np.isfinite(mag) or np.isfinite(relative_flux)):
+        has_flux = relative_flux is not None and bool(np.isfinite(relative_flux))
+        if not np.isfinite(jd) or not (np.isfinite(mag) or has_flux):
             return
         s = self._series.get(name)
         if s is None:

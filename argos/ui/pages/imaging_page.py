@@ -2450,6 +2450,8 @@ class ImagingPage(QWidget):
             point.mag_err,
             saturated=point.saturated,
             role=point.role,
+            relative_flux=point.relative_flux,
+            relative_flux_err=point.relative_flux_err,
         )
         win = self._photometry_window
         if win is not None and win.isVisible():
