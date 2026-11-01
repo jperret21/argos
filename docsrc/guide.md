@@ -92,6 +92,10 @@ one, and save it as a favourite. Without a site (a name, or coordinates other
 than the 0/0 default) ARGOS computes no BJD_TDB and no altitude curve, the live
 curve's airmass is the mount's (`na` without a mount), and frames carry no
 `SITELAT`/`SITELONG`.
+When the mount connects, ARGOS compares where it points (altitude and azimuth)
+with the direction computed from this site; more than 5° apart, the log warns
+that the site is not where the telescope is. Fix the site before observing: airmass, BJD_TDB and the
+FITS site keywords all come from it.
 
 **Settings → Equipment · camera.** Select the telescope you actually own. The
 S30 Pro is the reference profile; S30 and S50 are selectable but flagged

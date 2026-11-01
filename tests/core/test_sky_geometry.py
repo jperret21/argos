@@ -146,3 +146,28 @@ def test_airmass_formulas_agree_project_wide() -> None:
     for alt in (5.0, 15.0, 30.0, 45.0, 60.0, 89.0):
         assert airmass_from_altitude(alt) == compute_airmass(alt)
     assert airmass_from_altitude(0.0) is None and airmass_from_altitude(-5.0) is None
+
+
+def test_horizontal_at_matches_astropy_to_a_fraction_of_a_degree() -> None:
+    """The site check compares directions with a 5° tolerance; the fast
+    formula must stay well inside it (RR Lyr, 2026-09-25 20:04:57 UTC)."""
+    from astropy.coordinates import AltAz, EarthLocation, SkyCoord
+
+    from argos.core.imaging.sky_geometry import angle_between_directions, horizontal_at
+    from argos.core.photometry.airmass import julian_date
+
+    when = datetime(2026, 9, 25, 20, 4, 56, 567000, tzinfo=timezone.utc)
+    ra_h, dec = 19.4246239451336, 42.7853574181895
+    for lat, lon in ((37.87084, -122.27286), (48.8566, 2.3522), (-33.87, 151.21)):
+        alt, az = horizontal_at(julian_date(when), ra_h, dec, lat, lon)
+        frame = AltAz(obstime=Time(when), location=EarthLocation(lat=lat * u.deg, lon=lon * u.deg))
+        ref = SkyCoord(ra=ra_h * 15.0 * u.deg, dec=dec * u.deg).transform_to(frame)
+        assert angle_between_directions(alt, az, ref.alt.deg, ref.az.deg) < 0.3
+
+
+def test_angle_between_directions() -> None:
+    from argos.core.imaging.sky_geometry import angle_between_directions
+
+    assert angle_between_directions(90.0, 0.0, 90.0, 123.0) < 1e-6  # zenith, any azimuth
+    assert abs(angle_between_directions(0.0, 0.0, 0.0, 90.0) - 90.0) < 1e-9
+    assert abs(angle_between_directions(10.0, 350.0, 10.0, 10.0) - 19.70) < 0.01

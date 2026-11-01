@@ -33,14 +33,27 @@ from argos.core.alpaca.client import AlpacaError
 from argos.core.alpaca.filterwheel import FilterWheel, position_names
 from argos.core.alpaca.focuser import Focuser
 from argos.core.alpaca.telescope import MountPosition, Telescope
-from argos.core.config import Config
+from argos.core.config import Config, observing_site
 from argos.core.hardware import active as hardware, detect
+from argos.core.imaging.sky_geometry import angle_between_directions, horizontal_at
+from argos.core.photometry.airmass import julian_date
 from argos.core.session.types import CameraCapabilities, FilterWheelState, FocuserState
 from argos.workers.discovery_worker import DiscoveryWorker
 from argos.workers.polling_worker import MountPollingWorker, TemperaturePollingWorker
 from argos.workers.stellarium_worker import StellariumWorker
 
 logger = logging.getLogger(__name__)
+
+# Settings site against the mount: more than this between the direction the
+# mount reports (altitude, azimuth) and the one computed from the Settings
+# site means the site is not where the telescope is. The owner's sessions
+# with the right site agree within 1.9-3.1°; the 2026-09-25 run with a stale
+# site was 83.6-88.5° off (its altitudes alone came within 6.2° at the end).
+SITE_CHECK_TOLERANCE_DEG = 5.0
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class _JogRunnable(QRunnable):
@@ -169,6 +182,9 @@ class DeviceSession(QObject):
         self._stellarium: StellariumWorker | None = None
 
         self._last_position: MountPosition | None = None
+        # The Settings site is compared with the mount once per connection,
+        # on the first poll that is not a slew.
+        self._site_checked = False
         # Filter wheel, as far as this session knows: the slot it last
         # reported settled on (None while unknown), whether a move_filter is
         # in flight, and when the last move ended (UTC). Take shots read
@@ -347,6 +363,7 @@ class DeviceSession(QObject):
             self._log_clock_error(scope)
             self.device_state_changed.emit("mount", "connected", name)
             self.mount_mode.emit(scope.alignment_mode)
+            self._site_checked = False
             self._start_polling()
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Mount: {exc}")
@@ -393,6 +410,7 @@ class DeviceSession(QObject):
         self._log_clock_error(scope)
         self.device_state_changed.emit("mount", "connected", name)
         self.mount_mode.emit(scope.alignment_mode)
+        self._site_checked = False
         self._start_polling()
 
     def disconnect_mount(self) -> None:
@@ -621,6 +639,9 @@ class DeviceSession(QObject):
             # back a position, or a "connected" state, for a gone mount.
             return
         self._last_position = pos
+        if not self._site_checked and not pos.slewing:
+            self._site_checked = True
+            self._check_site_against_mount(pos)
         self.mount_position.emit(pos)
         self.tracking_changed.emit(pos.tracking)
         # Feed the Stellarium server directly so its on-screen reticle keeps
@@ -631,6 +652,38 @@ class DeviceSession(QObject):
             self.device_state_changed.emit("mount", "busy", "slewing")
         else:
             self.device_state_changed.emit("mount", "connected", "")
+
+    def _check_site_against_mount(self, pos: MountPosition) -> None:
+        """Say when the Settings site cannot be where the telescope is.
+
+        The mount reports where it points (altitude, azimuth) from its own
+        site and clock (the Seestar takes them from the phone). The same
+        RA/Dec seen from the Settings site at the computer's clock must point
+        the same way. Both angles are compared: altitudes alone can cross
+        (on 2026-09-25 they were 61.5° apart at the start of the run and 6.2°
+        at its end, the directions 88.5° and 83.6°). Airmass, BJD_TDB and
+        FITS SITELAT/SITELONG use the Settings site.
+        """
+        site = observing_site(self._config)
+        if site is None:
+            return  # no site set: nothing is computed from one
+        lat, lon, _elev = site
+        alt, az = horizontal_at(julian_date(_utcnow()), pos.ra, pos.dec, lat, lon)
+        delta = angle_between_directions(alt, az, pos.altitude, pos.azimuth)
+        if delta > SITE_CHECK_TOLERANCE_DEG:
+            self.log_message.emit(
+                "WARN",
+                f"Site check: the mount points at altitude {pos.altitude:.1f}°, azimuth "
+                f"{pos.azimuth:.1f}°; from the Settings site ({lat:.3f}°, {lon:.3f}°) the same "
+                f"RA/Dec is at altitude {alt:.1f}°, azimuth {az:.1f}°, {delta:.1f}° apart. "
+                "Airmass, BJD and the FITS site use the Settings site: correct Settings › "
+                "Observer & site if the telescope is elsewhere.",
+            )
+        else:
+            self.log_message.emit(
+                "INFO",
+                f"Site check: the Settings site agrees with the mount ({delta:.1f}° apart).",
+            )
 
     def _on_mount_lost(self) -> None:
         self.log_message.emit("ERROR", "Mount connection lost.")

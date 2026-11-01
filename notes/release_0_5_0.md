@@ -24,6 +24,11 @@ pointing), and **X2**, found in the review (with no site set, latitude and
 longitude 0/0 were used as the site). They are fixed here too, each with a test
 that fails on the code before it.
 
+One check was added after the review, **X3**: a site that is set but is not
+where the telescope is (the site of an earlier trip, for example) went
+unnoticed, and the airmass of the whole run was computed for it. The mount now
+gets compared with the Settings site when it connects.
+
 **Several of these defects affect files you already hold.** The table says
 which; *Check your old files* below says how to find them.
 
@@ -40,6 +45,7 @@ which; *Check your old files* below says how to find them.
 | S4 | **Open FITS** kept the previous frame's time and WCS, and wrapped a calibrated frame's pixels | A point dated with another frame's time, in the curve, its CSV and AAVSO; points measured on wrapped pixels | **yes** |
 | X1 | The mount's last polled position outlived a disconnect or a lost connection | Frozen `RA`, `DEC`, `ALTITUDE`, `AZIMUTH`, `AIRMASS` in the frames saved meanwhile | **yes** |
 | X2 | With no site set, latitude and longitude 0/0 were used as the site (0.4.1, 0.4.2) | Live and batch airmass (CSV `airmass`, AAVSO `AMASS`) for 0/0; `SITELAT`/`SITELONG` 0 | **yes** |
+| X3 | Nothing compared the Settings site with where the mount is | A wrong site's airmass (CSV `airmass`, AAVSO `AMASS`), `SITELAT`/`SITELONG` and `MOONALT` | **yes** |
 | S22 | Autofocus never applied its gain | Worse or rejected autofocus | no |
 | S23 | **Stop AF** could leave the focuser mid-sweep | Defocused frames after "Autofocus complete" | possibly defocused frames |
 | S5 | The Plan editor dropped a transit's planning metadata | No `observation.json` for any run started from the UI | **yes** |
@@ -131,6 +137,17 @@ against the day you installed 0.5.0.
   SS Cyg seen from Paris at 2026-11-01 19:00 UTC). Replace `AMASS` with `na`,
   or recompute it for your site, before submitting. `MOONALT` of those frames
   is for 0/0 too. The CSVs' `bjd_tdb` column is off by less than 0.03 s.
+- **Site set but wrong (X3).** The header `ALTITUDE` and
+  `AIRMASS` come from the mount, which knows where it is; `SITELAT`/`SITELONG`
+  and the CSV `airmass` come from the Settings site. Recompute the altitude and
+  azimuth of the frame's `RA`/`DEC` at `DATE-OBS` from `SITELAT`/`SITELONG`:
+  more than 5° from the header's `ALTITUDE`/`AZIMUTH` direction means the site
+  was wrong for that run (compare both angles: altitudes alone can agree). In one real case the
+  mount gave 75.4° and the stale site 13.8°, so the CSV airmass ran from 4.1
+  to 1.5 while the header `AIRMASS` ran from 1.03 to 1.36. Take the airmass
+  from the header `AIRMASS` (or recompute it for the real site) before
+  submitting; the differential magnitudes do not depend on it, and `bjd_tdb`
+  is off by less than 0.03 s.
 - **Black Light frames (S7).** Sequence Light frames with `FILTER = Dark` were
   shot through the opaque slot. The header is truthful; the data are lost.
 - **Runs with no live curve (S14) or mixed apertures (S15).** Re-run the batch
@@ -367,6 +384,37 @@ nothing changes.
 (1.3789 on the code before the fix, the mount's 1.1541 here),
 `tests/ui/test_batch_rerun.py::test_rerun_without_a_site_computes_no_airmass_at_latitude_0_longitude_0`
 and `tests/core/test_config_migration.py::test_observing_site_is_never_the_0_0_default`.
+
+### X3 — The Settings site is checked against the mount
+
+**What was wrong.** The Seestar takes its site and clock from the phone and
+reports where it points (altitude, azimuth); ARGOS computes airmass, BJD_TDB,
+the Moon and FITS `SITELAT`/`SITELONG` from the Settings site. Nothing compared
+the two, so a site left from an earlier trip went unnoticed for a whole run: in
+one session the mount gave RR Lyr at altitude 75.4°, azimuth 258.9° while the
+Settings site put it at 13.8°, azimuth 45.9° (88.5° apart), and the CSV airmass
+and AAVSO `AMASS` were computed for the wrong site. Over that run the two
+directions stayed 83.6–88.5° apart, but the altitudes alone came within 6.2° by
+its end, so the check compares the whole direction. In the eleven other
+sessions on disk, where the site was right, they agree within 1.9–3.1°.
+**Who was affected.** Anyone who observed away from the site saved in
+Settings.
+**What changed.** Once per mount connection (and again after a reconnect), on
+the first poll that is not a slew, ARGOS computes the altitude and azimuth of
+the mount's RA/Dec from the Settings site and the computer's clock (fast
+spherical trigonometry, within 0.3° of astropy). More than 5° from the
+direction the mount reports logs a WARN with both directions and the place to
+fix it (Settings › Observer & site); otherwise an INFO line says they agree. With
+no site set there is nothing to check (X2). A wrong mount clock also shifts
+the comparison; the clock check (H4) reports it separately. Nothing is
+blocked: the warning says what is wrong and the observer decides.
+**How to check.** `tests/core/test_device_session.py::test_site_that_cannot_be_where_the_mount_is_is_reported`
+uses the header values of that session's first frame (88.5° apart, warned
+once per connection); `test_site_that_agrees_with_the_mount_is_confirmed`,
+`test_site_is_checked_again_after_a_reconnect` and
+`test_no_site_set_means_no_site_check`. The first three fail on the code
+before the change. `tests/core/test_sky_geometry.py` checks the direction
+against astropy.
 
 ## Plan
 
@@ -841,7 +889,7 @@ patch:
 
 ## State of the branch
 
-- 617 tests pass, 45 skipped (0.4.2: 534 and 45). Every fix carries a test that
+- 623 tests pass, 45 skipped (0.4.2: 534 and 45). Every fix carries a test that
   fails on the code before it, checked commit by commit against its parent; one
   guard test (S3, the wheel cannot be read) pins a fallback 0.4.2 already had.
   Each hardware test was written first and run on the unfixed code (H17
@@ -865,6 +913,7 @@ patch:
       H16 deferred).
 - [x] Review findings fixed (X1, X2, gaps in S1, S3, S4, S10, S23, H3) and the
       notes corrected (S10 file names, S4, S23, the `SOFTWARE` header).
+- [x] Site check against the mount (X3) added, with its tests.
 - [ ] Bump the version to 0.5.0 in `pyproject.toml` and `argos/__init__.py`
       (both still say 0.4.2). Until then the branch writes `SOFTWARE = 'Argos
       v0.4.2'` and the site-search User-Agent says 0.4.2; *Check your old
@@ -873,7 +922,9 @@ patch:
       and attaches them to a **draft** release.
 - [ ] At the telescope: a Dark Take shot with Filter IR is refused; **+ Add**
       after the wheel connects gives a Light row on IR; Stop AF mid-sweep leaves
-      the focuser at its start; a run started after a GoTo, without Identify
+      the focuser at its start; connecting the mount with the Settings site
+      of another place logs the X3 warning, and with the right site an INFO;
+      a run started after a GoTo, without Identify
       field, gets live points once its first frame is solved. Hardware: in
       the jog dialog, hold Up and Right, release Up (altitude stops, azimuth
       goes on), release Right (all stop); hold Left and click the main

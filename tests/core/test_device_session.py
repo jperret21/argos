@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import copy
+import re
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 from argos.core.config import _DEFAULTS, Config
@@ -314,3 +317,100 @@ def test_mount_position_is_forgotten_when_the_mount_goes_away() -> None:
     finally:
         session._mount_retry.stop()
     assert session.last_position is None
+
+
+# The mount's azimuth in the first frame of the 2026-09-25 RR Lyr run (FITS AZIMUTH).
+AZ_0925 = 258.927222
+
+
+def _site_check_session(monkeypatch, site: dict, now: datetime) -> tuple[DeviceSession, list]:
+    import argos.core.session.device_session as ds
+
+    monkeypatch.setattr(ds, "_utcnow", lambda: now)
+    config = Config(copy.deepcopy(_DEFAULTS))  # set() must not reach the shared defaults
+    for key, value in site.items():
+        config.set(f"site.{key}", value)
+    session = DeviceSession(config)
+    session._telescope = MagicMock()
+    logs: list[tuple[str, str]] = []
+    session.log_message.connect(lambda level, msg: logs.append((level, msg)))
+    return session, logs
+
+
+def test_site_that_cannot_be_where_the_mount_is_is_reported(monkeypatch) -> None:
+    """The 2026-09-25 RR Lyr run (header values of its first frame): Settings
+    still held a site the telescope was not at. The mount put RR Lyr at
+    altitude 75.4°, azimuth 258.9°; the Settings site at altitude 13.8°,
+    azimuth 45.9° (88.5° apart), and the run's photometry airmass and AAVSO
+    AMASS were computed from the wrong site. Nothing said so."""
+    from argos.core.alpaca.telescope import MountPosition
+
+    first_frame = datetime(2026, 9, 25, 20, 4, 56, 567000, tzinfo=timezone.utc)
+    rr_lyr = MountPosition(19.4246239451336, 42.7853574181895, 75.375833, AZ_0925, True, False)
+    berkeley = {"name": "Berkeley", "latitude": 37.87084, "longitude": -122.27286}
+    session, logs = _site_check_session(monkeypatch, berkeley, first_frame)
+
+    session._on_position(MountPosition(19.0, 40.0, 30.0, 0.0, True, True))  # slewing
+    assert [m for _, m in logs if "Site check" in m] == []
+    session._on_position(rr_lyr)
+    session._on_position(rr_lyr)  # once per connection
+
+    checks = [(level, m) for level, m in logs if "Site check" in m]
+    assert len(checks) == 1
+    level, message = checks[0]
+    assert level == "WARN"
+    # Fast spherical trig, good to about 0.1° (astropy gives altitude 13.8°).
+    found = re.search(r"altitude ([\d.]+)°.* altitude ([\d.]+)°.* ([\d.]+)° apart", message)
+    assert found is not None, message
+    mount, expected, apart = (float(v) for v in found.groups())
+    assert mount == 75.4
+    assert abs(expected - 13.8) < 0.3 and abs(apart - 88.5) < 0.3
+    assert "Observer & site" in message
+
+
+def test_site_that_agrees_with_the_mount_is_confirmed(monkeypatch) -> None:
+    from argos.core.alpaca.telescope import MountPosition
+
+    first_frame = datetime(2026, 9, 25, 20, 4, 56, 567000, tzinfo=timezone.utc)
+    rr_lyr = MountPosition(19.4246239451336, 42.7853574181895, 75.375833, AZ_0925, True, False)
+    paris = {"name": "Paris", "latitude": 48.8566, "longitude": 2.3522}
+    session, logs = _site_check_session(monkeypatch, paris, first_frame)
+
+    session._on_position(rr_lyr)
+
+    checks = [(level, m) for level, m in logs if "Site check" in m]
+    assert len(checks) == 1 and checks[0][0] == "INFO"
+
+
+def test_no_site_set_means_no_site_check(monkeypatch) -> None:
+    from argos.core.alpaca.telescope import MountPosition
+
+    now = datetime(2026, 9, 25, 20, 5, tzinfo=timezone.utc)
+    session, logs = _site_check_session(monkeypatch, {}, now)
+
+    session._on_position(MountPosition(19.42, 42.79, 75.4, 0.0, True, False))
+
+    assert [m for _, m in logs if "Site check" in m] == []
+
+
+def test_site_is_checked_again_after_a_reconnect(monkeypatch) -> None:
+    import argos.core.session.device_session as ds
+    from argos.core.alpaca.telescope import MountPosition
+
+    first_frame = datetime(2026, 9, 25, 20, 4, 56, 567000, tzinfo=timezone.utc)
+    rr_lyr = MountPosition(19.4246239451336, 42.7853574181895, 75.375833, AZ_0925, True, False)
+    berkeley = {"name": "Berkeley", "latitude": 37.87084, "longitude": -122.27286}
+    session, logs = _site_check_session(monkeypatch, berkeley, first_frame)
+
+    def telescope(host, port):
+        t = MagicMock(equatorial_system="J2000", clock_error_seconds=None)
+        t.connect.return_value = "Seestar mount"
+        return t
+
+    monkeypatch.setattr(ds, "Telescope", telescope)
+    monkeypatch.setattr(ds.DeviceSession, "_start_polling", lambda self: None)
+    session._on_position(rr_lyr)
+    session.connect_mount("192.168.1.20", 32323)
+    session._on_position(rr_lyr)
+
+    assert len([m for level, m in logs if level == "WARN" and "Site check" in m]) == 2
