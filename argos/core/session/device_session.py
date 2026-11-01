@@ -206,7 +206,8 @@ class DeviceSession(QObject):
     @property
     def last_position(self) -> MountPosition | None:
         """Latest polled mount position (an atomic reference swap — safe to
-        read from worker threads as a single snapshot)."""
+        read from worker threads as a single snapshot); ``None`` before the
+        first poll and once the mount is disconnected or lost."""
         return self._last_position
 
     @property
@@ -378,6 +379,10 @@ class DeviceSession(QObject):
             except AlpacaError:
                 pass
             self._telescope = None
+        # The last polled pointing is not where the telescope is any more:
+        # FITS RA/DEC/ALTITUDE/AZIMUTH/AIRMASS and the photometry airmass
+        # read it, and every reader handles "no position".
+        self._last_position = None
         self.device_state_changed.emit("mount", "disconnected", "")
         self.tracking_changed.emit(None)
         self.mount_mode.emit(None)
@@ -578,6 +583,11 @@ class DeviceSession(QObject):
 
     @pyqtSlot(object)
     def _on_position(self, pos: MountPosition) -> None:
+        if self._telescope is None:
+            # Queued by a poller that was stopped when the mount went away
+            # (a poll in flight during disconnect_mount): it must not bring
+            # back a position, or a "connected" state, for a gone mount.
+            return
         self._last_position = pos
         self.mount_position.emit(pos)
         self.tracking_changed.emit(pos.tracking)
@@ -594,6 +604,9 @@ class DeviceSession(QObject):
         self.log_message.emit("ERROR", "Mount connection lost.")
         self._stop_polling()
         self._telescope = None
+        # Frames saved while the mount is retried must not carry its last
+        # polled pointing and airmass (see disconnect_mount).
+        self._last_position = None
         self.mount_lost.emit()
         self.mount_mode.emit(None)
         retrying = self._mount_endpoint is not None

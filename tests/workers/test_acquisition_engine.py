@@ -505,6 +505,29 @@ def test_take_shot_qa_headers_describe_the_saved_frame(shot_rig, tmp_path) -> No
     assert hdr["FWHM"] == pytest.approx(detect_stars(saved).mean_fwhm, abs=0.01)
 
 
+def test_frames_saved_after_the_mount_went_away_carry_no_pointing(shot_rig, tmp_path) -> None:
+    """X1: a disconnected (or lost) mount's last polled position went into
+    the next frames' RA, DEC, ALTITUDE, AZIMUTH and AIRMASS."""
+    from unittest.mock import MagicMock
+
+    from argos.core.alpaca.telescope import MountPosition
+
+    engine, session, form, logs = shot_rig
+    session._telescope = MagicMock()
+    session._on_position(MountPosition(5.0, 20.0, 45.0, 120.0, True, False))
+    assert engine._sequence_frame_context("V1", "IR").altitude == 45.0  # mount up: used
+
+    session.disconnect_mount()
+
+    ctx = engine._sequence_frame_context("V1", "IR")
+    assert (ctx.ra, ctx.dec, ctx.altitude, ctx.azimuth) == (None, None, None, None)
+    engine.take_shot()
+    _deliver(engine)
+    ((_, hdr),) = _saved_headers(tmp_path / "sessions")
+    for key in ("RA", "DEC", "OBJCTRA", "OBJCTDEC", "ALTITUDE", "AZIMUTH", "AIRMASS"):
+        assert key not in hdr, f"{key} written from a disconnected mount"
+
+
 def test_engine_reports_whether_the_running_sequence_shoots_lights(shot_rig, monkeypatch) -> None:
     """S14: the page arms field identification only for runs with Light frames."""
     import argos.core.session.acquisition_engine as ae

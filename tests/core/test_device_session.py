@@ -279,3 +279,38 @@ def test_connection_failures_carry_their_reason(monkeypatch) -> None:
     device, state, info = states[-1]
     assert (device, state) == ("mount", "error")
     assert "lost" in info and "retrying" in info
+
+
+def test_mount_position_is_forgotten_when_the_mount_goes_away() -> None:
+    """X1: the last polled position outlived a disconnect or a lost
+    connection, so frames saved afterwards (during the auto-retry, or with
+    the camera still exposing) carried a frozen RA, DEC, ALTITUDE, AZIMUTH
+    and AIRMASS."""
+    from argos.core.alpaca.telescope import MountPosition
+
+    polled = MountPosition(5.0, 20.0, 45.0, 120.0, True, False)
+    session = DeviceSession(Config(dict(_DEFAULTS)))
+    session._telescope = MagicMock()
+    session._on_position(polled)
+    assert session.last_position == polled
+
+    session.disconnect_mount()
+    assert session.last_position is None
+
+    # A poll that was in flight when the mount was disconnected arrives
+    # afterwards (queued): it must not bring the position back.
+    states: list[tuple[str, str, str]] = []
+    session.device_state_changed.connect(lambda d, s, i: states.append((d, s, i)))
+    session._on_position(polled)
+    assert session.last_position is None
+    assert states == []
+
+    # Connection lost (three failed polls): the same, while it is retried.
+    session._telescope = MagicMock()
+    session._mount_endpoint = ("192.168.1.20", 32323)
+    session._on_position(polled)
+    try:
+        session._on_mount_lost()
+    finally:
+        session._mount_retry.stop()
+    assert session.last_position is None
