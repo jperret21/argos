@@ -2263,7 +2263,11 @@ class ImagingPage(QWidget):
         if self._batch_worker is not None:
             return  # one at a time
         from argos.core.photometry.params import PhotometryParams
-        from argos.workers.photometry_batch_worker import BatchRequest, PhotometryBatchWorker
+        from argos.workers.photometry_batch_worker import (
+            BatchRequest,
+            PhotometryBatchWorker,
+            discover_light_frames,
+        )
 
         wcs = self._astrometry.wcs
         if wcs is None:
@@ -2292,11 +2296,12 @@ class ImagingPage(QWidget):
         folder = QFileDialog.getExistingDirectory(self, "Folder of saved subs", start)
         if not folder:
             return
-        paths = sorted(Path(folder).glob("*.fits"), key=lambda p: p.stat().st_mtime)
+        # Argos writes .fit; calibration frames (IMAGETYP) are never measured.
+        paths = discover_light_frames(Path(folder))
         if not paths:
-            paths = sorted(Path(folder).rglob("*.fits"), key=lambda p: p.stat().st_mtime)
-        if not paths:
-            QMessageBox.information(self, "No frames", f"No FITS files in {folder}")
+            QMessageBox.information(
+                self, "No frames", f"No light frames (.fit/.fits/.fts) in {folder}"
+            )
             return
         params = PhotometryParams.from_config(self._cfg, egain=self._engine_egain())
         req = BatchRequest(

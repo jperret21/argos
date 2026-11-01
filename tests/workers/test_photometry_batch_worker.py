@@ -505,3 +505,31 @@ def test_batch_drops_only_a_result_with_neither_product(_scene) -> None:
     curves: dict = {}
     worker._emit_points([_res(mag=None, ratio=None)], 2451545.0, curves)
     assert curves == {}
+
+
+def _header_only_fits(path, **header) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    hdu = fits.PrimaryHDU(np.zeros((4, 4), dtype=np.uint16))
+    for key, value in header.items():
+        hdu.header[key.replace("_", "-")] = value
+    hdu.writeto(path)
+
+
+def test_discover_light_frames_finds_fit_and_skips_calibration(tmp_path) -> None:
+    """S12: the re-run globbed only '*.fits', and Argos writes '.fit' — it
+    never found a frame of an Argos session. A wider glob alone would also
+    measure the run's darks, flats and biases as light frames."""
+    from argos.workers.photometry_batch_worker import discover_light_frames
+
+    a = tmp_path / "lights" / "a.fit"
+    b = tmp_path / "lights" / "b.FITS"
+    c = tmp_path / "lights" / "c.fts"
+    d = tmp_path / "darks" / "d.fit"
+    _header_only_fits(a, IMAGETYP="Light Frame", DATE_OBS="2026-11-01T21:00:10")
+    _header_only_fits(b, IMAGETYP="Light Frame", DATE_OBS="2026-11-01T21:00:00")
+    _header_only_fits(c)  # no IMAGETYP, no date: kept, sorted last
+    _header_only_fits(d, IMAGETYP="Dark Frame", DATE_OBS="2026-11-01T22:00:00")
+
+    assert discover_light_frames(tmp_path) == [b, a, c]  # recursive, d excluded
+    assert discover_light_frames(tmp_path / "lights") == [b, a, c]
+    assert discover_light_frames(tmp_path / "darks") == []

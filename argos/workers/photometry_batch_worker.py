@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -37,6 +37,51 @@ from argos.core.session.diagnostics import SessionDiagnostics
 from argos.core.session.types import PhotometryPoint
 
 logger = logging.getLogger(__name__)
+
+#: FITS file suffixes a re-run accepts (any case). Argos itself writes ``.fit``.
+_FITS_SUFFIXES = (".fit", ".fits", ".fts")
+#: IMAGETYP words that mark a calibration frame, never measured as a light.
+_CALIBRATION_WORDS = ("dark", "flat", "bias", "offset", "zero")
+
+
+def discover_light_frames(folder: Path) -> list[Path]:
+    """The light frames a batch re-run should measure under ``folder``.
+
+    ``.fit``/``.fits``/``.fts`` files (any case) in the folder itself, or in
+    its subfolders when it has none (a session root holds lights/, darks/,
+    flats/, biases/). Frames whose ``IMAGETYP`` names a calibration type are
+    left out; a frame without IMAGETYP is kept. Ordered by ``DATE-OBS``,
+    frames without a readable date last, by name.
+    """
+    from astropy.io import fits
+
+    folder = Path(folder)
+
+    def fits_files(paths) -> list[Path]:
+        return [p for p in paths if p.is_file() and p.suffix.lower() in _FITS_SUFFIXES]
+
+    candidates = fits_files(folder.glob("*")) or fits_files(folder.rglob("*"))
+    dated: list[tuple[datetime, Path]] = []
+    undated: list[Path] = []
+    for path in candidates:
+        try:
+            header = fits.getheader(path)
+        except Exception:  # unreadable: the batch reports it as a skipped frame
+            undated.append(path)
+            continue
+        imagetyp = str(header.get("IMAGETYP", "") or "").lower()
+        if any(word in imagetyp for word in _CALIBRATION_WORDS):
+            continue
+        try:
+            start = datetime.fromisoformat(str(header.get("DATE-OBS") or "").replace("Z", "+00:00"))
+        except ValueError:
+            undated.append(path)
+            continue
+        if start.tzinfo is not None:  # FITS dates are UTC; compare naive UTC
+            start = start.astimezone(timezone.utc).replace(tzinfo=None)
+        dated.append((start, path))
+    dated.sort(key=lambda item: (item[0], item[1].name))
+    return [path for _start, path in dated] + sorted(undated, key=lambda p: p.name)
 
 
 @dataclass
