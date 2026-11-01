@@ -662,6 +662,16 @@ class Shell(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        # An accidental Cmd+Q must not end a night's run: ask first, before
+        # anything is shut down (No keeps the window and the run).
+        activity = self._running_activity()
+        if activity is not None and not self._confirm(
+            "Quit Argos?",
+            f"{activity} is running. Quitting stops it and loses the frame being "
+            "exposed.\n\nQuit anyway?",
+        ):
+            event.ignore()
+            return
         # Order matters: stop the capture workers first (they hold device
         # references), then the session's pollers + Stellarium server.
         self._configuration.shutdown()

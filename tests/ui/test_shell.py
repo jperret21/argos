@@ -30,6 +30,7 @@ def test_shell_three_mode_walkthrough(monkeypatch) -> None:
     from argos.ui.widgets.mount_dock import MountDock
 
     shell = Shell(Config({}))
+    closed = False
     try:
         # ── Shell skeleton: 5 modes (NINA-style), default = connect ───────
         assert set(shell._pages.keys()) == {
@@ -715,7 +716,31 @@ def test_shell_three_mode_walkthrough(monkeypatch) -> None:
         shell._session._camera = camera
         conn.disconnect_requested.emit("camera")  # idle: no question
         assert asked == [] and camera.disconnect.call_count == 2
+
+        # ── H8: quitting during a run asks first (default No) ────────────
+        shut: list[str] = []
+        for name, owner in (
+            ("settings", shell._configuration),
+            ("plan", shell._sequencer),
+            ("capture", shell._acquisition),
+            ("session", shell._session),
+        ):
+            real = owner.shutdown
+            monkeypatch.setattr(
+                owner, "shutdown", lambda name=name, real=real: (shut.append(name), real())[1]
+            )
+        answer[0] = QMessageBox.StandardButton.No
+        shell._sequence_active = True
+        assert shell.close() is False  # the window stays, the run goes on
+        assert len(asked) == 1 and "quit" in asked[0].lower()
+        assert shut == []
+        answer[0] = QMessageBox.StandardButton.Yes
+        closed = shell.close()
+        assert closed is True
+        assert shut == ["settings", "plan", "capture", "session"]
     finally:
-        shell.close()
+        if not closed:
+            shell._sequence_active = shell._autofocus_active = False
+            shell.close()
         shell.deleteLater()
         app.processEvents()
