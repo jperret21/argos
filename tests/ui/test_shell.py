@@ -89,6 +89,11 @@ def test_shell_three_mode_walkthrough(monkeypatch) -> None:
         assert settings._scope_combo.currentData() == "s30pro"
         connection.set_device_state("camera", "disconnected")
         assert not connection._start_disconnect_btn.isEnabled()
+        # H13: the Shell locks the Settings picker while a device is up.
+        shell._on_device_state_changed("camera", "connected", "")
+        assert not settings._scope_combo.isEnabled()
+        shell._on_device_state_changed("camera", "disconnected", "")
+        assert settings._scope_combo.isEnabled()
         # Connection intentionally has one physical endpoint, not opaque
         # network modes. Discovery fills the same IP/port fields.
         assert not hasattr(connection, "_profile_combo")

@@ -315,8 +315,7 @@ class ConnectionPage(QWidget):
         if hasattr(self, "_telescope_combo"):
             self._telescope_combo.setEnabled(not any_connected)
             self._telescope_combo.setToolTip(
-                "Disconnect equipment before changing telescope model. The model controls "
-                "plate scale, sensor geometry and FITS metadata."
+                catalog.PROFILE_LOCKED_HINT
                 if any_connected
                 else "Select the physical telescope before connecting equipment."
             )

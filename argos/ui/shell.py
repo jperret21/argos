@@ -422,6 +422,11 @@ class Shell(QMainWindow):
         self._connection.set_device_state(device_id, state, info)
 
         self._conn_state[device_id] = state
+        # The telescope model is refused while anything is connected
+        # (ConnectionPage.apply_telescope_profile): lock the Settings picker too.
+        self._configuration.set_profile_locked(
+            any(s in ("connected", "busy") for s in self._conn_state.values())
+        )
         self._refresh_sidebar_states()
 
     def _on_sequence_running(self, running: bool) -> None:

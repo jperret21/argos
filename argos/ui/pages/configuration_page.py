@@ -607,6 +607,12 @@ class ConfigurationPage(QWidget):
         """Reflect the shared active instrument after a Connection/Settings change."""
         self._refresh_telescope_card()
 
+    def set_profile_locked(self, locked: bool) -> None:
+        """Lock the model while equipment is connected, as the Connection page
+        does: a change is refused then, so the picker must not offer it."""
+        self._scope_combo.setEnabled(not locked)
+        self._scope_combo.setToolTip(catalog.PROFILE_LOCKED_HINT if locked else "")
+
     def _build_camera_card(self) -> "design.Card":
         card = design.Card("Camera")
         layout = design.card_layout(card)

@@ -132,6 +132,14 @@ def test_telescope_picker_walkthrough() -> None:
         assert page._scope_warning.text() == ""
         assert active.profile().key == "s30pro"
 
+        # H13: while equipment is connected the model cannot change; Settings
+        # offered the change anyway and silently snapped back.
+        page.set_profile_locked(True)
+        assert not page._scope_combo.isEnabled()
+        assert page._scope_combo.toolTip().startswith("Disconnect equipment")
+        page.set_profile_locked(False)
+        assert page._scope_combo.isEnabled()
+
         # A saved observing site is separate from the observer name and can
         # become the active/default site in one explicit action.
         page._site_name_edit.setText("Berkeley roof")
