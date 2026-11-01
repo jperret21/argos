@@ -655,6 +655,8 @@ class ImagingPage(QWidget):
         enabled = state in ("connected", "busy")
         if device == "mount":
             self._mount_dock.set_enabled(enabled)
+            if not enabled and self._jog_dialog is not None and self._jog_dialog.isVisible():
+                self._jog_dialog.close()  # stops any axis it moves; reopened on the new handle
         elif device == "camera":
             self._camera_dock.set_enabled(enabled)
             if state == "disconnected":
@@ -2871,6 +2873,9 @@ class ImagingPage(QWidget):
         if self._jog_dialog is None:
             self._jog_dialog = ManualControlDialog(telescope, parent=self)
             self._jog_dialog.log_message.connect(self.log_message)
+        else:
+            # A reconnect creates a new Telescope: never jog the old handle.
+            self._jog_dialog.set_telescope(telescope)
         self._jog_dialog.show()
         self._jog_dialog.raise_()
 

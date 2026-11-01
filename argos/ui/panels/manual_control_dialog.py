@@ -10,13 +10,18 @@ Axis mapping (Alt-Az mount):
 The mount keeps moving at the commanded rate until Rate=0 is sent.
 Button pressed → MoveAxis(rate), button released → MoveAxis(0).
 No periodic resend needed (unlike native scope_speed_move).
+
+Each axis is tracked on its own (a diagonal jog moves both), and a released
+key or button stops its own axis. The ■ button stops both axes; closing,
+hiding or leaving the window stops every axis still moving, since a key
+released in another window never reaches this one.
 """
 
 from __future__ import annotations
 
 import logging
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -52,6 +57,13 @@ _DIRECTIONS: dict[str, tuple[int, float]] = {
     "West": (0, -1.0),
 }
 
+_KEY_DIRECTIONS: dict[Qt.Key, str] = {
+    Qt.Key.Key_Up: "North",
+    Qt.Key.Key_Down: "South",
+    Qt.Key.Key_Left: "West",
+    Qt.Key.Key_Right: "East",
+}
+
 
 class _JogButton(QPushButton):
     def __init__(self, label: str, parent: QWidget | None = None) -> None:
@@ -80,7 +92,7 @@ class ManualControlDialog(QDialog):
         super().__init__(parent)
         self._telescope = telescope
         self._speed: float = list(SPEEDS.values())[1]
-        self._active_axis: int | None = None
+        self._active_axes: set[int] = set()
 
         self._setup_window()
         self._build_ui()
@@ -131,13 +143,13 @@ class ManualControlDialog(QDialog):
             btn = _JogButton(icon)
             btn.setToolTip(direction)
             btn.pressed.connect(lambda d=direction: self._start(d))
-            btn.released.connect(self._stop)
+            btn.released.connect(lambda d=direction: self._stop_axis(_DIRECTIONS[d][0]))
             grid.addWidget(btn, row, col)
 
         stop_btn = _JogButton("■")
-        stop_btn.setToolTip("Stop")
+        stop_btn.setToolTip("Stop both axes")
         stop_btn.setStyleSheet(f"color:{theme.DANGER};")
-        stop_btn.clicked.connect(self._stop)
+        stop_btn.clicked.connect(self._stop_all)
         grid.addWidget(stop_btn, 1, 1)
 
         root.addLayout(grid)
@@ -150,6 +162,10 @@ class ManualControlDialog(QDialog):
 
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
+    def set_telescope(self, telescope: Telescope) -> None:
+        """Drive *telescope* from now on (a reconnect creates a new handle)."""
+        self._telescope = telescope
+
     # ------------------------------------------------------------------
     # Motion
     # ------------------------------------------------------------------
@@ -157,25 +173,37 @@ class ManualControlDialog(QDialog):
     def _start(self, direction: str) -> None:
         axis, sign = _DIRECTIONS[direction]
         rate = sign * self._speed
-        self._active_axis = axis
+        # Marked before the call and kept on failure: a MoveAxis that raised
+        # may still have reached the mount, and a stop is harmless.
+        self._active_axes.add(axis)
         logger.info("ManualControl: %s  axis=%d rate=%.2f", direction, axis, rate)
         try:
             self._telescope.move_axis(axis, rate)
         except AlpacaError as exc:
-            self._active_axis = None
             logger.error("MoveAxis failed: %s", exc)
             self._log("ERROR", f"Move failed: {exc}")
 
-    def _stop(self) -> None:
-        axis = self._active_axis
-        self._active_axis = None
-        if axis is not None:
-            try:
-                self._telescope.stop_axis(axis)
-                logger.info("ManualControl: stopped axis %d", axis)
-            except AlpacaError as exc:
-                logger.warning("Stop axis %d failed: %s", axis, exc)
-                self._log("WARN", f"Stop failed: {exc}")
+    def _stop_axis(self, axis: int) -> None:
+        """Stop *axis* if this dialog moved it (key or button released)."""
+        if axis not in self._active_axes:
+            return
+        self._active_axes.discard(axis)
+        try:
+            self._telescope.stop_axis(axis)
+            logger.info("ManualControl: stopped axis %d", axis)
+        except AlpacaError as exc:
+            logger.warning("Stop axis %d failed: %s", axis, exc)
+            self._log("WARN", f"Stop failed: {exc}")
+
+    def _stop_active(self) -> None:
+        """Stop every axis this dialog still moves (close, hide, focus lost)."""
+        for axis in sorted(self._active_axes):
+            self._stop_axis(axis)
+
+    def _stop_all(self) -> None:
+        """The ■ button: stop both axes, whatever the dialog believes."""
+        self._active_axes.update((0, 1))
+        self._stop_active()
 
     # ------------------------------------------------------------------
     # Keyboard
@@ -184,13 +212,7 @@ class ManualControlDialog(QDialog):
     def keyPressEvent(self, event) -> None:
         if event.isAutoRepeat():
             return
-        mapping = {
-            Qt.Key.Key_Up: "North",
-            Qt.Key.Key_Down: "South",
-            Qt.Key.Key_Left: "West",
-            Qt.Key.Key_Right: "East",
-        }
-        direction = mapping.get(event.key())
+        direction = _KEY_DIRECTIONS.get(event.key())
         if direction is not None:
             self._start(direction)
         else:
@@ -199,15 +221,26 @@ class ManualControlDialog(QDialog):
     def keyReleaseEvent(self, event) -> None:
         if event.isAutoRepeat():
             return
-        if event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_Left, Qt.Key.Key_Right):
-            self._stop()
+        direction = _KEY_DIRECTIONS.get(event.key())
+        if direction is not None:
+            self._stop_axis(_DIRECTIONS[direction][0])
         else:
             super().keyReleaseEvent(event)
 
     # ------------------------------------------------------------------
 
+    def event(self, event) -> bool:
+        if event.type() == QEvent.Type.WindowDeactivate:
+            # A key held while the window loses focus is released elsewhere.
+            self._stop_active()
+        return super().event(event)
+
+    def hideEvent(self, event) -> None:
+        self._stop_active()
+        super().hideEvent(event)
+
     def closeEvent(self, event) -> None:
-        self._stop()
+        self._stop_active()
         super().closeEvent(event)
 
     def _log(self, level: str, message: str) -> None:
