@@ -411,7 +411,9 @@ class Shell(QMainWindow):
         self._configuration.sync_telescope_profile()
 
     def _on_stellarium_error(self, message: str) -> None:
-        self._connection.stellarium_card.set_server_state(False, "✗  error")
+        # The reason (e.g. "bind 127.0.0.1:10001 failed — address already in
+        # use") belongs on the card, not only in the Observe log.
+        self._connection.stellarium_card.set_server_state(False, f"✗  {message}")
 
     # ------------------------------------------------------------------
     # Status fan-out
