@@ -525,7 +525,7 @@ class ConfigurationPage(QWidget):
         self._scope_combo = QComboBox()
         for key in catalog.keys():
             entry = catalog.PROFILES[key]
-            label = entry.name if entry.validated else f"{entry.name}  (unvalidated)"
+            label = entry.name if entry.validated else f"{entry.name}{catalog.UNVALIDATED_SUFFIX}"
             self._scope_combo.addItem(label, key)
         self._scope_combo.currentIndexChanged.connect(self._save_telescope)
 
@@ -577,7 +577,7 @@ class ConfigurationPage(QWidget):
         else:
             self._scope_warning.setVisible(True)
             self._scope_warning.setText(
-                "Unvalidated profile — never run on this hardware. " + " · ".join(scope.caveats)
+                f"{catalog.UNVALIDATED_WARNING} " + " · ".join(scope.caveats)
             )
 
     def _save_telescope(self) -> None:

@@ -40,6 +40,13 @@ class _FakeConfig:
     def sessions_path(self):
         return "/tmp/sessions"
 
+    alpaca_host = ""  # read by the Connection page
+    alpaca_port = 32323
+
+
+#: The one unvalidated-profile warning (Q-C2), on both pages.
+_NOT_VALIDATED = "Not validated on this hardware: do not use it for scientific photometry."
+
 
 def test_telescope_picker_walkthrough() -> None:
     """Build the Settings page and exercise the telescope card end to end."""
@@ -75,9 +82,27 @@ def test_telescope_picker_walkthrough() -> None:
         assert "f/5.0" in page._scope_specs.text()
 
         # …and it warns, naming the caveat that matters most for photometry.
+        # S29: Settings said "never run on this hardware", which contradicted
+        # both the profile docs (usable, but flagged) and the Connection page.
         warning = page._scope_warning.text()
-        assert "Unvalidated" in warning
+        assert warning.startswith(_NOT_VALIDATED)
+        assert "never run" not in warning
         assert "Bayer" in warning
+
+        # The Connection page says the same, with the same picker labels, and
+        # its camera card names the active profile's sensor (it was hard-coded
+        # to the S30 Pro's IMX585).
+        from argos.ui.pages.connection_page import ConnectionPage
+
+        connection = ConnectionPage(config)
+        assert connection._telescope_warning.text().startswith(_NOT_VALIDATED)
+        combo = connection._telescope_combo
+        assert {combo.itemData(i): combo.itemText(i) for i in range(combo.count())} == labels
+        assert catalog.get("s50").sensor == "IMX462"
+        assert connection._cards["camera"]._hint_lbl.text() == "Telephoto IMX462 sensor"
+        assert connection.apply_telescope_profile("s30pro")
+        assert connection._cards["camera"]._hint_lbl.text() == "Telephoto IMX585 sensor"
+        connection.deleteLater()
 
         # Back to the validated profile: the warning clears.
         page._scope_combo.setCurrentIndex(page._scope_combo.findData("s30pro"))

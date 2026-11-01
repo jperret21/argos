@@ -40,10 +40,15 @@ logger = logging.getLogger(__name__)
 # global status bar so connection state reads left-to-right consistently.
 _DEVICES: tuple[tuple[str, str, str], ...] = (
     ("mount", "Telescope", "Mount control via ASCOM Alpaca"),
-    ("camera", "Camera", "Telephoto IMX585 sensor"),
+    ("camera", "Camera", "Telephoto sensor"),  # the profile's sensor, see _camera_hint
     ("filterwheel", "Filter Wheel", "Dark / IR / LP slots"),
     ("focuser", "Focuser", "Telephoto focuser"),
 )
+
+
+def _camera_hint(sensor: str) -> str:
+    """The camera card's hint names the active profile's sensor."""
+    return f"Telephoto {sensor} sensor" if sensor else "Telephoto sensor"
 
 
 class ConnectionPage(QWidget):
@@ -122,7 +127,7 @@ class ConnectionPage(QWidget):
         self._telescope_combo = QComboBox()
         for key in catalog.keys():
             profile = catalog.PROFILES[key]
-            suffix = " (unvalidated)" if not profile.validated else ""
+            suffix = catalog.UNVALIDATED_SUFFIX if not profile.validated else ""
             self._telescope_combo.addItem(f"{profile.name}{suffix}", key)
         current = self._telescope_combo.findData(active.profile().key)
         self._telescope_combo.setCurrentIndex(max(0, current))
@@ -196,6 +201,8 @@ class ConnectionPage(QWidget):
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
         for i, (device_id, label, hint) in enumerate(_DEVICES):
+            if device_id == "camera":
+                hint = _camera_hint(active.profile().sensor)
             card = _DeviceCard(device_id, label, hint)
             card.connect_clicked.connect(self._on_connect_one)
             card.disconnect_clicked.connect(self.disconnect_requested)
@@ -335,10 +342,12 @@ class ConnectionPage(QWidget):
             self._telescope_warning.hide()
         else:
             self._telescope_warning.setText(
-                "Unvalidated profile — do not use it for scientific photometry: "
-                + " · ".join(profile.caveats)
+                f"{catalog.UNVALIDATED_WARNING} " + " · ".join(profile.caveats)
             )
             self._telescope_warning.show()
+        camera = self._cards.get("camera")
+        if camera is not None:
+            camera.set_hint(_camera_hint(profile.sensor))
 
     # ------------------------------------------------------------------
     # Config + internals
@@ -425,6 +434,9 @@ class _DeviceCard(design.Card):
         self._connect_btn = design.PrimaryButton("↗  Connect")
         self._connect_btn.clicked.connect(self._on_button)
         outer.addWidget(self._connect_btn)
+
+    def set_hint(self, hint: str) -> None:
+        self._hint_lbl.setText(hint)
 
     def set_state(self, state: str, info: str = "") -> None:
         self._state = state
