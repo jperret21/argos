@@ -1,0 +1,493 @@
+{
+ "title": "Wave 2: Settings, site against mount, command palette, support bundle (after the review)",
+ "date": "2026-11-02",
+ "summary": "Wave 2 of web/spec/README.md section 7 after its design and technical reviews were applied. The Settings screen with its nine categories, generated from the server's config meta (every key of 02 appendix A editable or read-only with its reason), live sync between clients, Undo, the in-app FilePicker; the site-against-mount check; the Help menu, About, the support bundle; the command palette. Review fixes visible here: the palette runs the row it highlights; the observer's name, AAVSO code and site have no Reset (no default: 0°, 0° is not a site); Observer & site fits 1 440 × 900 (one Position row, one line of help where the help column shows it); controls sized by content, rules between groups only, a small dot for 'changed', Reset on hover or focus; one Attention mark for the site mismatch everywhere and no brass-looking frame; refusals never cut; U+202F grouping and one range notation ('−90° … +90°'); help in the observer's words, Qt-only keys folded away; Comfortable density changes card values, statistics and log lines; Slew brass only for a new target; paths with a middle cut; key hints on the rail, filter, Help and palette; the FilePicker without a brass region ring. Taken against the ARGOS server with the simulator and a temporary configuration, HOME and sessions folder, in headless Chrome; the Settings site is Berkeley while the simulator mount sits at APC Paris. 1 440 × 900 in Observatory, Charcoal and Night Red, 1 280 × 800 in Observatory. The Night Red shots pass scripts/audit-png.mjs (rules A and B, 0 px).",
+ "shots": [
+  {
+   "file": "observatory-1440x900-settings-observer-site-mismatch.png",
+   "caption": "Settings › Observer & site with the site-against-mount check failing, the 2026-09-25 case reproduced: the simulator mount points at RR Lyr from its own site (APC, Paris) while the Settings site is Berkeley. The panel gives the verdict in one bold sentence, both altitudes and azimuths (2 decimals), the angle between the directions against the 5° limit, when it was checked and the mount's own site 8 941 km away. One alert vocabulary: the upright Attention mark (bar over a dot) on the chip, the intro line, the category list, the rail's Settings entry and the status bar; a 3 px warning bar instead of a brass-looking frame. The site is one Position row (latitude, longitude, elevation side by side); the observer's values have no Reset (no shipped default: 0°, 0° is not a site). The page fits 1 440 × 900 without scrolling. (observatory, 1440x900.)",
+   "tags": [
+    "settings",
+    "site-check",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-settings-observer-site-mismatch.png",
+   "caption": "Settings › Observer & site with the site-against-mount check failing, the 2026-09-25 case reproduced: the simulator mount points at RR Lyr from its own site (APC, Paris) while the Settings site is Berkeley. The panel gives the verdict in one bold sentence, both altitudes and azimuths (2 decimals), the angle between the directions against the 5° limit, when it was checked and the mount's own site 8 941 km away. One alert vocabulary: the upright Attention mark (bar over a dot) on the chip, the intro line, the category list, the rail's Settings entry and the status bar; a 3 px warning bar instead of a brass-looking frame. The site is one Position row (latitude, longitude, elevation side by side); the observer's values have no Reset (no shipped default: 0°, 0° is not a site). The page fits 1 440 × 900 without scrolling. (observatory, 1280x800.)",
+   "tags": [
+    "settings",
+    "site-check",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-settings-observer-site-mismatch.png",
+   "caption": "Settings › Observer & site with the site-against-mount check failing, the 2026-09-25 case reproduced: the simulator mount points at RR Lyr from its own site (APC, Paris) while the Settings site is Berkeley. The panel gives the verdict in one bold sentence, both altitudes and azimuths (2 decimals), the angle between the directions against the 5° limit, when it was checked and the mount's own site 8 941 km away. One alert vocabulary: the upright Attention mark (bar over a dot) on the chip, the intro line, the category list, the rail's Settings entry and the status bar; a 3 px warning bar instead of a brass-looking frame. The site is one Position row (latitude, longitude, elevation side by side); the observer's values have no Reset (no shipped default: 0°, 0° is not a site). The page fits 1 440 × 900 without scrolling. (charcoal, 1440x900.)",
+   "tags": [
+    "settings",
+    "site-check",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-settings-observer-site-mismatch.png",
+   "caption": "Settings › Observer & site with the site-against-mount check failing, the 2026-09-25 case reproduced: the simulator mount points at RR Lyr from its own site (APC, Paris) while the Settings site is Berkeley. The panel gives the verdict in one bold sentence, both altitudes and azimuths (2 decimals), the angle between the directions against the 5° limit, when it was checked and the mount's own site 8 941 km away. One alert vocabulary: the upright Attention mark (bar over a dot) on the chip, the intro line, the category list, the rail's Settings entry and the status bar; a 3 px warning bar instead of a brass-looking frame. The site is one Position row (latitude, longitude, elevation side by side); the observer's values have no Reset (no shipped default: 0°, 0° is not a site). The page fits 1 440 × 900 without scrolling. (night-red, 1440x900.)",
+   "tags": [
+    "settings",
+    "site-check",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-settings-paths-filepicker.png",
+   "caption": "Settings › Data & storage with the in-app FilePicker open on the sessions folder (read-only listing over GET /api/fs/list, limited to home and the data folders). Path fields show the middle cut with the last segment whole; the focused list no longer rings the whole region in brass (the active row carries the focus), so brass drops from 5 467 to about 2 550 px (the Choose folder primary). (observatory, 1440x900.)",
+   "tags": [
+    "settings",
+    "filepicker",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-settings-paths-filepicker.png",
+   "caption": "Settings › Data & storage with the in-app FilePicker open on the sessions folder (read-only listing over GET /api/fs/list, limited to home and the data folders). Path fields show the middle cut with the last segment whole; the focused list no longer rings the whole region in brass (the active row carries the focus), so brass drops from 5 467 to about 2 550 px (the Choose folder primary). (observatory, 1280x800.)",
+   "tags": [
+    "settings",
+    "filepicker",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-settings-paths-filepicker.png",
+   "caption": "Settings › Data & storage with the in-app FilePicker open on the sessions folder (read-only listing over GET /api/fs/list, limited to home and the data folders). Path fields show the middle cut with the last segment whole; the focused list no longer rings the whole region in brass (the active row carries the focus), so brass drops from 5 467 to about 2 550 px (the Choose folder primary). (charcoal, 1440x900.)",
+   "tags": [
+    "settings",
+    "filepicker",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-settings-paths-filepicker.png",
+   "caption": "Settings › Data & storage with the in-app FilePicker open on the sessions folder (read-only listing over GET /api/fs/list, limited to home and the data folders). Path fields show the middle cut with the last segment whole; the focused list no longer rings the whole region in brass (the active row carries the focus), so brass drops from 5 467 to about 2 550 px (the Choose folder primary). (night-red, 1440x900.)",
+   "tags": [
+    "settings",
+    "filepicker",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-settings-instrument-advanced.png",
+   "caption": "Settings › Instrument, Advanced and Qt app compatibility open, scrolled to the end: the telescope profile as a read-only mirror, saturation and linearity overrides showing the profile's values ('Profile: 60 000'), the ADC depth as what is in effect ('12 bit · from the telescope profile', never 'not set'), the electron gain table, and the Qt app's legacy copies in their own closed disclosure. Help texts are in the observer's words (no config keys or JSON); controls are sized for their content, rules separate groups only. (observatory, 1440x900.)",
+   "tags": [
+    "settings",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-settings-instrument-advanced.png",
+   "caption": "Settings › Instrument, Advanced and Qt app compatibility open, scrolled to the end: the telescope profile as a read-only mirror, saturation and linearity overrides showing the profile's values ('Profile: 60 000'), the ADC depth as what is in effect ('12 bit · from the telescope profile', never 'not set'), the electron gain table, and the Qt app's legacy copies in their own closed disclosure. Help texts are in the observer's words (no config keys or JSON); controls are sized for their content, rules separate groups only. (observatory, 1280x800.)",
+   "tags": [
+    "settings",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-settings-instrument-advanced.png",
+   "caption": "Settings › Instrument, Advanced and Qt app compatibility open, scrolled to the end: the telescope profile as a read-only mirror, saturation and linearity overrides showing the profile's values ('Profile: 60 000'), the ADC depth as what is in effect ('12 bit · from the telescope profile', never 'not set'), the electron gain table, and the Qt app's legacy copies in their own closed disclosure. Help texts are in the observer's words (no config keys or JSON); controls are sized for their content, rules separate groups only. (charcoal, 1440x900.)",
+   "tags": [
+    "settings",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-settings-instrument-advanced.png",
+   "caption": "Settings › Instrument, Advanced and Qt app compatibility open, scrolled to the end: the telescope profile as a read-only mirror, saturation and linearity overrides showing the profile's values ('Profile: 60 000'), the ADC depth as what is in effect ('12 bit · from the telescope profile', never 'not set'), the electron gain table, and the Qt app's legacy copies in their own closed disclosure. Help texts are in the observer's words (no config keys or JSON); controls are sized for their content, rules separate groups only. (night-red, 1440x900.)",
+   "tags": [
+    "settings",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-settings-appearance-comfortable.png",
+   "caption": "Settings › Appearance in Comfortable density (owner D7): theme, density, image rotation and Reset all layouts for this browser, the Observe display values shared by every viewer, and the Qt app's theme and rotation folded into 'Qt app compatibility' instead of sitting next to the web's own controls. The density help says exactly what Comfortable changes. (observatory, 1440x900.)",
+   "tags": [
+    "settings",
+    "density",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-settings-appearance-comfortable.png",
+   "caption": "Settings › Appearance in Comfortable density (owner D7): theme, density, image rotation and Reset all layouts for this browser, the Observe display values shared by every viewer, and the Qt app's theme and rotation folded into 'Qt app compatibility' instead of sitting next to the web's own controls. The density help says exactly what Comfortable changes. (observatory, 1280x800.)",
+   "tags": [
+    "settings",
+    "density",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-settings-appearance-comfortable.png",
+   "caption": "Settings › Appearance in Comfortable density (owner D7): theme, density, image rotation and Reset all layouts for this browser, the Observe display values shared by every viewer, and the Qt app's theme and rotation folded into 'Qt app compatibility' instead of sitting next to the web's own controls. The density help says exactly what Comfortable changes. (charcoal, 1440x900.)",
+   "tags": [
+    "settings",
+    "density",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-settings-appearance-comfortable.png",
+   "caption": "Settings › Appearance in Comfortable density (owner D7): theme, density, image rotation and Reset all layouts for this browser, the Observe display values shared by every viewer, and the Qt app's theme and rotation folded into 'Qt app compatibility' instead of sitting next to the web's own controls. The density help says exactly what Comfortable changes. (night-red, 1440x900.)",
+   "tags": [
+    "settings",
+    "density",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-settings-plate-solving.png",
+   "caption": "Settings › Plate solving: what ASTAP the server would run (program, star database, -d flag) above the solver and solving settings; ranges written one way everywhere ('0° … 180°', ° against the number), changed values marked by a small neutral dot after the label (Reset appears on hover or focus). (observatory, 1440x900.)",
+   "tags": [
+    "settings",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-settings-plate-solving.png",
+   "caption": "Settings › Plate solving: what ASTAP the server would run (program, star database, -d flag) above the solver and solving settings; ranges written one way everywhere ('0° … 180°', ° against the number), changed values marked by a small neutral dot after the label (Reset appears on hover or focus). (observatory, 1280x800.)",
+   "tags": [
+    "settings",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-settings-plate-solving.png",
+   "caption": "Settings › Plate solving: what ASTAP the server would run (program, star database, -d flag) above the solver and solving settings; ranges written one way everywhere ('0° … 180°', ° against the number), changed values marked by a small neutral dot after the label (Reset appears on hover or focus). (charcoal, 1440x900.)",
+   "tags": [
+    "settings",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-settings-plate-solving.png",
+   "caption": "Settings › Plate solving: what ASTAP the server would run (program, star database, -d flag) above the solver and solving settings; ranges written one way everywhere ('0° … 180°', ° against the number), changed values marked by a small neutral dot after the label (Reset appears on hover or focus). (night-red, 1440x900.)",
+   "tags": [
+    "settings",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-settings-catalogues.png",
+   "caption": "Settings › Catalogues: the bundled catalogue, the identification budget as a segmented 100 / 200 / 400 / 800 / 1 600 (names in its help), VSX and Gaia groups with ranges grouped from 1 000 ('10 … 2 000'), the Gaia depth presets and the local context layers. The help column lists what differs from the defaults. (observatory, 1440x900.)",
+   "tags": [
+    "settings",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-settings-catalogues.png",
+   "caption": "Settings › Catalogues: the bundled catalogue, the identification budget as a segmented 100 / 200 / 400 / 800 / 1 600 (names in its help), VSX and Gaia groups with ranges grouped from 1 000 ('10 … 2 000'), the Gaia depth presets and the local context layers. The help column lists what differs from the defaults. (observatory, 1280x800.)",
+   "tags": [
+    "settings",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-settings-catalogues.png",
+   "caption": "Settings › Catalogues: the bundled catalogue, the identification budget as a segmented 100 / 200 / 400 / 800 / 1 600 (names in its help), VSX and Gaia groups with ranges grouped from 1 000 ('10 … 2 000'), the Gaia depth presets and the local context layers. The help column lists what differs from the defaults. (charcoal, 1440x900.)",
+   "tags": [
+    "settings",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-settings-catalogues.png",
+   "caption": "Settings › Catalogues: the bundled catalogue, the identification budget as a segmented 100 / 200 / 400 / 800 / 1 600 (names in its help), VSX and Gaia groups with ranges grouped from 1 000 ('10 … 2 000'), the Gaia depth presets and the local context layers. The help column lists what differs from the defaults. (night-red, 1440x900.)",
+   "tags": [
+    "settings",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-palette-open.png",
+   "caption": "Command palette (⌘K) with an empty field: grouped Sections, Hardware, Actions, Settings; it opens on the first row that moves no hardware, and the highlighted row is always the row Enter runs (the review found Enter running another command). Hardware rows are marked CONFIRM; unavailable rows say why; 0 brass. (observatory, 1440x900.)",
+   "tags": [
+    "palette",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-palette-open.png",
+   "caption": "Command palette (⌘K) with an empty field: grouped Sections, Hardware, Actions, Settings; it opens on the first row that moves no hardware, and the highlighted row is always the row Enter runs (the review found Enter running another command). Hardware rows are marked CONFIRM; unavailable rows say why; 0 brass. (observatory, 1280x800.)",
+   "tags": [
+    "palette",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-palette-open.png",
+   "caption": "Command palette (⌘K) with an empty field: grouped Sections, Hardware, Actions, Settings; it opens on the first row that moves no hardware, and the highlighted row is always the row Enter runs (the review found Enter running another command). Hardware rows are marked CONFIRM; unavailable rows say why; 0 brass. (charcoal, 1440x900.)",
+   "tags": [
+    "palette",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-palette-open.png",
+   "caption": "Command palette (⌘K) with an empty field: grouped Sections, Hardware, Actions, Settings; it opens on the first row that moves no hardware, and the highlighted row is always the row Enter runs (the review found Enter running another command). Hardware rows are marked CONFIRM; unavailable rows say why; 0 brass. (night-red, 1440x900.)",
+   "tags": [
+    "palette",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-support-bundle-dialog.png",
+   "caption": "Help › Create support bundle…: what the ZIP holds and what is replaced, crash reports in, site coordinates and session metadata out by default (Q-G17); the Save to path keeps the file name with its UTC time whole (middle cut). (observatory, 1440x900.)",
+   "tags": [
+    "support-bundle",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-support-bundle-dialog.png",
+   "caption": "Help › Create support bundle…: what the ZIP holds and what is replaced, crash reports in, site coordinates and session metadata out by default (Q-G17); the Save to path keeps the file name with its UTC time whole (middle cut). (observatory, 1280x800.)",
+   "tags": [
+    "support-bundle",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-support-bundle-dialog.png",
+   "caption": "Help › Create support bundle…: what the ZIP holds and what is replaced, crash reports in, site coordinates and session metadata out by default (Q-G17); the Save to path keeps the file name with its UTC time whole (middle cut). (charcoal, 1440x900.)",
+   "tags": [
+    "support-bundle",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-support-bundle-dialog.png",
+   "caption": "Help › Create support bundle…: what the ZIP holds and what is replaced, crash reports in, site coordinates and session metadata out by default (Q-G17); the Save to path keeps the file name with its UTC time whole (middle cut). (night-red, 1440x900.)",
+   "tags": [
+    "support-bundle",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-settings-about.png",
+   "caption": "Settings › About: the ARGOS mark from the generator (never redrawn), version, API, Python and platform ('macOS 26.5'), three equal secondary actions (Copy version info, Documentation & website, Source code), credits, licence ('ARGOS contributors') and the folders in use. (observatory, 1440x900.)",
+   "tags": [
+    "settings",
+    "about",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-settings-about.png",
+   "caption": "Settings › About: the ARGOS mark from the generator (never redrawn), version, API, Python and platform ('macOS 26.5'), three equal secondary actions (Copy version info, Documentation & website, Source code), credits, licence ('ARGOS contributors') and the folders in use. (observatory, 1280x800.)",
+   "tags": [
+    "settings",
+    "about",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-settings-about.png",
+   "caption": "Settings › About: the ARGOS mark from the generator (never redrawn), version, API, Python and platform ('macOS 26.5'), three equal secondary actions (Copy version info, Documentation & website, Source code), credits, licence ('ARGOS contributors') and the folders in use. (charcoal, 1440x900.)",
+   "tags": [
+    "settings",
+    "about",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-settings-about.png",
+   "caption": "Settings › About: the ARGOS mark from the generator (never redrawn), version, API, Python and platform ('macOS 26.5'), three equal secondary actions (Copy version info, Documentation & website, Source code), credits, licence ('ARGOS contributors') and the folders in use. (night-red, 1440x900.)",
+   "tags": [
+    "settings",
+    "about",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-help-menu.png",
+   "caption": "Help menu in the rail footer: version and API level, Documentation & website (opens the browser only on request), Keyboard shortcuts (?), Command palette (⌘K), Create support bundle…, About ARGOS. (observatory, 1440x900.)",
+   "tags": [
+    "shell",
+    "help",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-help-menu.png",
+   "caption": "Help menu in the rail footer: version and API level, Documentation & website (opens the browser only on request), Keyboard shortcuts (?), Command palette (⌘K), Create support bundle…, About ARGOS. (observatory, 1280x800.)",
+   "tags": [
+    "shell",
+    "help",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-help-menu.png",
+   "caption": "Help menu in the rail footer: version and API level, Documentation & website (opens the browser only on request), Keyboard shortcuts (?), Command palette (⌘K), Create support bundle…, About ARGOS. (charcoal, 1440x900.)",
+   "tags": [
+    "shell",
+    "help",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-help-menu.png",
+   "caption": "Help menu in the rail footer: version and API level, Documentation & website (opens the browser only on request), Keyboard shortcuts (?), Command palette (⌘K), Create support bundle…, About ARGOS. (night-red, 1440x900.)",
+   "tags": [
+    "shell",
+    "help",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-connection.png",
+   "caption": "Connection screen with the site mismatch: the Instrument card's callout starts with the same Attention chip ('Site ≠ mount') as Settings and the status bar, then the consequence and the numbers (79° apart, both altitudes with 2 decimals); D8 frame sizes, D5 numbers. (observatory, 1440x900.)",
+   "tags": [
+    "connection",
+    "site-check",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-connection.png",
+   "caption": "Connection screen with the site mismatch: the Instrument card's callout starts with the same Attention chip ('Site ≠ mount') as Settings and the status bar, then the consequence and the numbers (79° apart, both altitudes with 2 decimals); D8 frame sizes, D5 numbers. (observatory, 1280x800.)",
+   "tags": [
+    "connection",
+    "site-check",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-connection.png",
+   "caption": "Connection screen with the site mismatch: the Instrument card's callout starts with the same Attention chip ('Site ≠ mount') as Settings and the status bar, then the consequence and the numbers (79° apart, both altitudes with 2 decimals); D8 frame sizes, D5 numbers. (charcoal, 1440x900.)",
+   "tags": [
+    "connection",
+    "site-check",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-connection.png",
+   "caption": "Connection screen with the site mismatch: the Instrument card's callout starts with the same Attention chip ('Site ≠ mount') as Settings and the status bar, then the consequence and the numbers (79° apart, both altitudes with 2 decimals); D8 frame sizes, D5 numbers. (night-red, 1440x900.)",
+   "tags": [
+    "connection",
+    "site-check",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-observe-live.png",
+   "caption": "Observe with live frames and the mount tracking on target: Slew is secondary while the typed target is where the mount already points (it turns primary for a new target), so brass drops from 2 804 to about 1 150 --accent px; the Dec echo is signed ('= +42.78444°'); the status bar carries 'Site ≠ mount'. (observatory, 1440x900.)",
+   "tags": [
+    "observe",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-observe-live.png",
+   "caption": "Observe with live frames and the mount tracking on target: Slew is secondary while the typed target is where the mount already points (it turns primary for a new target), so brass drops from 2 804 to about 1 150 --accent px; the Dec echo is signed ('= +42.78444°'); the status bar carries 'Site ≠ mount'. (observatory, 1280x800.)",
+   "tags": [
+    "observe",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-observe-live.png",
+   "caption": "Observe with live frames and the mount tracking on target: Slew is secondary while the typed target is where the mount already points (it turns primary for a new target), so brass drops from 2 804 to about 1 150 --accent px; the Dec echo is signed ('= +42.78444°'); the status bar carries 'Site ≠ mount'. (charcoal, 1440x900.)",
+   "tags": [
+    "observe",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-observe-live.png",
+   "caption": "Observe with live frames and the mount tracking on target: Slew is secondary while the typed target is where the mount already points (it turns primary for a new target), so brass drops from 2 804 to about 1 150 --accent px; the Dec echo is signed ('= +42.78444°'); the status bar carries 'Site ≠ mount'. (night-red, 1440x900.)",
+   "tags": [
+    "observe",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-observe-live-comfortable.png",
+   "caption": "Observe in Comfortable density: Mount readouts 20 px, the Camera card's In use / Sensor values and the frame statistics 16 px (13 px compact), log lines 24 px; toolbar, icons and image unchanged. (observatory, 1440x900.)",
+   "tags": [
+    "observe",
+    "density",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-keyhints-settings.png",
+   "caption": "Key hints with ⌘ held alone on Settings: neutral caps on the rail entries (F1-F5), the Help button (?) and the Settings filter (/), and a chip above the status bar for the command palette (⌘K) and the shortcuts sheet, which have no button of their own. Never brass. (observatory, 1440x900.)",
+   "tags": [
+    "shell",
+    "keyboard",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-undo-toast.png",
+   "caption": "Undo after removing a saved site: on Settings the toasts' column sits at the bottom left of the form, so it no longer covers 'Save current site' or the help column. (observatory, 1440x900.)",
+   "tags": [
+    "settings",
+    "undo",
+    "observatory",
+    "1440x900"
+   ]
+  }
+ ]
+}
