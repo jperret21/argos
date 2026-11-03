@@ -40,10 +40,15 @@ logger = logging.getLogger(__name__)
 # global status bar so connection state reads left-to-right consistently.
 _DEVICES: tuple[tuple[str, str, str], ...] = (
     ("mount", "Telescope", "Mount control via ASCOM Alpaca"),
-    ("camera", "Camera", "Telephoto IMX585 sensor"),
+    ("camera", "Camera", "Telephoto sensor"),  # the profile's sensor, see _camera_hint
     ("filterwheel", "Filter Wheel", "Dark / IR / LP slots"),
     ("focuser", "Focuser", "Telephoto focuser"),
 )
+
+
+def _camera_hint(sensor: str) -> str:
+    """The camera card's hint names the active profile's sensor."""
+    return f"Telephoto {sensor} sensor" if sensor else "Telephoto sensor"
 
 
 class ConnectionPage(QWidget):
@@ -122,7 +127,7 @@ class ConnectionPage(QWidget):
         self._telescope_combo = QComboBox()
         for key in catalog.keys():
             profile = catalog.PROFILES[key]
-            suffix = " (unvalidated)" if not profile.validated else ""
+            suffix = catalog.UNVALIDATED_SUFFIX if not profile.validated else ""
             self._telescope_combo.addItem(f"{profile.name}{suffix}", key)
         current = self._telescope_combo.findData(active.profile().key)
         self._telescope_combo.setCurrentIndex(max(0, current))
@@ -140,6 +145,13 @@ class ConnectionPage(QWidget):
 
         layout.addWidget(design.horizontal_divider())
         layout.addLayout(self._build_endpoint_row())
+        # Said when Connect is pressed with no address (it used to do nothing).
+        self._endpoint_hint = design.MutedLabel("Enter the Seestar IP address or press Discover.")
+        self._endpoint_hint.setWordWrap(True)
+        self._endpoint_hint.setStyleSheet(f"color:{theme.WARNING};")
+        self._endpoint_hint.hide()
+        self._host_edit.textChanged.connect(self._endpoint_hint.hide)  # display only
+        layout.addWidget(self._endpoint_hint)
         layout.addWidget(design.horizontal_divider())
         self._summary_labels: dict[str, QLabel] = {}
         status_grid = QGridLayout()
@@ -176,12 +188,14 @@ class ConnectionPage(QWidget):
         self._host_edit = QLineEdit()
         self._host_edit.setPlaceholderText("192.168.x.x")
         self._host_edit.setToolTip("IPv4 address of the Seestar on the current network")
-        self._host_edit.textChanged.connect(self._on_host_changed)
+        # Saved (and probed by the network monitor) once typed, not per keystroke.
+        self._host_edit.editingFinished.connect(self._on_host_edited)
         row.addWidget(self._host_edit, 1)
         row.addWidget(design.MutedLabel("Port"))
         self._port_spin = QSpinBox()
         self._port_spin.setRange(1, 65535)
         self._port_spin.setMaximumWidth(96)
+        self._port_spin.setKeyboardTracking(False)
         self._port_spin.valueChanged.connect(self._on_port_changed)
         row.addWidget(self._port_spin)
         self._discover_btn = design.PrimaryButton("⚡  Discover")
@@ -196,6 +210,8 @@ class ConnectionPage(QWidget):
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
         for i, (device_id, label, hint) in enumerate(_DEVICES):
+            if device_id == "camera":
+                hint = _camera_hint(active.profile().sensor)
             card = _DeviceCard(device_id, label, hint)
             card.connect_clicked.connect(self._on_connect_one)
             card.disconnect_clicked.connect(self.disconnect_requested)
@@ -232,6 +248,7 @@ class ConnectionPage(QWidget):
     def set_discovered_address(self, host: str, port: int) -> None:
         """Fill in the form when a discovery worker returns an address."""
         self._host_edit.setText(host)
+        self._on_host_edited()  # setText is not an edit: save it explicitly
         self._port_spin.setValue(port)
 
     def apply_telescope_profile(self, key: str) -> bool:
@@ -298,8 +315,7 @@ class ConnectionPage(QWidget):
         if hasattr(self, "_telescope_combo"):
             self._telescope_combo.setEnabled(not any_connected)
             self._telescope_combo.setToolTip(
-                "Disconnect equipment before changing telescope model. The model controls "
-                "plate scale, sensor geometry and FITS metadata."
+                catalog.PROFILE_LOCKED_HINT
                 if any_connected
                 else "Select the physical telescope before connecting equipment."
             )
@@ -335,10 +351,12 @@ class ConnectionPage(QWidget):
             self._telescope_warning.hide()
         else:
             self._telescope_warning.setText(
-                "Unvalidated profile — do not use it for scientific photometry: "
-                + " · ".join(profile.caveats)
+                f"{catalog.UNVALIDATED_WARNING} " + " · ".join(profile.caveats)
             )
             self._telescope_warning.show()
+        camera = self._cards.get("camera")
+        if camera is not None:
+            camera.set_hint(_camera_hint(profile.sensor))
 
     # ------------------------------------------------------------------
     # Config + internals
@@ -350,29 +368,41 @@ class ConnectionPage(QWidget):
         self._port_spin.setValue(self._config.alpaca_port or 32323)
         self._loading = False
 
-    def _on_host_changed(self, text: str) -> None:
+    def _on_host_edited(self) -> None:
         if self._loading:
             return
-        self._config.alpaca_host = text.strip()
+        host = self._host_edit.text().strip()
+        if host != self._config.alpaca_host:
+            self._config.alpaca_host = host
 
     def _on_port_changed(self, value: int) -> None:
         if self._loading:
             return
         self._config.alpaca_port = value
 
+    def _endpoint(self) -> tuple[str, int]:
+        """The typed address and port. A port typed without Enter is
+        committed first: a button click does not take the focus on macOS."""
+        self._port_spin.interpretText()
+        return self._host_edit.text().strip(), int(self._port_spin.value())
+
     def _on_connect_one(self, device_id: str) -> None:
-        host = self._host_edit.text().strip()
-        port = int(self._port_spin.value())
+        host, port = self._endpoint()
         if not host:
+            self._ask_for_address()
             return
         self.connect_requested.emit(device_id, host, port)
 
     def _on_connect_all(self) -> None:
-        host = self._host_edit.text().strip()
-        port = int(self._port_spin.value())
+        host, port = self._endpoint()
         if not host:
+            self._ask_for_address()
             return
         self.connect_all_requested.emit(host, port)
+
+    def _ask_for_address(self) -> None:
+        self._endpoint_hint.show()
+        self._host_edit.setFocus()
 
 
 # --------------------------------------------------------------------------- #
@@ -409,6 +439,7 @@ class _DeviceCard(design.Card):
         text_col = QVBoxLayout()
         text_col.setSpacing(2)
         self._status_lbl = QLabel("Disconnected")
+        self._status_lbl.setWordWrap(True)  # an error's full reason, never cut
         self._status_lbl.setStyleSheet(
             f"color:{theme.FG}; font-size:13px; font-weight:bold;" f" background:transparent;"
         )
@@ -425,6 +456,9 @@ class _DeviceCard(design.Card):
         self._connect_btn = design.PrimaryButton("↗  Connect")
         self._connect_btn.clicked.connect(self._on_button)
         outer.addWidget(self._connect_btn)
+
+    def set_hint(self, hint: str) -> None:
+        self._hint_lbl.setText(hint)
 
     def set_state(self, state: str, info: str = "") -> None:
         self._state = state

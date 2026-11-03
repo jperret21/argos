@@ -66,6 +66,14 @@ _CFG_STATE = "ui.shell.state"
 _CFG_MODE = "ui.shell.mode"
 _PROJECT_URL = "https://github.com/jperret21/argos"
 
+#: How a disconnect confirmation names each device.
+_DEVICE_LABELS = {
+    "mount": "telescope",
+    "camera": "camera",
+    "filterwheel": "filter wheel",
+    "focuser": "focuser",
+}
+
 #: Modes that need hardware to be useful. Devices are never connected at
 #: startup, so restoring one of these would land the user on a dead screen —
 #: we land on Equipment instead (the persisted mode is kept for the session).
@@ -319,9 +327,10 @@ class Shell(QMainWindow):
         # Connection intents → device session (dict-dispatched per device).
         self._connection.discover_requested.connect(self._session.discover)
         self._connection.connect_requested.connect(self._session.connect_device)
-        self._connection.disconnect_requested.connect(self._session.disconnect_device)
+        # Disconnects go through the Shell: it knows whether a run is active.
+        self._connection.disconnect_requested.connect(self._on_disconnect_requested)
         self._connection.connect_all_requested.connect(self._session.connect_all)
-        self._connection.disconnect_all_requested.connect(self._session.disconnect_all)
+        self._connection.disconnect_all_requested.connect(self._on_disconnect_all_requested)
         self._connection.telescope_profile_requested.connect(self._on_telescope_profile_requested)
         self._configuration.set_telescope_profile_applier(self._on_telescope_profile_requested)
         self._session.discovered_address.connect(self._connection.set_discovered_address)
@@ -338,6 +347,50 @@ class Shell(QMainWindow):
         self._session.stellarium_clients.connect(card.set_client_count)
         self._session.stellarium_target.connect(self._on_stellarium_target)
         self._session.stellarium_error.connect(self._on_stellarium_error)
+
+    # ------------------------------------------------------------------
+    # Disconnect / quit while a run is active
+    # ------------------------------------------------------------------
+
+    def _running_activity(self) -> str | None:
+        """ "A sequence" / "An autofocus" while one runs, else ``None``."""
+        if self._sequence_active:
+            return "A sequence"
+        if self._autofocus_active:
+            return "An autofocus"
+        return None
+
+    def _confirm(self, title: str, text: str) -> bool:
+        """Yes/No question, No by default (Enter must not end a run)."""
+        answer = QMessageBox.question(
+            self,
+            title,
+            text,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _on_disconnect_requested(self, device_id: str) -> None:
+        activity = self._running_activity()
+        label = _DEVICE_LABELS.get(device_id, device_id)
+        if activity is not None and not self._confirm(
+            f"Disconnect the {label}?",
+            f"{activity} is running. Disconnecting the {label} now can interrupt it "
+            f"and lose the frame being exposed.\n\nDisconnect the {label} anyway?",
+        ):
+            return
+        self._session.disconnect_device(device_id)
+
+    def _on_disconnect_all_requested(self) -> None:
+        activity = self._running_activity()
+        if activity is not None and not self._confirm(
+            "Disconnect the equipment?",
+            f"{activity} is running. Disconnecting the equipment ends it and loses "
+            "the frame being exposed.\n\nDisconnect anyway?",
+        ):
+            return
+        self._session.disconnect_all()
 
     # ------------------------------------------------------------------
     # Stellarium fan-out (the session owns the server worker)
@@ -358,7 +411,9 @@ class Shell(QMainWindow):
         self._configuration.sync_telescope_profile()
 
     def _on_stellarium_error(self, message: str) -> None:
-        self._connection.stellarium_card.set_server_state(False, "✗  error")
+        # The reason (e.g. "bind 127.0.0.1:10001 failed — address already in
+        # use") belongs on the card, not only in the Observe log.
+        self._connection.stellarium_card.set_server_state(False, f"✗  {message}")
 
     # ------------------------------------------------------------------
     # Status fan-out
@@ -369,6 +424,11 @@ class Shell(QMainWindow):
         self._connection.set_device_state(device_id, state, info)
 
         self._conn_state[device_id] = state
+        # The telescope model is refused while anything is connected
+        # (ConnectionPage.apply_telescope_profile): lock the Settings picker too.
+        self._configuration.set_profile_locked(
+            any(s in ("connected", "busy") for s in self._conn_state.values())
+        )
         self._refresh_sidebar_states()
 
     def _on_sequence_running(self, running: bool) -> None:
@@ -609,6 +669,16 @@ class Shell(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        # An accidental Cmd+Q must not end a night's run: ask first, before
+        # anything is shut down (No keeps the window and the run).
+        activity = self._running_activity()
+        if activity is not None and not self._confirm(
+            "Quit Argos?",
+            f"{activity} is running. Quitting stops it and loses the frame being "
+            "exposed.\n\nQuit anyway?",
+        ):
+            event.ignore()
+            return
         # Order matters: stop the capture workers first (they hold device
         # references), then the session's pollers + Stellarium server.
         self._configuration.shutdown()

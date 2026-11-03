@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import QVBoxLayout, QWidget
 from argos.ui import design
 from argos.ui.widgets.sequence_panel import SequencePanel
 from argos.core.catalog.object_resolver import ResolvedObject
+from argos.core.config import observing_site
 from argos.core.exoplanet.transit import make_transit_sequence, predict_next_transit
 from argos.core.photometry.airmass import bjd_tdb, julian_date, utc_from_bjd_tdb
 from argos.workers.exoplanet_worker import ExoplanetLookupWorker
@@ -78,13 +79,16 @@ class SequencerPage(QWidget):
 
     def set_target_coordinates(self, name: str, ra_hours: float, dec_degrees: float) -> None:
         """Receive the shared Telescope target for the Plan visibility preview."""
-        self.panel.set_target_coordinates(
-            name,
-            ra_hours,
-            dec_degrees,
-            float(self._config.get("site.latitude", 0.0) or 0.0),
-            float(self._config.get("site.longitude", 0.0) or 0.0),
-        )
+        site = self._site_coordinates()
+        if site is None:
+            # Never plot altitudes for latitude/longitude 0/0: a target that
+            # never rises at the observer's site would look observable.
+            self.panel.set_object_name(name)
+            self.panel.show_visibility_message(
+                "Set and save the observing site in Settings to compute altitudes."
+            )
+            return
+        self.panel.set_target_coordinates(name, ra_hours, dec_degrees, site[0], site[1])
 
     def _lookup_object(self, query: str) -> None:
         if self._object_resolver_worker is not None:
@@ -145,17 +149,9 @@ class SequencerPage(QWidget):
         )
 
     def _site_coordinates(self) -> tuple[float, float, float] | None:
-        """Return the explicitly saved observing site, never the 0/0 default."""
-        if not str(self._config.get("site.name", "") or "").strip():
-            return None
-        try:
-            return (
-                float(self._config.get("site.latitude")),
-                float(self._config.get("site.longitude")),
-                float(self._config.get("site.elevation", 0.0) or 0.0),
-            )
-        except (TypeError, ValueError):
-            return None
+        """Return the observing site the observer set, never the 0/0 default
+        (the rule photometry and FITS use too: :func:`observing_site`)."""
+        return observing_site(self._config)
 
     def _local_transit_window(self, target, window):
         """Return topocentric local coverage instants, or ``None`` if unavailable."""
@@ -208,15 +204,26 @@ class SequencerPage(QWidget):
     def _on_exoplanet_resolved(self, target) -> None:
         self._exoplanet_target = target
         now_bjd = self._current_bjd_tdb(target)
+        reason = None
         try:
             self._transit_window = (
-                predict_next_transit(target, now_bjd) if now_bjd is not None else None
+                predict_next_transit(
+                    target,
+                    now_bjd,
+                    baseline_minutes=float(self.panel.transit_settings()["baseline_minutes"]),
+                )
+                if now_bjd is not None
+                else None
             )
-        except ValueError:
+        except ValueError as exc:
             self._transit_window = None
+            reason = f"Coverage unavailable: {exc}"
         local_window = self._local_transit_window(target, self._transit_window)
         self.panel.set_exoplanet_result(
-            target, self._transit_window, local_mid=local_window[1] if local_window else None
+            target,
+            self._transit_window,
+            local_mid=local_window[1] if local_window else None,
+            reason=reason,
         )
 
         # The telescope slews to the star, never the planet.  This retains the
@@ -318,6 +325,7 @@ class SequencerPage(QWidget):
 
     @pyqtSlot(str, str, str)
     def _on_device_state(self, device: str, state: str, _info: str) -> None:
+        # The spin-box ranges are not reset on a camera disconnect: resetting
+        # to the defaults clamped the plan (900 s became 600 s). The next
+        # camera's capabilities_ready retargets them.
         self.panel.set_device_state(device, state)
-        if device == "camera" and state == "disconnected":
-            self.panel.set_camera_limits()  # back to defaults

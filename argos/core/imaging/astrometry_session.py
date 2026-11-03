@@ -61,7 +61,10 @@ def build_solve_settings(
 
     return SolveSettings(
         astap_path=str(cfg_get("astrometry.astap_path", "")),
-        database=str(cfg_get("astrometry.database_path", "") or cfg_get("astrometry.database", "")),
+        # The set (-D) and the folder holding it (-d) are separate settings:
+        # a folder must not replace the observer's chosen set.
+        database=str(cfg_get("astrometry.database", "") or "").strip(),
+        database_dir=str(cfg_get("astrometry.database_path", "") or "").strip(),
         search_radius_deg=radius,
         downsample=int(cfg_get("astrometry.downsample", 2)),
         fov_hint_deg=(gh * arcsec_per_green_px() / 3600.0) if use_hint else None,

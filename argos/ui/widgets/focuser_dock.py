@@ -12,6 +12,7 @@ Public surface:
         set_temperature(temp: float | None)
         set_moving(moving: bool)
         set_autofocus_running(running: bool)
+        set_max_step(max_step: int)
 """
 
 from __future__ import annotations
@@ -46,6 +47,7 @@ class FocuserDock(design.Card):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Focuser", parent)
         self._autofocus_running = False
+        self._connected = False
         self._build_ui()
         self.set_enabled(False)
 
@@ -100,12 +102,12 @@ class FocuserDock(design.Card):
         self._goto_spin.setRange(0, 200_000)
         self._goto_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self._goto_spin.setMinimumHeight(design.INPUT_HEIGHT)
-        move_btn = design.SecondaryButton("Move")
-        move_btn.setToolTip("Move to the specified absolute focuser position")
-        move_btn.clicked.connect(self._on_move_to)
+        self._move_btn = design.SecondaryButton("Move")
+        self._move_btn.setToolTip("Move to the specified absolute focuser position")
+        self._move_btn.clicked.connect(self._on_move_to)
         manual.addWidget(design.MutedLabel("Go to"), 1, 0)
         manual.addWidget(self._goto_spin, 1, 1, 1, 2)
-        manual.addWidget(move_btn, 1, 3)
+        manual.addWidget(self._move_btn, 1, 3)
         outer.addLayout(manual)
 
         outer.addWidget(design.horizontal_divider())
@@ -142,9 +144,17 @@ class FocuserDock(design.Card):
             self._out_btn,
             self._in_btn,
             self._goto_spin,
-            move_btn,
+            self._move_btn,
             self._halt_btn,
             self._af_btn,
+        ]
+        # Manual moves the autofocus sweep must not be mixed with: a position
+        # the worker did not command would enter its V-curve.
+        self._manual_widgets = [
+            self._out_btn,
+            self._in_btn,
+            self._goto_spin,
+            self._move_btn,
         ]
 
     # ------------------------------------------------------------------
@@ -152,8 +162,16 @@ class FocuserDock(design.Card):
     # ------------------------------------------------------------------
 
     def set_enabled(self, connected: bool) -> None:
+        self._connected = connected
         for w in self._action_widgets:
             w.setEnabled(connected)
+        if self._autofocus_running:
+            for w in (*self._manual_widgets, self._halt_btn):
+                w.setEnabled(False)
+
+    def set_max_step(self, max_step: int) -> None:
+        """Limit Go to to the focuser's range (MaxStep), as ``move_to`` does."""
+        self._goto_spin.setRange(0, max(0, int(max_step)))
 
     def set_position(self, pos: int) -> None:
         self._pos_lbl.setText(f"{pos:,}")
@@ -179,9 +197,8 @@ class FocuserDock(design.Card):
         self._af_btn.setProperty("class", "danger" if running else "success")
         self._af_btn.style().unpolish(self._af_btn)
         self._af_btn.style().polish(self._af_btn)
-        self._out_btn.setEnabled(not running)
-        self._in_btn.setEnabled(not running)
-        self._halt_btn.setEnabled(not running)
+        for w in (*self._manual_widgets, self._halt_btn):
+            w.setEnabled(self._connected and not running)
         if running:
             self._af_status.setText("Autofocus in progress…")
             self._af_status.show()

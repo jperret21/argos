@@ -124,17 +124,35 @@ class LightCurvePanel(QWidget):
         relative_flux_err: float | None = None,
     ) -> None:
         """Append a point to its scientific or comparison-diagnostic plot."""
-        if not np.isfinite(jd) or not (np.isfinite(mag) or np.isfinite(relative_flux)):
-            return
+        if self._append_point(
+            name, jd, mag, err, saturated, role, relative_flux, relative_flux_err
+        ):
+            self._refresh_series(name)
+
+    def _append_point(
+        self,
+        name: str,
+        jd: float,
+        mag: float,
+        err: float,
+        saturated: bool,
+        role: str,
+        relative_flux: float | None,
+        relative_flux_err: float | None,
+    ) -> bool:
+        """Store one point in its series without redrawing; False if dropped."""
+        has_flux = relative_flux is not None and bool(np.isfinite(relative_flux))
+        if not np.isfinite(jd) or not (np.isfinite(mag) or has_flux):
+            return False
         s = self._series.get(name)
         if s is None:
             palette = _series_palette()
             color = palette[len(self._series) % len(palette)]
             comparison = role == "comparison"
             if comparison and self._comparison_plot is None:
-                return
+                return False
             if not comparison and self._target_plot is None:
-                return
+                return False
             plot = self._comparison_plot if comparison else self._target_plot
             assert plot is not None
             curve = plot.plot(
@@ -164,6 +182,7 @@ class LightCurvePanel(QWidget):
                 "err": [],
                 "flux": [],
                 "flux_err": [],
+                "saturated": [],  # per point, parallel to jd/mag/flux
                 "sat_jd": [],
                 "sat_mag": [],
                 "sat_flux": [],
@@ -200,13 +219,14 @@ class LightCurvePanel(QWidget):
         s["flux"].append(float(relative_flux) if relative_flux is not None else float("nan"))
         flux_err = float(relative_flux_err or 0.0)
         s["flux_err"].append(flux_err if np.isfinite(flux_err) and flux_err >= 0 else 0.0)
+        s["saturated"].append(bool(saturated))
         if saturated:
             s["sat_jd"].append(float(jd))
             s["sat_mag"].append(float(mag))
             s["sat_flux"].append(
                 float(relative_flux) if relative_flux is not None else float("nan")
             )
-        self._refresh_series(name)
+        return True
 
     def _refresh_series(self, name: str) -> None:
         """Refresh one series and restore its error-bar visibility.
@@ -222,21 +242,25 @@ class LightCurvePanel(QWidget):
         e = np.asarray(s["flux_err" if flux_mode else "err"], dtype=float)
         sat_y = np.asarray(s["sat_flux" if flux_mode else "sat_mag"], dtype=float)
         finite = np.isfinite(y)
-        if not finite.any():
+        # Baselines come from unsaturated points: clipped fluxes would bias the
+        # median (all points saturated: fall back to every finite point).
+        unsaturated = finite & ~np.asarray(s["saturated"], dtype=bool)
+        reference = unsaturated if unsaturated.any() else finite
+        baseline = float(np.median(y[reference])) if finite.any() else float("nan")
+        if not finite.any() or (flux_mode and not (np.isfinite(baseline) and baseline > 0)):
+            # Nothing to draw in this mode: clear rather than leave the other
+            # mode's values on screen under this axis. ErrorBarItem merges its
+            # options, so the old bar lengths must go too.
             s["curve"].setData([], [])
-            s["errbar"].setData(x=np.array([]), y=np.array([]))
+            s["errbar"].setData(x=np.array([]), y=np.array([]), top=None, bottom=None)
             s["sat"].setData([], [])
             self._apply_series_visibility(name)
             return
         if flux_mode:
-            baseline = float(np.median(y[finite]))
-            if baseline <= 0:
-                return
             y, e, sat_y = y / baseline, e / baseline, sat_y / baseline
             if s["role"] == "comparison":
                 y, sat_y = y - 1.0, sat_y - 1.0
         elif s["role"] == "comparison":
-            baseline = float(np.median(y[finite]))
             y = y - baseline
             sat_y = sat_y - baseline
         s["curve"].setData(x, y, data=[{"err": value} for value in e])
@@ -257,24 +281,34 @@ class LightCurvePanel(QWidget):
         s["errbar"].setVisible(visible and self._errors.isChecked())
         s["sat"].setVisible(visible)
 
-    def set_curves(self, curves: dict) -> None:
-        """Replace the plots with ``key → LightCurve`` from the engine store."""
+    def set_curves(self, curves: dict, *, keep_view: bool = False) -> None:
+        """Replace the plots with ``key → LightCurve`` from the engine store.
+
+        Each series is drawn once, after all its points are stored (drawing
+        it per point made a whole-store re-render O(N²)). By default the view
+        is fitted to the new curves. ``keep_view`` is for the live re-render
+        of the same store: an axis the user zoomed or panned keeps its range,
+        the others keep following the data.
+        """
         self.clear()
         for lc in curves.values():
             label = lc.name or lc.auid or "TARGET"
             role = getattr(lc, "role", "target")
             for p in lc.points:
-                self.add_point(
+                self._append_point(
                     label,
                     p.jd_utc,
                     p.mag,
                     p.mag_err,
-                    saturated=p.saturated,
-                    role=role,
-                    relative_flux=p.relative_flux,
-                    relative_flux_err=p.relative_flux_err,
+                    p.saturated,
+                    role,
+                    p.relative_flux,
+                    p.relative_flux_err,
                 )
-        self._auto_range()
+        for name in self._series:
+            self._refresh_series(name)
+        if not keep_view or not self.has_data():
+            self._auto_range()
 
     def has_data(self) -> bool:
         return any(s["jd"] for s in self._series.values())
@@ -319,6 +353,13 @@ class LightCurvePanel(QWidget):
         self._auto_range()
 
     def _auto_range(self) -> None:
+        """Fit the view to the data and keep following it.
+
+        Auto-range stays on until the user zooms or pans an axis (pyqtgraph
+        then turns it off for that axis; the plot's "A" button turns it back
+        on). ``ViewBox.autoRange()`` fitted once and turned it off at once,
+        so a live re-render could not tell the user's zoom from its own.
+        """
         for plot in (self._target_plot, self._comparison_plot):
             if plot is not None:
-                plot.getViewBox().autoRange()
+                plot.getViewBox().enableAutoRange()

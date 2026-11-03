@@ -49,18 +49,24 @@ class TargetCurvePanel(QWidget):
         return str(self._selector.currentData() or "")
 
     def set_curves(self, curves: dict, *, preferred_key: str = "") -> None:
-        """Populate the selector from target curves; ``All targets`` is last."""
+        """Populate the selector from target and check curves; ``All targets`` is last.
+
+        Check stars are listed (labelled "(check)") and join the overlay, as
+        in the live dock; the comparison plot shows comparisons only.
+        """
         previous = preferred_key or self.selected_key()
         targets = {
             str(key): curve
             for key, curve in curves.items()
-            if getattr(curve, "role", "target") == "target"
+            if getattr(curve, "role", "target") in ("target", "check")
         }
         self._curves = targets
         self._selector.blockSignals(True)
         self._selector.clear()
         for key, curve in targets.items():
             label = str(getattr(curve, "name", "") or getattr(curve, "auid", "") or key)
+            if getattr(curve, "role", "target") == "check":
+                label = f"{label} (check)"
             self._selector.addItem(label, key)
         if targets:
             self._selector.addItem("All targets", _ALL_TARGETS)

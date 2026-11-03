@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from datetime import timedelta
 from pathlib import Path
 
 import pyqtgraph as pg
@@ -42,6 +43,7 @@ from PyQt6.QtWidgets import (
 )
 
 from argos.core.imaging.sequencer import (
+    DARK_FILTER_NAME,
     ON_COMPLETE_CHOICES,
     SequencePlan,
     SequenceStep,
@@ -159,6 +161,12 @@ class TargetVisibilityPlot(QWidget):
         self._summary.setText(f"Peak {peak_alt:.1f}° · {peak_when.strftime('%H:%M')} local")
         self._summary.show()
 
+    def show_message(self, text: str) -> None:
+        """Replace the curve by an explanation (e.g. no observing site)."""
+        self.clear()
+        self._summary.setText(text)
+        self._summary.show()
+
     def clear(self) -> None:
         self._curve.setData([], [])
         self._transit_region.hide()
@@ -192,6 +200,11 @@ class SequencePanel(QWidget):
         self._paused = False
         self._active_row = -1
         self._device_states: dict[str, str] = {}
+        # Planning hand-off of the loaded plan (Prepare transit), kept for the
+        # object it was computed for. Set before _build_ui: the estimate
+        # refresh during construction already calls to_plan().
+        self._plan_metadata: dict = {}
+        self._plan_metadata_object = ""
         self._build_ui()
         self._add_row()  # start with one editable row
         self._refresh_estimate()
@@ -628,8 +641,11 @@ class SequencePanel(QWidget):
             self._transit_result.setText("Searching NASA Exoplanet Archive…")
             self._transit_result.show()
 
-    def set_exoplanet_result(self, target, window=None, local_mid=None) -> None:
-        """Show a published ephemeris and its current coverage window."""
+    def set_exoplanet_result(self, target, window=None, local_mid=None, reason=None) -> None:
+        """Show a published ephemeris and its current coverage window.
+
+        ``reason`` says why there is no window; the default blames the site.
+        """
         duration = (
             f"{target.duration_hours:.2f} h"
             if target.duration_hours is not None
@@ -651,7 +667,7 @@ class SequencePanel(QWidget):
             if local_mid is not None:
                 text += f"\nApprox. local midpoint: {local_mid.strftime('%Y-%m-%d %H:%M %Z')}."
         else:
-            text += "\nObserving site required for coverage."
+            text += f"\n{reason or 'Observing site required for coverage.'}"
         self._transit_result.setText(text)
         self._transit_result.show()
         self._prepare_transit_btn.setEnabled(window is not None)
@@ -675,8 +691,22 @@ class SequencePanel(QWidget):
     # Row management
     # ------------------------------------------------------------------
 
-    def _add_row(self, step: SequenceStep | None = None) -> None:
-        step = step or SequenceStep()
+    def _light_filter_default(self) -> str:
+        """Filter a row falls back to: the first slot that passes light.
+
+        Every Seestar wheel has the opaque Dark slot at position 0; falling
+        back to index 0 turned a whole Light step into black frames.
+        """
+        for name in self._filters:
+            if name.casefold() != DARK_FILTER_NAME.casefold():
+                return name
+        return self._filters[0] if self._filters else ""
+
+    def _add_row(self, step: SequenceStep | None = None, notes: list[str] | None = None) -> None:
+        """Append a row; ``notes`` collects what had to change to fit it (plan load)."""
+        # The "+ Add" button's clicked(bool) passes False here, not a step.
+        step = step if isinstance(step, SequenceStep) else SequenceStep()
+        notes = notes if notes is not None else []
         r = self._table.rowCount()
         self._table.insertRow(r)
 
@@ -692,20 +722,34 @@ class SequencePanel(QWidget):
 
         type_combo = QComboBox()
         type_combo.addItems(_FRAME_TYPES)
+        if type_combo.findText(step.frame_type) < 0:
+            notes.append(f"step {r + 1}: unknown frame type '{step.frame_type}' → Light")
         type_combo.setCurrentText(step.frame_type)
         self._table.setCellWidget(r, 1, type_combo)
 
         filter_combo = QComboBox()
         filter_combo.addItems(self._filters)
         idx = filter_combo.findText(step.filter_name)
-        if idx >= 0:
-            filter_combo.setCurrentIndex(idx)
+        if idx < 0:
+            fallback = self._light_filter_default()
+            idx = max(0, filter_combo.findText(fallback))
+            if step.filter_name != SequenceStep.filter_name:  # not the "+ Add" default
+                notes.append(
+                    f"step {r + 1}: filter '{step.filter_name}' not on this wheel → {fallback}"
+                )
+        filter_combo.setCurrentIndex(idx)
         self._table.setCellWidget(r, 2, filter_combo)
 
         exp = QDoubleSpinBox()
         exp.setRange(*self._exposure_range)
         exp.setDecimals(2)
         exp.setValue(step.exposure_s)
+        if abs(exp.value() - step.exposure_s) > 1e-9:
+            lo, hi = self._exposure_range
+            notes.append(
+                f"step {r + 1}: exposure {step.exposure_s:g} s → {exp.value():g} s "
+                f"(range {lo:g}–{hi:g} s)"
+            )
         exp.setProperty("cadence_s", step.cadence_s)
         exp.valueChanged.connect(self._refresh_estimate)
         self._table.setCellWidget(r, 3, exp)
@@ -713,6 +757,9 @@ class SequencePanel(QWidget):
         gain = QSpinBox()
         gain.setRange(*self._gain_range)
         gain.setValue(step.gain)
+        if gain.value() != step.gain:
+            lo, hi = self._gain_range
+            notes.append(f"step {r + 1}: gain {step.gain} → {gain.value()} (range {lo}–{hi})")
         self._table.setCellWidget(r, 4, gain)
 
         count = QSpinBox()
@@ -822,20 +869,42 @@ class SequencePanel(QWidget):
             autofocus_every_n=int(self._af_spin.value()),
             autofocus_on_filter_change=self._af_filter_chk.isChecked(),
             on_complete=self._on_complete_combo.currentText(),
+            metadata=self._current_plan_metadata(),
         )
 
-    def load_plan(self, plan: SequencePlan) -> None:
-        """Replace the whole editor state with ``plan`` (preset load)."""
+    def _current_plan_metadata(self) -> dict:
+        """The loaded plan's planning metadata, while the object is unchanged.
+
+        A transit ephemeris (observation.json) must never be written for
+        another object picked afterwards in Plan or Observe.
+        """
+        if not self._plan_metadata:
+            return {}
+        if self._object_edit.text().strip() != self._plan_metadata_object:
+            return {}
+        return dict(self._plan_metadata)
+
+    def load_plan(self, plan: SequencePlan) -> list[str]:
+        """Replace the whole editor state with ``plan`` (preset load).
+
+        Returns what had to change to fit the plan into the editor (a filter
+        missing from the wheel, an exposure or gain outside the camera's
+        range), so the caller can say so instead of changing it silently.
+        """
+        notes: list[str] = []
         self._table.setRowCount(0)
         for step in plan.steps or [SequenceStep()]:
-            self._add_row(step)
+            self._add_row(step, notes)
         self.set_object_name(plan.object_name, emit=True)
+        self._plan_metadata = dict(plan.metadata or {})
+        self._plan_metadata_object = (plan.object_name or "").strip()
         self._repeat_spin.setValue(max(1, plan.repeat))
         self._af_spin.setValue(max(0, plan.autofocus_every_n))
         self._af_filter_chk.setChecked(plan.autofocus_on_filter_change)
         idx = self._on_complete_combo.findText(plan.on_complete)
         self._on_complete_combo.setCurrentIndex(max(0, idx))
         self._refresh_estimate()
+        return notes
 
     def set_object_name(self, name: str, *, emit: bool = False) -> None:
         """Set the shared observation object without feeding a signal loop."""
@@ -853,6 +922,10 @@ class SequencePanel(QWidget):
         """Update the visibility card from a Telescope catalogue resolution."""
         self.set_object_name(name)
         self._visibility_plot.set_target(name, ra_hours, dec_degrees, site_lat, site_lon)
+
+    def show_visibility_message(self, text: str) -> None:
+        """Show ``text`` in the visibility card instead of an altitude curve."""
+        self._visibility_plot.show_message(text)
 
     def set_transit_visibility(
         self,
@@ -873,7 +946,9 @@ class SequencePanel(QWidget):
             dec_degrees,
             site_lat,
             site_lon,
-            night_date=midpoint,
+            # The 18:00–06:00 night that contains the midpoint: a 02:00
+            # midpoint belongs to the night that began the previous evening.
+            night_date=midpoint - timedelta(hours=12),
         )
         self._visibility_plot.set_transit_coverage(coverage_start, coverage_end)
 
@@ -920,8 +995,19 @@ class SequencePanel(QWidget):
         except (OSError, ValueError, TypeError) as exc:
             self.set_status(f"Preset load failed: {exc}")
             return
-        self.load_plan(plan)
-        self.set_status(f"Preset loaded: {Path(path).name}")
+        # A transit window is computed for one event: a preset reused on
+        # another night must not declare that stale window in
+        # observation.json. Prepare transit computes tonight's.
+        had_metadata = bool(plan.metadata)
+        plan.metadata = {}
+        notes = self.load_plan(plan)
+        adjusted = f" — adjusted: {'; '.join(notes)}" if notes else ""
+        note = (
+            " — planning metadata not restored (use Prepare transit for tonight's window)"
+            if had_metadata
+            else ""
+        )
+        self.set_status(f"Preset loaded: {Path(path).name}{adjusted}{note}")
 
     # ------------------------------------------------------------------
     # Public API (called by ImagingPage)
@@ -963,16 +1049,18 @@ class SequencePanel(QWidget):
             combo.clear()
             combo.addItems(self._filters)
             idx = combo.findText(current)
-            if idx >= 0:
-                combo.setCurrentIndex(idx)
+            if idx < 0:  # never fall onto the opaque Dark slot at index 0
+                idx = max(0, combo.findText(self._light_filter_default()))
+            combo.setCurrentIndex(idx)
             combo.blockSignals(False)
         current = self._transit_filter_combo.currentText()
         self._transit_filter_combo.blockSignals(True)
         self._transit_filter_combo.clear()
         self._transit_filter_combo.addItems(self._filters)
         idx = self._transit_filter_combo.findText(current)
-        if idx >= 0:
-            self._transit_filter_combo.setCurrentIndex(idx)
+        if idx < 0:
+            idx = max(0, self._transit_filter_combo.findText(self._light_filter_default()))
+        self._transit_filter_combo.setCurrentIndex(idx)
         self._transit_filter_combo.blockSignals(False)
 
     def set_running(self, running: bool) -> None:

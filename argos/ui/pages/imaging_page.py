@@ -42,6 +42,8 @@ import base64
 import logging
 import math
 import time
+from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -63,7 +65,7 @@ from PyQt6.QtWidgets import (
 )
 
 from argos.core.alpaca.telescope import MountPosition
-from argos.core.config import Config
+from argos.core.config import Config, observing_site
 from argos.core.session.acquisition_engine import AcquisitionEngine
 from argos.core.session.device_session import DeviceSession
 from argos.core.session.types import (
@@ -88,7 +90,7 @@ from argos.core.imaging.metrics import (
     TRACK_SNAP_SEARCH,
     measure_star_at,
 )
-from argos.core.imaging.platesolve import format_dec_dms, format_ra_hms
+from argos.core.imaging.platesolve import find_astap, format_dec_dms, format_ra_hms
 from argos.core.photometry.airmass import airmass_from_altitude
 from argos.ui import design, theme
 from argos.ui.panels.log_panel import LogPanel
@@ -102,7 +104,7 @@ from argos.ui.widgets.histogram_dock import HistogramDock
 from argos.ui.widgets.image_toolbar import ImageToolbar
 from argos.ui.widgets.lightcurve_panel import LightCurvePanel
 from argos.ui.widgets.mount_dock import MountDock
-from argos.ui.panels.photometry_window import PhotometryWindow
+from argos.ui.panels.photometry_window import PhotometrySetupPanel, PhotometryWindow
 from argos.ui.widgets.overlay_bar import OverlayBar
 from argos.ui.widgets.astrometry_settings import AstrometrySettingsDialog, SECTION_CATALOG
 from argos.ui.widgets.star_info_card import StarInfoCard
@@ -199,6 +201,8 @@ class ImagingPage(QWidget):
         self._metrics_t0: float | None = None
         self._batch_worker = None  # WS7 batch re-run (QThread) + its progress dialog
         self._batch_dialog: QProgressDialog | None = None
+        self._batch_total = 0  # frames handed to the running batch re-run
+        self._sequence_active = False  # the aperture geometry is locked meanwhile
         self._object_resolver_worker: ObjectResolverWorker | None = None
         self._nearby_object_resolver_worker: NearbyObjectResolverWorker | None = None
         self._point_identity_worker: PointIdentityWorker | None = None
@@ -633,9 +637,13 @@ class ImagingPage(QWidget):
         self.action_changed.emit(_STATE_ACTION[state])
         self._camera_dock.set_live_running(state is CameraState.LIVE)
         # WS8 cockpit: freeze the capture form while the sequence owns the
-        # camera (SEQUENCE and its nested AUTOFOCUS pass); any release —
-        # complete, stopped or error — transitions state and unfreezes.
-        self._camera_dock.set_sequence_lock(state in (CameraState.SEQUENCE, CameraState.AUTOFOCUS))
+        # camera (SEQUENCE and its nested AUTOFOCUS pass) or a stand-alone
+        # autofocus runs; any release — complete, stopped or error —
+        # transitions state and unfreezes. The hint names the owner.
+        self._camera_dock.set_sequence_lock(
+            state in (CameraState.SEQUENCE, CameraState.AUTOFOCUS),
+            owner="autofocus" if state is CameraState.AUTOFOCUS else "sequence",
+        )
 
     # ------------------------------------------------------------------
     # Device session state → docks (the session owns the device handles)
@@ -647,6 +655,8 @@ class ImagingPage(QWidget):
         enabled = state in ("connected", "busy")
         if device == "mount":
             self._mount_dock.set_enabled(enabled)
+            if not enabled and self._jog_dialog is not None and self._jog_dialog.isVisible():
+                self._jog_dialog.close()  # stops any axis it moves; reopened on the new handle
         elif device == "camera":
             self._camera_dock.set_enabled(enabled)
             if state == "disconnected":
@@ -679,6 +689,7 @@ class ImagingPage(QWidget):
 
     @pyqtSlot(object)
     def _on_focuser_state(self, foc: FocuserState) -> None:
+        self._focuser_dock.set_max_step(foc.max_step)
         self._focuser_dock.set_position(foc.position)
 
     def _on_filter_move(self, position: int) -> None:
@@ -1323,20 +1334,23 @@ class ImagingPage(QWidget):
         if not path:
             return
         try:
-            from astropy.io import fits as _fits
-
-            raw = _fits.getdata(path)
-            if raw is None or getattr(raw, "ndim", 0) != 2:
-                raise ValueError("expected a single 2-D image HDU")
+            # Another field, another night: the engine drops its WCS, dates
+            # the frame from its header and forgets the last run's folder.
+            exposure_mid = self._engine.open_fits_frame(path)
         except Exception as exc:
             self.log_message.emit("ERROR", f"Open FITS: {exc}")
             return
-        # The display/measure pipeline speaks the sensor's raw dtype.
-        self._engine.ingest_frame(np.ascontiguousarray(raw, dtype=np.uint16))
+        self._clear_astrometry()  # the previous field's overlays and markers
         self._frame_context_lbl.setText(f"Opened  {Path(path).name}")
         self.log_message.emit(
             "OK", f"Loaded {Path(path).name} — solve to enable catalog & photometry."
         )
+        if exposure_mid is None:
+            self.log_message.emit(
+                "WARN",
+                f"{Path(path).name} has no DATE-OBS/EXPTIME — no photometry point can be "
+                "dated, so none will be measured on it.",
+            )
 
     def open_fits(self) -> None:
         """Open a FITS image into Capture from the application File menu."""
@@ -2091,6 +2105,7 @@ class ImagingPage(QWidget):
     def _open_photometry(self, *, select_variable: bool = False) -> None:
         if self._photometry_window is None:
             self._photometry_window = PhotometryWindow(self)
+            self._photometry_window.setup.set_geometry_locked(self._sequence_active)
             self._photometry_window.lightcurves = self._engine.lightcurves
             self._photometry_window.set_export_meta(
                 str(self._cfg("observer.obscode", "XXX") or "XXX"),
@@ -2130,6 +2145,11 @@ class ImagingPage(QWidget):
         # ``load_curves`` snapshots into a copy; restore the engine's live dict so
         # AAVSO/CSV export reflects points (and targets) added after this open.
         self._photometry_window.lightcurves = self._engine.lightcurves
+        # Exports open in the last run's folder, else the sessions folder.
+        last_dir = self._engine.last_sequence_dir
+        self._photometry_window.default_dir = (
+            last_dir.parent if last_dir is not None else self._config.sessions_path
+        )
         self._refresh_target_table()
         self._photometry_window.comparisons.set_quality_report(
             self._engine.comparison_quality_report
@@ -2151,6 +2171,14 @@ class ImagingPage(QWidget):
 
     @pyqtSlot(str, object)
     def _on_photometry_setting_changed(self, key: str, value: object) -> None:
+        if self._sequence_active and key in PhotometrySetupPanel.GEOMETRY_KEYS:
+            # The controls are disabled during a run; refuse anything that
+            # still arrives, so one curve keeps one aperture.
+            self.log_message.emit(
+                "WARN", "Aperture geometry is locked while a sequence runs — change ignored."
+            )
+            self._sync_photometry_setup()
+            return
         self._config.set(key, value)
         self._sync_photometry_setup()
         # If a catalogue star is selected, redraw its aperture ring immediately
@@ -2255,7 +2283,12 @@ class ImagingPage(QWidget):
         if self._batch_worker is not None:
             return  # one at a time
         from argos.core.photometry.params import PhotometryParams
-        from argos.workers.photometry_batch_worker import BatchRequest, PhotometryBatchWorker
+        from argos.workers.photometry_batch_worker import (
+            BatchRequest,
+            PhotometryBatchWorker,
+            discover_light_frames,
+            rerun_output_dir,
+        )
 
         wcs = self._astrometry.wcs
         if wcs is None:
@@ -2284,11 +2317,12 @@ class ImagingPage(QWidget):
         folder = QFileDialog.getExistingDirectory(self, "Folder of saved subs", start)
         if not folder:
             return
-        paths = sorted(Path(folder).glob("*.fits"), key=lambda p: p.stat().st_mtime)
+        # Argos writes .fit; calibration frames (IMAGETYP) are never measured.
+        paths = discover_light_frames(Path(folder))
         if not paths:
-            paths = sorted(Path(folder).rglob("*.fits"), key=lambda p: p.stat().st_mtime)
-        if not paths:
-            QMessageBox.information(self, "No frames", f"No FITS files in {folder}")
+            QMessageBox.information(
+                self, "No frames", f"No light frames (.fit/.fits/.fts) in {folder}"
+            )
             return
         params = PhotometryParams.from_config(self._cfg, egain=self._engine_egain())
         req = BatchRequest(
@@ -2296,13 +2330,11 @@ class ImagingPage(QWidget):
             wcs=wcs,
             target_set=tset,
             params=params,
-            out_dir=self._config.sessions_path.parent / "targets",
+            # A new folder in the session per re-run: never another run's CSVs.
+            out_dir=rerun_output_dir(Path(folder), datetime.now(timezone.utc)),
             object_name=tset.object_name or "untitled",
-            site=(
-                self._cfg("site.latitude", None),
-                self._cfg("site.longitude", None),
-                self._cfg("site.elevation", 0.0) or 0.0,
-            ),
+            # Never the 0/0 default: no site, no airmass and no BJD_TDB.
+            site=observing_site(self._config) or (None, None, 0.0),
             diagnostics=bool(self._cfg("diagnostics.enabled", False)),
         )
         dialog = QProgressDialog("Re-running photometry…", "Cancel", 0, len(paths), self)
@@ -2314,6 +2346,7 @@ class ImagingPage(QWidget):
         worker.finished_batch.connect(self._on_batch_done)
         self._batch_worker = worker
         self._batch_dialog = dialog
+        self._batch_total = len(paths)
         dialog.show()
         worker.start()
 
@@ -2343,16 +2376,37 @@ class ImagingPage(QWidget):
         if not result.ok:
             QMessageBox.warning(self, "Batch failed", result.error)
             return
-        if not result.curves:
+        total = self._batch_total or result.frames_done + result.frames_skipped
+        if result.cancelled:
+            # Partial curves never replace the live ones, and nothing was written.
             self.log_message.emit(
                 "WARN",
-                "Batch photometry: no points measured — see the per-frame notes "
-                "in targets/*_diagnostics.jsonl.",
+                f"Batch photometry cancelled after {result.frames_done + result.frames_skipped}"
+                f"/{total} frame(s) — nothing saved.",
             )
             return
+        if result.frames_skipped:
+            self.log_message.emit(
+                "WARN",
+                f"Batch photometry: {result.frames_skipped} frame(s) skipped "
+                "(unreadable, or no DATE-OBS to date a point).",
+            )
+        if not result.curves:
+            notes = (
+                f" — see the per-frame notes in {result.out_dir}"
+                if result.out_dir is not None and self._cfg("diagnostics.enabled", False)
+                else ""
+            )
+            self.log_message.emit("WARN", f"Batch photometry: no points measured{notes}.")
+            return
+        roles = Counter(getattr(curve, "role", "target") for curve in result.curves.values())
+        counts = ", ".join(
+            f"{roles[role]} {role}" for role in ("target", "check", "comparison") if roles[role]
+        )
+        where = f" → {result.out_dir}" if result.out_dir is not None else ""
         self.log_message.emit(
             "OK",
-            f"Batch photometry: {result.frames_done} frame(s), {len(result.curves)} target(s).",
+            f"Batch photometry: {result.frames_done} frame(s) measured; curves: {counts}{where}.",
         )
         if abs(result.rotation_deg) > 0.05 or result.shift_px > 1.0:
             self.log_message.emit(
@@ -2375,14 +2429,19 @@ class ImagingPage(QWidget):
 
     def _render_curves(self) -> None:
         """Re-render every curve surface from the engine's store (the ONLY
-        rendering path for whole-store changes: batch adopt, object change)."""
-        self._lightcurve_panel.set_curves(self._engine.lightcurves)
+        rendering path for whole-store changes: batch adopt, object change,
+        uncertainty-floor updates during a run).
+
+        The user's zoom is kept. A hidden Photometry window is skipped, as for
+        single points: ``_open_photometry`` reloads it from the store."""
+        self._lightcurve_panel.set_curves(self._engine.lightcurves, keep_view=True)
         win = self._photometry_window
-        if win is not None:
+        if win is not None and win.isVisible():
             win.load_curves(
                 self._engine.lightcurves,
                 obscode=str(self._cfg("observer.obscode", "XXX") or "XXX"),
                 filt=str(self._cfg("photometry.default_band", "TG") or "TG"),
+                keep_view=True,
             )
             # load_curves snapshots into a copy; keep exports on the live store.
             win.lightcurves = self._engine.lightcurves
@@ -2400,6 +2459,8 @@ class ImagingPage(QWidget):
             point.mag_err,
             saturated=point.saturated,
             role=point.role,
+            relative_flux=point.relative_flux,
+            relative_flux_err=point.relative_flux_err,
         )
         win = self._photometry_window
         if win is not None and win.isVisible():
@@ -2539,11 +2600,26 @@ class ImagingPage(QWidget):
         # Arm the periodic re-solve for the run (and restore the user's choice
         # after): it re-bases the WCS + live tracker so rigid-fit error never
         # accumulates, keeping markers and apertures on the stars all night.
+        # Armed whether or not a WCS exists: any GoTo clears it, and without
+        # one no point is measured for the whole run (sequence photometry
+        # needs the field identified). Not for calibration-only runs, and not
+        # without ASTAP, which would fail on every frame.
+        self._sequence_active = running
+        if self._photometry_window is not None:
+            self._photometry_window.setup.set_geometry_locked(running)
         if running:
             self._auto_solve_before_seq = self._astrometry.auto
-            if self._astrometry.wcs is not None and not self._astrometry.auto:
-                self.auto_solve_armed.emit(True)  # menu action → set_auto via toggled
-                self.log_message.emit("INFO", "Sequence: auto-solve armed for the run.")
+            if not self._astrometry.auto and self._engine.sequence_has_light_frames():
+                astap = find_astap(str(self._config.get("astrometry.astap_path", "") or ""))
+                if astap is None:
+                    self.log_message.emit(
+                        "WARN",
+                        "Sequence: ASTAP not found — the field cannot be identified, "
+                        "so no live photometry will be measured.",
+                    )
+                else:
+                    self.auto_solve_armed.emit(True)  # menu action → set_auto via toggled
+                    self.log_message.emit("INFO", "Sequence: auto-solve armed for the run.")
         elif not getattr(self, "_auto_solve_before_seq", True):
             self.auto_solve_armed.emit(False)
         if not running:
@@ -2794,6 +2870,9 @@ class ImagingPage(QWidget):
         if self._jog_dialog is None:
             self._jog_dialog = ManualControlDialog(telescope, parent=self)
             self._jog_dialog.log_message.connect(self.log_message)
+        else:
+            # A reconnect creates a new Telescope: never jog the old handle.
+            self._jog_dialog.set_telescope(telescope)
         self._jog_dialog.show()
         self._jog_dialog.raise_()
 
@@ -2812,6 +2891,12 @@ class ImagingPage(QWidget):
 
     def _on_focuser_halt(self) -> None:
         if not self._session.focuser:
+            return
+        if self._engine.autofocus_running:
+            # Stop AF (and Halt, which shares this slot while AF runs): the
+            # worker stops the sweep and drives the focuser back to its start.
+            # A Halt after that would freeze the return anywhere in the sweep.
+            self._engine.stop_autofocus()
             return
         self._engine.stop_autofocus()
         self._session.focuser_halt()
@@ -2841,10 +2926,16 @@ class ImagingPage(QWidget):
     @pyqtSlot(int, object)
     def _on_af_done(self, best_pos: int, best_hfd) -> None:
         self._focuser_dock.set_position(best_pos)
-        hfd_str = f"{best_hfd:.1f}" if best_hfd is not None else "—"
         self._focuser_dock.vcurve.set_best(best_pos, best_hfd)
         self.autofocus_best.emit(best_pos, best_hfd)
-        self.log_message.emit("OK", f"Autofocus complete — best pos={best_pos}  HFD={hfd_str}")
+        if best_hfd is None:
+            # A stop, a rejected (non-V) sweep or too few frames: the worker
+            # drove the focuser back to its start and reports where it ended.
+            self.log_message.emit(
+                "INFO", f"Autofocus ended without a result — focuser back at {best_pos}."
+            )
+            return
+        self.log_message.emit("OK", f"Autofocus complete — best pos={best_pos}  HFD={best_hfd:.1f}")
         self.action_changed.emit(f"Focused  pos={best_pos}")
 
     # ------------------------------------------------------------------

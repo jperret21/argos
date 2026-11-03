@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 from PyQt6.QtWidgets import QApplication
 
+from types import SimpleNamespace
+
 from argos.core.photometry.lightcurve import LcPoint, LightCurve
 from argos.ui.panels.photometry_window import PhotometryWindow
 from argos.ui.widgets.comparison_curve_panel import ComparisonCurvePanel
@@ -452,8 +454,11 @@ def test_aavso_export_names_the_check_star_and_the_vsp_chart(qapp, tmp_path, mon
 
     from argos.core.catalog.targets import TargetStar
 
+    import argos.ui.panels.photometry_window as pw
+
     out = tmp_path / "aavso.txt"
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(out), ""))
+    monkeypatch.setattr(pw, "QMessageBox", _MessageBoxRecorder(), raising=False)
     win = PhotometryWindow()
     try:
         target = LightCurve(auid="000-BCK-301", name="XX Cyg", role="target")
@@ -473,4 +478,563 @@ def test_aavso_export_names_the_check_star_and_the_vsp_chart(qapp, tmp_path, mon
     finally:
         win.close()
         win.deleteLater()
+        qapp.processEvents()
+
+
+def test_target_plot_lists_check_curve(qapp) -> None:
+    """S9: once Review gives check curves their role, the source-curve plot
+    must still list them (the comparison plot shows comparisons only)."""
+    target = LightCurve(auid="000-BCP-095", name="SS Cyg", role="target")
+    target.append(LcPoint(jd_utc=2461315.5, mag=12.0, mag_err=0.02))
+    check = LightCurve(auid="000-KKK-222", name="K1", role="check")
+    check.append(LcPoint(jd_utc=2461315.5, mag=12.5, mag_err=0.02))
+    panel = TargetCurvePanel()
+    try:
+        panel.set_curves({"T": target, "K": check})
+        labels = {
+            panel._selector.itemData(i): panel._selector.itemText(i)
+            for i in range(panel._selector.count())
+        }
+        assert labels["K"] == "K1 (check)"
+        assert labels["T"] == "SS Cyg"
+    finally:
+        panel.close()
+        panel.deleteLater()
+        qapp.processEvents()
+
+
+def _open_curve_csv_as_review_does(qapp, monkeypatch, csv_path):
+    """Run AnalyzeScreen._open_lightcurve on a stand-in screen; return
+    (window, warnings shown)."""
+    from types import SimpleNamespace
+
+    import argos.ui.pages.analyze_page as ap
+
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        ap.QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(csv_path), ""))
+    )
+    monkeypatch.setattr(
+        ap,
+        "QMessageBox",
+        SimpleNamespace(warning=lambda *args, **kwargs: warnings.append(str(args[2]))),
+        raising=False,
+    )
+    screen = SimpleNamespace(
+        _config=SimpleNamespace(sessions_path=csv_path.parent),
+        _obscode=lambda: "ABC",
+        _band=lambda: "TG",
+        _windows=[],
+    )
+    ap.AnalyzeScreen._open_lightcurve(screen)
+    (window,) = screen._windows
+    return window, warnings
+
+
+def test_open_curve_csv_never_exports_a_comparison_as_the_variable(
+    qapp, tmp_path, monkeypatch
+) -> None:
+    """S10: a comparison_ CSV opened in Review was exported as a target row
+    named COMPARISON_SS_CYG_000-AAA-111; an unidentifiable file must not
+    be exportable at all."""
+    import argos.ui.panels.photometry_window as pw
+    from argos.core.catalog.targets import TargetSet, TargetStar
+
+    run = tmp_path / "run"
+    photometry = run / "photometry"
+    photometry.mkdir(parents=True)
+    TargetSet(
+        object_name="SS Cyg",
+        stars=[
+            TargetStar("target", 325.678, 43.586, auid="000-BCP-095", name="SS Cyg"),
+            TargetStar("comparison", 325.70, 43.60, auid="000-AAA-111", name="111"),
+        ],
+    ).save(run / "targets.json")
+    csv_path = photometry / "comparison_SS_Cyg_000-AAA-111.csv"
+    csv_path.write_text("jd_utc,mag,mag_err,saturated\n2461315.5,11.0,0.02,0\n")
+    out = tmp_path / "aavso.txt"
+    monkeypatch.setattr(
+        pw.QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(out), ""))
+    )
+    monkeypatch.setattr(
+        pw,
+        "QMessageBox",
+        SimpleNamespace(warning=lambda *a, **k: None, information=lambda *a, **k: None),
+        raising=False,
+    )
+
+    window, warnings = _open_curve_csv_as_review_does(qapp, monkeypatch, csv_path)
+    try:
+        window._export_aavso()
+        rows = (
+            [line for line in out.read_text().splitlines() if not line.startswith("#")]
+            if out.exists()
+            else []
+        )
+        assert not any(row.startswith("COMPARISON_") for row in rows), rows
+        assert warnings == []
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+
+    legacy = tmp_path / "SS_Cyg_000-BCP-095.csv"  # no prefix, no targets.json near it
+    legacy.write_text("jd_utc,mag,mag_err,saturated\n2461315.5,12.0,0.02,0\n")
+    window, warnings = _open_curve_csv_as_review_does(qapp, monkeypatch, legacy)
+    try:
+        assert warnings and "unknown" in warnings[0]
+        assert not window._aavso_btn.isEnabled()
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+
+
+def test_open_curve_csv_finds_the_target_set_of_a_preview_curve(
+    qapp, tmp_path, monkeypatch
+) -> None:
+    """S10 (gap found in review): a live-preview CSV sits in <sessions>/targets/
+    as <object>_<star>.csv, beside <object>.json, not beside a targets.json.
+    It was always 'role unknown' and its AAVSO export disabled, even for the
+    real target."""
+    import argos.ui.panels.photometry_window as pw
+    from argos.core.catalog.targets import TargetSet, TargetStar
+
+    targets_dir = tmp_path / "sessions" / "targets"
+    targets_dir.mkdir(parents=True)
+    TargetSet(
+        object_name="SS Cyg",
+        stars=[
+            TargetStar("target", 325.678, 43.586, auid="000-BCP-095", name="SS Cyg"),
+            TargetStar("comparison", 325.70, 43.60, auid="000-AAA-111", name="111"),
+        ],
+    ).save(
+        targets_dir / "SS_Cyg.json"
+    )  # AcquisitionEngine._target_path("SS Cyg")
+    TargetSet(object_name="SS", stars=[]).save(targets_dir / "SS.json")  # a shorter prefix
+    rows = "jd_utc,mag,mag_err,saturated\n2461315.5,12.0,0.02,0\n"
+    (targets_dir / "SS_Cyg_000-BCP-095.csv").write_text(rows)
+    (targets_dir / "SS_Cyg_000-AAA-111.csv").write_text(rows)
+    monkeypatch.setattr(
+        pw,
+        "QMessageBox",
+        SimpleNamespace(warning=lambda *a, **k: None, information=lambda *a, **k: None),
+        raising=False,
+    )
+
+    def export(csv_name: str) -> tuple[list[str], list[str]]:
+        out = tmp_path / f"{csv_name}.aavso.txt"
+        monkeypatch.setattr(
+            pw.QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(out), ""))
+        )
+        window, warnings = _open_curve_csv_as_review_does(qapp, monkeypatch, targets_dir / csv_name)
+        try:
+            assert window._aavso_btn.isEnabled()
+            window._export_aavso()
+        finally:
+            window.close()
+            window.deleteLater()
+            qapp.processEvents()
+        lines = out.read_text().splitlines() if out.exists() else []
+        return [line for line in lines if not line.startswith("#")], warnings
+
+    rows_out, warnings = export("SS_Cyg_000-BCP-095.csv")
+    assert warnings == []
+    assert len(rows_out) == 1 and rows_out[0].startswith("SS CYG,2461315.500000,")
+
+    rows_out, warnings = export("SS_Cyg_000-AAA-111.csv")  # a comparison: never a row
+    assert warnings == [] and rows_out == []
+
+
+class _MessageBoxRecorder:
+    """Stands in for QMessageBox: records (kind, text) instead of blocking."""
+
+    def __init__(self) -> None:
+        self.shown: list[tuple[str, str]] = []
+
+    def warning(self, _parent, _title, text, *args, **kwargs):
+        self.shown.append(("warning", str(text)))
+
+    def information(self, _parent, _title, text, *args, **kwargs):
+        self.shown.append(("information", str(text)))
+
+
+def _window_with_one_target(obscode: str) -> PhotometryWindow:
+    target = LightCurve(name="SS Cyg", role="target")
+    target.append(LcPoint(jd_utc=2461315.5, mag=12.0, mag_err=0.02))
+    win = PhotometryWindow()
+    win.load_curves({"T": target}, obscode=obscode)
+    return win
+
+
+def test_aavso_export_refuses_unset_obscode(qapp, tmp_path, monkeypatch) -> None:
+    """S11: an unset observer code was exported as #OBSCODE=XXX, silently."""
+    import argos.ui.panels.photometry_window as pw
+
+    out = tmp_path / "aavso.txt"
+    monkeypatch.setattr(
+        pw.QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(out), ""))
+    )
+    boxes = _MessageBoxRecorder()
+    monkeypatch.setattr(pw, "QMessageBox", boxes, raising=False)
+    for unset in ("XXX", ""):
+        win = _window_with_one_target(unset)
+        try:
+            boxes.shown.clear()
+            win._export_aavso()
+            assert not out.exists()
+            assert [kind for kind, _text in boxes.shown] == ["warning"]
+            assert "observer code" in boxes.shown[0][1]
+        finally:
+            win.close()
+            win.deleteLater()
+            qapp.processEvents()
+
+
+def test_aavso_export_reports_write_error(qapp, tmp_path, monkeypatch) -> None:
+    """S11: a failed write raised out of the slot (crash report only) and
+    looked like a success to the observer."""
+    import argos.ui.panels.photometry_window as pw
+
+    blocker = tmp_path / "not_a_folder"
+    blocker.write_text("")
+    monkeypatch.setattr(
+        pw.QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *a, **k: (str(blocker / "aavso.txt"), "")),
+    )
+    boxes = _MessageBoxRecorder()
+    monkeypatch.setattr(pw, "QMessageBox", boxes, raising=False)
+    win = _window_with_one_target("ABC")
+    try:
+        win._export_aavso()  # must not raise
+        assert [kind for kind, _text in boxes.shown] == ["warning"]
+    finally:
+        win.close()
+        win.deleteLater()
+        qapp.processEvents()
+
+
+def test_aavso_export_reports_rows_and_excluded_points(qapp, tmp_path, monkeypatch) -> None:
+    import argos.ui.panels.photometry_window as pw
+
+    out = tmp_path / "aavso.txt"
+    seen_dirs: list[str] = []
+
+    def save_dialog(_parent, _title, start, *_a, **_k):
+        seen_dirs.append(start)
+        return str(out), ""
+
+    monkeypatch.setattr(pw.QFileDialog, "getSaveFileName", staticmethod(save_dialog))
+    boxes = _MessageBoxRecorder()
+    monkeypatch.setattr(pw, "QMessageBox", boxes, raising=False)
+    win = _window_with_one_target("ABC")
+    try:
+        win.lightcurves["T"].append(
+            LcPoint(jd_utc=2461315.6, mag=9.0, mag_err=0.02, saturated=True)
+        )
+        win.default_dir = tmp_path
+        win._export_aavso()
+        assert seen_dirs and seen_dirs[0].startswith(str(tmp_path))
+        ((kind, text),) = boxes.shown
+        assert kind == "information" and "1 observation" in text and "saturated" in text
+    finally:
+        win.close()
+        win.deleteLater()
+        qapp.processEvents()
+
+
+def test_aperture_geometry_locked_during_sequence(qapp) -> None:
+    """S15: one touch of a geometry spin during a run silently changed the
+    aperture or annulus mid-curve (applied from the next sub)."""
+    from argos.core.config import Config
+
+    config = Config({})
+    logs: list[tuple[str, str]] = []
+    win = PhotometryWindow()
+    page = SimpleNamespace(
+        _astrometry=SimpleNamespace(auto=True, wcs=None),
+        _engine=SimpleNamespace(
+            sequence_has_light_frames=lambda: False,
+            photometry_geometry=lambda: (6.0, 8.0, 12.0),
+        ),
+        _config=config,
+        _cfg=lambda key, default: config.get(key, default),
+        auto_solve_armed=SimpleNamespace(emit=lambda armed: None),
+        log_message=SimpleNamespace(emit=lambda level, msg: logs.append((level, msg))),
+        _sequence_context_lbl=SimpleNamespace(clear=lambda: None),
+        _photometry_window=win,
+        _pending_green=None,
+    )
+    page._sync_photometry_setup = lambda: ImagingPage._sync_photometry_setup(page)
+    setup = win.setup
+    geometry = (setup._fwhm_mult, setup._minimum, setup._annulus_in, setup._annulus_out)
+    try:
+        ImagingPage._on_sequence_running(page, True)
+        assert not any(spin.isEnabled() for spin in geometry)
+        assert setup._comparison_snr.isEnabled()  # comparison selection stays free
+
+        # Even if a change gets through (keyboard, a queued signal), it is refused.
+        before = config.get("photometry.aperture_fwhm_mult", None)
+        ImagingPage._on_photometry_setting_changed(page, "photometry.aperture_fwhm_mult", 3.0)
+        assert config.get("photometry.aperture_fwhm_mult", None) == before
+        assert any(level == "WARN" for level, _msg in logs)
+
+        ImagingPage._on_sequence_running(page, False)
+        assert all(spin.isEnabled() for spin in geometry)
+    finally:
+        win.close()
+        win.deleteLater()
+        qapp.processEvents()
+
+
+def test_relative_flux_baseline_ignores_saturated_points(qapp) -> None:
+    """S16: the relative-flux median (and the comparison Δmag median)
+    included saturated (clipped) points."""
+    panel = LightCurvePanel(view="both")
+    try:
+        jd = 2461315.5
+        for i in range(3):
+            panel.add_point("V1", jd + i * 0.01, 11.0, 0.02, relative_flux=1.0)
+            panel.add_point("C1", jd + i * 0.01, 12.0, 0.02, role="comparison")
+        for i in range(4):  # clipped flux recorded on saturated frames
+            t = jd + (3 + i) * 0.01
+            panel.add_point("V1", t, 10.0, 0.02, saturated=True, relative_flux=2.0)
+            panel.add_point("C1", t, 11.0, 0.02, saturated=True, role="comparison")
+        _x, dmag = panel._series["C1"]["curve"].getData()
+        assert list(dmag[:3]) == pytest.approx([0.0, 0.0, 0.0])  # +1.0 on 0.4.2
+        panel._relative_flux.setChecked(True)
+        _x, y = panel._series["V1"]["curve"].getData()
+        assert list(y[:3]) == pytest.approx([1.0, 1.0, 1.0])  # 0.5 on 0.4.2
+    finally:
+        panel.close()
+        panel.deleteLater()
+        qapp.processEvents()
+
+
+def test_nonpositive_flux_baseline_clears_series(qapp) -> None:
+    """S16: with no positive baseline the magnitudes stayed on screen under
+    the relative-flux axis."""
+    panel = LightCurvePanel(view="target")
+    try:
+        for i in range(3):
+            panel.add_point("V1", 2461315.5 + i * 0.01, 14.0, 0.2, relative_flux=-0.1)
+        panel._relative_flux.setChecked(True)
+        x, y = panel._series["V1"]["curve"].getData()
+        assert x is None or len(x) == 0
+    finally:
+        panel.close()
+        panel.deleteLater()
+        qapp.processEvents()
+
+
+def test_quality_wait_label_uses_report_min_points(qapp) -> None:
+    """S17: "Waiting for 10 points" was hard-coded whatever the configured
+    minimum, and the ensemble verdict was never shown."""
+    from argos.core.catalog.targets import TargetStar
+    from argos.ui.widgets.comparison_table import ComparisonQualityTable
+
+    report = {
+        "selection_status": "not_ready",
+        "scientific_note": "Leave-one-out live-preview assessment only.",
+        "criteria": {"min_points": 5},
+        "comparison_stars": [
+            {
+                "auid": "000-AAA-001",
+                "name": "106",
+                "n_valid": 3,
+                "scatter_mag": None,
+                "median_formal_error_mag": 0.012,
+                "status": "insufficient_data",
+            }
+        ],
+    }
+    table = ComparisonEnsembleTable()
+    review = ComparisonQualityTable()
+    try:
+        table.set_targets(
+            [TargetStar(role="comparison", ra_deg=300.0, dec_deg=22.0, auid="000-AAA-001")]
+        )
+        table.set_quality_report(report)
+        assert table._table.item(0, 9).text() == "Waiting for 5 points"  # 10 on 0.4.2
+        assert "fewer than 3 stable comparisons" in table._hint.text()
+        assert "Leave-one-out live-preview assessment only." in table._hint.text()
+
+        review.set_quality_report(report)
+        assert review._table.item(0, 4).text() == "Waiting for 5 points"
+        assert "fewer than 3 stable comparisons" in review._hint.text()
+
+        table.set_quality_report({})  # cleared on an object change
+        assert "Ensemble" not in table._hint.text()
+    finally:
+        for widget in (table, review):
+            widget.close()
+            widget.deleteLater()
+        qapp.processEvents()
+
+
+def test_live_ratio_only_point_reaches_dock_and_window(qapp) -> None:
+    """S18: the live dock was fed without the relative flux, so a ratio-only
+    point (comparisons without a catalogue magnitude) raised TypeError in
+    add_point and the Photometry window never got it."""
+    from argos.core.session.types import PhotometryPoint
+
+    fed: list = []
+    window = SimpleNamespace(isVisible=lambda: True, feed_point=fed.append)
+    dock = LightCurvePanel()
+    page = SimpleNamespace(_lightcurve_panel=dock, _photometry_window=window)
+    try:
+        ratio_only = PhotometryPoint(
+            key="V1",
+            name="V1",
+            jd=2461315.5,
+            mag=float("nan"),
+            mag_err=float("nan"),
+            saturated=False,
+            relative_flux=0.83,
+            relative_flux_err=0.01,
+        )
+        ImagingPage._on_photometry_point(page, ratio_only)  # TypeError on 0.4.2
+        assert fed == [ratio_only]
+        assert dock.has_data()
+        assert dock._series["V1"]["flux"] == [pytest.approx(0.83)]
+
+        both = PhotometryPoint(
+            key="V2",
+            name="V2",
+            jd=2461315.5,
+            mag=12.0,
+            mag_err=0.02,
+            saturated=False,
+            relative_flux=0.91,
+            relative_flux_err=0.01,
+        )
+        ImagingPage._on_photometry_point(page, both)
+        assert dock._series["V2"]["flux"] == [pytest.approx(0.91)]  # NaN on 0.4.2
+    finally:
+        dock.close()
+        dock.deleteLater()
+        qapp.processEvents()
+
+
+def test_add_point_ignores_point_with_neither_product(qapp) -> None:
+    """S18: no magnitude and no relative flux: skipped, not a TypeError."""
+    panel = LightCurvePanel()
+    try:
+        panel.add_point("V1", 2461315.5, float("nan"), 0.02, relative_flux=None)
+        assert not panel.has_data()
+    finally:
+        panel.close()
+        panel.deleteLater()
+        qapp.processEvents()
+
+
+def _live_store(n_frames: int) -> dict:
+    """An engine-like store: one target and one comparison, a point per frame."""
+    target = LightCurve(auid="V1", name="V1", role="target")
+    comparison = LightCurve(auid="C1", name="C1", role="comparison")
+    for i in range(n_frames):
+        jd = 2461315.5 + i * 0.002
+        target.append(LcPoint(jd, 12.0 + 0.01 * (i % 3), 0.02, relative_flux=1.0))
+        comparison.append(LcPoint(jd, 11.0 + 0.01 * (i % 2), 0.02))
+    return {"V1": target, "C1": comparison}
+
+
+def test_set_curves_refreshes_each_series_once(qapp, monkeypatch) -> None:
+    """S19: a whole-store re-render refreshed a series once per point, so
+    each re-render cost O(N²) on the GUI thread."""
+    panel = LightCurvePanel()
+    try:
+        curves = {}
+        for k in range(3):
+            curve = LightCurve(auid=f"S{k}", name=f"S{k}", role="target")
+            for i in range(50):
+                curve.append(LcPoint(2461315.5 + i * 0.002, 12.0, 0.02))
+            curves[f"S{k}"] = curve
+        calls: list[str] = []
+        refresh = panel._refresh_series
+        monkeypatch.setattr(panel, "_refresh_series", lambda n: (calls.append(n), refresh(n)))
+
+        panel.set_curves(curves)
+
+        assert sorted(calls) == ["S0", "S1", "S2"]  # 150 calls on 0.4.2
+        x, _y = panel._series["S1"]["curve"].getData()
+        assert len(x) == 50
+    finally:
+        panel.close()
+        panel.deleteLater()
+        qapp.processEvents()
+
+
+def test_live_rerender_keeps_user_zoom_and_follows_data_otherwise(qapp) -> None:
+    """S19: every live re-render (once per point after the 10th) reset the
+    observer's zoom. Without a zoom the view must keep following the night."""
+    dock = LightCurvePanel()  # the live dock's layout: target + comparison, X-linked
+    dock.resize(700, 700)
+    dock.show()
+    qapp.processEvents()
+    store: dict = {}
+    page = SimpleNamespace(
+        _lightcurve_panel=dock,
+        _photometry_window=None,
+        _engine=SimpleNamespace(lightcurves=store),
+    )
+    target_vb = dock._target_plot.getViewBox()
+    comparison_vb = dock._comparison_plot.getViewBox()
+    try:
+        store.update(_live_store(20))
+        ImagingPage._render_curves(page)
+        qapp.processEvents()
+        store.update(_live_store(60))
+        ImagingPage._render_curves(page)
+        qapp.processEvents()
+        last_jd = store["V1"].points[-1].jd_utc
+        assert target_vb.viewRange()[0][1] >= last_jd  # follows the new points
+
+        zoom = [2461315.52, 2461315.53]
+        target_vb.setXRange(*zoom, padding=0)  # what a wheel zoom / drag does
+        qapp.processEvents()
+        store.update(_live_store(80))
+        ImagingPage._render_curves(page)
+        qapp.processEvents()
+        # abs: pytest's relative tolerance at JD ~2.46e6 would hide a 0.1 d reset.
+        assert target_vb.viewRange()[0] == pytest.approx(zoom, abs=1e-6)  # reset on 0.4.2
+        # The X-linked plot lines up by screen pixels (its axis is a little
+        # wider), so it matches to 1 % of the zoom width, not exactly.
+        assert comparison_vb.viewRange()[0] == pytest.approx(zoom, abs=1e-4)
+    finally:
+        dock.close()
+        dock.deleteLater()
+        qapp.processEvents()
+
+
+def test_live_rerender_skips_a_hidden_photometry_window(qapp) -> None:
+    """S19: the closed Photometry window was rebuilt on every re-render too
+    (it is reloaded from the store whenever it is opened)."""
+    loads: list = []
+    window = SimpleNamespace(
+        visible=False,
+        isVisible=lambda: window.visible,
+        load_curves=lambda curves, **kw: loads.append(kw),
+        lightcurves=None,
+    )
+    dock = LightCurvePanel()
+    store = _live_store(12)
+    page = SimpleNamespace(
+        _lightcurve_panel=dock,
+        _photometry_window=window,
+        _engine=SimpleNamespace(lightcurves=store),
+        _cfg=lambda key, default=None: default,
+    )
+    try:
+        ImagingPage._render_curves(page)
+        assert loads == []  # rebuilt while closed on 0.4.2
+        assert dock.has_data()
+        window.visible = True
+        ImagingPage._render_curves(page)
+        assert len(loads) == 1 and loads[0].get("keep_view") is True
+        assert window.lightcurves is store
+    finally:
+        dock.close()
+        dock.deleteLater()
         qapp.processEvents()

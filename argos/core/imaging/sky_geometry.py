@@ -57,6 +57,39 @@ def altitude_at(
     return math.degrees(math.asin(max(-1.0, min(1.0, sin_alt))))
 
 
+def horizontal_at(
+    jd_utc: float,
+    ra_hours: float,
+    dec_deg: float,
+    lat_deg: float,
+    lon_deg: float,
+) -> tuple[float, float]:
+    """Altitude and azimuth (degrees, azimuth north through east) at a JD.
+
+    The same fast spherical trig as :func:`altitude_at` (about 0.1°, no
+    nutation or refraction), for checks that need the whole direction.
+    """
+    gmst_h = (18.697374558 + 24.06570982441908 * (jd_utc - 2451545.0)) % 24.0
+    lst_h = (gmst_h + lon_deg / 15.0) % 24.0
+    ha = math.radians((lst_h - ra_hours) * 15.0)
+    lat = math.radians(lat_deg)
+    dec = math.radians(dec_deg)
+    sin_alt = math.sin(lat) * math.sin(dec) + math.cos(lat) * math.cos(dec) * math.cos(ha)
+    alt = math.asin(max(-1.0, min(1.0, sin_alt)))
+    az = math.atan2(
+        -math.cos(dec) * math.sin(ha),
+        math.sin(dec) * math.cos(lat) - math.cos(dec) * math.cos(ha) * math.sin(lat),
+    )
+    return math.degrees(alt), math.degrees(az) % 360.0
+
+
+def angle_between_directions(alt1: float, az1: float, alt2: float, az2: float) -> float:
+    """Angle (degrees) between two horizontal directions given in degrees."""
+    a1, z1, a2, z2 = (math.radians(v) for v in (alt1, az1, alt2, az2))
+    cos_d = math.sin(a1) * math.sin(a2) + math.cos(a1) * math.cos(a2) * math.cos(z1 - z2)
+    return math.degrees(math.acos(max(-1.0, min(1.0, cos_d))))
+
+
 def upcoming_night_altitudes(
     ra_hours: float,
     dec_deg: float,

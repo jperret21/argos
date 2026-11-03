@@ -15,29 +15,29 @@ not for observers.
 ## 1. Install ARGOS
 
 Downloads are on the [releases
-page](https://github.com/jperret21/argos/releases/tag/v0.4.1).
+page](https://github.com/jperret21/argos/releases/tag/v0.4.2).
 
 `````{grid} 1 1 3 3
 :gutter: 2
 
 ````{grid-item-card} macOS
-`Argos-0.4.1-macOS-arm64.dmg` — 67 MB, Apple silicon.
+`Argos-0.4.2-macOS-arm64.dmg` — 67 MB, Apple silicon.
 
 Open the `.dmg`, drag ARGOS to Applications.
 ````
 
 ````{grid-item-card} Debian
-`argos_0.4.1_amd64.deb` — 82 MB, x86-64.
+`argos_0.4.2_amd64.deb` — 82 MB, x86-64.
 
 ```bash
-sudo apt install ./argos_0.4.1_amd64.deb
+sudo apt install ./argos_0.4.2_amd64.deb
 ```
 
 A technical preview: never field-validated on Linux.
 ````
 
 ````{grid-item-card} Source
-Tag `v0.4.1`.
+Tag `v0.4.2`.
 
 ```bash
 uv sync --extra dev
@@ -89,6 +89,9 @@ Do not take G05 or W08 — they are for fields far outside this range.
 **database folder** if it was not auto-detected. The status line has to confirm
 *both*: ARGOS cannot solve from the executable alone, and the failure mode if
 you get this wrong is a solve that simply never succeeds, at one in the morning.
+The folder says *where* the databases are; the **Star database** choice (D50,
+or *Auto*) still says *which* one ASTAP uses. Before 0.5.0 a folder replaced
+that choice and ASTAP picked a database on its own.
 
 ````{admonition} macOS: point at the binary, not the bundle
 :class: warning

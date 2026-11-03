@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -37,6 +37,66 @@ from argos.core.session.diagnostics import SessionDiagnostics
 from argos.core.session.types import PhotometryPoint
 
 logger = logging.getLogger(__name__)
+
+#: FITS file suffixes a re-run accepts (any case). Argos itself writes ``.fit``.
+_FITS_SUFFIXES = (".fit", ".fits", ".fts")
+#: IMAGETYP words that mark a calibration frame, never measured as a light.
+_CALIBRATION_WORDS = ("dark", "flat", "bias", "offset", "zero")
+
+
+def discover_light_frames(folder: Path) -> list[Path]:
+    """The light frames a batch re-run should measure under ``folder``.
+
+    ``.fit``/``.fits``/``.fts`` files (any case) in the folder itself, or in
+    its subfolders when it has none (a session root holds lights/, darks/,
+    flats/, biases/). Frames whose ``IMAGETYP`` names a calibration type are
+    left out; a frame without IMAGETYP is kept. Ordered by ``DATE-OBS``,
+    frames without a readable date last, by name.
+    """
+    from astropy.io import fits
+
+    folder = Path(folder)
+
+    def fits_files(paths) -> list[Path]:
+        return [p for p in paths if p.is_file() and p.suffix.lower() in _FITS_SUFFIXES]
+
+    candidates = fits_files(folder.glob("*")) or fits_files(folder.rglob("*"))
+    dated: list[tuple[datetime, Path]] = []
+    undated: list[Path] = []
+    for path in candidates:
+        try:
+            header = fits.getheader(path)
+        except Exception:  # unreadable: the batch reports it as a skipped frame
+            undated.append(path)
+            continue
+        imagetyp = str(header.get("IMAGETYP", "") or "").lower()
+        if any(word in imagetyp for word in _CALIBRATION_WORDS):
+            continue
+        try:
+            start = datetime.fromisoformat(str(header.get("DATE-OBS") or "").replace("Z", "+00:00"))
+        except ValueError:
+            undated.append(path)
+            continue
+        if start.tzinfo is not None:  # FITS dates are UTC; compare naive UTC
+            start = start.astimezone(timezone.utc).replace(tzinfo=None)
+        dated.append((start, path))
+    dated.sort(key=lambda item: (item[0], item[1].name))
+    return [path for _start, path in dated] + sorted(undated, key=lambda p: p.name)
+
+
+def rerun_output_dir(frames_folder: Path, now: datetime) -> Path:
+    """A new folder for one re-run's CSVs: never another run's files.
+
+    ``<session root>/photometry_rerun_<UTC>`` when ``session.json`` sits in
+    ``frames_folder`` or its parent (an Argos session or its lights/ folder),
+    else ``<frames_folder>/photometry_rerun_<UTC>``.
+    """
+    folder = Path(frames_folder)
+    stamp = now.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    for root in (folder, folder.parent):
+        if (root / "session.json").is_file():
+            return root / f"photometry_rerun_{stamp}"
+    return folder / f"photometry_rerun_{stamp}"
 
 
 @dataclass
@@ -55,13 +115,21 @@ class BatchRequest:
 
 @dataclass
 class BatchResult:
-    """Outcome of a batch run. ``error`` is empty on success."""
+    """Outcome of a batch run. ``error`` is empty on success.
+
+    ``frames_done`` counts the frames measured; ``frames_skipped`` those that
+    could not be read or dated. A ``cancelled`` run writes no CSV and its
+    curves are partial (``ok`` still means "no error").
+    """
 
     curves: dict[str, LightCurve] = field(default_factory=dict)
     frames_done: int = 0
     error: str = ""
     rotation_deg: float = 0.0  # accumulated field rotation vs the reference solve
     shift_px: float = 0.0  # accumulated pointing drift vs the reference solve
+    frames_skipped: int = 0
+    cancelled: bool = False
+    out_dir: Path | None = None  # where the CSVs were written
 
     @property
     def ok(self) -> bool:
@@ -97,7 +165,9 @@ class PhotometryBatchWorker(QThread):
         req = self._req
         curves: dict[str, LightCurve] = {}
         total = len(req.fits_paths)
-        done = 0
+        done = 0  # frames measured
+        skipped = 0  # frames unreadable or without a usable DATE-OBS
+        handled = 0  # progress: measured + skipped
         safe_obj = "".join(c if c.isalnum() or c in "-_" else "_" for c in req.object_name)
         diag = SessionDiagnostics(
             req.out_dir / f"{safe_obj or 'batch'}_diagnostics.jsonl",
@@ -115,12 +185,23 @@ class PhotometryBatchWorker(QThread):
             for fpath in req.fits_paths:
                 if self._cancel:
                     break
-                self._process_frame(diag, fpath, done, curves)
-                done += 1
-                self.progress.emit(done, total)
+                if self._process_frame(diag, fpath, done, curves):
+                    done += 1
+                else:
+                    skipped += 1
+                handled += 1
+                self.progress.emit(handled, total)
+            cancelled = self._cancel
             self._apply_systematic_floors(curves)
-            self._write_csvs(curves)
-            result = BatchResult(curves=curves, frames_done=done)
+            if not cancelled:  # a partial run must not replace any file
+                self._write_csvs(curves)
+            result = BatchResult(
+                curves=curves,
+                frames_done=done,
+                frames_skipped=skipped,
+                cancelled=cancelled,
+                out_dir=None if cancelled else req.out_dir,
+            )
             for key in sorted(self._check_keys):
                 lc = curves.get(key)
                 if lc is None or len(lc.points) < 2:
@@ -150,17 +231,29 @@ class PhotometryBatchWorker(QThread):
         except Exception as exc:  # pragma: no cover - safety net
             logger.exception("Batch photometry crashed")
             diag.record("event", what="batch_crash", error=str(exc))
-            self.finished_batch.emit(BatchResult(curves=curves, frames_done=done, error=str(exc)))
+            self.finished_batch.emit(
+                BatchResult(curves=curves, frames_done=done, frames_skipped=skipped, error=str(exc))
+            )
         finally:
             diag.close()
 
     # ------------------------------------------------------------------
 
-    def _process_frame(self, diag, fpath: Path, frame_no: int, curves) -> None:
-        """Measure one frame: tracker update, diagnostics records, points."""
+    def _process_frame(self, diag, fpath: Path, frame_no: int, curves) -> bool:
+        """Measure one frame: tracker update, diagnostics records, points.
+
+        Returns False, with no point, for a frame that cannot be read or has
+        no usable DATE-OBS: an undated point would carry JD 0 to the AAVSO.
+        """
         arr, jd = self._read_frame(fpath)
         if arr is None:
-            return
+            logger.warning("%s: unreadable — skipped", fpath.name)
+            diag.record("event", what="frame_skipped", file=fpath.name, reason="unreadable")
+            return False
+        if jd is None:
+            logger.warning("%s: no usable DATE-OBS — skipped (a point needs a time)", fpath.name)
+            diag.record("event", what="frame_skipped", file=fpath.name, reason="no DATE-OBS")
+            return False
         green = green_plane(arr)
         wcs = self._wcs_for_frame(green, fpath.name)
         if self._series_fwhm is None:
@@ -197,6 +290,7 @@ class PhotometryBatchWorker(QThread):
                     note=res.diff.note or None,
                 )
         self._emit_points(results, jd, curves)
+        return True
 
     def _measure_series_fwhm(self, raw, diag) -> float | None:
         """Field FWHM from the first readable frame — one aperture per series (P7).
@@ -273,7 +367,7 @@ class PhotometryBatchWorker(QThread):
                 self._check_keys.add(res.star.auid or res.star.display_name)
             bjd = self._bjd(jd, res.star)
             pt = LcPoint(
-                jd_utc=jd or 0.0,
+                jd_utc=jd,
                 mag=res.diff.mag if res.diff and res.diff.mag is not None else float("nan"),
                 mag_err=(
                     res.diff.mag_err if res.diff and res.diff.mag_err is not None else float("nan")
@@ -376,9 +470,11 @@ class PhotometryBatchWorker(QThread):
         arr = np.nan_to_num(np.asarray(data, dtype=np.float32))
         jd = None
         date_str = str(header.get("DATE-OBS", "") or "")
-        if date_str:
+        if "T" in date_str:  # a date without a time is not an epoch (not midnight)
             try:
                 dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                if dt.tzinfo is not None:  # julian_date expects UTC fields
+                    dt = dt.astimezone(timezone.utc)
                 jd = julian_date(dt)
             except ValueError:
                 jd = None
@@ -390,13 +486,24 @@ class PhotometryBatchWorker(QThread):
         return arr, jd
 
     def _write_csvs(self, curves: dict[str, LightCurve]) -> None:
-        """Write each curve as the canonical 9-column CSV keyed by object+star."""
+        """Write each curve as ``{role}_{object}_{star}.csv`` beside ``targets.json``.
+
+        The engine's naming, so Review and "Open curve CSV…" recover each
+        curve's role and star from the file name and the saved target set.
+        """
         for lc in curves.values():
             tag = lc.auid or lc.name or "photometry"
             safe = "".join(
                 c if c.isalnum() or c in "-_" else "_" for c in f"{self._req.object_name}_{tag}"
             )
+            role = lc.role or "target"
             try:
-                lc.to_csv(self._req.out_dir / f"{safe or 'photometry'}.csv")
+                lc.to_csv(self._req.out_dir / f"{role}_{safe or 'photometry'}.csv")
             except OSError as exc:
                 logger.warning("batch photometry.csv: %s", exc)
+        if not curves:
+            return
+        try:
+            self._req.target_set.save(self._req.out_dir / "targets.json")
+        except OSError as exc:
+            logger.warning("batch targets.json: %s", exc)

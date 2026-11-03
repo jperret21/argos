@@ -36,6 +36,19 @@ _UNSEEN = (
     "ADC depth and saturation thresholds inherited from the S30 Pro",
 )
 
+#: The one warning for an unvalidated profile, on every page that shows one
+#: (followed by its caveats). Unvalidated profiles are usable, but flagged.
+UNVALIDATED_WARNING = "Not validated on this hardware: do not use it for scientific photometry."
+
+#: Appended to an unvalidated profile's name in every profile picker.
+UNVALIDATED_SUFFIX = " (unvalidated)"
+
+#: Why every profile picker is locked while equipment is connected.
+PROFILE_LOCKED_HINT = (
+    "Disconnect equipment before changing telescope model. The model controls "
+    "plate scale, sensor geometry and FITS metadata."
+)
+
 
 S30_PRO = TelescopeProfile(
     key="s30pro",

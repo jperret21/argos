@@ -213,8 +213,24 @@ def plan_to_dict(plan: SequencePlan) -> dict:
 
 
 def plan_from_dict(data: dict) -> SequencePlan:
-    """Rebuild a plan from a dict produced by :func:`plan_to_dict`."""
-    steps = [SequenceStep(**s) for s in data.get("steps", [])]
+    """Rebuild a plan from a dict produced by :func:`plan_to_dict`.
+
+    Frame types are matched case-insensitively (a hand-edited ``"dark"`` is
+    ``"Dark"``); an unknown type raises ``ValueError`` rather than loading
+    as a Light step.
+    """
+    canonical = {name.casefold(): name for name in FRAME_TYPES}
+    steps = []
+    for number, raw in enumerate(data.get("steps", []), start=1):
+        step = SequenceStep(**raw)
+        frame_type = canonical.get(str(step.frame_type).casefold())
+        if frame_type is None:
+            raise ValueError(
+                f"step {number}: unknown frame type {step.frame_type!r} "
+                f"(expected one of {', '.join(FRAME_TYPES)})"
+            )
+        step.frame_type = frame_type
+        steps.append(step)
     base = data.get("base_dir")
     return SequencePlan(
         steps=steps,

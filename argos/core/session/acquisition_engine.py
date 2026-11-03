@@ -42,14 +42,15 @@ from argos.core.catalog.targets import (
     TargetSet,
     TargetStar,
 )
-from argos.core.config import Config
+from argos.core.config import Config, observing_site
 from argos.core.hardware import active as hardware
 from argos.core.imaging import sensor_models
 from argos.core.imaging.astrometry_session import field_geometry
 from argos.core.imaging.fits_writer import FITSWriter, FrameContext
 from argos.core.imaging.green import green_plane
-from argos.core.imaging.metrics import measure_star_at
+from argos.core.imaging.metrics import detect_stars, frame_metrics, measure_star_at
 from argos.core.imaging.platesolve import angular_separation_deg
+from argos.core.imaging.sequencer import DARK_FILTER_NAME
 from argos.core.photometry.airmass import (
     airmass_at,
     airmass_from_altitude,
@@ -81,6 +82,102 @@ def _is_light_frame(frame_type: str) -> bool:
     """Shutter semantics for a CameraDock frame type — darks/bias expose with
     ``light=False`` so single shots are honest about what they captured."""
     return frame_type not in ("Dark Frame", "Bias Frame")
+
+
+def _fits_utc(value) -> datetime | None:
+    """A FITS ISO date-time keyword as an aware UTC datetime, else None.
+
+    FITS dates are UTC; a value without a time part (old ``DATE-OBS`` with a
+    separate ``TIME-OBS``) is refused rather than read as midnight.
+    """
+    text = str(value or "").strip()
+    if "T" not in text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
+def fits_exposure_mid(header) -> datetime | None:
+    """Exposure midpoint (UTC) of a saved frame, from its header, or None.
+
+    ``DATE-AVG`` when present, else ``DATE-OBS`` + ``EXPTIME``/2 (``EXPOSURE``
+    accepted). ``DATE-OBS`` is the exposure start: Argos writes it so, and so
+    does most capture software, but a third-party file may differ. Without a
+    usable date and exposure the epoch is unknown (None), never guessed.
+    """
+    mid = _fits_utc(header.get("DATE-AVG"))
+    if mid is not None:
+        return mid
+    start = _fits_utc(header.get("DATE-OBS"))
+    exposure = header.get("EXPTIME", header.get("EXPOSURE"))
+    try:
+        exposure_s = float(exposure)
+    except (TypeError, ValueError):
+        return None
+    if start is None or not math.isfinite(exposure_s) or exposure_s < 0:
+        return None
+    return start + timedelta(seconds=exposure_s / 2.0)
+
+
+def _raw_adu(data) -> np.ndarray:
+    """An opened frame as the sensor's 16-bit ADU, or ``ValueError``.
+
+    The live pipeline (photometry gain, saturation flags, solve) assumes raw
+    camera counts. A plain ``uint16`` cast wraps what it cannot hold: a
+    negative value (a dark-subtracted or calibrated frame) becomes about
+    65535 and 70000 becomes 4464, so the sky and aperture sums are wrong
+    while the frame still solves. Integer values in 0..65535 are accepted,
+    whatever the stored type; anything else is refused.
+    """
+    arr = np.asarray(data)
+    if arr.dtype.kind not in "uif":
+        raise ValueError(f"unsupported pixel type {arr.dtype}")
+    if arr.dtype.kind == "f" and not (
+        np.isfinite(arr).all() and np.array_equal(arr, np.floor(arr))
+    ):
+        raise ValueError(
+            "floating-point pixels (a calibrated or stacked frame?) are not raw "
+            "16-bit camera counts — open the raw .fit frame instead"
+        )
+    low, high = arr.min(), arr.max()
+    if low < 0 or high > 65535:
+        raise ValueError(
+            f"pixel values {low:g} to {high:g} do not fit raw 16-bit camera counts "
+            "(0 to 65535) — open the raw .fit frame instead"
+        )
+    return np.ascontiguousarray(arr, dtype=np.uint16)
+
+
+def _wheel_filter_name(wheel, requested: str, log_emit) -> str:
+    """Filter the wheel actually sits on, for a Take-shot header.
+
+    Same policy as ``SequenceWorker._read_back_filter``: without a wheel the
+    form's name stands; an unreadable or still-turning wheel keeps it with a
+    warning; a readable wheel that differs wins over the form. Runs off the
+    UI thread (it is a device read).
+    """
+    if wheel is None:
+        return requested
+    try:
+        actual = wheel.position_name()
+    except Exception as exc:
+        log_emit(
+            "WARN", f"Filter read-back failed ({exc}) — FITS FILTER is the form's '{requested}'"
+        )
+        return requested
+    if not actual or actual == "Moving…":
+        log_emit("WARN", f"Filter wheel still moving — FITS FILTER is the form's '{requested}'")
+        return requested
+    if actual.lower() != requested.lower():
+        log_emit(
+            "WARN",
+            f"The wheel is on '{actual}', not on the form's '{requested}' — "
+            f"FITS FILTER records '{actual}'.",
+        )
+    return actual
 
 
 class AcquisitionEngine(QObject):
@@ -134,8 +231,11 @@ class AcquisitionEngine(QObject):
 
         self._preview: LivePreviewWorker | None = None
         self._autofocus: AutofocusWorker | None = None
+        # A stopped sweep still driving the focuser back to its start.
+        self._af_returning = False
         self._sequence: SequenceWorker | None = None
         self._seq_object = ""  # object name of the running sequence (for the strip)
+        self._seq_has_lights = False  # the running plan shoots Light frames
         self._on_complete = "Nothing"  # end-of-sequence mount action (plan option)
 
         # Single-shot capture: number of upcoming preview frames to save.
@@ -149,7 +249,7 @@ class AcquisitionEngine(QObject):
         self._last_raw: np.ndarray | None = None
         self._last_raw_decimated = False
         self._green_shape: tuple[int, int] | None = None  # of the last processed frame
-        self._last_metrics = None  # last FrameMetrics, for FITS QA headers
+        self._last_metrics = None  # last displayed FrameMetrics (FITS QA uses the saved array)
         self._last_fwhm: float | None = None  # mean detected-star FWHM (green px)
         self._last_exposure_mid: datetime | None = None  # exposure midpoint (UTC)
 
@@ -172,6 +272,9 @@ class AcquisitionEngine(QObject):
 
         # §6 P4: live photometry preview state.
         self._lightcurves: dict[str, LightCurve] = {}  # key → per-target curve
+        # Set when a frame's uncertainty floor changed earlier points: the
+        # store is re-rendered once at the end of that frame, not per star.
+        self._curves_dirty = False
 
         # P11 flight recorder for the live measurement path — created lazily
         # on the first measured frame, re-created when the object changes.
@@ -318,6 +421,8 @@ class AcquisitionEngine(QObject):
         if not self._session.camera:
             self.log_message.emit("WARN", "Camera not connected.")
             return
+        if not self._dark_shot_allowed(self._params()):
+            return
         if self._camera_service.state is CameraState.LIVE:
             # The live loop already owns the camera — just tag its next frame
             # for saving; no ownership change.
@@ -328,6 +433,81 @@ class AcquisitionEngine(QObject):
             return  # refused (sequence/autofocus owns the camera) — reason logged
         self._capture_pending = 1
         self.log_message.emit("CMD", "Take shot — saving next frame…")
+
+    def _dark_shot_allowed(self, params) -> bool:
+        """Refuse a Dark/Bias shot unless the wheel's opaque slot is selected.
+
+        The Seestar has no shutter: ``light=False`` does not close anything,
+        and the wheel's Dark slot is the only way to block the light (field
+        bug 2026-07-11, the same rule as ``FrameSpec.wheel_filter``). Without
+        that slot the frame is a light frame labelled IMAGETYP=Dark, and a
+        master dark built from it corrupts every calibrated science frame.
+        The check reads the Camera form's filter (the wheel is moved from
+        there) and the slot the wheel last reported it settled on: the form
+        shows the new filter as soon as it is picked, while the wheel still
+        turns. The wheel is not moved automatically here.
+        """
+        if _is_light_frame(params.frame_type):
+            return True
+        if not self._wheel_can_block_light():
+            self.log_message.emit(
+                "WARN",
+                f"{params.frame_type}: no filter wheel to block the light — the frame is "
+                "only dark if the telescope is covered.",
+            )
+            return True
+        if params.filter_name.strip().lower() != DARK_FILTER_NAME.lower():
+            self.log_message.emit(
+                "WARN",
+                f"{params.frame_type} shot refused: the wheel is on '{params.filter_name}'. "
+                f"Select Filter '{DARK_FILTER_NAME}' first (the Seestar has no shutter).",
+            )
+            return False
+        problem = self._wheel_not_on_dark()
+        if problem:
+            self.log_message.emit("WARN", f"{params.frame_type} shot refused: {problem}")
+            return False
+        return True
+
+    def _wheel_can_block_light(self) -> bool:
+        """A wheel is connected and its profile has an opaque Dark slot."""
+        has_dark_slot = DeviceSession.filter_position_for(DARK_FILTER_NAME) is not None
+        return self._session.filterwheel is not None and has_dark_slot
+
+    def _wheel_not_on_dark(self) -> str | None:
+        """Why the wheel cannot be trusted to sit on its Dark slot, or ``None``."""
+        session = self._session
+        if session.filter_moving:
+            return (
+                f"the filter wheel is still turning. Wait until it has settled on "
+                f"'{DARK_FILTER_NAME}' (the Seestar has no shutter)."
+            )
+        slot = session.filter_slot
+        if slot is None:
+            return (
+                f"the filter wheel's position is unknown. Select Filter "
+                f"'{DARK_FILTER_NAME}' again and wait for the wheel to settle."
+            )
+        if slot.strip().lower() != DARK_FILTER_NAME.lower():
+            return f"the filter wheel reports '{slot}', not '{DARK_FILTER_NAME}'."
+        return None
+
+    def _wheel_moved_during(self, start_dt) -> bool:
+        """The wheel turned, or is turning, since this exposure started.
+
+        Moves made from the Camera form only (a sequence, which moves the
+        wheel itself, owns the camera: no Take shot then).
+        """
+        session = self._session
+        if session.filterwheel is None:
+            return False
+        if session.filter_moving:
+            return True
+        settled = session.filter_settled_at
+        try:
+            return settled is not None and start_dt is not None and settled > start_dt
+        except TypeError:  # a naive start time: cannot compare, assume moved
+            return True
 
     def start_live(self) -> None:
         if not self._session.camera:
@@ -357,6 +537,7 @@ class AcquisitionEngine(QObject):
             gain=params.gain,
             preview_scale=self._preview_scale(),
             light=_is_light_frame(params.frame_type),
+            tag=params,
         )
         self._preview.frame_ready.connect(self._on_frame)
         self._preview.status_updated.connect(self.action_changed)
@@ -388,11 +569,13 @@ class AcquisitionEngine(QObject):
         else:
             self._stop_preview()
 
-    @pyqtSlot(object, object, object, object)
-    def _on_frame(self, preview_arr, full_arr, start_dt, end_dt) -> None:
+    @pyqtSlot(object, object, object, object, object)
+    def _on_frame(self, preview_arr, full_arr, start_dt, end_dt, used=None) -> None:
         # Update worker settings for the next frame from the dock form. The
         # preview scale (Full/Half quality) only shapes the display pipeline —
-        # saved FITS always use the full-resolution readout below.
+        # saved FITS always use the full-resolution readout below. The form
+        # snapshot rides along as the tag: ``used`` (a FrameSettings) is what
+        # THIS frame was exposed with, which the form may no longer show.
         params = self._params()
         if self._preview:
             self._preview.update_settings(
@@ -400,6 +583,7 @@ class AcquisitionEngine(QObject):
                 params.gain,
                 scale=self._preview_scale(),
                 light=_is_light_frame(params.frame_type),
+                tag=params,
             )
 
         try:  # exposure-midpoint time → the light curve's true epoch
@@ -422,8 +606,30 @@ class AcquisitionEngine(QObject):
 
         # Single-shot save: persist the requested number of FULL-RES frames.
         if self._capture_pending > 0:
+            if self._wheel_moved_during(start_dt):
+                # Exposed (partly) while the wheel turned: neither its filter
+                # nor, for a dark, its darkness is known. The loop exposes
+                # another frame, which is the one saved.
+                self.log_message.emit(
+                    "INFO",
+                    "Take shot: the filter wheel moved during this exposure — "
+                    "saving the next frame instead.",
+                )
+                return
+            tag = used.tag if used is not None and used.tag is not None else params
+            if not _is_light_frame(tag.frame_type) and self._wheel_can_block_light():
+                problem = self._wheel_not_on_dark()
+                if problem:
+                    # The wheel left the Dark slot after the shot was accepted
+                    # (moved by hand, or a refused move): never save a light
+                    # frame as a dark.
+                    self._capture_pending = 0
+                    self.log_message.emit("WARN", f"{tag.frame_type} shot not saved: {problem}")
+                    if not self._live_requested:
+                        self._camera_service.release(CameraState.SINGLE)
+                    return
             self._capture_pending -= 1
-            self._save_fits_async(full_arr, start_dt, end_dt)
+            self._save_fits_async(full_arr, start_dt, end_dt, used)
             if self._capture_pending == 0 and not self._live_requested:
                 # Transient Take-shot loop done; Live keeps going (its release
                 # would be a no-op here because LIVE owns the camera).
@@ -474,12 +680,19 @@ class AcquisitionEngine(QObject):
         self._sequence.error_occurred.connect(self._on_seq_error)
         self._sequence.finished.connect(self._on_seq_finished)
         self._on_complete = plan.on_complete
+        self._seq_has_lights = any(
+            s.enabled and s.count > 0 and s.frame_type == "Light" for s in plan.steps
+        )
 
         self._sequence.start()
         self.sequence_running.emit(True)
         total = sum(s.count for s in plan.steps if s.enabled and s.count > 0) * max(1, plan.repeat)
         self.log_message.emit("CMD", f"Sequence started — {total} frame(s).")
         return True
+
+    def sequence_has_light_frames(self) -> bool:
+        """Whether the running sequence shoots Light frames (a field to identify)."""
+        return self._sequence is not None and self._seq_has_lights
 
     def stop_sequence(self) -> None:
         if self._sequence and self._sequence.isRunning():
@@ -524,6 +737,33 @@ class AcquisitionEngine(QObject):
         self.frame_ready.emit(
             LiveFrame(preview=full_arr, full=full_arr, start=None, end=None, decimated=False)
         )
+
+    def open_fits_frame(self, path) -> datetime | None:
+        """Load a saved FITS into the live pipeline (Open FITS, offline replay).
+
+        An opened file is another field and another night: the WCS and the
+        field's catalogue cache are dropped (solve it again), the photometry
+        epoch becomes the file's own exposure midpoint (see
+        :func:`fits_exposure_mid`; None when the header has no usable date,
+        and then no point is measured), and the last run's folder is
+        forgotten so a point never lands in that run's CSVs.
+
+        Returns the midpoint. Raises ``OSError``/``ValueError`` (the engine is
+        untouched) when the file is not a single 2-D image of raw 16-bit
+        data (see :func:`_raw_adu`).
+        """
+        from astropy.io import fits
+
+        raw, header = fits.getdata(path, header=True)
+        if raw is None or getattr(raw, "ndim", 0) != 2:
+            raise ValueError("expected a single 2-D image HDU")
+        # The display/measure pipeline speaks the sensor's raw dtype.
+        frame = _raw_adu(raw)
+        self.invalidate_astrometry()
+        self._last_exposure_mid = fits_exposure_mid(header)
+        self._active_run_root = None
+        self.ingest_frame(frame)
+        return self._last_exposure_mid
 
     @pyqtSlot(object)
     def _on_seq_frame_image(self, full_arr) -> None:
@@ -587,6 +827,9 @@ class AcquisitionEngine(QObject):
         # the sequence died while a mid-run autofocus held the camera, this
         # just cancels the pending resume — AF releases to IDLE on its own.
         self._camera_service.release(CameraState.SEQUENCE)
+        # The worker moved the wheel directly; re-read it so the Camera form
+        # (Take-shot metadata) shows the slot the wheel really sits on.
+        self._session.refresh_filter()
         self.sequence_running.emit(False)
         self.log_message.emit(
             "OK" if completed else "INFO",
@@ -614,6 +857,7 @@ class AcquisitionEngine(QObject):
         pos = self._session.last_position
         target = self._session.target_radec
         cam = self._session.camera
+        site = observing_site(self._config) or (None, None, None)
         return FrameContext(
             ra=pos.ra if pos else None,
             dec=pos.dec if pos else None,
@@ -624,9 +868,9 @@ class AcquisitionEngine(QObject):
             object_name=object_name,
             filter_name=filter_name,
             observer=(self._config.get("observer.name") or "").strip(),
-            site_lat=self._config.get("site.latitude"),
-            site_lon=self._config.get("site.longitude"),
-            site_elev=self._config.get("site.elevation"),
+            site_lat=site[0],
+            site_lon=site[1],
+            site_elev=site[2],
             software=_SOFTWARE,
             ccd_temp=cam.get_ccd_temperature() if cam else None,
             egain_driver=cam.get_electrons_per_adu() if cam else None,
@@ -715,10 +959,36 @@ class AcquisitionEngine(QObject):
         self.log_message.emit("CMD", "Autofocus started…")
         return True
 
+    @property
+    def autofocus_running(self) -> bool:
+        """True while an autofocus sweep worker is running."""
+        return self._autofocus is not None and self._autofocus.isRunning()
+
+    #: How long Stop AF blocks the UI for the worker to end (ms).
+    _AF_STOP_WAIT_MS = 10_000
+
     def stop_autofocus(self) -> None:
-        if self._autofocus and self._autofocus.isRunning():
-            self._autofocus.stop()
-            self._autofocus.wait(10_000)
+        worker = self._autofocus
+        if worker is not None and worker.isRunning():
+            if self._af_returning:
+                self.log_message.emit(
+                    "INFO", "Autofocus stopping — the focuser is still returning to its start."
+                )
+                return
+            worker.stop()
+            if not worker.wait(self._AF_STOP_WAIT_MS):
+                # The worker drives the focuser back to its start (bounded by
+                # its own 30 s deadline) before it ends. Keep it, and its hold
+                # on the camera, until then: _on_af_finished releases the
+                # camera. Dropping it here let a new autofocus start a second
+                # worker driving the same focuser.
+                self._af_returning = True
+                self.log_message.emit(
+                    "INFO",
+                    "Autofocus stopping — the focuser is still returning to its start; "
+                    "the camera is released when it is back.",
+                )
+                return
         self._autofocus = None
         self.autofocus_state.emit(False)
         # Hand the camera back promptly (the worker's queued finished signal
@@ -730,6 +1000,7 @@ class AcquisitionEngine(QObject):
         self.log_message.emit("ERROR", f"AF: {message}")
 
     def _on_af_finished(self) -> None:
+        self._af_returning = False
         self.autofocus_state.emit(False)
         # The focus (and hence the PSF) may have changed — re-sample the
         # series aperture FWHM on the next measured frame (P7).
@@ -1338,6 +1609,13 @@ class AcquisitionEngine(QObject):
         tset = self.target_set()
         if not tset.by_role(ROLE_TARGET):
             return
+        if self._last_exposure_mid is None:
+            # An opened FITS without DATE-OBS/EXPTIME: a point stamped "now"
+            # would reach the curve, its CSV and the AAVSO export.
+            self.log_message.emit(
+                "WARN", "Photometry skipped: the frame has no exposure time (DATE-OBS/EXPTIME)."
+            )
+            return
         if self._phot_fwhm is None and self._last_fwhm:
             self._phot_fwhm = self._last_fwhm
         fwhm = self._phot_fwhm or DEFAULT_FWHM
@@ -1354,11 +1632,12 @@ class AcquisitionEngine(QObject):
             fwhm=fwhm,
             on_star=lambda s, phot, x, y: diag.star(frame_no, s, phot, x, y),
         )
-        jd = julian_date(self._last_exposure_mid or datetime.now(timezone.utc))
+        jd = julian_date(self._last_exposure_mid)
         pos = self._session.last_position
         air = airmass_from_altitude(pos.altitude) if pos else None
-        lat, lon = self._cfg("site.latitude", None), self._cfg("site.longitude", None)
-        elev = self._cfg("site.elevation", 0.0) or 0.0
+        # Never the 0/0 default: without a site, the airmass is the mount's
+        # (or none) and there is no BJD_TDB.
+        lat, lon, elev = observing_site(self._config) or (None, None, 0.0)
         diag.record("frame", frame=frame_no, jd_utc=jd, airmass=air, fwhm=fwhm)
         self.photometry_measuring.emit()  # the page samples the CCD temp if open
         for res in results:
@@ -1381,6 +1660,10 @@ class AcquisitionEngine(QObject):
             if not (has_mag or has_ratio):
                 continue
             self._emit_live_point(res, jd, air, fwhm, (lat, lon, elev))
+        if self._curves_dirty:
+            # One whole-store re-render per frame, whatever the star count.
+            self._curves_dirty = False
+            self.curves_changed.emit()
         self._write_live_quality_report(tset)
 
     def _write_live_quality_report(self, target_set: TargetSet) -> None:
@@ -1389,9 +1672,9 @@ class AcquisitionEngine(QObject):
         The report deliberately never drops or substitutes a comparison during
         a run. It gives the observer a clear quality state and preserves the
         exact selection already recorded in ``photometry_selection.json``.
+        The report is computed and shown in plain live preview too; it is
+        written to disk only inside a run's folder.
         """
-        if self._active_run_root is None:
-            return
         report = comparison_quality_report(
             target_set,
             self._lightcurves,
@@ -1405,6 +1688,8 @@ class AcquisitionEngine(QObject):
         )
         self._comparison_quality_report = report
         self.comparison_quality_updated.emit(report)
+        if self._active_run_root is None:
+            return
         try:
             save_comparison_quality_report(
                 self._active_run_root / "photometry_quality.json", report
@@ -1457,8 +1742,9 @@ class AcquisitionEngine(QObject):
         if floor_changed:
             # All prior values may have gained the shared systematic floor,
             # so replay the authoritative store rather than leaving stale bars
-            # in the live panel.
-            self.curves_changed.emit()
+            # in the live panel: once, after the frame's last star
+            # (_measure_photometry emits curves_changed).
+            self._curves_dirty = True
         else:
             self.photometry_point.emit(
                 PhotometryPoint(
@@ -1507,11 +1793,24 @@ class AcquisitionEngine(QObject):
     # FITS save
     # ------------------------------------------------------------------
 
-    def _save_fits_async(self, arr: np.ndarray, start_dt: datetime, end_dt: datetime) -> None:
+    def _save_fits_async(
+        self, arr: np.ndarray, start_dt: datetime, end_dt: datetime, used=None
+    ) -> None:
+        """Write a Take-shot frame off the UI thread.
+
+        ``used`` is the worker's :class:`FrameSettings` for this frame: its
+        exposure, gain and form snapshot (object, filter, frame type) are the
+        ones the frame was exposed with. The current form is only a fallback.
+        """
         params = self._params()
+        if used is not None and used.tag is not None:
+            params = used.tag
+        exposure = used.exposure_s if used is not None else params.exposure_s
+        gain = used.gain if used is not None else params.gain
 
         pos = self._session.last_position
         target = self._session.target_radec
+        site = observing_site(self._config) or (None, None, None)
         ctx_kwargs = {
             "ra": pos.ra if pos else None,
             "dec": pos.dec if pos else None,
@@ -1520,50 +1819,42 @@ class AcquisitionEngine(QObject):
             "target_ra": target[0] if target else None,
             "target_dec": target[1] if target else None,
             "object_name": params.object_name,
-            "filter_name": params.filter_name,
             "observer": (self._config.get("observer.name") or "").strip(),
-            "site_lat": self._config.get("site.latitude"),
-            "site_lon": self._config.get("site.longitude"),
-            "site_elev": self._config.get("site.elevation"),
+            "site_lat": site[0],
+            "site_lon": site[1],
+            "site_elev": site[2],
             "software": _SOFTWARE,
-            "hfd": self._last_metrics.hfd if self._last_metrics else None,
-            "star_count": self._last_metrics.star_count if self._last_metrics else None,
-            "sky_adu": self._last_metrics.sky_adu if self._last_metrics else None,
         }
 
         camera = self._session.camera
+        wheel = self._session.filterwheel
         base = self._sessions_base()
-        folder = FITSWriter.session_folder(
-            base,
-            params.object_name,
-            start_dt,
-            params.frame_type,
-            params.filter_name,
-        )
-        frame_idx = 1
-        while True:
-            filename = FITSWriter.build_filename(
-                params.object_name,
-                params.frame_type,
-                start_dt,
-                params.exposure_s,
-                params.filter_name,
-                frame_idx,
-                params.gain,
-            )
-            path = folder / filename
-            if not path.exists():
-                break
-            frame_idx += 1
+        object_name = params.object_name
+        form_filter = params.filter_name
         # Capture the engine's signal (long-lived) — never a page method.
         log_emit = self.log_message.emit
 
-        gain = params.gain
-        exposure = params.exposure_s
         frame_type = params.frame_type
 
         class _Task(QRunnable):
             def run(self) -> None:
+                # Header truthfulness, as the sequence does: FILTER (and the
+                # folder/file name) come from the wheel, not from the form,
+                # which a sequence or any outside move leaves stale.
+                filter_name = _wheel_filter_name(wheel, form_filter, log_emit)
+                folder = FITSWriter.session_folder(
+                    base, object_name, start_dt, frame_type, filter_name
+                )
+                frame_idx = 1
+                while True:
+                    filename = FITSWriter.build_filename(
+                        object_name, frame_type, start_dt, exposure, filter_name, frame_idx, gain
+                    )
+                    path = folder / filename
+                    if not path.exists():
+                        break
+                    frame_idx += 1
+
                 ccd_temp = camera.get_ccd_temperature() if camera else None
                 egain_d = camera.get_electrons_per_adu() if camera else None
                 offset_v = camera.get_offset() if camera else None
@@ -1574,8 +1865,22 @@ class AcquisitionEngine(QObject):
                     egain_driver=egain_d,
                     offset=offset_v,
                     readout_mode=readout,
+                    filter_name=filter_name,
                     **ctx_kwargs,
                 )
+                # QA headers measured on THIS array, as a sequence frame does
+                # (the display's last metrics belong to another, maybe
+                # decimated, frame). Best-effort: never block the save.
+                try:
+                    metrics = frame_metrics(arr)
+                    field = detect_stars(arr)
+                    ctx.hfd = metrics.hfd
+                    ctx.star_count = metrics.star_count
+                    ctx.sky_adu = metrics.sky_adu
+                    ctx.fwhm = field.mean_fwhm
+                    ctx.eccentricity = field.mean_eccentricity
+                except Exception:  # pragma: no cover - metrics are best-effort
+                    logger.warning("Frame metrics failed — saving without QA", exc_info=True)
                 try:
                     FITSWriter.write(
                         arr=arr,

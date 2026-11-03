@@ -82,6 +82,7 @@ class StellariumCard(QGroupBox):
         status_row = QHBoxLayout()
         status_row.setSpacing(6)
         self._status_lbl = QLabel("○  stopped")
+        self._status_lbl.setWordWrap(True)  # a bind error names host, port and cause
         self._status_lbl.setStyleSheet(
             f"color:{theme.FG_MUTED}; font-size:11px; background:transparent;"
         )
@@ -125,17 +126,20 @@ class StellariumCard(QGroupBox):
         if running:
             self._server_btn.setText("■  Stop server")
             self._server_btn.setProperty("class", "danger")
-            text = message or f"●  listening on :{self._tcp_port_spin.value()}"
+            text = message or f"●  listening on {self._host}:{self._tcp_port_spin.value()}"
             self._status_lbl.setText(text)
             self._status_lbl.setStyleSheet(
                 f"color:{theme.SUCCESS}; font-size:11px; background:transparent;"
             )
         else:
+            # Not running: the reason when there is one (a port already in
+            # use), in the danger colour; a plain stop otherwise.
             self._server_btn.setText("▶  Start server")
             self._server_btn.setProperty("class", "primary")
-            self._status_lbl.setText("○  stopped")
+            self._status_lbl.setText(message or "○  stopped")
+            color = theme.DANGER if message else theme.FG_MUTED
             self._status_lbl.setStyleSheet(
-                f"color:{theme.FG_MUTED}; font-size:11px; background:transparent;"
+                f"color:{color}; font-size:11px; background:transparent;"
             )
         self._server_btn.style().unpolish(self._server_btn)
         self._server_btn.style().polish(self._server_btn)

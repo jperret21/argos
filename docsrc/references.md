@@ -65,8 +65,8 @@ Pence, W. D., Chiappetti, L., Page, C. G., Shaw, R. A., & Stobie, E. 2010,
 *A&A*, **524**, A42 — [doi:10.1051/0004-6361/201015362](https://doi.org/10.1051/0004-6361/201015362)
 
 **AAVSO Extended File Format** — the submission format ARGOS's target export
-produces. The observer code goes in Settings; left unset, exports are stamped
-`XXX`.
+produces. The observer code goes in Settings; left unset, the export is
+refused.
 AAVSO — <https://www.aavso.org/aavso-extended-file-format>
 
 **TG — the untransformed green band.** ARGOS measures the green plane of the
@@ -267,7 +267,7 @@ to a result, cite it as software with its version and repository:
 
 ```text
 Perret, J. 2026, ARGOS: differential photometry for smart telescopes,
-v0.4.1, https://github.com/jperret21/argos
+v0.4.2, https://github.com/jperret21/argos
 ```
 
 ```{important}

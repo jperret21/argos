@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from argos.core.imaging.session_log import SESSION_FILENAME
-from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet
+from argos.core.catalog.targets import ROLE_CHECK, ROLE_COMPARISON, ROLE_TARGET, TargetSet
 from argos.core.photometry.lightcurve import LightCurve, read_curves_csv
 
 
@@ -188,19 +188,8 @@ def load_session_curves(review: ReviewedSession) -> dict[str, LightCurve]:
     targets = TargetSet.load(review.root / "targets.json")
     for path in sorted((review.root / "photometry").glob("*.csv")):
         try:
-            role, identity, name, auid = _curve_identity(path, targets)
-            for key, curve in read_curves_csv(path).items():
-                # A multi-curve CSV already carries identity metadata.  The
-                # one-star session CSVs use the sidecar data reconstructed
-                # above.  Filename role always wins for those legacy files.
-                if key == f"target:{path.stem}" or key == path.stem:
-                    curve.role = role
-                    curve.name = name
-                    curve.auid = auid
-                    key = identity
-                elif not curve.name:
-                    curve.name = name
-                curves_key = str(key)
+            identified, _problems = identify_curve_file(path, read_curves_csv(path), targets)
+            for curves_key, curve in identified.items():
                 existing = curves.get(curves_key)
                 # The same physical target may have an AUID and a catalogue
                 # alias recorded in one session. Keep the more complete curve
@@ -212,11 +201,66 @@ def load_session_curves(review: ReviewedSession) -> dict[str, LightCurve]:
     return curves
 
 
-def _curve_identity(path: Path, targets: TargetSet) -> tuple[str, str, str, str]:
-    """Recover ``(role, key, label, auid)`` for a per-star curve CSV."""
+def identify_curve_file(
+    path: Path | str, curves: dict[str, LightCurve], targets: TargetSet
+) -> tuple[dict[str, LightCurve], list[str]]:
+    """Give the curves read from one CSV their scientific role and star.
+
+    A per-star CSV carries only measurement columns, so ``read_curves_csv``
+    returns it as one "target" curve named after the file. The role comes
+    from the engine's file-name prefix (``{role}_{object}_{tag}.csv``), the
+    star from ``targets.json`` (AUID suffix first, then name); an unprefixed
+    file (legacy, batch re-run) takes the role of the star it matches. A
+    multi-curve export already carries role and identity and is kept as is.
+
+    Returns the curves keyed by identity, and one problem line per one-star
+    file whose role or star could not be recovered — such a curve must not
+    be exported to AAVSO (its NAME would be the file name).
+    """
+    path = Path(path)
+    role, identity, name, auid, matched = _curve_identity(path, targets)
+    identified: dict[str, LightCurve] = {}
+    problems: list[str] = []
+    for key, curve in curves.items():
+        if key == f"target:{path.stem}" or key == path.stem:
+            if role is None:
+                problems.append(
+                    f"{path.name}: role unknown — no role prefix in the file name and "
+                    "no star of targets.json matches it."
+                )
+            elif not matched:
+                problems.append(f"{path.name}: star unknown — no star of targets.json matches it.")
+            curve.role = role or ROLE_TARGET
+            curve.name = name
+            curve.auid = auid
+            key = identity
+        elif not curve.name:
+            curve.name = name
+        identified[str(key)] = curve
+    return identified, problems
+
+
+#: File-name prefixes of the engine's per-star CSVs (``{role}_{object}_{tag}``).
+_ROLE_PREFIXES = (
+    ("target_", ROLE_TARGET),
+    ("comparison_", ROLE_COMPARISON),
+    ("check_", ROLE_CHECK),
+)
+
+
+def _curve_identity(path: Path, targets: TargetSet) -> tuple[str | None, str, str, str, bool]:
+    """Recover ``(role, key, label, auid, matched)`` for a per-star curve CSV.
+
+    ``role`` is None for an unprefixed file that matches no star; ``matched``
+    says whether a star of ``targets`` was found.
+    """
     stem = path.stem
-    role = ROLE_COMPARISON if stem.startswith("comparison_") else ROLE_TARGET
-    candidates = [star for star in targets.stars if star.role == role]
+    role = next((role for prefix, role in _ROLE_PREFIXES if stem.startswith(prefix)), None)
+    if role is not None:
+        candidates = [star for star in targets.stars if star.role == role]
+    else:  # any role; on a name tie, the science target first
+        order = {ROLE_TARGET: 0, ROLE_CHECK: 1, ROLE_COMPARISON: 2}
+        candidates = sorted(targets.stars, key=lambda star: order.get(star.role, 3))
     # AUID suffix is unambiguous and takes precedence over display names.
     star = next((item for item in candidates if item.auid and stem.endswith(item.auid)), None)
     if star is None:
@@ -229,7 +273,8 @@ def _curve_identity(path: Path, targets: TargetSet) -> tuple[str, str, str, str]
             None,
         )
     if star is None:
-        return role, f"{role}:{stem}", stem, ""
+        return role, f"{role or ROLE_TARGET}:{stem}", stem, "", False
+    role = role or star.role
 
     # Targets are deduplicated by sky position, not AUID: a catalogue alias
     # and the user-selected name can legitimately describe the same star.
@@ -237,7 +282,7 @@ def _curve_identity(path: Path, targets: TargetSet) -> tuple[str, str, str, str]
         identity = f"{role}:pos:{star.ra_deg:.4f},{star.dec_deg:.4f}"
     else:
         identity = star.auid or f"{role}:pos:{star.ra_deg:.5f},{star.dec_deg:.5f}"
-    return role, identity, star.display_name, star.auid or ""
+    return role, identity, star.display_name, star.auid or "", True
 
 
 def _safe_component(value: str) -> str:

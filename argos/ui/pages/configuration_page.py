@@ -179,6 +179,7 @@ class ConfigurationPage(QWidget):
         self._elev_spin.setRange(-500.0, 9000.0)
         self._elev_spin.setDecimals(1)
         self._elev_spin.setSuffix(" m")
+        self._elev_spin.setKeyboardTracking(False)
         self._elev_spin.valueChanged.connect(self._save_site)
         grid.addWidget(design.MutedLabel("Elevation"), 3, 0)
         grid.addWidget(self._elev_spin, 3, 1)
@@ -270,6 +271,7 @@ class ConfigurationPage(QWidget):
         spin.setRange(low, high)
         spin.setDecimals(5)
         spin.setSuffix(" °")
+        spin.setKeyboardTracking(False)  # save the typed value, not each keystroke
         return spin
 
     @staticmethod
@@ -525,7 +527,7 @@ class ConfigurationPage(QWidget):
         self._scope_combo = QComboBox()
         for key in catalog.keys():
             entry = catalog.PROFILES[key]
-            label = entry.name if entry.validated else f"{entry.name}  (unvalidated)"
+            label = entry.name if entry.validated else f"{entry.name}{catalog.UNVALIDATED_SUFFIX}"
             self._scope_combo.addItem(label, key)
         self._scope_combo.currentIndexChanged.connect(self._save_telescope)
 
@@ -577,7 +579,7 @@ class ConfigurationPage(QWidget):
         else:
             self._scope_warning.setVisible(True)
             self._scope_warning.setText(
-                "Unvalidated profile — never run on this hardware. " + " · ".join(scope.caveats)
+                f"{catalog.UNVALIDATED_WARNING} " + " · ".join(scope.caveats)
             )
 
     def _save_telescope(self) -> None:
@@ -604,6 +606,12 @@ class ConfigurationPage(QWidget):
     def sync_telescope_profile(self) -> None:
         """Reflect the shared active instrument after a Connection/Settings change."""
         self._refresh_telescope_card()
+
+    def set_profile_locked(self, locked: bool) -> None:
+        """Lock the model while equipment is connected, as the Connection page
+        does: a change is refused then, so the picker must not offer it."""
+        self._scope_combo.setEnabled(not locked)
+        self._scope_combo.setToolTip(catalog.PROFILE_LOCKED_HINT if locked else "")
 
     def _build_camera_card(self) -> "design.Card":
         card = design.Card("Camera")
@@ -952,6 +960,8 @@ class ConfigurationPage(QWidget):
         if not name:
             self._site_search_status.setText("Name the site before saving it as a favourite.")
             return
+        for spin in (self._lat_spin, self._lon_spin, self._elev_spin):
+            spin.interpretText()  # a value typed without Enter (focus stays on macOS)
         favorite = {
             "name": name,
             "latitude": float(self._lat_spin.value()),

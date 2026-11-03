@@ -308,12 +308,15 @@ only some of them act.
 | Excludes it from automatic selection and from tracking anchors | yes | yes |
 | Removes a flagged **target** point from the curve | **no** | **no** |
 | Appears as a column in `photometry.csv` | yes | yes |
+| Leaves a **target** point out of the AAVSO export (since 0.5.0) | yes | yes |
 
 So a comparison star flagged only as *suspect* still contributes to the
 magnitude ensemble, and a *suspect* target point is still measured, plotted and
-exported. What changed in 0.4.2 is that you can now **see** it afterwards: the
-flag is a column, so a suspicious point can be found in the file rather than
-only in the live view. Filtering on it is still your decision, not ARGOS's.
+written to the CSV. What changed in 0.4.2 is that you can now **see** it
+afterwards: the flag is a column, so a suspicious point can be found in the file
+rather than only in the live view. Since 0.5.0 the AAVSO export leaves flagged
+target points out and says how many; a flagged check point never provides
+`KMAG`. Filtering the CSV is still your decision, not ARGOS's.
 ```
 
 ## 4. The comparison ensemble
@@ -449,7 +452,8 @@ on the baseline you actually observed.
 
 ```{warning}
 The **Relative flux** display in the transit panel does normalise — to the
-median of the series currently shown. That is a *display* convenience and it has
+median of the series currently shown, saturated points left out (before 0.5.0
+they were included). That is a *display* convenience and it has
 a failure mode: if most of your run is in transit, the median sits inside the
 event, the baseline is pulled down and the depth looks shallower than it is.
 Judge depth from an exported, un-normalised series with a real out-of-transit
@@ -603,7 +607,7 @@ $\sigma_\text{real}$ of §5 and the median formal error, then classifies:
 
 | Status | Condition |
 |---|---|
-| *insufficient data* | fewer than 10 valid points, or no scatter estimate |
+| *insufficient data* | fewer valid points than the configured minimum (`photometry.comparison_validation_min_points`, 10 by default), or no scatter estimate |
 | **Noisy** | median formal error $> 0.10$ mag — the star is too faint or too poorly measured to judge |
 | **Unstable** | scatter $> 0.10$ mag — the star moves relative to the others |
 | **Stable** | neither of the above |
@@ -612,9 +616,12 @@ The ensemble as a whole is then reported as *insufficient data* while any
 comparison is still unassessed, **not ready** while fewer than three
 comparisons are stable, and *live-preview consistent* otherwise.
 
-The report is written to `photometry_quality.json` in the session folder and
-shown live in the **Comparison quality** panel, with the criteria that produced
-it recorded alongside the verdicts.
+The report is recomputed on every measured frame, in plain live preview as well
+as during a sequence, and shown live in the **Comparison quality** panel with the
+ensemble verdict and its caveat. During a sequence it is also written to
+`photometry_quality.json` in the session folder, with the criteria that produced
+it recorded alongside the verdicts. (Before 0.5.0 it was computed only once a
+sequence had saved a frame.)
 
 ```{warning}
 "Stable" means only that the *live preview* has enough internally consistent
@@ -671,6 +678,8 @@ more than rounding.
 
 The point falls back to the frame-level value when no observing site is
 configured — without a latitude and longitude there is no altitude to compute.
+A site counts as configured when it has a name or coordinates other than the
+0/0 default; before 0.5.0 the default was used as a real site.
 ```
 
 ## 8. What the export actually contains

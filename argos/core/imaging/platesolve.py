@@ -77,6 +77,7 @@ class SolveSettings:
 
     astap_path: str = ""  # explicit binary; empty → auto-detect
     database: str = ""  # star DB name (empty → ASTAP auto-picks by FOV)
+    database_dir: str = ""  # folder holding the star DBs (empty → auto-detect)
     search_radius_deg: float = 30.0  # 0 = blind (slower)
     downsample: int = 2  # 0 = ASTAP auto
     scale_hint_arcsec: float | None = None  # known plate scale → faster/locked
@@ -298,22 +299,23 @@ def _build_command(astap: str, fits_path: Path, s: SolveSettings) -> list[str]:
         cmd += ["-fov", f"{s.fov_hint_deg:g}"]
     if s.ra_hint_hours is not None and s.dec_hint_deg is not None:
         cmd += ["-ra", f"{s.ra_hint_hours:g}", "-spd", f"{s.dec_hint_deg + 90.0:g}"]
-    cmd += _database_args(astap, s.database)
+    cmd += _database_args(astap, s.database, s.database_dir)
     return cmd
 
 
-def _database_args(astap: str, database: str) -> list[str]:
-    """Star-database flags: ``-D <abbreviation>`` (e.g. "D05") vs ``-d <path>``.
+def _database_args(astap: str, database: str, database_dir: str = "") -> list[str]:
+    """Star-database flags: ``-D <abbreviation>`` (e.g. "D05") and ``-d <folder>``.
 
-    The config exposes abbreviations, so a path-looking value uses ``-d``,
-    anything else ``-D``. With no explicit directory, auto-detect one:
-    ``astap_cli`` only searches next to its own binary, which is empty under
-    Homebrew's ``bin/``.
+    ``database`` is the set's abbreviation; a path-looking value (legacy) is
+    passed alone as ``-d``. ``database_dir`` is the folder holding the sets;
+    it is passed together with ``-D`` so a folder never drops the chosen set.
+    With no folder, auto-detect one: ``astap_cli`` only searches next to its
+    own binary, which is empty under Homebrew's ``bin/``.
     """
     if database and ("/" in database or Path(database).is_dir()):
         return ["-d", database]
     args = ["-D", database] if database else []
-    db_dir = find_astap_db(astap)
+    db_dir = database_dir or find_astap_db(astap)
     if db_dir:
         args += ["-d", db_dir]
     return args

@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QTabWidget,
     QVBoxLayout,
@@ -154,6 +155,31 @@ class PhotometrySetupPanel(QWidget):
         root.addWidget(note)
         root.addStretch(1)
 
+    #: Config keys of the measurement geometry, fixed while a sequence runs.
+    GEOMETRY_KEYS = (
+        "photometry.aperture_fwhm_mult",
+        "photometry.aperture_min_px",
+        "photometry.annulus_in_px",
+        "photometry.annulus_out_px",
+    )
+
+    def set_geometry_locked(self, locked: bool) -> None:
+        """Freeze the aperture/annulus controls while a sequence runs.
+
+        One light curve must use one aperture: a change applied from the next
+        sub would mix two geometries in the same series, unrecorded. The
+        comparison-selection controls stay available.
+        """
+        tip = "Locked while a sequence runs — the curve must use one aperture."
+        for spin, free_tip in (
+            (self._fwhm_mult, "Photometric aperture radius; 2–3 × FWHM is a typical start."),
+            (self._minimum, "Lower limit for the aperture radius in green-plane pixels."),
+            (self._annulus_in, "Inner radius of the local-sky annulus."),
+            (self._annulus_out, "Outer radius of the local-sky annulus."),
+        ):
+            spin.setEnabled(not locked)
+            spin.setToolTip(tip if locked else free_tip)
+
     @staticmethod
     def _radius_spin(lower: float, upper: float) -> QDoubleSpinBox:
         spin = QDoubleSpinBox()
@@ -253,6 +279,8 @@ class PhotometryWindow(QWidget):
         self.filt = "TG"
         # The selection behind the curves; its comparisons name the AAVSO CHART.
         self._target_stars: list = []
+        # Where the export dialogs open (the session or the CSV's folder).
+        self.default_dir: Path | None = None
 
     # ------------------------------------------------------------------
     # Real API (WS7): feed_point / set_export_meta / load_curves
@@ -288,40 +316,86 @@ class PhotometryWindow(QWidget):
         self.targets.set_targets(stars)
         self.comparisons.set_targets(stars)
 
-    def load_curves(self, curves: dict, obscode: str = "XXX", filt: str = "TG") -> None:
+    def set_aavso_export_enabled(self, enabled: bool, reason: str = "") -> None:
+        """Allow or forbid the AAVSO export (e.g. a curve whose star is unknown)."""
+        self._aavso_btn.setEnabled(enabled)
+        self._aavso_btn.setToolTip(
+            "Export science targets only; comparison curves are diagnostics"
+            if enabled
+            else reason or "AAVSO export unavailable"
+        )
+
+    def load_curves(
+        self, curves: dict, obscode: str = "XXX", filt: str = "TG", *, keep_view: bool = False
+    ) -> None:
         """Display finished curves (e.g. reloaded from a session CSV by Analyze).
 
         ``curves`` maps a key to a :class:`LightCurve`; its points are plotted
         and kept for export. Replaces any currently shown curves.
+        ``keep_view`` (live re-render) keeps the user's zoom, see
+        :meth:`LightCurvePanel.set_curves`.
         """
         self.lightcurves = dict(curves)
         self.obscode = obscode or "XXX"
         self.filt = filt or "TG"
-        self.lightcurve.set_curves(self.lightcurves)  # same path as the dock
+        self.lightcurve.set_curves(self.lightcurves, keep_view=keep_view)  # same path as the dock
+
+    def _export_dir(self) -> Path:
+        return Path(self.default_dir) if self.default_dir else Path.home()
 
     def _export_csv(self) -> None:
         curves = [lc for lc in self.lightcurves.values() if lc.points]
         if not curves:
+            QMessageBox.information(self, "Export measurements", "No measurements to export.")
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export light curve", str(Path.home() / "photometry.csv"), "CSV (*.csv)"
+            self, "Export light curve", str(self._export_dir() / "photometry.csv"), "CSV (*.csv)"
         )
-        if path:
+        if not path:
+            return
+        try:
             write_curves_csv(path, curves)  # canonical 9-column schema (+ target)
+        except OSError as exc:
+            QMessageBox.warning(self, "Export measurements", f"Could not write {path}:\n{exc}")
 
     def _export_aavso(self) -> None:
+        # "XXX" is the placeholder the pages pass when Settings has no code.
+        obscode = (self.obscode or "").strip()
+        if not obscode or obscode.upper() == "XXX":
+            QMessageBox.warning(
+                self,
+                "Export AAVSO",
+                "Set your AAVSO observer code in Settings first: it is stamped on every "
+                "AAVSO report.",
+            )
+            return
         curves = [lc for lc in self.lightcurves.values() if lc.points]
         if not any(lc.role == "target" for lc in curves):
+            QMessageBox.information(self, "Export AAVSO", "No target points to export.")
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export AAVSO", str(Path.home() / "aavso.txt"), "Text (*.txt)"
+            self, "Export AAVSO", str(self._export_dir() / "aavso.txt"), "Text (*.txt)"
         )
-        if path:
+        if not path:
+            return
+        try:
             # Check curves only fill KNAME/KMAG; write_aavso never makes them rows.
-            write_aavso(
+            summary = write_aavso(
                 path,
                 curves,
-                obscode=self.obscode or "XXX",
+                obscode=obscode,
                 filt=self.filt or "TG",
                 chart=comparison_chart_id(self._target_stars),
             )
+        except OSError as exc:
+            QMessageBox.warning(self, "Export AAVSO", f"Could not write {path}:\n{exc}")
+            return
+        excluded = []
+        if summary.saturated_excluded:
+            excluded.append(f"{summary.saturated_excluded} saturated")
+        if summary.suspect_excluded:
+            excluded.append(f"{summary.suspect_excluded} suspect (cosmic ray / hot pixel)")
+        text = f"{summary.rows} observation(s) written to {Path(path).name}."
+        if excluded:
+            text += "\nLeft out: " + ", ".join(excluded) + " point(s)."
+        QMessageBox.information(self, "Export AAVSO", text)
