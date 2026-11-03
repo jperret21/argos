@@ -13,7 +13,7 @@
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte';
-  import { FocusReturn, focusableIn, focusTargetOf } from './focus';
+  import { focusableIn, FocusReturn, focusTargetOf, keepKeysInside } from './focus';
   import { type CloseReason, floating, layer, portal } from './layers';
   import type { Placement } from './position';
 
@@ -57,21 +57,20 @@
     const back = new FocusReturn(document, focusTargetOf(anchor));
     let restore = true;
     queueMicrotask(() => (focusableIn(node)[0] ?? node).focus({ preventScroll: true }));
-    const onKey = (e: KeyboardEvent) => {
-      // Keys used in the popover stay in it (a checkbox's Space is not a shortcut).
-      if (e.key !== 'Escape') e.stopPropagation();
-    };
+    // Keys used in the popover stay in it (a checkbox's Space is not a
+    // shortcut), stopped at the document after the controls' own delegated
+    // handlers ran (focus.ts keepKeysInside).
+    const release = keepKeysInside(node);
     const onFocusOut = (e: FocusEvent) => {
       const next = e.relatedTarget as Node | null;
       if (!next || node.contains(next) || anchor?.contains(next)) return;
       restore = false;
       close('tab');
     };
-    node.addEventListener('keydown', onKey);
     node.addEventListener('focusout', onFocusOut);
     return {
       destroy() {
-        node.removeEventListener('keydown', onKey);
+        release();
         node.removeEventListener('focusout', onFocusOut);
         // A press outside leaves focus where the observer clicked.
         const active = document.activeElement;

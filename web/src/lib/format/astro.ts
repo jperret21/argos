@@ -11,7 +11,9 @@
  * argos/core/imaging/platesolve.py, and RA and Dec are rounded the same way.
  */
 
-export const MINUS = '−';
+import { fixed, MINUS } from './number';
+
+export { MINUS };
 export const PRIME = '′';
 export const DOUBLE_PRIME = '″';
 
@@ -45,12 +47,9 @@ export function formatDec(degrees: number, decimals: 0 | 1 = 0): string {
   return `${sign}${pad2(d)}° ${pad2(m)}${PRIME} ${s}${DOUBLE_PRIME}`;
 }
 
-/** Signed decimal with U+2212 for negatives (no sign for positives). */
+/** Signed decimal with U+2212 for negatives (no sign for positives): number.ts `fixed`. */
 export function formatSigned(value: number, digits: number): string {
-  if (!Number.isFinite(value)) return '—';
-  const text = Math.abs(value).toFixed(digits);
-  const isZero = Number(text) === 0;
-  return value < 0 && !isZero ? `${MINUS}${text}` : text;
+  return fixed(value, digits);
 }
 
 /** Altitude / azimuth / any angle in decimal degrees: "41.27°". */

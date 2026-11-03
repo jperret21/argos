@@ -3,11 +3,23 @@
 Owner: design team (`web/src/design/`). Audience: front-end developers, icon designers,
 art QA. This guide is normative: a component or icon that breaks a MUST rule here is a bug.
 
+**Status (2026-11-01).** The owner accepted the art-direction decisions D1-D11 of the design
+lab (`web/lab/PROPOSAL.md` section 10) on 2026-11-01: task modes and the task band (D1), Run
+controls in Observe with a server interlock (D2), Watch and server-side attention rules
+(D3), Park by hold and Stop by dialog (D4), U+202F grouping and U+00D7 factors (D5), the
+cursor readout on the image HUD (D6), Comfortable density as tokens (D7), the frame sizes
+toolbar 44 px, status bar 28 px, right panel 360-580 px with 400 by default (D8), queued
+focuser taps (D9), check star as check − catalogue V (D10) and the data-ramp and hatching
+exception to principle 2 (D11). The amendments of PROPOSAL section 4 are applied below
+(sections 2, 3, 4.3, 5, 7, 8, 9, 10, 11.1 and the new section 13); the tokens of PROPOSAL
+section 5 are in `tokens.css`. Where an older answer differs (README Q-G4, the 420 px rail,
+the 47 px Observe toolbar, the 32 px status bar), these decisions win.
+
 Files in this folder:
 
 | File | Role |
 |---|---|
-| `tokens.css` | All colours, type, spacing, radii, icon sizes, states, motion, chart tokens. Three themes. |
+| `tokens.css` | All colours, type, spacing, radii, icon sizes, control and frame metrics, states, motion, chart tokens. Three themes, two densities (Compact, Comfortable). |
 | `fonts.css`, `fonts/` | IBM Plex Sans / Mono, bundled (SIL OFL 1.1, see `fonts/OFL.txt`). |
 | `icons/<id>.svg` | One original icon per id, 24 x 24 grid, `currentColor` only. |
 | `icon-inventory.json` | Every current Qt action mapped to an icon id, with the glyph's metaphor. |
@@ -32,8 +44,11 @@ at the measurement."* The UI is where that measurement happens.
 
 1. **Data first.** The image, the coordinates and the light curve are the content; the
    chrome recedes. Neutral graphite everywhere, colour only where it carries meaning.
-2. **Calm.** No gradients, glows, glass, bouncing or decorative animation. Nothing moves
-   unless the instrument moves or a value changes.
+2. **Calm.** No decorative gradients, glows, glass, bouncing or decorative animation.
+   Nothing moves unless the instrument moves, a value changes, or the observer changes
+   the layout. Two graded fills are data and are allowed: a display ramp that shows the
+   exact mapping of the image (LUT preview), and hard-stop hatching that marks a period
+   or a stale state.
 3. **Precise.** Numbers in a monospaced face with tabular figures and explicit units;
    one decimal convention per quantity; signs always shown on declinations.
 4. **Dark-adapted.** Every theme is dark. Night Red guarantees that nothing on screen
@@ -41,17 +56,25 @@ at the measurement."* The UI is where that measurement happens.
 5. **Deliberate actions are visible, routine actions are compact.** Frequent tools are
    icon-only; anything that moves hardware irreversibly, stops a run or writes files keeps
    its label (section 7).
-6. **One vocabulary.** The same shape means the same thing on the image, in the plots and
-   in the icons: circle = target, square = comparison, triangle = check.
+6. **One vocabulary.** The same shape means the same thing on the image, in the plots,
+   in the controls and in the icons: circle = target, square = comparison, triangle =
+   check, and these three shapes mean nothing else (an attention mark is never a
+   triangle). A ring around a control is elapsed time; a dashed edge is "not current" or
+   "not yet sent"; a hollow mark is idle.
 7. **Say the observer's task, not the implementation.** "Identify field" on the button,
    "ASTAP plate solve" in the tooltip (the convention the Qt app already follows).
+8. **Spaces follow the night.** Each section keeps one set of regions. Observe re-arranges
+   them in four task modes (Framing, Focus, Field, Run) and a Watch view serves the hours
+   of waiting. The observer chooses the mode; the app only suggests one.
+9. **Liveness is always visible.** Anything live shows its age; a live time plot runs to
+   "now"; a stale value says so in words; an alert never hides the last-frame age.
 
 ## 3. What is preserved from the current charter, and why
 
 | Element | Decision | Why |
 |---|---|---|
 | Palettes | Observatory (default), Charcoal and Night Red hexes copied **unchanged** from `argos/ui/palettes.py` into `tokens.css` (checked by script against the dataclasses). | They are the product's identity and already field-tested. Mandatory token names mirror the `Palette` fields (`bg2` becomes `--bg-2`, `border_soft` becomes `--border-soft`). |
-| Brass `#c49a3c` | Reserved for **focus, selection and deliberate actions** (primary button, selected rail entry, toggled tool, focus ring, the active target). Never decoration, never a large background, never body text. | Brass comes from the ARGOS mark; scarcity is what makes it mean "this one". |
+| Brass `#c49a3c` | Reserved for **focus, selection and deliberate actions** (primary button, selected rail entry, toggled tool, focus ring, the active target). Never decoration, never a large background, never body text. `--role-target` is in the brass family on purpose (the active target), so a target series already spends brass on a run screen: long or large fills (areas, coverage blocks, progress bars) never use `--accent` or a role colour; they use neutral inks. | Brass comes from the ARGOS mark; scarcity is what makes it mean "this one". |
 | Graphite neutrals | Backgrounds, surfaces, borders and text stay neutral graphite. | "A scientific cockpit should not read like a dashboard of unrelated blue/green/purple status colours" (palettes.py). |
 | Semantic colours | `--success`, `--warning`, `--danger` keep their muted charter values and their meaning only. | Status must never be mistaken for a data series. |
 | Night Red | Kept with its rules: luminance hierarchy instead of hue, states always double-coded by icon or label. | Dark adaptation of the observer's eyes. |
@@ -163,6 +186,13 @@ In `[data-theme="night-red"]` **nothing on screen may emit non-red light.**
   be drawn as colour emoji, which emit yellow, blue or white light in Night Red. The Qt
   labels used them as icons; the web UI uses `icons/` instead.
 
+**Audit (MUST, in CI).** Every Night Red screenshot, in Chromium and in WebKit, passes:
+(a) no pixel has G > R or B > R; (b) no pixel has max(G, B) > 8 and max(G, B) > 0.68 × R,
+with ±0.5 per channel allowed for 8-bit rounding (anti-aliased `--fg` edges over black).
+Audit captured originals, never a resampled copy: a resampling filter with negative lobes
+creates green above red on near-black edges. Tool: `web/scripts/audit-png.mjs`
+(`npm run audit:night-red`; moved from `web/lab/synthesis/` in wave 2).
+
 Note (measured, not changed): the charter's Night Red colours are red-dominant but not
 pure red. Green and blue carry 60 % of the luminance of `--fg` (`#d88f8f`), 48-50 % of
 `--fg-muted`, `--text-muted` and `--variable`, and 33-38 % of the accents, warning, danger
@@ -197,6 +227,14 @@ explicit). Right-align numeric columns and give each quantity a fixed number of 
 decimal points line up. Display negatives with U+2212 MINUS SIGN so `+` and `-` take the
 same width.
 
+Thousands are grouped with U+202F NARROW NO-BREAK SPACE from 1 000 up, in every face
+(`12 450`, `65 535 ADU`): one cell wide in Plex Mono, so columns stay aligned, and never
+broken across lines. Never a comma (a decimal mark for much of Europe) or a plain space.
+Factors and products use U+00D7 (`2.5× baseline`, `20 × 10 s`), never the letter x.
+`Intl` number formatters are not used for display (they produce U+002D).
+(Implementation: `web/src/lib/format/number.ts`, which also parses what an observer types,
+point or comma decimal.)
+
 **Coverage facts** (checked on the bundled files): Plex Mono has no Greek letters; set
 alpha, delta, sigma, Delta in `--font-ui`. Neither face has U+25CF / U+25CB; draw status
 dots with CSS or SVG. Degree, prime, double prime, plus-minus, multiplication and minus
@@ -217,6 +255,8 @@ signs are present in both.
 | Durations / ETA | `1h 05m`, `12m 30s`, `10 s` exposure | `ETA 1h 05m` |
 | Temperature | space before °C (SI) | `−10.0 °C` |
 | Pixel measures | value + `px` (state the channel when it matters) | `HFD 2.1 px` |
+| Integers and counts | grouped with U+202F | `12 450 steps` |
+| Factors | value + U+00D7 | `1.5× baseline` |
 
 Rounding: round once to the displayed precision, then carry (59.96 s becomes 00.0 s and
 the minute increments), as `format_ra_hms` in `argos/core/imaging/platesolve.py` does.
@@ -425,6 +465,15 @@ place).
 | Menu items | Text, with an optional 16 px icon on the left. |
 | Navigation rail | 24 px icon above an 11 px label, plus the state dot (ready / active / blocked). |
 | Toggles (overlays, tracking, crosshair, loupe) | Same glyph on and off; state shown by the toggled style and `aria-pressed`. A running process (live, autofocus) may swap to `stop` and changes its `aria-label`. |
+| Physical action that is hard to undo at night (Park; pause the run to slew) | Icon + label at `--control-h-l` (40 px), **hold to confirm** for `--hold-duration` with the time ring; Enter / Space open an inline two-button confirmation instead. The label never changes while held; the caption under the button does. |
+| A control that cannot act now | `aria-disabled` (still focusable), the reason in the tooltip's second line; a press shows the reason at once. |
+| An action with options | Split button: the main part acts with the options written on it (`2.0 s`); the chevron or ArrowDown opens them; choosing an option never runs the action. |
+
+Holding ⌘ (Ctrl elsewhere) alone for 450 ms shows each control's shortcut as a neutral
+key cap where the control is; any other key cancels. The command palette (⌘K / Ctrl+K)
+lists every action with its key or its unavailable reason; a hardware action in it opens
+its confirmation and never runs on Enter alone. Jog keys show axis words on an alt-az
+mount (Alt +, Alt −, Az −, Az +) and N / S / W / E on an equatorial one (Q-O4).
 
 `icon-inventory.json` gives the default `display` per id; a context may promote an icon to
 icon + label, never the reverse for the second row above. Every icon has an accessible name;
@@ -453,35 +502,80 @@ Mirrors the Qt stylesheet, with the contrast fixes of section 3.
 | Disabled | glyph/text `--fg-disabled`, outline `--border-soft`, no hover; prefer `aria-disabled` + a tooltip saying why | same | fill `--surface` | same |
 | Busy | glyph replaced by a spinner (a logo-like arc, 1.5 stroke, 0.9 s per turn), `aria-busy`, width unchanged, still focusable | same | same | same |
 
+- **Error** (the last attempt failed): `--danger` outline, a 6 px `--danger` dot in the
+  top-right corner, the device's words in the tooltip and `aria-describedby`; cleared by
+  the next success.
+- **Progress** (a timed operation: exposure, autofocus sweep, export): a ring around the
+  glyph whose arc is the exact elapsed fraction, linear, butt caps, `--ring-w`; under
+  reduced motion it advances in quarters and the numbers stay exact.
+- **Pressed** adds `--pressed-inset` (a 1 px black inner top edge) to the pressed fill; no
+  scale, no bounce.
+- **Device value fields**: not sent (dashed edge, "Enter sends"), sending (spinner in the
+  unit slot), applied (with when it takes effect), refused (the device's words; Esc
+  reverts), invalid (never clamped silently), unavailable (the reason). One value per
+  commit (Enter, release, blur), never per keystroke or pixel of drag.
+- **Modifiers**, for every value control: plain = one step; Shift = ×10 or snap to ticks;
+  Alt = ×0.1; the wheel acts only on a focused control; Esc returns to the device value.
+- **Attention levels** (chips, lists, Run card, Watch), always with the word: Critical =
+  filled `--danger` disc, its sound repeats until acknowledged; Attention = upright mark
+  (a bar over a dot) in `--warning`; Info = hollow ring.
+
 Selected rail entry: glyph and label `--toggled-fg`, fill `--surface`, 3 px `--accent` bar
 on the left (as in Qt). Segmented choices (transfer, rotation, equipment) always hold one
 selection, so the selected segment is fill `--toggled-bg`, text `--fg`, edge `--border`:
 no brass. A routine stop (live view) is a secondary button with only its glyph in
-`--danger`; the full danger style is for motion (a slew) and destructive actions. Brass
-budget while observing: about eight marks on the whole screen (selected rail entry and
-its state dot, the live toggle, auto stretch, the LIVE chip's dot, the exposure progress,
-the black and white levels); count them on a live screenshot after any change. `--toggled-fg` is brass in Observatory, the lighter brass in
-Charcoal and the bright red in Night Red, so the label passes AA on `--surface` and on a
-14 % brass tint in every theme. Control sizes: `--control-h-s` 30 px (16 px icon), `--control-h-m` 34 px
-(20 px icon), inputs 28 px; hit targets are never below 24 x 24 px.
+`--danger`; the full danger style is for motion (a slew) and destructive actions.
+
+Brass budget while observing: about eight marks (selected rail entry and its state dot,
+the live toggle and its ring, auto stretch, the LIVE / REC chip dot, the exposure ring,
+the black and white levels, the active target's marker and series). Run progress bars,
+coverage blocks, key-hint caps and attention marks are not brass. Count them on a live
+screenshot after any change (`audit-png.mjs --brass`).
+
+`--toggled-fg` is brass in Observatory, the lighter brass in Charcoal and the bright red
+in Night Red, so the label passes AA on `--surface` and on a 14 % brass tint in every
+theme.
+
+Control sizes: `--control-h-s` 30 px (16 px icon), `--control-h-m` 34 px (20 px icon),
+`--control-h-l` 40 px (hold-to-confirm targets, Watch), jog keys `--jog-key` 44 px,
+inputs 28 px; hit targets are never below 24 x 24 px.
 
 ## 9. Layout, density, elevation, motion
 
 - **Density:** compact, instrument-like. Spacing scale `--space-1` 4, `-2` 6, `-3` 8, `-4`
   12, `-5` 18, `-6` 24 px. Card padding 12 / 14 / 12 / 10 px (Qt `CARD_PADDING`). Table rows
   24 px, list rows 28 px. Sparse form pages are capped at `--page-max-w` (880 px); the
-  observing cockpit uses the full width with a right rail of 420-580 px.
+  observing cockpit uses the full width with a right rail of 360-580 px, 400 px by default
+  (`--rail-min-w`, `--rail-w`, `--rail-max-w`), under a 44 px section toolbar
+  (`--toolbar-h`) and over a 28 px status bar (`--statusbar-h`) (owner D8).
+  **Comfortable** density (Settings › Appearance) changes tokens, never the page zoom:
+  readouts 20 px (`--readout`: the Mount card's RA, Dec, Alt, Az), key readouts 26 px
+  (`--readout-key`), card facts and frame statistics 16 px (`--readout-s`, 13 px compact:
+  the Camera card's In use / Sensor, the Levels band's Black / Mid / White and Min / Median
+  / Max), table and list rows 28 px (`--row-h`), activity-log lines 24 px (`--log-row-h`,
+  20 px compact); toolbar, icons and image unchanged (wave 2 review: the first cut changed
+  only the Mount readouts).
+  **Watch** sizes: primary values 88 px, secondary 66 px, conditions 48 px, labels 30 px
+  (digits of 66-83 px read from 2 m on a 13-inch 1440 x 900 screen; functional-spaces 2.5).
 - **Radii:** `--radius-s` 2 px (controls, chips), `--radius-m` 4 px (cards, popovers,
   dialogs), `--radius-round` for dots.
 - **Elevation:** flat. Regions are separated by 1 px borders (`--border` between regions,
   `--border-soft` inside). Shadows only on floating layers (menus, popovers, tooltips,
   dragged panels: `--shadow-2`). Shadows are black, so they are safe in Night Red. No
   blur, glow or translucency except the modal `--scrim`.
-- **Motion:** colour state changes `--duration-fast` (120 ms); popovers and panels
-  `--duration-base` (180 ms, opacity plus a 4 px move, `--ease-out`). Data never animates:
-  values, plots and the image update instantly. No bounce, no parallax, no looping
-  decoration. `prefers-reduced-motion: reduce` sets every duration to 0 (tokens do it);
-  the spinner then becomes a static arc with `aria-busy`.
+- **Motion** is for state changes and orientation, and is limited to this list: colour
+  state changes `--duration-fast`; popovers and panels `--duration-base` (opacity and a
+  4 px move); the segmented control's block slides `--duration-fast` after the value is
+  applied; task-mode and section switches cross-fade `--duration-base`; a table re-sort
+  uses flip for `--duration-fast`; a dragged star card settles into a corner (a spring,
+  instant while dragged); a keyboard or button zoom of a plot glides for
+  `--duration-base`.
+- **Elapsed time is linear** (rings, hold fill), never eased.
+- **Data never animates**: values, plots, handles and the image jump to the truth. Live
+  statistics are causal (trailing windows), so a point once drawn never moves.
+- `prefers-reduced-motion: reduce` sets every duration to 0 (tokens do it) except
+  `--hold-duration`, which carries information; rings then advance in quarters and the
+  spinner becomes a static arc with `aria-busy`.
 
 ## 10. Data visualisation
 
@@ -504,6 +598,24 @@ Charcoal and the bright red in Night Red, so the label passes AA on `--surface` 
   on hover, one y-axis per plot (never dual axes), the plot surface `--chart-surface`.
 - Night Red: the role colours collapse to one hue by design; shape and labels carry
   identity. Not a valid categorical palette on colour alone, and documented as such.
+- **Live plots**: the x range ends at "now". Past max(2 × cadence, cadence + 60 s) the gap
+  after the newest point is hatched and the header says "no frame for …".
+- **Zoom states** are named by a chip: Whole run, Following (the right edge on the newest
+  frame), Zoom kept. New data never moves a kept zoom; `F` fits, `End` follows.
+- The newest point wears a static ring in `--chart-highlight`, never a pulse.
+- **Rules**: a dashed `--warning` line at the server's threshold, the period where the rule
+  holds hatched from the frame where it fired, a rug on the frames over it. A live chart
+  never edits a rule.
+- **Check star**: plotted as check − catalogue V with a trailing 15-point mean ± 1σ band;
+  its rms is in the readout. Observe shows target and check as two facets on one time axis
+  (D25); the comparison ensemble facet lives in Review and in the drawer's Light curve tab.
+- **Provisional vs decided**: a fit result stays neutral and labelled "provisional" until
+  it is accepted; brass marks only the accepted decision (the autofocus position).
+- Sparklines and geometry (altitude, airmass) use neutral inks; role colours are for
+  photometric series and role markers only.
+- Canvas inks come from the tokens through `web/src/lib/charts/ink.ts` (resolved by the
+  engine, `color-mix()` included, re-read on a theme change); canvas labels go through
+  `web/src/lib/charts/text.ts`, which always sets `textAlign` and `textBaseline`.
 
 ## 11. Image viewer
 
@@ -537,17 +649,16 @@ half the viewer black, while the stretch card and histogram were pushed below th
   go below them or in a disclosure.
 - **No dead bands.** Toolbars, status bar and chips take one row each, with no empty
   strips. Frame chips sit over the image in a corner, not in a reserved band.
-- **Levels strip (added after the integration review).** Fit alone cannot fill the
-  viewer: with the right rail open at 1440 x 900 the viewer is about 1.13:1 and the
-  rotated frame 1.78:1, which left 150 px bands above and below the image. The display
-  stretch therefore lives in a strip docked **under** the image, sized to exactly that
-  band: `band = centre height − log drawer − centre width × frame h / w`
-  (`web/src/lib/imaging/layout.ts`). Band ≥ 150 px: the full strip (histogram with
-  draggable B / M / W handles on its own x axis, the three levels as numbers, transfer,
-  rotation, the frame statistics), at most 300 px. Smaller band (rail closed): one
-  compact row of the three levels and the transfer, still as tall as the band. `H` hides
-  it (remembered). Measured: bands 0 px at 1440 x 900 and 1280 x 800, 4.5 px at
-  1600 x 1000, 0 px with the rail closed.
+- **Task band (was the levels strip).** The band under the image keeps its size rule
+  (`band = centre height − drawer − centre width × frame h / w`,
+  `web/src/lib/imaging/layout.ts`), and its content follows the Observe task mode:
+  Framing = levels and the exposure check (peaks against 65 535); Focus = V-curve and HFD
+  trend; Field = comparison candidates; Run = the live light curve (target and check).
+  Below 150 px it becomes a one-row summary still as tall as the band. `H` hides it in
+  every mode. Dragging its edge overrides the height for that mode and shows the cost on
+  the image (`Band 445 px · image 681 × 383 · side margins 133 px`); "Fit to image" returns
+  to the rule. When the band does not show the levels, the image HUD carries a 64-bin mini
+  histogram with them.
 - **Fill fit mode.** `Shift+F` (icon `zoom-fill`) fills the viewer and crops the frame's
   long sides equally; `F` returns to the whole frame. The mode is remembered, and a
   "Fill · cropped" chip on the image says so whenever it crops: a crop is never silent.
@@ -555,8 +666,9 @@ half the viewer black, while the stretch card and histogram were pushed below th
   during a slew, the angle still to go with an abort button), because the Mount card can
   sit below the fold; the device name moved into the connection badge's tooltip, the
   zoom stays in the toolbar only and the theme in its button's tooltip, to make room.
-- **One home per value.** Frame number and exposure on the image chips; the settings in
-  use and the sensor in the Camera card; cursor, rate and latency in the status bar.
+- **One home per value.** Frame number and exposure on the image chips; cursor X, Y,
+  value and RA / Dec on the image HUD (bottom right); the settings in use and the sensor
+  in the Camera card; mount, run and rate in the status bar.
 - **Stale frames say so.** A frame that is not current (equipment disconnected, server
   link down, or no new frame for max(5 s, three exposures)) gets a muted
   "Last frame · 21:34:05 UTC" chip and a dashed frame edge; rate and latency show "—";
@@ -571,3 +683,13 @@ half the viewer black, while the stretch card and histogram were pushed below th
   visible placeholder for unknown ids. Ask the design team before adding a token or an id.
 - Any new action: add it to the inventory first (id, labels, sources, metaphor, display),
   then draw it.
+
+## 13. Attention and alerts
+
+Rules run on the server, on every frame (no new frame, HFD rise, star-count drop, too few
+comparisons, tracker lost, altitude limit, disk, run stopped on error, device lost). Each
+item has a level (§8), a short headline for Watch and the rule with its numbers for the
+list. It is shown in the status-bar attention chip (count and newest), its list
+(Acknowledge, suggested view), the Run card and Watch's first row. Sound: Web Audio tones
+(Critical 3, Attention 2, Info 1), Off / Soft / Normal, armed by a click. No OS
+notification, no flashing, no large red fill.

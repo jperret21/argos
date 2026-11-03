@@ -42,6 +42,7 @@
   import type { Column } from '../table';
   import TextField from '../TextField.svelte';
   import { DEVICES, type DeviceRow, NOW, SAMPLE_JOBS, sampleLogLines, VARIABLES, type VariableRow } from './fixtures';
+  import Wave2 from './Wave2.svelte';
 
   // -- Theme --------------------------------------------------------------------------
   const params = new URLSearchParams(location.search);
@@ -240,7 +241,7 @@
   <header class="top">
     <span class="mark"><Icon name="about" size="l" /></span>
     <h1>ARGOS · component gallery</h1>
-    <span class="note">development only · wave 1 shared components · reference 1440 × 900</span>
+    <span class="note">development only · shared components of waves 1 and 2 · reference 1440 × 900</span>
     <span class="spacer"></span>
     <Segmented
       label="Theme"
@@ -250,9 +251,12 @@
     />
   </header>
 
+  <!-- Wave 2: the components promoted from the design lab and the Settings components. -->
+  <Wave2 />
+
   <!-- ===================================================================== Buttons -->
   <section data-gallery="buttons" id="buttons">
-    <h2>Buttons <span>Button (text only, BRAND 7 row 3) and IconButton (existing), every state</span></h2>
+    <h2>Buttons <span>Button (text only, BRAND 7 row 3) and IconButton: since wave 2 thin wrappers over Control</span></h2>
     <div class="row">
       <figure><Button label="Park" variant="primary" /><figcaption>primary</figcaption></figure>
       <figure><Button label="Cancel" /><figcaption>secondary</figcaption></figure>

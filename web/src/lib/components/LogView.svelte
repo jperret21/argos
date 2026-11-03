@@ -23,6 +23,7 @@
   import { tick } from 'svelte';
   import type { LogFilter, LogStore } from '../app/log.svelte';
   import { FollowState, isAtBottom, LEVEL_NAMES, LEVEL_TAGS, localClock, utcClock, utcFull } from '../app/log';
+  import { int } from '../format/number';
   import { tooltip } from './tooltip';
 
   interface Props {
@@ -84,7 +85,7 @@
   });
   const shown = $derived(start > 0 ? lines.slice(start) : lines);
   const hasSource = $derived(sources && shown.some((r) => r.source));
-  const fmt = (n: number) => n.toLocaleString('en-GB').replace(/,/g, ' ');
+  const fmt = int; // U+202F grouping from 1 000 (BRAND 5, D5), never a plain space
 
   // A new filter shows the newest matching lines again.
   let filterKey = '';
@@ -289,7 +290,7 @@
     overflow-anchor: none;
     font-family: var(--font-mono);
     font-size: var(--text-s);
-    line-height: 20px;
+    line-height: var(--log-row-h); /* 20 px compact, 24 px Comfortable (D7) */
   }
 
   li {

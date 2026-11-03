@@ -15,7 +15,7 @@
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte';
-  import { FocusReturn, focusableIn, handleTrapKey } from './focus';
+  import { FocusReturn, focusableIn, handleTrapKey, keepKeysInside } from './focus';
   import IconButton from './IconButton.svelte';
   import { type CloseReason, layer, portal } from './layers';
 
@@ -101,12 +101,15 @@
     });
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Tab') handleTrapKey(e, focusableIn(dialog), document.activeElement, dialog);
-      if (e.key !== 'Escape') e.stopPropagation();
     };
     node.addEventListener('keydown', onKey);
+    // Not stopPropagation here: it would disable the delegated onkeydown of
+    // every control inside (focus.ts keepKeysInside).
+    const release = keepKeysInside(node);
     return {
       destroy() {
         node.removeEventListener('keydown', onKey);
+        release();
         queueMicrotask(() => back.restore());
       },
     };

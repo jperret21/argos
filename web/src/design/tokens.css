@@ -70,14 +70,53 @@
   /* Control metrics (Qt: INPUT_HEIGHT 28, BUTTON_HEIGHT 30, PRIMARY 34). */
   --control-h-s: 30px; /* 16 px icon + 2 x 6 px padding + 2 px border */
   --control-h-m: 34px; /* 20 px icon + 2 x 6 px padding + 2 px border */
+  /* Large single targets for night use (cold fingers, gloves, a trackpad in
+     the dark): hold-to-confirm buttons, Watch buttons. 40 = --control-h-m + 6. */
+  --control-h-l: 40px;
+  --jog-key: 44px; /* jog pad keys */
   --input-h: 28px;
   --border-w: 1px;
 
-  /* Layout landmarks (Qt: sidebar 92 px, status strip 32 px, rail 420-580 px). */
+  /* Instrument controls (PROPOSAL 5, from the controls lab). */
+  --ring-w: 1.5px; /* time and hold rings: the icon stroke, one vocabulary */
+  --track-h: 4px; /* slider and gauge tracks */
+  --thumb: 14px; /* slider thumbs, value handles */
+  --tick-minor: 4px; /* slider and gauge ticks */
+  --tick-major: 8px;
+  --cap-h: 16px; /* key caps: tooltips, key hints, help lines */
+  /* Pressed buttons sink by a 1 px black inner top edge: tactile without
+     colour (black emits no light, safe in Night Red). No scale, no bounce. */
+  --pressed-inset: inset 0 1px 0 rgba(0, 0, 0, 0.4);
+
+  /* Readouts and rows (density). Compact is the default; Comfortable
+     ([data-density='comfortable'] on <html>, below) lifts them for reading
+     from a step away (17 px digits are 13.8' at 0.6 m). Never a page zoom:
+     toolbar, icons and image keep their size. */
+  --readout: var(--text-xl); /* 17 px: rail readouts */
+  --readout-key: var(--text-xl); /* 17 px: key values (Run, Photometry) */
+  --readout-s: var(--text-s); /* 13 px: card facts and frame statistics (Camera, Levels) */
+  --row-h: 24px; /* table and list rows */
+  --log-row-h: 20px; /* activity log lines */
+
+  /* Watch (functional-spaces 2.5: digits of 66-83 px read from 2 m on a
+     13-inch 1440 x 900 screen). */
+  --watch-xl: 88px; /* primary values */
+  --watch-l: 66px; /* secondary values */
+  --watch-m: 40px; /* value lines and units */
+  --watch-s: 30px; /* labels, read from about 1 m */
+  --watch-tick: 22px; /* chart ticks in Watch */
+
+  /* Layout landmarks (owner D8, 2026-11-01: toolbar 44 px, status bar
+     28 px, right panel 360-580 px with 400 by default; Qt: sidebar 92 px,
+     status strip 32 px, rail 420-580 px). */
   --sidebar-w: 92px;
-  --statusbar-h: 32px;
-  --rail-min-w: 420px;
+  --toolbar-h: 44px; /* section toolbar, one row (Observe was 47 px) */
+  --statusbar-h: 28px; /* one 12 px row (was 32 px) */
+  --rail-min-w: 360px; /* right panel: drag limits and default */
+  --rail-w: 400px;
   --rail-max-w: 580px;
+  --band-header-h: 28px; /* title row of the task band and of drawer tabs */
+  --splitter-hit: 7px; /* hit area of a 1 px separator */
   --page-max-w: 880px;
 
   /* Focus ring: always visible on keyboard focus, never removed. */
@@ -87,21 +126,33 @@
   /* Elevation: black shadows only (black emits no light, safe in Night Red). */
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.45);
   --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --elev-hud: 0 1px 0 rgba(0, 0, 0, 0.6); /* opaque chips over the image */
 
-  /* Motion: short, functional, never decorative. Zeroed for reduced motion. */
+  /* Motion: short, functional, never decorative (BRAND 9 lists every use).
+     Zeroed for reduced motion, except --hold-duration. */
   --duration-instant: 80ms;
   --duration-fast: 120ms;
   --duration-base: 180ms;
   --duration-slow: 280ms;
+  --duration-mode: var(--duration-base); /* task-mode and section cross-fade */
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-out: cubic-bezier(0.2, 0.75, 0.25, 1);
+  /* Hold-to-confirm is elapsed time, not decoration: it carries information
+     and is NOT zeroed by reduced motion (the ring then advances in quarters). */
+  --hold-duration: 700ms;
+  --hold-drain: 150ms; /* ring drain after an early release (0 reduced) */
+  /* Auto-repeat of steppers and focuser taps held down. */
+  --repeat-delay: 400ms;
+  --repeat-interval: 80ms;
 
-  /* Stacking. */
+  /* Stacking. Menus, list boxes and popovers sit above the modal layer,
+     because they also open FROM a dialog or a sheet (a Select in the
+     support bundle dialog); tooltips above them; toasts on top. */
   --z-dock: 10;
   --z-sticky: 20;
-  --z-popover: 100;
-  --z-tooltip: 200;
-  --z-modal: 300;
+  --z-modal: 100;
+  --z-popover: 200;
+  --z-tooltip: 300;
   --z-toast: 400;
 
   /* Chart marks. Light curves are dense (hundreds of points): 6 px markers,
@@ -112,6 +163,30 @@
   --chart-marker-sparse: 8px;
   --chart-marker-hover: 10px;
   --chart-error-opacity: 0.55;
+  /* Alphas over --chart-* inks, resolved at draw time (lib/charts/ink.ts). */
+  --chart-band-alpha: 0.16; /* stability bands, fit envelopes (Night Red 0.20) */
+  --chart-flag-alpha: 0.22; /* hatch of the period where a rule holds */
+  --chart-clip-alpha: 0.5; /* histogram regions the stretch clips */
+  /* Twilight washes of --fg-muted on the visibility timeline (night,
+     astronomical, nautical, civil, day): luminance steps, no hue, so they
+     hold in Night Red (stronger there, theme block). */
+  --chart-twilight-0: 0;
+  --chart-twilight-1: 0.035;
+  --chart-twilight-2: 0.065;
+  --chart-twilight-3: 0.1;
+  --chart-twilight-4: 0.15;
+  --chart-header-h: 26px; /* facet headers */
+  --chart-toolbar-h: 38px; /* plot toolbars */
+}
+
+/* Comfortable density (owner D7, Settings › Appearance): tokens, never a
+   page zoom. Rows and readouts only; toolbar, icons and image unchanged. */
+:root[data-density='comfortable'] {
+  --readout: 20px;
+  --readout-key: 26px;
+  --readout-s: 16px;
+  --row-h: 28px;
+  --log-row-h: 24px;
 }
 
 /* --------------------------------------------------------------------------
@@ -417,6 +492,12 @@
   --chart-1: var(--role-target);
   --chart-2: var(--role-comparison);
   --chart-3: var(--role-check);
+  /* --fg-muted is darker here: bands and twilight steps a little stronger. */
+  --chart-band-alpha: 0.2;
+  --chart-twilight-1: 0.05;
+  --chart-twilight-2: 0.09;
+  --chart-twilight-3: 0.14;
+  --chart-twilight-4: 0.2;
 
   /* Images render in the red channel only; full scale = the red channel of
      --fg (0xd8), so the brightest star never outshines the interface text. */
@@ -426,6 +507,8 @@
 
 /* --------------------------------------------------------------------------
    Reduced motion: no transitions or animations beyond an instant state swap.
+   --duration-mode follows --duration-base (0). --hold-duration is kept: it
+   is information (elapsed time), and the ring then advances in quarters.
    -------------------------------------------------------------------------- */
 
 @media (prefers-reduced-motion: reduce) {
@@ -434,5 +517,6 @@
     --duration-fast: 0ms;
     --duration-base: 0ms;
     --duration-slow: 0ms;
+    --hold-drain: 0ms;
   }
 }

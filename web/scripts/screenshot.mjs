@@ -42,21 +42,28 @@
  *   --wait MS         settle time before each shot (default 700)
  *   --stop            stop live view (POST /api/camera/stop) at the end
  *   --strict          exit 1 on console errors, page errors or non-local requests
+ *   --audit           pixel audit of every shot (scripts/audit-png.mjs, on the PNG as
+ *                     written, never resized): Night Red rules A and B on the
+ *                     night-red shot, brass counts on the others; exit 1 when a
+ *                     Night Red shot fails (BRAND 4.3)
  *
  * Environment: CHROME_PATH overrides the Chrome binary (default: the macOS app path).
  *
  * Output: one PNG per theme and PREFIX-report.json (console messages, failed or
  * non-local requests, frame sequence per shot, and the measured layout: the
  * image's box against the viewer's, the black bands on each side, the levels
- * strip height and the bottom of the right rail's cards; BRAND 11.1). The page
- * exposes the frame on screen as [data-frame-seq] (ImagingScreen); scripts
- * can wait on it too.
+ * strip height and the bottom of the right rail's cards; BRAND 11.1), the frame
+ * metrics of owner decision D8 (toolbar, status bar and right panel sizes), every
+ * element that scrolls (only the log may, BRAND 11.1) and, with --audit, the
+ * pixel audit. The page exposes the frame on screen as [data-frame-seq]
+ * (ImagingScreen); scripts can wait on it too.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import puppeteer from 'puppeteer-core';
+import { auditFile } from './audit-png.mjs';
 
 // System Chrome (macOS default path); set CHROME_PATH elsewhere, e.g. /usr/bin/google-chrome.
 const CHROME = process.env.CHROME_PATH ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -84,6 +91,7 @@ const { values: opt } = parseArgs({
     wait: { type: 'string', default: '700' },
     stop: { type: 'boolean', default: false },
     strict: { type: 'boolean', default: false },
+    audit: { type: 'boolean', default: false },
   },
 });
 
@@ -171,6 +179,7 @@ async function startSlew() {
 
 const report = { url: pageUrl.toString(), shots: [], console: [], external: [], failed: [] };
 let problems = 0;
+let auditFailed = 0;
 
 const browser = await puppeteer.launch({
   executablePath: CHROME,
@@ -233,9 +242,11 @@ try {
     await page.waitForSelector('.shell', { timeout: 15_000 });
     await page.evaluate(() => document.fonts.ready);
 
-    if (opt.section !== 'imaging') {
+    {
+      // Always click the entry: the app may open on Connection (equipment not ready).
       const labels = {
         connection: 'Connection',
+        imaging: 'Observe',
         sequencer: 'Plan',
         analyze: 'Review',
         configuration: 'Settings',
@@ -280,8 +291,9 @@ try {
       await handle.asElement().click();
     }
 
-    // Park the pointer outside the viewer and the toolbar (no hover state, no tooltip).
-    await page.mouse.move(Number(opt.width) - 2, Number(opt.height) - 2);
+    // Park the pointer on the empty middle of the navigation rail: no hover state,
+    // no tooltip (the bottom-right corner is the status bar's Log button).
+    await page.mouse.move(46, Math.round(Number(opt.height) * 0.55));
     await sleep(Number(opt.wait));
     const file = path.join(opt.out, `${opt.name}-${theme}.png`);
     await page.screenshot({ path: file });
@@ -311,7 +323,43 @@ try {
               croppedX: r1((100 * Math.max(0, image.width - stage.width)) / image.width),
             }
           : null;
+      const h = (sel) => {
+        const el = document.querySelector(sel);
+        return el ? r1(el.getBoundingClientRect().height) : null;
+      };
+      const w = (sel) => {
+        const el = document.querySelector(sel);
+        return el ? r1(el.getBoundingClientRect().width) : null;
+      };
+      // Owner D8: toolbar 44 px, status bar 28 px, right panel 360-580 px (400 by default).
+      const frame = {
+        toolbar: h('main [role="toolbar"]'),
+        statusbar: h('footer.statusbar'),
+        rightPanel: w('aside.rail'),
+        navRail: w('nav.rail'),
+      };
+      // Everything that scrolls (BRAND 11.1: nothing but the log may).
+      const name = (el) =>
+        el.getAttribute('aria-label') ||
+        `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''}${[...el.classList]
+          .filter((c) => !c.startsWith('svelte-'))
+          .slice(0, 2)
+          .map((c) => `.${c}`)
+          .join('')}`;
+      const scrollers = [...document.querySelectorAll('body *')]
+        .filter((el) => {
+          const cs = getComputedStyle(el);
+          const y = /(auto|scroll)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 1;
+          const x = /(auto|scroll)/.test(cs.overflowX) && el.scrollWidth > el.clientWidth + 1;
+          return (x || y) && el.getClientRects().length > 0;
+        })
+        .map((el) => ({ name: name(el), log: !!el.closest('.log, [aria-label^="Activity log"], .log-drawer, .drawer') }));
+      const se = document.scrollingElement;
+      const pageScrolls = se ? se.scrollHeight > innerHeight + 1 || se.scrollWidth > innerWidth + 1 : false;
       return {
+        frame,
+        scrollers,
+        pageScrolls,
         stage,
         image,
         bands,
@@ -324,7 +372,27 @@ try {
         })(),
       };
     });
-    report.shots.push({ theme, appliedTheme, file, frameSeq: seq, layout });
+    const shot = { theme, appliedTheme, file, frameSeq: seq, layout };
+    report.shots.push(shot);
+    const f8 = layout.frame;
+    say(
+      `${theme}: toolbar ${f8.toolbar ?? '—'} px, status bar ${f8.statusbar ?? '—'} px, ` +
+        `right panel ${f8.rightPanel ?? '—'} px; page ${layout.pageScrolls ? 'SCROLLS' : 'does not scroll'}; ` +
+        `scrolling: ${layout.scrollers.map((s) => s.name + (s.log ? ' (log)' : '')).join(', ') || 'nothing'}`,
+    );
+    if (opt.audit) {
+      shot.audit = auditFile(file, { brass: true });
+      const a = shot.audit;
+      if (a.error || (a.nightRed && !a.nightRed.pass)) auditFailed++;
+      say(
+        `${theme}: audit ` +
+          (a.error
+            ? `ERROR ${a.error}`
+            : a.nightRed
+              ? `Night Red ${a.nightRed.pass ? 'PASS' : 'FAIL'} (rule A ${a.nightRed.ruleA} px, rule B ${a.nightRed.ruleB_tol} px with rounding)`
+              : `brass ${a.brass.total} px (accent ${a.brass.accent}, hover ${a.brass.accentHover}, warning ${a.brass.warning}, role target ${a.brass.roleTarget})`),
+      );
+    }
     if (layout.bands) {
       const b = layout.bands;
       say(
@@ -352,4 +420,8 @@ try {
       `${report.external.length} non-local requests, ${report.failed.length} failed requests)`,
   );
   if (opt.strict && problems > 0 && !process.exitCode) process.exitCode = 1;
+  if (auditFailed > 0) {
+    console.error(`[screenshot] pixel audit: ${auditFailed} shot(s) FAIL (BRAND 4.3)`);
+    process.exitCode = 1;
+  }
 }

@@ -124,3 +124,22 @@ export function focusTargetOf(el: HTMLElement | null | undefined): HTMLElement |
   if (el.matches(FOCUSABLE_SELECTOR) && el.tabIndex >= 0) return el;
   return el.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
 }
+
+/**
+ * Keep the keys typed inside a layer away from the window's listeners (the
+ * shortcut registry: "E" typed in a field is not an exposure), WITHOUT
+ * stopping them at the layer itself. Svelte 5 delegates `onkeydown` to the
+ * document, so a `stopPropagation()` on the layer element would silently
+ * disable every keydown handler inside it (Enter in a NumberField, the
+ * FilePicker list). This listener sits on the document and runs after
+ * Svelte's (registered at mount, before any layer opens: same node, so the
+ * delegated handlers still run), then stops the event before the window.
+ * Escape always travels on (it aborts mount motion, D21). Returns the detach.
+ */
+export function keepKeysInside(node: HTMLElement, doc: Document = document): () => void {
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key !== 'Escape' && e.target instanceof Node && node.contains(e.target)) e.stopPropagation();
+  };
+  doc.addEventListener('keydown', onKey);
+  return () => doc.removeEventListener('keydown', onKey);
+}

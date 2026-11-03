@@ -69,8 +69,23 @@ function onKeyDown(e: KeyboardEvent): void {
     if (reserved?.(e)) e.preventDefault();
     return;
   }
+  // A field that holds something Escape reverts (a value not sent, a refusal)
+  // takes this Escape; the next one closes the layer (README 3.4).
+  if (ownsEscape(e.target)) return;
   e.preventDefault();
   stack[stack.length - 1].close('escape');
+}
+
+/**
+ * True when the key's target (or an ancestor) is marked
+ * `data-escape="local"`: NumberField and the other value fields set it while
+ * they hold a draft or a refusal, so Escape reverts the field before it
+ * closes the sheet or dialog around it. The shortcut registry still sees the
+ * key (Escape aborts mount motion from any focus, D21).
+ */
+export function ownsEscape(target: EventTarget | null): boolean {
+  const el = target as { closest?: (s: string) => unknown } | null;
+  return !!el && typeof el.closest === 'function' && !!el.closest('[data-escape="local"]');
 }
 
 function onPointerDown(e: PointerEvent): void {

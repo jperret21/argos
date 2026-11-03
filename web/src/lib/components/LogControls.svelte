@@ -7,6 +7,7 @@
 <script lang="ts">
   import type { LogFilter, LogStore } from '../app/log.svelte';
   import { type LevelFilter, LEVEL_FILTER_LABELS, logFileName, logToText } from '../app/log';
+  import { int } from '../format/number';
   import IconButton from './IconButton.svelte';
   import SearchField from './SearchField.svelte';
   import Segmented from './Segmented.svelte';
@@ -31,7 +32,7 @@
     label: LEVEL_FILTER_LABELS[value],
   }));
 
-  const fmt = (n: number) => n.toLocaleString('en-GB').replace(/,/g, ' ');
+  const fmt = int; // U+202F grouping from 1 000 (BRAND 5, D5)
 
   function say(text: string): void {
     note = text;

@@ -9,7 +9,11 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
-    "test": "vitest run"
+    "test": "vitest run",
+    "screenshot": "node scripts/screenshot.mjs",
+    "audit:night-red": "node scripts/audit-png.mjs --night-red",
+    "audit:brass": "node scripts/audit-png.mjs --brass",
+    "capture:lab": "node scripts/capture-lab.mjs"
   },
   "dependencies": {
     "uplot": "^1.6.32"

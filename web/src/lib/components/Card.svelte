@@ -6,6 +6,12 @@
   rail is shorter than the four cards at laptop heights, and a folded card
   keeps its status visible in the header. With `persist`, the open state is
   remembered per viewer (localStorage, optional) under that key.
+
+  `summary` (optional) is the one line a folded card keeps after its title
+  ("2.0 s · gain 80 · IR"), so folding loses nothing a glance needs
+  (web/lab/PROPOSAL.md section 6, lab RightPanel). It is shown only while the
+  card is folded, muted, in mono, cut with an ellipsis; outside the
+  disclosure button, so the button's name stays the title.
 -->
 <script lang="ts">
   import { type Snippet, untrack } from 'svelte';
@@ -17,6 +23,8 @@
     icon: string;
     /** Right side of the header (usually a StatusBadge). */
     status?: Snippet;
+    /** One line after the title while the card is folded (collapsible only). */
+    summary?: Snippet;
     children: Snippet;
     collapsible?: boolean;
     open?: boolean;
@@ -34,6 +42,7 @@
     title,
     icon,
     status,
+    summary,
     children,
     collapsible = false,
     open = $bindable(true),
@@ -60,6 +69,7 @@
   class:dense
   class:fill
   class:closed={collapsible && !open}
+  class:summarised={!!summary && collapsible && !open}
   id={anchor}
   aria-labelledby="{id}-title"
 >
@@ -80,6 +90,7 @@
       <span class="glyph"><Icon name={icon} size="s" /></span>
       <h2 id="{id}-title">{title}</h2>
     {/if}
+    {#if summary && collapsible && !open}<span class="summary num">{@render summary()}</span>{/if}
     {#if status}<span class="status">{@render status()}</span>{/if}
   </header>
   {#if !collapsible || open}
@@ -152,6 +163,23 @@
     font-size: var(--text-l);
     font-weight: var(--weight-semibold);
     line-height: var(--leading-tight);
+    white-space: nowrap;
+  }
+
+  /* Folded with a summary: the title keeps its width, the summary takes the
+     rest and is cut first. */
+  .summarised .toggle {
+    flex: 0 1 auto;
+  }
+  .summary {
+    flex: 1 1 0;
+    min-width: 0;
+    margin-left: var(--space-2);
+    overflow: hidden;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 

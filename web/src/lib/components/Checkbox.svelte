@@ -4,7 +4,10 @@
   --fg on --toggled-bg, not brass: checkboxes list visible panels and
   options that are on most of the time, and brass marks "this one" (BRAND 3).
 
-  `disabledReason` disables it and says why (tooltip and a second line).
+  `disabledReason` makes it unavailable and says why (the second line, the
+  tooltip's reason line): since wave 2 with aria-disabled, so it stays
+  focusable and a screen reader reaches the reason (BRAND 7); a press does
+  not change it. `disabled` (hard) only where there is no reason to give.
 -->
 <script lang="ts">
   import { tooltip } from './tooltip';
@@ -31,24 +34,31 @@
   }: Props = $props();
 
   const off = $derived(disabled || !!disabledReason);
+  const soft = $derived(!disabled && !!disabledReason);
+  const detailId = `cb-${Math.random().toString(36).slice(2, 9)}-detail`;
 </script>
 
 <label
   class="checkbox size-{size}"
   class:off
-  use:tooltip={{ text: `${label}: ${disabledReason ?? ''}`, placement: 'top', disabled: !disabledReason }}
+  use:tooltip={{ text: label, reason: disabledReason, placement: 'top', disabled: !disabledReason }}
 >
   <input
     class="visually-hidden"
     type="checkbox"
     bind:checked
-    disabled={off}
+    {disabled}
+    aria-disabled={soft || undefined}
+    aria-describedby={disabledReason || detail ? detailId : undefined}
+    onclick={(e) => {
+      if (soft) e.preventDefault(); // unavailable: the press shows the reason, nothing changes
+    }}
     onchange={() => onchange?.(checked)}
   />
   <span class="box" aria-hidden="true"></span>
   <span class="text">
     <span class="label">{label}</span>
-    {#if disabledReason || detail}<span class="detail">{disabledReason ?? detail}</span>{/if}
+    {#if disabledReason || detail}<span class="detail" id={detailId}>{disabledReason ?? detail}</span>{/if}
   </span>
 </label>
 

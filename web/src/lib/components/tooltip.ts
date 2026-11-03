@@ -1,30 +1,56 @@
 /**
- * Tooltips (BRAND.md section 7): label + shortcut, shown after ~500 ms of
- * hover and immediately on keyboard focus. Once one has been shown, moving
- * to a neighbour within WARM_MS shows the next one at once, so a row of
- * icon-only tools can be scanned without waiting at every button.
+ * Tooltips, v2 (BRAND.md section 7; web/lab/PROPOSAL.md 3.3, promoted from
+ * src/lab/controls/tip.ts): the label and its key caps on the first line,
+ * then at most one muted second line that says WHY (the reason a control is
+ * unavailable, hollow ring; what failed last time, danger dot) or HOW (a
+ * gesture: "Hold to park").
+ *
+ * - Hover: shown after ~500 ms; once one has been seen, moving to a
+ *   neighbour within WARM_MS shows the next one at once, so a row of
+ *   icon-only tools can be scanned without waiting at every button.
+ * - Keyboard focus: at once.
+ * - A press on an unavailable control (aria-disabled) shows its reason at
+ *   once: the moment a control "does nothing" is when the observer most
+ *   needs the reason, and the click itself is swallowed.
  *
  * One shared element is positioned in the viewport (position: fixed on
  * <body>), so a tooltip is never clipped by a scrolling card rail or a toolbar
  * with overflow. It is aria-hidden: the control already carries the same
- * information as aria-label / aria-keyshortcuts, and a tooltip never holds
- * information found nowhere else. Text goes in with textContent only.
+ * information (aria-label, aria-keyshortcuts, aria-describedby), and a
+ * tooltip never holds information found nowhere else. Text goes in with
+ * textContent only.
  *
- * Usage: <button use:tooltip={{ text: 'Zoom in', shortcut: '+' }}>
+ * Usage: <button use:tooltip={{ text: 'Slew', reason: 'Unpark the mount first' }}>
  */
 
 import type { Action } from 'svelte/action';
 import { formatShortcut } from '../app/shortcuts';
+import './tooltip.css';
 
 export type TooltipPlacement = 'top' | 'bottom' | 'left' | 'right';
 
 export interface TooltipOptions {
   text: string;
-  /** Shortcut spec ("E", "Shift+A", "Escape"); shown as a key cap. */
-  shortcut?: string;
+  /** Shortcut spec(s) ("E", "Shift+A", ["ArrowUp", "ArrowDown"]); shown as key caps. */
+  shortcut?: string | readonly string[];
+  /** Why the control is unavailable now (second line, hollow ring; hides the key caps). */
+  reason?: string | null;
+  /** What failed on the last attempt (second line, danger dot). */
+  error?: string | null;
+  /** How to use it when it is not a plain click (second line, unmarked). */
+  hint?: string | null;
   placement?: TooltipPlacement;
   /** Turn the tooltip off without removing the action. */
   disabled?: boolean;
+}
+
+export type TipSecondKind = 'reason' | 'error' | 'hint';
+
+export interface TipContent {
+  text: string;
+  /** Key specs to draw as caps (none while a reason is shown: the control cannot act). */
+  keys: string[];
+  second: { kind: TipSecondKind; text: string } | null;
 }
 
 export const HOVER_DELAY_MS = 500;
@@ -32,6 +58,23 @@ export const HOVER_DELAY_MS = 500;
 export const WARM_MS = 300;
 const GAP = 6;
 const MARGIN = 8;
+
+/** What a tooltip shows, from its options (pure, unit-tested). Error wins over reason over hint. */
+export function tipContent(o: TooltipOptions): TipContent {
+  const reason = o.reason || null;
+  const raw = o.shortcut === undefined ? [] : typeof o.shortcut === 'string' ? [o.shortcut] : [...o.shortcut];
+  const keys = reason ? [] : raw.filter(Boolean);
+  let second: TipContent['second'] = null;
+  if (o.error) second = { kind: 'error', text: o.error };
+  else if (reason) second = { kind: 'reason', text: reason };
+  else if (o.hint) second = { kind: 'hint', text: o.hint };
+  return { text: o.text, keys, second };
+}
+
+/** Does a press show the tooltip at once? Only on an unavailable control that has something to say. */
+export function explainsOnPress(unavailable: boolean, o: TooltipOptions): boolean {
+  return unavailable && !o.disabled && !!o.text && !!(o.reason || o.error);
+}
 
 let tipEl: HTMLDivElement | null = null;
 let owner: HTMLElement | null = null;
@@ -45,6 +88,7 @@ function element(): HTMLDivElement {
   if (tipEl && tipEl.isConnected) return tipEl;
   tipEl = document.createElement('div');
   tipEl.className = 'argos-tip';
+  tipEl.dataset.v2 = '';
   tipEl.setAttribute('aria-hidden', 'true');
   document.body.appendChild(tipEl);
   return tipEl;
@@ -67,6 +111,32 @@ export function hideTooltip(from?: HTMLElement): void {
 /** Hover delay for the next tooltip: none while the previous one was just seen. */
 export function hoverDelay(now: number, lastHidden: number, open: boolean): number {
   return open || now - lastHidden < WARM_MS ? 0 : HOVER_DELAY_MS;
+}
+
+function fill(tip: HTMLDivElement, c: TipContent): void {
+  tip.replaceChildren();
+  const row = document.createElement('span');
+  row.className = 'tip-row';
+  const label = document.createElement('span');
+  label.textContent = c.text;
+  row.appendChild(label);
+  if (c.keys.length) {
+    const wrap = document.createElement('span');
+    wrap.className = 'tip-keys';
+    for (const k of c.keys) {
+      const kbd = document.createElement('kbd');
+      kbd.textContent = formatShortcut(k);
+      wrap.appendChild(kbd);
+    }
+    row.appendChild(wrap);
+  }
+  tip.appendChild(row);
+  if (c.second) {
+    const line = document.createElement('span');
+    line.className = `tip-second ${c.second.kind}`;
+    line.textContent = c.second.text;
+    tip.appendChild(line);
+  }
 }
 
 function place(node: HTMLElement, tip: HTMLDivElement, placement: TooltipPlacement): void {
@@ -106,18 +176,14 @@ function show(node: HTMLElement, opts: TooltipOptions): void {
   cancelTimer();
   if (opts.disabled || !opts.text) return;
   const tip = element();
-  tip.replaceChildren();
-  const label = document.createElement('span');
-  label.textContent = opts.text;
-  tip.appendChild(label);
-  if (opts.shortcut) {
-    const kbd = document.createElement('kbd');
-    kbd.textContent = formatShortcut(opts.shortcut);
-    tip.appendChild(kbd);
-  }
+  fill(tip, tipContent(opts));
   owner = node;
   tip.dataset.open = 'true';
   place(node, tip, opts.placement ?? 'bottom');
+}
+
+function unavailable(node: HTMLElement): boolean {
+  return node.getAttribute('aria-disabled') === 'true' || node.hasAttribute('disabled');
 }
 
 export const tooltip: Action<HTMLElement, TooltipOptions> = (node, initial) => {
@@ -139,9 +205,15 @@ export const tooltip: Action<HTMLElement, TooltipOptions> = (node, initial) => {
     if (node.matches(':focus-visible')) show(node, opts);
   };
   const onBlur = () => hideTooltip(node);
-  const onDown = () => hideTooltip(node);
+  const onDown = () => {
+    // An unavailable control explains itself at once; any other press hides.
+    if (explainsOnPress(unavailable(node), opts)) show(node, opts);
+    else hideTooltip(node);
+  };
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'Escape') hideTooltip(node);
+    // Enter / Space on an unavailable control: the same explanation as a press.
+    else if ((e.key === 'Enter' || e.key === ' ') && explainsOnPress(unavailable(node), opts)) show(node, opts);
   };
 
   node.addEventListener('pointerenter', onEnter);

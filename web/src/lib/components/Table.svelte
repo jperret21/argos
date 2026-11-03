@@ -268,8 +268,10 @@
     overflow: auto;
   }
 
+  /* Row height follows the density token (--row-h: 24 px Compact, 28 px
+     Comfortable, Settings › Appearance); `density="comfortable"` forces 28. */
   .table {
-    --row-h: 24px;
+    --t-row: var(--row-h, 24px);
     width: 100%;
     border-collapse: separate;
     border-spacing: 0;
@@ -277,14 +279,14 @@
     color: var(--fg);
   }
   .comfortable {
-    --row-h: 28px;
+    --t-row: 28px;
   }
 
   th {
     position: sticky;
     top: 0;
     z-index: 1;
-    height: var(--row-h);
+    height: var(--t-row);
     padding: 0 var(--space-3);
     border-bottom: var(--border-w) solid var(--border);
     background: var(--bg-2);
@@ -352,7 +354,7 @@
   }
 
   td {
-    height: var(--row-h);
+    height: var(--t-row);
     padding: 0 var(--space-3);
     border-bottom: var(--border-w) solid var(--border-soft);
     white-space: nowrap;
