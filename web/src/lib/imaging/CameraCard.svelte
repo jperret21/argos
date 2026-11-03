@@ -17,6 +17,7 @@
   import IconButton from '../components/IconButton.svelte';
   import NumberField from '../components/NumberField.svelte';
   import StatusBadge from '../components/StatusBadge.svelte';
+  import { fixed, int, seconds } from '../format/number';
 
   const app = useApp();
 
@@ -26,8 +27,6 @@
   const badge = $derived(cameraStatus(app.camera, app.cameraReady, app.stale));
   const cam = $derived(app.cameraReady ? app.camera : null);
   const sensor = $derived(cam?.sensor ?? null);
-
-  const seconds = (s: number) => `${s.toFixed(s < 1 ? 3 : 1)} s`;
 
   // Exposure progress, estimated on the client from the request and the time
   // the state (or the last live frame) started. 10 Hz while it runs; the bar
@@ -65,7 +64,7 @@
     if (Math.abs(cam.exposure_s - app.exposure) > 1e-9) {
       parts.push(`${seconds(app.exposure)} (now ${seconds(cam.exposure_s)})`);
     }
-    if (cam.gain !== Math.round(app.gain)) parts.push(`gain ${Math.round(app.gain)} (now ${cam.gain})`);
+    if (cam.gain !== Math.round(app.gain)) parts.push(`gain ${int(app.gain)} (now ${int(cam.gain)})`);
     return parts.join(', ');
   });
 </script>
@@ -73,6 +72,9 @@
 <Card title="Camera" icon="camera" collapsible persist="camera">
   {#snippet status()}
     <StatusBadge tone={badge.tone} label={badge.label} />
+  {/snippet}
+  {#snippet summary()}
+    {#if cam}{seconds(cam.exposure_s)} · gain {int(cam.gain)}{/if}
   {/snippet}
 
   <div class="fields">
@@ -123,7 +125,7 @@
     </div>
     <span class="num">
       {#if progress && cam}
-        {cam.state === 'downloading' ? 'Downloading' : `${progress.elapsed.toFixed(1)} / ${cam.exposure_s.toFixed(1)} s`}
+        {cam.state === 'downloading' ? 'Downloading' : `${fixed(progress.elapsed, 1, { group: true })} / ${fixed(cam.exposure_s, 1, { group: true })} s`}
       {:else}
         &nbsp;
       {/if}
@@ -133,12 +135,12 @@
   <dl class="facts" class:stale={app.stale}>
     <div>
       <dt>In use</dt>
-      <dd class="num">{cam ? `${seconds(cam.exposure_s)}, gain ${cam.gain}` : '—'}</dd>
+      <dd class="num">{cam ? `${seconds(cam.exposure_s)}, gain ${int(cam.gain)}` : '—'}</dd>
     </div>
     <div>
       <dt>Sensor</dt>
       <dd class="num">
-        {sensor ? `${sensor.width}×${sensor.height} ${sensor.bayer ?? 'mono'}` : '—'}
+        {sensor ? `${int(sensor.width)} × ${int(sensor.height)} ${sensor.bayer ?? 'mono'}` : '—'}
       </dd>
     </div>
   </dl>
@@ -188,9 +190,11 @@
     overflow: hidden;
   }
 
+  /* Neutral ink: a progress bar is a long fill, never brass (BRAND 3, 8; owner
+     decisions 2026-11-01). The time ring around Capture carries the brass. */
   .bar {
     height: 100%;
-    background: var(--accent);
+    background: var(--fg-muted);
   }
   .progress.idle .track {
     visibility: hidden;
@@ -219,7 +223,7 @@
   dd {
     margin: 0;
     color: var(--fg);
-    font-size: var(--text-s);
+    font-size: var(--readout-s); /* 13 px compact, 16 px Comfortable (D7) */
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

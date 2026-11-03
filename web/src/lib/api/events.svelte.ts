@@ -15,8 +15,8 @@
  * The last known state is kept across a dropped link (link !== "open"), so
  * the UI can grey it out as stale instead of blanking the screen.
  *
- * Snapshot messages (status, camera, mount, devices, network, activity)
- * replace the held record. Stream messages are handed to the owner of the
+ * Snapshot messages (status, camera, mount, devices, network, activity,
+ * stellarium, site_check) replace the held record. Stream messages are handed to the owner of the
  * matching store, which deduplicates and orders them by their sequence
  * numbers: `log` lines to the activity log (the server replays its last 200
  * lines after the first status of every connection), `job` events to the
@@ -39,6 +39,7 @@ import type {
   NetworkState,
   ProfileSummary,
   ServerEvent,
+  SiteCheck,
   Status,
   StellariumState,
 } from './types';
@@ -88,6 +89,8 @@ export function parseEventMessage(data: unknown): ServerEvent | null {
       return isObject(msg.job) && typeof msg.job.id === 'string' ? ok : null;
     case 'stellarium':
       return typeof msg.running === 'boolean' && typeof msg.clients === 'number' ? ok : null;
+    case 'site_check':
+      return typeof msg.state === 'string' && typeof msg.message === 'string' ? ok : null;
     default:
       return null;
   }
@@ -125,6 +128,8 @@ export class ArgosEvents {
   activity: ActivityEvent | null = $state.raw(null);
   /** API 2: the Stellarium bridge (A19). */
   stellarium: StellariumState | null = $state.raw(null);
+  /** API 2, wave 2: the Settings site against the mount (status.site_check, `site_check` events). */
+  siteCheck: SiteCheck | null = $state.raw(null);
   /** API 2: the server process of the last `status` (a restart changes it). */
   bootId: string | null = $state(null);
   /** performance.now() of the last message, for staleness indicators. */
@@ -174,6 +179,11 @@ export class ArgosEvents {
     if (status.mount) this.mount = status.mount;
     if (status.devices) this.devices = status.devices;
     if (status.profile) this.profile = status.profile;
+    if (status.site_check) this.siteCheck = status.site_check;
+  }
+
+  applySiteCheck(check: SiteCheck): void {
+    this.siteCheck = check;
   }
 
   applyDevices(devices: DevicesState): void {
@@ -199,6 +209,7 @@ export class ArgosEvents {
         this.mount = msg.mount;
         if (msg.devices) this.devices = msg.devices;
         if (msg.profile) this.profile = msg.profile;
+        if (msg.site_check) this.siteCheck = msg.site_check;
         const first = !this.statusSeen;
         let restarted = false;
         if (typeof msg.boot_id === 'string') {
@@ -239,6 +250,11 @@ export class ArgosEvents {
       case 'stellarium': {
         const { type: _type, ...bridge } = msg;
         this.stellarium = bridge;
+        break;
+      }
+      case 'site_check': {
+        const { type: _type, ...check } = msg;
+        this.siteCheck = check;
         break;
       }
     }

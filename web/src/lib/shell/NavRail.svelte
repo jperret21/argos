@@ -29,8 +29,9 @@
   import { ariaShortcut } from '../app/shortcuts';
   import { useApp } from '../app/state.svelte';
   import Icon from '../components/Icon.svelte';
+  import KeyHint from '../components/KeyHint.svelte';
   import { tooltip } from '../components/tooltip';
-  import { firstRunChecklist } from '../connection/model';
+  import { settingsAttention } from '../settings/categories';
   import RailFooter from './RailFooter.svelte';
   import ShortcutSheet from './ShortcutSheet.svelte';
 
@@ -41,7 +42,7 @@
   let { entries }: Props = $props();
   const app = useApp();
 
-  type Dot = 'ready' | 'active' | 'blocked' | null;
+  type Dot = 'ready' | 'active' | 'blocked' | 'alert' | null;
 
   /**
    * Rail state dots (01 2.4.4, README 3.10.1):
@@ -51,7 +52,8 @@
    * - Observe: ready = camera connected; active = live view, an exposure or
    *   a slew (no amber when nothing is connected: that is the normal start).
    * - Settings: attention while the observer code or the site is missing
-   *   (Q-G11): FITS and AAVSO metadata would be wrong.
+   *   (Q-G11): FITS and AAVSO metadata would be wrong; and (wave 2) while
+   *   the Settings site disagrees with where the mount points (site check).
    * - Plan, Review: nothing to report until their waves ship.
    */
   function dotFor(id: Section): Dot {
@@ -73,8 +75,12 @@
       return null;
     }
     if (id === 'configuration' && app.configValues) {
-      const missing = firstRunChecklist(app.configValues, true).some((c) => c.id !== 'astap' && !c.done);
-      return missing ? 'blocked' : null;
+      // BRAND 8 levels: the upright attention mark when the site is missing or
+      // disagrees with the mount (the same mark as the status bar and the
+      // Settings list); the ring for info only (no AAVSO code).
+      const items = settingsAttention(app.configValues, app.siteCheck);
+      if (items.some((a) => a.level === 'attention')) return 'alert';
+      return items.length ? 'blocked' : null;
     }
     return null;
   }
@@ -83,6 +89,7 @@
     ready: 'ready',
     active: 'running',
     blocked: 'needs attention',
+    alert: 'needs attention',
   };
 
   const main = $derived(entries.filter((e) => e.id !== 'configuration'));
@@ -91,6 +98,7 @@
 
 {#snippet entry(e: NavEntry)}
   {@const dot = dotFor(e.id)}
+  {@const why = e.id === 'configuration' && (dot === 'blocked' || dot === 'alert') ? settingsAttention(app.configValues, app.siteCheck).map((a) => a.text).join(' · ') : ''}
   <button
     type="button"
     class="entry"
@@ -99,11 +107,12 @@
     aria-label={dot ? `${e.label}, ${DOT_WORDS[dot]}` : e.label}
     aria-keyshortcuts={ariaShortcut(e.shortcut)}
     onclick={() => app.go(e.id)}
-    use:tooltip={{ text: dot ? `${e.hint} · ${DOT_WORDS[dot]}` : e.hint, shortcut: e.shortcut, placement: 'right' }}
+    use:tooltip={{ text: dot ? `${e.hint} · ${why || DOT_WORDS[dot]}` : e.hint, shortcut: e.shortcut, placement: 'right' }}
   >
     <span class="glyph">
       <Icon name={e.icon} size="l" />
       {#if dot}<span class="dot {dot}" aria-hidden="true"></span>{/if}
+      {#if e.shortcut}<KeyHint keys={e.shortcut} />{/if}
     </span>
     <span class="label" aria-hidden="true">{e.label}</span>
   </button>
@@ -123,7 +132,11 @@
       ontheme={(t) => app.setTheme(t)}
       version={app.serverVersion}
       api={app.serverApi}
+      docsUrl={app.appInfo?.docs_url}
       onshortcuts={() => (app.shortcutSheetOpen = true)}
+      onpalette={() => (app.paletteOpen = true)}
+      onsupportbundle={() => (app.supportBundleOpen = true)}
+      onabout={() => app.openSettings('about')}
     />
     {#each footer as e (e.id)}{@render entry(e)}{/each}
   </div>
@@ -147,7 +160,7 @@
     align-items: center;
     justify-content: center;
     gap: var(--space-2);
-    height: calc(var(--control-h-m) + 2 * var(--space-2) + var(--border-w));
+    height: var(--toolbar-h); /* one 44 px row, border included (owner D8) */
     margin-bottom: var(--space-2);
     border-bottom: var(--border-w) solid var(--border); /* continues the toolbar's edge */
     color: var(--accent);
@@ -267,5 +280,16 @@
   .dot.blocked {
     --c: var(--warning);
     box-shadow: inset 0 0 0 1.5px var(--c);
+  }
+  /* Attention (BRAND 8): the upright mark, a bar over a dot, as StatusBadge
+     level "attention" (the site disagrees with the mount). */
+  .dot.alert {
+    width: 3px;
+    height: 11px;
+    border-radius: 1px;
+    overflow: visible;
+    outline: none;
+    background: linear-gradient(var(--warning) 0 7px, transparent 7px 8px, var(--warning) 8px 11px);
+    box-shadow: 0 0 0 1.5px var(--halo);
   }
 </style>

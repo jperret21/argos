@@ -392,6 +392,38 @@ export class ShortcutRegistry {
     return (this.handlers.get(id)?.length ?? 0) > 0;
   }
 
+  /**
+   * Can `trigger(id)` run it now: defined, built, bound, its scope active
+   * and its guard (`when`) true. The command palette lists the others with
+   * the reason.
+   */
+  canTrigger(id: string, scopes: readonly string[] = this.active): boolean {
+    const def = this.defs.get(id);
+    if (!def || def.planned || def.local || (def.desktopOnly && !this.desktop)) return false;
+    if (!scopesOf(def).some((s) => scopeActive(s, scopes))) return false;
+    return (this.handlers.get(id) ?? []).some((h) => !h.when || h.when());
+  }
+
+  /**
+   * Run a binding's action as if its key had been pressed (the command
+   * palette): same handler, same guard. Returns true when an action ran.
+   */
+  trigger(id: string, scopes: readonly string[] = this.active): boolean {
+    if (!this.canTrigger(id, scopes)) return false;
+    const def = this.defs.get(id)!;
+    const handler = this.handlers.get(id)!.find((h) => !h.when || h.when());
+    if (!handler) return false;
+    const p = parseShortcut(def.keys[0]);
+    handler.action({
+      key: p.key,
+      shiftKey: p.shift,
+      altKey: p.alt,
+      ctrlKey: p.mod && !this.mac,
+      metaKey: p.mod && this.mac,
+    });
+    return true;
+  }
+
   setScopes(scopes: readonly string[]): void {
     this.active = scopes.includes('global') ? [...scopes] : ['global', ...scopes];
   }

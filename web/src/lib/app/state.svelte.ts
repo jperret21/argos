@@ -40,8 +40,11 @@ import { type DecodedFrame, FrameStream } from '../api/frames';
 import type { LinkState } from '../api/socket';
 import type {
   AppInfo,
+  AstapState,
   CameraState,
   ConfigEvent,
+  ConfigPatchResult,
+  OmittedKey,
   ConfigValue,
   ConnectionState,
   DeviceConnectBody,
@@ -52,6 +55,7 @@ import type {
   MountState,
   NetworkState,
   ProfilesState,
+  SiteCheck,
 } from '../api/types';
 import { type ArgosConfig, loadConfig } from '../config';
 import {
@@ -69,15 +73,22 @@ import type { StretchMode, StretchParams } from '../viewer/stretch';
 import type { DisplayInfo, PointerInfo } from '../viewer/types';
 import { type FitMode, isFitMode } from '../viewer/view';
 import { openLayers, setReservedKeys, topModalIndex } from '../components/layers';
+import type { FsLister } from '../components/filepicker';
+import type { BundleRequest, BundleResult } from '../components/supportbundle';
+import { UndoQueue } from '../components/undo.svelte';
+import { isSettingsCategory, type SettingsCategoryId } from '../settings/categories';
+import type { JobEntry } from './jobs';
 import { JobStore } from './jobs.svelte';
 import { KEYMAP } from './keymap';
 import { LogStore } from './log.svelte';
 import { type FrameMetrics, FrameRateMeter } from './metrics';
-import { isBoolean, loadPref, savePref } from './prefs';
+import { clearAllLayouts } from './panels';
+import { isBoolean, loadPref, removePrefsWithPrefix, savePref } from './prefs';
 import { ShortcutRegistry } from './shortcuts';
 import { type StartupFailure, startupView, type StartupView } from './startup';
 import { deviceUsable } from './status';
-import { loadTheme, nextTheme, parseCssColor, saveTheme, type Theme } from './theme';
+import { loadTheme, nextTheme, parseCssColor, saveTheme, THEME_STORAGE_KEY, type Theme } from './theme';
+import { applyDensity, type Density, loadDensity, saveDensity, seedFromQt } from './viewerprefs';
 
 export const SECTIONS = ['connection', 'imaging', 'sequencer', 'analyze', 'configuration'] as const;
 export type Section = (typeof SECTIONS)[number];
@@ -104,7 +115,8 @@ export type ActionKey =
   | 'mountStop'
   | 'park'
   | 'unpark'
-  | 'tracking';
+  | 'tracking'
+  | 'siteCheck';
 
 /** Outcome of a config commit: the server's per-key messages when it refused. */
 export interface CommitResult {
@@ -195,6 +207,8 @@ export class ArgosApp {
   /** Values of GET /api/config, kept current by `config` events. */
   configValues: Record<string, ConfigValue> | null = $state.raw(null);
   configMeta: Record<string, KeyMeta> | null = $state.raw(null);
+  /** Wave 2: keys of 02 appendix A left out of `meta` on purpose, with the reason. */
+  configOmitted: OmittedKey[] = $state.raw([]);
   /** Id of the discovery job this page shows (started here, or found running). */
   discoveryJobId: string | null = $state(null);
   /** Discovery finished with several devices: the choice popover lists them. */
@@ -265,6 +279,21 @@ export class ArgosApp {
   readonly shortcuts = new ShortcutRegistry(KEYMAP, { blocked: () => topModalIndex(openLayers()) >= 0 });
   /** Keyboard shortcuts sheet ("?", Help menu). */
   shortcutSheetOpen = $state(false);
+
+  // -- Wave 2: Settings, Help, command palette ---------------------------------
+  /** Density of the readouts and rows (Settings › Appearance, owner D7); per viewer. */
+  density: Density = $state(loadDensity());
+  /** Undo after an immediate change (remove a saved site, reset a setting): one queue, bottom right. */
+  readonly undo = new UndoQueue();
+  /** Support bundle dialog (Help menu, Settings › Privacy & diagnostics; D14). */
+  supportBundleOpen = $state(false);
+  /** Command palette (Mod+K). */
+  paletteOpen = $state(false);
+  /** Settings: the category shown (per viewer) and a key to bring into view (palette, links). */
+  settingsCategory: SettingsCategoryId = $state(loadPref('argos.settings.category', isSettingsCategory, 'observer_site'));
+  settingsFocus: { key: string; n: number } | null = $state.raw(null);
+  /** Bumped by "Reset all layouts": screens holding their own layout state re-read it. */
+  layoutGeneration = $state(0);
   /** A GET /api/logs is running (fills a gap or the history after a (re)connection). */
   private logFetch: Promise<void> | null = null;
   private nextToastId = 1;
@@ -329,6 +358,11 @@ export class ArgosApp {
 
   get network(): NetworkState | null {
     return this.events.network;
+  }
+
+  /** The Settings site against the mount's pointing (wave 2; protocol.md "Site check"). */
+  get siteCheck(): SiteCheck | null {
+    return this.events.siteCheck;
   }
 
   /** "n of 4 devices ready", and whether a link is held (profile and link locked). */
@@ -467,6 +501,7 @@ export class ArgosApp {
 
   start(): () => void {
     this.applyTheme(this.theme);
+    applyDensity(this.density);
     this.events.start();
     this.frames.start();
     this.readHealth();
@@ -554,6 +589,7 @@ export class ArgosApp {
     // A (re)connection may reach a restarted server, whose revision starts at 0 again.
     this.configRevision = null;
     void this.reloadConfig().catch(quiet('Configuration'));
+    this.refreshAstap();
     void this.reloadProfiles().catch(quiet('Telescope profiles'));
     void this.client
       .network()
@@ -594,14 +630,30 @@ export class ArgosApp {
   private async reloadConfig(): Promise<void> {
     const snap = await this.client.getConfig();
     this.configMeta = snap.meta;
+    this.configOmitted = snap.omitted ?? [];
+    this.seedViewerPrefs(snap.values);
     // A config event may have arrived while the GET was in flight: never go back.
     this.adoptConfigValues(snap.values, snap.revision);
   }
 
+  /** Revisions of this page's own commits: a `config` event with another one came from elsewhere. */
+  private readonly ownRevisions = new Set<number>();
+  /** The last change made by another window, client or program (the Settings header says so). */
+  lastRemoteConfig: { keys: string[]; t: number; source: 'api' | 'file' } | null = $state.raw(null);
+
   private applyConfigEvent(msg: ConfigEvent): void {
+    const keys = Object.keys(msg.changed);
+    // Our own commit's event can arrive before its PATCH answer: keys still in flight are ours.
+    const inFlight = keys.every((k) => this.patching.has(k));
+    if (keys.length && !this.ownRevisions.has(msg.revision) && !inFlight) {
+      this.lastRemoteConfig = { keys, t: Date.now(), source: msg.source };
+    }
     this.adoptConfigValues(msg.values, msg.revision);
     if ('hardware.profile' in msg.changed || Object.keys(msg.changed).some((k) => k.startsWith('hardware.'))) {
       void this.reloadProfiles().catch(() => {});
+    }
+    if (Object.keys(msg.changed).some((k) => k.startsWith('astrometry.astap') || k.startsWith('astrometry.database'))) {
+      this.refreshAstap();
     }
     if ('astrometry.astap_path' in msg.changed) {
       void this.client
@@ -624,10 +676,71 @@ export class ArgosApp {
     }
   }
 
+  /**
+   * Q-G6: theme and rotation are per viewer, seeded once from the Qt app's
+   * keys when this browser has no choice of its own.
+   */
+  private seedViewerPrefs(values: Record<string, ConfigValue>): void {
+    let stored = { theme: true, rotation: true };
+    try {
+      stored = {
+        theme: globalThis.localStorage?.getItem(THEME_STORAGE_KEY) != null,
+        rotation: globalThis.localStorage?.getItem('argos.rotation') != null,
+      };
+    } catch {
+      /* blocked storage: nothing to seed into either */
+    }
+    const seed = seedFromQt(values, stored);
+    if (seed.theme && seed.theme !== this.theme) this.setTheme(seed.theme);
+    if (seed.rotation && seed.rotation !== this.rotation) this.setRotation(seed.rotation);
+  }
+
+  /**
+   * One Settings commit: PATCH /api/config, values adopted at once; rejects
+   * with the ApiError (its `fields` carry each refused key's words), so the
+   * field that sent it shows the refusal under itself (SettingsForm).
+   */
+  /** Keys of this page's PATCHes in flight (with a count: two fields may send the same key). */
+  private readonly patching = new Map<string, number>();
+
+  async patchConfig(changes: Record<string, ConfigValue>): Promise<ConfigPatchResult> {
+    const keys = Object.keys(changes);
+    for (const k of keys) this.patching.set(k, (this.patching.get(k) ?? 0) + 1);
+    let r: ConfigPatchResult;
+    try {
+      r = await this.client.patchConfig(changes);
+    } finally {
+      for (const k of keys) {
+        const n = (this.patching.get(k) ?? 1) - 1;
+        if (n > 0) this.patching.set(k, n);
+        else this.patching.delete(k);
+      }
+    }
+    this.ownRevisions.add(r.revision);
+    if (this.ownRevisions.size > 200) this.ownRevisions.delete(this.ownRevisions.values().next().value!);
+    this.adoptConfigValues(r.values, r.revision);
+    this.lastConfigSave = { keys: Object.keys(changes), t: Date.now() };
+    return r;
+  }
+
+  /** What ASTAP would run (A81): a set path, or one found on PATH (the Setup line, Q-G11). */
+  astap: AstapState | null = $state.raw(null);
+
+  private refreshAstap(): void {
+    void this.client
+      .astap()
+      .then((a) => (this.astap = a))
+      .catch(() => {});
+  }
+
+  /** The last Settings commit of this page (the "Saved" line of the Settings header). */
+  lastConfigSave: { keys: string[]; t: number } | null = $state.raw(null);
+
   /** One config commit (PATCH /api/config): the server validates every key or none. */
   async commitConfig(changes: Record<string, ConfigValue>): Promise<CommitResult> {
     try {
       const r = await this.client.patchConfig(changes);
+      this.ownRevisions.add(r.revision);
       this.adoptConfigValues(r.values, r.revision);
       for (const w of r.warnings) this.toast('warning', w.key, w.message);
       return { ok: true, warnings: r.warnings };
@@ -780,6 +893,7 @@ export class ArgosApp {
       this.shortcuts.handle('help.shortcuts', () => (this.shortcutSheetOpen = true)),
       this.shortcuts.handle('log.toggle', () => this.toggleLog()),
       this.shortcuts.handle('nav.settings.mod', () => this.go('configuration')),
+      this.shortcuts.handle('palette.open', () => (this.paletteOpen = !this.paletteOpen)),
       this.shortcuts.handle('motion.abort', () => this.abortMotion()),
     ];
     const detach = typeof window === 'undefined' ? () => {} : this.shortcuts.attach(window);
@@ -789,6 +903,164 @@ export class ArgosApp {
       detach();
       for (const f of off) f();
     };
+  }
+
+  // -- Wave 2: Settings, files, jobs, support bundle, site check -----------------------
+
+  /** Open Settings at a category (and bring one key into view: palette, links). */
+  openSettings(category: SettingsCategoryId, key?: string): void {
+    this.setSettingsCategory(category);
+    if (key) this.settingsFocus = { key, n: (this.settingsFocus?.n ?? 0) + 1 };
+    this.go('configuration');
+  }
+
+  setSettingsCategory(category: SettingsCategoryId): void {
+    this.settingsCategory = category;
+    savePref('argos.settings.category', category);
+  }
+
+  /** The in-app FilePicker's listing (A11): read-only, home and the ARGOS data folders. */
+  readonly listFiles: FsLister = (req, signal) => this.client.fsList(req, { signal });
+
+  private readonly jobWaiters = new Map<string, ((job: JobEntry) => void)[]>();
+
+  private static finished(job: { state: string } | null): boolean {
+    return !!job && job.state !== 'queued' && job.state !== 'running';
+  }
+
+  /**
+   * Resolve with a job's final record (done, failed or cancelled), from the
+   * `job` events, with a slow GET as a fallback in case an event was lost.
+   */
+  waitJob(id: string): Promise<JobEntry> {
+    const held = this.jobs.get(id);
+    if (ArgosApp.finished(held)) return Promise.resolve(held!);
+    return new Promise((resolve) => {
+      const list = this.jobWaiters.get(id) ?? [];
+      let poll: ReturnType<typeof setInterval> | undefined;
+      const done = (job: JobEntry) => {
+        clearInterval(poll);
+        resolve(job);
+      };
+      list.push(done);
+      this.jobWaiters.set(id, list);
+      poll = setInterval(() => {
+        void this.client
+          .job(id)
+          .then((job) => {
+            this.jobs.ingest(job);
+            this.settleWaiters(id);
+          })
+          .catch(() => {});
+      }, 3000);
+    });
+  }
+
+  private settleWaiters(id: string): void {
+    const job = this.jobs.get(id);
+    if (!ArgosApp.finished(job)) return;
+    const list = this.jobWaiters.get(id);
+    if (!list) return;
+    this.jobWaiters.delete(id);
+    for (const fn of list) fn(job!);
+  }
+
+  /**
+   * Create a support bundle (A5): start the job, wait for it, and in the
+   * browser build fetch the ZIP it kept (destination null). Rejects with the
+   * server's ApiError (409 file_exists lets the dialog ask "Replace?").
+   */
+  async createSupportBundle(req: BundleRequest): Promise<BundleResult> {
+    const answer = await this.client.startSupportBundle(req);
+    this.jobs.ingest(answer.job);
+    const job = await this.waitJob(answer.job_id);
+    if (job.state !== 'done') {
+      throw new ApiError(500, job.error?.code ?? 'bundle_failed', job.error?.message ?? 'The bundle was not created');
+    }
+    const result = job.result as BundleResult;
+    if (result?.download) {
+      const { blob, name } = await this.client.jobDownload(answer.job_id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name ?? result.name ?? 'argos-support.zip';
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    }
+    return result;
+  }
+
+  /** Check the Settings site against the mount now (POST /api/site/check). */
+  checkSite(): Promise<unknown> {
+    return this.run('siteCheck', 'Site check', async () => {
+      this.events.applySiteCheck(await this.client.checkSiteNow());
+    });
+  }
+
+  /** The Settings site disagrees with the mount (Q-G11 rail mark, Instrument card, status bar). */
+  get siteMismatch(): boolean {
+    return this.events.siteCheck?.state === 'mismatch';
+  }
+
+  // -- Density, layouts (Settings › Appearance) ---------------------------------------
+
+  setDensity(density: Density): void {
+    this.density = density;
+    saveDensity(density);
+    applyDensity(density);
+  }
+
+  /**
+   * "Reset all layouts" (D16, README 3.11): every section's panels, drawer
+   * and rail width, the rail open state, card folds and the levels strip;
+   * theme, density, rotation and science settings stay. Undo puts back what
+   * was removed.
+   */
+  resetAllLayouts(): void {
+    let store: Storage | null = null;
+    try {
+      store = globalThis.localStorage ?? null;
+    } catch {
+      store = null;
+    }
+    const saved: [string, string][] = [];
+    try {
+      if (store) {
+        for (let i = 0; i < store.length; i++) {
+          const k = store.key(i);
+          if (k && /^argos\.(layout\.|drawer\.|rail-width\.|rail-open|card\.|levels-strip)/.test(k)) {
+            const v = store.getItem(k);
+            if (v !== null) saved.push([k, v]);
+          }
+        }
+      }
+    } catch {
+      /* blocked storage */
+    }
+    clearAllLayouts(store);
+    removePrefsWithPrefix('argos.card.');
+    removePrefsWithPrefix('argos.levels-strip');
+    const rail = this.railOpen;
+    const strip = this.stripOpen;
+    this.railOpen = true;
+    this.stripOpen = true;
+    this.layoutGeneration++;
+    this.undo.push({
+      title: 'Layouts reset',
+      detail: saved.length ? `${saved.length} remembered panel ${saved.length === 1 ? 'state' : 'states'} cleared` : 'Every section is back to its default panels',
+      undo: () => {
+        try {
+          for (const [k, v] of saved) store?.setItem(k, v);
+        } catch {
+          throw new Error('The browser storage refused to restore them');
+        }
+        this.railOpen = rail;
+        this.stripOpen = strip;
+        this.layoutGeneration++;
+      },
+    });
   }
 
   // -- Theme ------------------------------------------------------------------------
@@ -1100,6 +1372,7 @@ export class ArgosApp {
   private onJobEvent(raw: unknown): void {
     const job = this.jobs.ingest(raw);
     if (!job) return;
+    this.settleWaiters(job.id);
     if (job.kind === 'discovery') {
       if (job.state === 'queued' || job.state === 'running') {
         // Started elsewhere (another page): show it here too.

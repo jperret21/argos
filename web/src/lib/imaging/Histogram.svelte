@@ -19,7 +19,10 @@
   import uPlot from 'uplot';
   import 'uplot/dist/uPlot.min.css';
   import { onMount, untrack } from 'svelte';
-  import { parseCssColor, type Theme } from '../app/theme';
+  import type { Theme } from '../app/theme';
+  import { Ink } from '../charts/ink';
+  import { drawText } from '../charts/text';
+  import { compactCount, fixed, int } from '../format/number';
   import { binHistogram, type BinnedHistogram } from '../viewer/histogram';
   import { dragLevel, handleLevels, type LevelHandle, pickHandle } from '../viewer/levels';
   import type { Histogram16, StretchParams } from '../viewer/stretch';
@@ -65,21 +68,18 @@
   function readPalette(): Palette {
     const css = getComputedStyle(host);
     const v = (name: string) => css.getPropertyValue(name).trim();
-    const line = v('--fg-muted');
-    // A light wash of the line colour under the curve (canvas needs a resolved colour).
-    const rgb = parseCssColor(line);
-    const fill = rgb
-      ? `rgba(${rgb.map((c) => Math.round(c * 255)).join(', ')}, 0.16)`
-      : 'transparent';
+    // Canvas needs resolved colours (charts/ink.ts: hex, rgb(), color(srgb …), color-mix()).
+    const ink = (name: string) => new Ink(v(name) || '#000');
+    const line = ink('--fg-muted');
     return {
-      line,
-      fill,
-      grid: v('--chart-grid'),
-      axis: v('--chart-axis'),
-      text: v('--chart-text'),
-      level: v('--accent'),
-      mid: v('--fg-muted'),
-      font: v('--font-mono'),
+      line: line.a(),
+      fill: line.a(0.16), // a light wash of the line colour under the curve
+      grid: ink('--chart-grid').a(),
+      axis: ink('--chart-axis').a(),
+      text: ink('--chart-text').a(),
+      level: ink('--accent').a(),
+      mid: line.a(),
+      font: v('--font-mono') || 'monospace',
     };
   }
 
@@ -91,11 +91,8 @@
     return [xs, ys];
   }
 
-  function compact(v: number): string {
-    if (v >= 1e6) return `${v / 1e6}M`;
-    if (v >= 1e3) return `${v / 1e3}k`;
-    return String(v);
-  }
+  /** Log-axis counts: 1, 10, 100, 1k, 10k, 1.5M (format/number.ts). */
+  const compact = compactCount;
 
   /** Handle positions in CSS px within the plot overlay. */
   function handlePositions(u: uPlot, p: StretchParams): Record<LevelHandle, number> {
@@ -123,9 +120,7 @@
       { key: 'white', v: at.white, color: pal.level, dash: [], tag: 'W' },
     ];
     ctx.save();
-    ctx.font = `600 ${10 * dpr}px ${pal.font}`;
-    ctx.textBaseline = 'bottom';
-    ctx.textAlign = 'center';
+    const tagStyle = { font: `600 ${10 * dpr}px ${pal.font}`, fill: pal.text, align: 'center', baseline: 'bottom' } as const;
     for (const m of marks) {
       let x = u.valToPos(m.v, 'x', true);
       const outside = x < left || x > right;
@@ -149,9 +144,8 @@
       ctx.closePath();
       ctx.fill();
       // Tag in the room above the plot, clear of the gridlines.
-      ctx.fillStyle = pal.text;
       const tx = Math.min(right - 4 * dpr, Math.max(left + 4 * dpr, x));
-      ctx.fillText(m.tag, tx, top - 2 * dpr);
+      drawText(ctx, m.tag, tx, top - 2 * dpr, tagStyle);
     }
     ctx.restore();
   }
@@ -196,7 +190,7 @@
           ticks: { stroke: pal.axis, width: 1, size: 3 },
           grid: { show: false },
           border: { show: true, stroke: pal.axis, width: 1 },
-          values: (_u, splits) => splits.map((v) => String(Math.round(v))),
+          values: (_u, splits) => splits.map((v) => int(v)), // "20 000" (U+202F)
           space: 64,
         },
         {
@@ -335,17 +329,17 @@
     untrack(() => plot?.redraw(false, false));
   });
 
-  const fmt = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
+  const fmt = (v: number) => (Number.isInteger(v) ? int(v) : fixed(v, 1, { group: true }));
 </script>
 
 <div class="histogram">
   <p class="readout num" aria-live="off">
     {#if hover}
       <span class="val">{fmt(hover.lo)}–{fmt(hover.hi)}</span> ADU ·
-      <span class="val">{hover.count}</span> px
+      <span class="val">{int(hover.count)}</span> px
     {:else if binned}
-      {caption ?? `Range ${binned.lo}–${Math.round(binned.hi)} ADU`}{binned.step > 1
-        ? ` · ${binned.step} ADU steps`
+      {caption ?? `Range ${int(binned.lo)}–${int(binned.hi)} ADU`}{binned.step > 1
+        ? ` · ${int(binned.step)} ADU steps`
         : ''}
     {:else}
       No frame

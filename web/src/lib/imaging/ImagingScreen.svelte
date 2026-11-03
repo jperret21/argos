@@ -23,6 +23,7 @@
   import { useApp } from '../app/state.svelte';
   import Icon from '../components/Icon.svelte';
   import IconButton from '../components/IconButton.svelte';
+  import { seconds } from '../format/number';
   import LogDrawer from '../shell/LogDrawer.svelte';
   import FitsViewer from '../viewer/FitsViewer.svelte';
   import { displaySize, effectiveTurns } from '../viewer/rotation';
@@ -65,7 +66,6 @@
   );
 
   // -- Frame chips ------------------------------------------------------------
-  const seconds = (s: number) => `${s.toFixed(s < 1 ? 3 : 1)} s`;
   const stale = $derived(app.frameStale);
   const sourceChip = $derived.by(() => {
     if (!header) return '';
@@ -368,7 +368,7 @@
 
   .workspace {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) var(--rail-min-w);
+    grid-template-columns: minmax(0, 1fr) var(--rail-w); /* 400 px default, 360-580 when resizable (D8) */
     min-height: 0;
   }
   .workspace.rail-closed {

@@ -15,6 +15,11 @@
         if (t === 'observatory' || t === 'charcoal' || t === 'night-red') {
           document.documentElement.setAttribute('data-theme', t);
         }
+        // Comfortable density (Settings › Appearance, owner D7): tokens only.
+        // Key and values: src/lib/app/viewerprefs.ts.
+        if (localStorage.getItem('argos.density') === 'comfortable') {
+          document.documentElement.setAttribute('data-density', 'comfortable');
+        }
       } catch (e) {
         /* storage blocked: keep the default theme */
       }

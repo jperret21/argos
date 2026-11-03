@@ -11,8 +11,12 @@
     answers and /ws/events has sent its first status; a failure stays on
     screen with Retry. It never comes back once the UI started: a later
     link loss shows in the status bar and the Link card.
-  - Sections: Connection (wave 1) and Observe are built; Plan, Review and
-    Settings say what they will hold. Every section has the Log drawer (L).
+  - Sections: Connection (wave 1), Observe and Settings (wave 2) are built;
+    Plan and Review say what they will hold. Every section has the Log
+    drawer (L).
+  - Global overlays (wave 2): the support bundle dialog (Help menu,
+    Settings › Privacy & diagnostics, D14), the command palette (Mod+K) and
+    the one Undo queue, drawn in the toasts' column.
   Add ?perf to the URL to log per-frame decode/upload/stats/draw timings
   (upload and draw are then fenced with a 1-px readPixels: measurements only).
 -->
@@ -21,6 +25,10 @@
   import { ArgosApp, provideApp, type Section } from './lib/app/state.svelte';
   import ConnectionScreen from './lib/connection/ConnectionScreen.svelte';
   import ImagingScreen from './lib/imaging/ImagingScreen.svelte';
+  import SettingsScreen from './lib/settings/SettingsScreen.svelte';
+  import CommandPalette from './lib/shell/CommandPalette.svelte';
+  import KeyHintBanner from './lib/shell/KeyHintBanner.svelte';
+  import SupportBundle from './lib/shell/SupportBundle.svelte';
   import EmptySection from './lib/shell/EmptySection.svelte';
   import LogDrawer from './lib/shell/LogDrawer.svelte';
   import NavRail, { type NavEntry } from './lib/shell/NavRail.svelte';
@@ -71,7 +79,7 @@
     },
   ];
 
-  type Placeholder = Exclude<Section, 'imaging' | 'connection'>;
+  type Placeholder = Exclude<Section, 'imaging' | 'connection' | 'configuration'>;
   const PLACEHOLDERS: Record<Placeholder, { title: string; text: string; items: string[] }> = {
     sequencer: {
       title: "The night's sequence",
@@ -82,11 +90,6 @@
       title: 'Review the session',
       text: 'The differential light curve of the session, the frames behind every point, and the AAVSO export.',
       items: ['Light curve with comparison and check stars', 'Frame inspection from any point', 'AAVSO extended-format export'],
-    },
-    configuration: {
-      title: 'Settings',
-      text: 'Observer, site, plate solving, catalogues, storage paths and appearance. The theme switch is in the rail footer, above Settings.',
-      items: ['Observer code and site coordinates', 'ASTAP, catalogues and photometry', 'Data folders, privacy and appearance'],
     },
   };
 
@@ -108,6 +111,11 @@
       <ImagingScreen {perf} />
     {:else if app.section === 'connection'}
       <ConnectionScreen />
+    {:else if app.section === 'configuration'}
+      <div class="placeholder" style:grid-template-rows="minmax(0, 1fr) {app.logOpen ? '216px' : '0px'}">
+        <SettingsScreen />
+        {#if app.logOpen}<LogDrawer label="Settings drawer" />{/if}
+      </div>
     {:else}
       {@const p = PLACEHOLDERS[app.section]}
       {@const nav = NAV.find((n) => n.id === app.section)}
@@ -122,6 +130,9 @@
   </div>
 </div>
 <Toasts />
+<SupportBundle />
+<CommandPalette />
+<KeyHintBanner />
 {#if !startupGone}
   <StartupScreen
     stages={app.startup.stages}

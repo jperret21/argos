@@ -10,8 +10,10 @@
     (409 busy, shown verbatim).
   - Unvalidated profiles say so in one wording (Q-C2) with their caveats.
   - Site: name, coordinates (5 decimals, signed) and elevation, with a link
-    to Settings (Observer & site, wave 2). A missing site is a science
-    error, so it reads as a warning.
+    to Settings › Observer & site. A missing site is a science error, so it
+    reads as a warning. Wave 2: the site-against-mount check under it (the
+    server's verdict): a mismatch is a warning line with both altitudes and
+    the angle between the directions; an agreement is one muted line.
 -->
 <script lang="ts">
   import { useApp } from '../app/state.svelte';
@@ -19,6 +21,8 @@
   import IconButton from '../components/IconButton.svelte';
   import Select from '../components/Select.svelte';
   import StatusBadge from '../components/StatusBadge.svelte';
+  import { fixed } from '../format/number';
+  import { siteCheckView } from '../settings/categories';
   import { profileSpecs, siteSummary, UNVALIDATED_TEXT } from './model';
 
   const app = useApp();
@@ -32,7 +36,7 @@
     (profiles?.profiles ?? []).map((p) => ({
       value: p.key,
       label: p.name,
-      detail: `${p.sensor} · ${p.arcsec_per_px.toFixed(2)}″/px${p.validated ? '' : ' · not validated'}`,
+      detail: `${p.sensor} · ${fixed(p.arcsec_per_px, 2)}″/px${p.validated ? '' : ' · not validated'}`,
       detailMono: true,
     })),
   );
@@ -44,6 +48,26 @@
   });
   const mismatch = $derived(app.devices?.camera?.warnings ?? []);
   const site = $derived(siteSummary(app.configValues));
+  const check = $derived(app.siteCheck);
+  const checkView = $derived(siteCheckView(check));
+  /** One line: "88.5° apart · mount alt 75.4°, Settings site alt 13.8°". */
+  const checkLine = $derived.by(() => {
+    if (!check) return null;
+    if (check.state === 'mismatch') {
+      const parts: string[] = [];
+      if (check.separation_deg !== null) parts.push(`${fixed(check.separation_deg, 1)}° apart`);
+      if (check.mount && check.expected) {
+        parts.push(`mount alt ${fixed(check.mount.alt_deg, 2)}°, Settings site alt ${fixed(check.expected.alt_deg, 2)}°`);
+      } else if (check.driver_site?.distance_km != null) {
+        parts.push(`the mount's own site is ${fixed(check.driver_site.distance_km, 0)} km away`);
+      }
+      return parts.join(' · ');
+    }
+    if (check.state === 'ok' && check.separation_deg !== null) {
+      return `Agrees with the mount (${fixed(check.separation_deg, 1)}° apart${checkView.when ? `, ${checkView.when}` : ''})`;
+    }
+    return null;
+  });
 </script>
 
 <Card title="Instrument" icon="mount" dense>
@@ -107,9 +131,21 @@
         variant="ghost"
         tooltip="top"
         tooltipText="Observer & site are set in Settings (F5)"
-        onclick={() => app.go('configuration')}
+        onclick={() => app.openSettings('observer_site')}
       />
     </div>
+
+    {#if check?.state === 'mismatch'}
+      <span></span>
+      <p class="note warning site-check" role="alert">
+        <StatusBadge variant="alert" level="attention" label="Site ≠ mount" live={false} />
+        <span class="lead">The Settings site disagrees with the mount: airmass, BJD and the FITS site would be wrong.</span>
+        {#if checkLine}<span class="num">{checkLine}</span>{/if}
+      </p>
+    {:else if checkLine}
+      <span></span>
+      <p class="check-ok num">{checkLine}</p>
+    {/if}
   </div>
 </Card>
 
@@ -149,6 +185,17 @@
   }
   .note .lead {
     margin: 0;
+  }
+  .site-check {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+  .check-ok {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--text-xs);
   }
   .note ul {
     margin: var(--space-1) 0 0;

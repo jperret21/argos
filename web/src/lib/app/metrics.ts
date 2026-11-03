@@ -14,6 +14,8 @@
  *   0 against small clock jitter.
  */
 
+import { fixed, int } from '../format/number';
+
 export interface FrameMetrics {
   /** Frames per second, or null until two frames have been drawn. */
   fps: number | null;
@@ -76,11 +78,11 @@ export class FrameRateMeter {
 /** "1.0 fps", "12 fps", "—". */
 export function formatFps(fps: number | null): string {
   if (fps === null || !Number.isFinite(fps)) return '—';
-  return fps < 10 ? `${fps.toFixed(1)} fps` : `${Math.round(fps)} fps`;
+  return fps < 10 ? `${fixed(fps, 1)} fps` : `${int(fps)} fps`;
 }
 
 /** "38 ms", "1.24 s", "—". */
 export function formatLatency(ms: number | null): string {
   if (ms === null || !Number.isFinite(ms)) return '—';
-  return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
+  return ms < 1000 ? `${int(ms)} ms` : `${fixed(ms / 1000, 2, { group: true })} s`;
 }

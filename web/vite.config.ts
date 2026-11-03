@@ -11,7 +11,8 @@ export default defineConfig({
     sourcemap: true,
   },
   test: {
-    include: ['src/**/*.test.ts'],
+    // scripts/*.test.mjs: the dependency-free CI tools (audit-png.mjs).
+    include: ['src/**/*.test.ts', 'scripts/**/*.test.mjs'],
     environment: 'node',
   },
 });

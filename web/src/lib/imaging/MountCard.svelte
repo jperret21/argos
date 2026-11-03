@@ -14,6 +14,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { formatDec, formatDegrees, formatRA, parseDec, parseRA, separationDeg } from '../format/astro';
+  import { fixed, signed } from '../format/number';
   import { useApp } from '../app/state.svelte';
   import { mountStatus } from '../app/status';
   import Card from '../components/Card.svelte';
@@ -46,6 +47,16 @@
 
   const toTarget = $derived(
     m && m.target ? separationDeg(m.ra_hours, m.dec_deg, m.target.ra_hours, m.target.dec_deg) : null,
+  );
+
+  /**
+   * Slew is the deliberate action (brass) only while the typed target is a
+   * new one: farther than the "on target" tolerance (0.01°) from where the
+   * mount points. Otherwise it stays secondary (design review: a filled brass
+   * Slew next to "on target" was the largest brass area of Observe).
+   */
+  const newTarget = $derived(
+    !!target && (!m || separationDeg(m.ra_hours, m.dec_deg, target.ra, target.dec) >= 0.01),
   );
 
   const gotoReason = $derived.by(() => {
@@ -96,6 +107,9 @@
 <Card title="Mount" icon="mount" collapsible persist="mount">
   {#snippet status()}
     <StatusBadge tone={badge.tone} label={badge.label} />
+  {/snippet}
+  {#snippet summary()}
+    {#if m}Alt {formatDegrees(m.alt_deg)} · Az {formatDegrees(m.az_deg)}{/if}
   {/snippet}
 
   <div class="readouts" class:offline={!m || app.stale}>
@@ -183,7 +197,7 @@
         mono
         placeholder="05h 35m 17.3s"
         error={touched || raText ? (ra && !ra.ok ? ra.error : null) : null}
-        hint={ra?.ok ? `= ${ra.value.toFixed(5)} h` : 'h m s, or decimal hours'}
+        hint={ra?.ok ? `= ${fixed(ra.value, 5)} h` : 'h m s, or decimal hours'}
       />
       <TextField
         label="Target Dec"
@@ -191,7 +205,7 @@
         mono
         placeholder="−05° 23′ 28″"
         error={touched || decText ? (dec && !dec.ok ? dec.error : null) : null}
-        hint={dec?.ok ? `= ${formatDegrees(dec.value, 5)}` : '° ′ ″, or decimal degrees'}
+        hint={dec?.ok ? `= ${signed(dec.value, 5)}°` : '° ′ ″, or decimal degrees'}
       />
     </div>
     <div class="row">
@@ -201,7 +215,7 @@
         label="Slew"
         showLabel
         size="s"
-        variant="primary"
+        variant={newTarget && !gotoReason ? 'primary' : 'secondary'}
         busy={!!app.busy.goto}
         disabledReason={gotoReason}
         tooltipText="Slew to the target (J2000)"
@@ -255,7 +269,7 @@
 
   .value {
     color: var(--fg);
-    font-size: var(--text-xl);
+    font-size: var(--readout); /* 17 px; 20 px in Comfortable density (owner D7) */
     font-weight: var(--weight-medium);
     line-height: var(--leading-tight);
     white-space: nowrap;

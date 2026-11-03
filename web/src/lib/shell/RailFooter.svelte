@@ -8,13 +8,14 @@
     (Q-G3). No single-key shortcut (Q-G3).
   - [help]: the Help menu: version line, Documentation & website (opens in
     the browser, the only network use, on request), Keyboard shortcuts (?),
-    Create support bundle…, About ARGOS (Settings › About, D14), and Quit
-    ARGOS in the desktop app. Items whose screen is not built yet are shown
+    Command palette (Mod+K), Create support bundle…, About ARGOS
+    (Settings › About, D14), and Quit ARGOS in the desktop app. Items whose screen is not built yet are shown
     disabled with the reason, not hidden.
 -->
 <script lang="ts">
   import { THEME_LABELS, THEMES, type Theme, nextTheme } from '../app/theme';
   import IconButton from '../components/IconButton.svelte';
+  import KeyHint from '../components/KeyHint.svelte';
   import Menu from '../components/Menu.svelte';
   import type { MenuChoice, MenuEntry } from '../components/menu';
 
@@ -26,6 +27,8 @@
     api?: number | null;
     docsUrl?: string;
     onshortcuts: () => void;
+    /** Command palette (Mod+K, wave 2). */
+    onpalette?: () => void;
     onabout?: () => void;
     onsupportbundle?: () => void;
     /** Desktop app only. */
@@ -41,6 +44,7 @@
     api = null,
     docsUrl = 'https://perretjules.com/argos/',
     onshortcuts,
+    onpalette,
     onabout,
     onsupportbundle,
     onquit,
@@ -67,6 +71,7 @@
       detail: `${docsHost} · opens in your browser`,
     },
     { id: 'shortcuts', label: 'Keyboard shortcuts', shortcut: '?' },
+    ...(onpalette ? ([{ id: 'palette', label: 'Command palette', icon: 'search', shortcut: 'Mod+K' }] as MenuEntry[]) : []),
     {
       id: 'bundle',
       label: 'Create support bundle…',
@@ -93,6 +98,9 @@
         break;
       case 'shortcuts':
         onshortcuts();
+        break;
+      case 'palette':
+        onpalette?.();
         break;
       case 'bundle':
         onsupportbundle?.();
@@ -151,6 +159,8 @@
 
 <div class="footer-tools" bind:this={row}>
   <span class="anchor" bind:this={helpAnchor}>
+    <!-- Key hints: "?" (Keyboard shortcuts, a Help item) on the Help button. -->
+    <KeyHint keys="?" />
     <IconButton
       icon="help"
       label="Help"
@@ -219,6 +229,7 @@
     padding: var(--space-1) 0;
   }
   .anchor {
+    position: relative;
     display: inline-flex;
   }
   .footer-tools :global(.icon-button) {

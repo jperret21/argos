@@ -21,6 +21,7 @@
   import IconButton from '../components/IconButton.svelte';
   import PanelsPopover, { type PanelGroup } from '../components/PanelsPopover.svelte';
   import { disconnectRisk } from '../connection/model';
+  import { percent } from '../format/number';
 
   interface Props {
     hasFrame: boolean;
@@ -165,7 +166,7 @@
       disabledReason={viewReason}
       onclick={() => onzoom('out')}
     />
-    <span class="zoom num" aria-live="off">{hasFrame ? `${Math.round(app.zoom * 100)}%` : '—'}</span>
+    <span class="zoom num" aria-live="off">{hasFrame ? percent(app.zoom) : '—'}</span>
     <IconButton
       icon="zoom-in"
       label="Zoom in"
@@ -269,7 +270,7 @@
     display: flex;
     align-items: center;
     gap: var(--space-3);
-    height: calc(var(--control-h-m) + 2 * var(--space-2) + var(--border-w));
+    height: var(--toolbar-h); /* one 44 px row, border included (owner D8) */
     padding: 0 var(--space-3);
     border-bottom: var(--border-w) solid var(--border);
     background: var(--bg);

@@ -9,19 +9,25 @@
  */
 
 import type { ArgosConfig } from '../config';
+import type { FsListing, FsListRequest } from '../components/filepicker';
+import type { BundleRequest } from '../components/supportbundle';
 import type {
   AppInfo,
+  AstapState,
+  CacheInfo,
   CameraState,
   ConfigPatchResult,
   ConfigSnapshot,
   ConfigValue,
   ConnectRequest,
   ConnectionState,
+  CrashReports,
   DeviceConnectBody,
   DeviceId,
   DevicesState,
   DiscoveryBody,
   ErrorBody,
+  EssentialCatalogue,
   ExposureRequest,
   Health,
   JobWire,
@@ -29,6 +35,8 @@ import type {
   MountState,
   NetworkState,
   ProfilesState,
+  SessionPage,
+  SiteCheck,
   Status,
   StellariumState,
 } from './types';
@@ -360,5 +368,95 @@ export class ArgosClient {
 
   stopStellarium(options?: RequestOptions): Promise<StellariumState> {
     return this.request('DELETE', '/api/stellarium', undefined, options);
+  }
+
+  // -- API 2, wave 2: files, sessions, support bundle, settings helpers, site check --
+
+  /** Read-only listing of home and the ARGOS data folders (A11); 403 forbidden_path outside them. */
+  fsList(req: FsListRequest, options?: RequestOptions): Promise<FsListing> {
+    const q = new URLSearchParams();
+    if (req.path) q.set('path', req.path);
+    q.set('kind', req.kind);
+    if (req.ext && req.ext.length) q.set('ext', req.ext.join(','));
+    if (req.counts) q.set('counts', req.counts);
+    if (req.hidden) q.set('hidden', 'true');
+    return this.request('GET', `/api/fs/list?${q.toString()}`, undefined, options);
+  }
+
+  /** Sessions under sessions_path, newest first (A67, list only). */
+  sessions(query: { offset?: number; limit?: number } = {}, options?: RequestOptions): Promise<SessionPage> {
+    const q = new URLSearchParams();
+    if (query.offset !== undefined) q.set('offset', String(query.offset));
+    if (query.limit !== undefined) q.set('limit', String(query.limit));
+    const qs = q.toString();
+    return this.request('GET', `/api/sessions${qs ? `?${qs}` : ''}`, undefined, options);
+  }
+
+  /** Starts a `support_bundle` job (A5); 409 file_exists / busy, 403 forbidden_path. */
+  startSupportBundle(body: BundleRequest, options?: RequestOptions): Promise<{ job_id: string; job: JobWire }> {
+    return this.request('POST', '/api/support-bundle', body, options);
+  }
+
+  /** The ZIP a finished job kept for the browser (GET /api/jobs/{id}/download), as a Blob. */
+  async jobDownload(id: string, options: RequestOptions = {}): Promise<{ blob: Blob; name: string | null }> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 60_000);
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.config.apiBase}/api/jobs/${encodeURIComponent(id)}/download`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${this.config.token}` },
+        signal: controller.signal,
+      });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new ApiError(0, NETWORK_ERROR, `Cannot reach the ARGOS server at ${this.config.apiBase} (${detail})`);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!response.ok) throw errorFromResponse(response.status, response.statusText, await response.text());
+    const disposition = response.headers.get('Content-Disposition') ?? '';
+    const name = /filename="?([^";]+)"?/i.exec(disposition)?.[1] ?? null;
+    return { blob: await response.blob(), name };
+  }
+
+  crashReports(since?: string, options?: RequestOptions): Promise<CrashReports> {
+    const qs = since ? `?since=${encodeURIComponent(since)}` : '';
+    return this.request('GET', `/api/diagnostics/crash-reports${qs}`, undefined, options);
+  }
+
+  /** What ASTAP would run with these settings (A81; each defaults to the config's). */
+  astap(query: { path?: string; database_path?: string; database?: string } = {}, options?: RequestOptions): Promise<AstapState> {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(query)) if (v !== undefined) q.set(k, v);
+    const qs = q.toString();
+    return this.request('GET', `/api/astrometry/astap${qs ? `?${qs}` : ''}`, undefined, options);
+  }
+
+  /** Starts a cancellable `site_search` job (A82; online: Nominatim, Open-Meteo). */
+  startSiteSearch(query: string, options?: RequestOptions): Promise<{ job_id: string; job: JobWire }> {
+    return this.request('POST', '/api/site/search', { query }, options);
+  }
+
+  caches(options?: RequestOptions): Promise<{ caches: CacheInfo[] }> {
+    return this.request('GET', '/api/caches', undefined, options);
+  }
+
+  /** Clears one catalogue cache (local, synchronous; the UI confirms first). */
+  clearCache(kind: string, options?: RequestOptions): Promise<{ cache: CacheInfo; removed: number }> {
+    return this.request('DELETE', `/api/caches/${encodeURIComponent(kind)}`, undefined, options);
+  }
+
+  essentialCatalogue(options?: RequestOptions): Promise<EssentialCatalogue> {
+    return this.request('GET', '/api/catalogues/essential', undefined, options);
+  }
+
+  siteCheck(options?: RequestOptions): Promise<SiteCheck> {
+    return this.request('GET', '/api/site/check', undefined, options);
+  }
+
+  /** Check the Settings site against the latest mount reading now (409 not_connected without a mount). */
+  checkSiteNow(options?: RequestOptions): Promise<SiteCheck> {
+    return this.request('POST', '/api/site/check', undefined, options);
   }
 }

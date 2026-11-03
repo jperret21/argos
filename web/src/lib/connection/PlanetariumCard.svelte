@@ -38,7 +38,7 @@
   const lookup = $derived(values?.['stellarium.online_target_lookup'] === true);
   const lookupHelp = $derived(
     app.configMeta?.['stellarium.online_target_lookup']?.help ??
-      'When no local catalogue match exists, send the GoTo coordinates to CDS/SIMBAD to suggest a target name. Argos always asks before changing FITS metadata.',
+      'When no local catalogue match exists, send the GoTo coordinates to CDS/SIMBAD to suggest a target name. ARGOS always asks before changing FITS metadata.',
   );
 
   const bridge = $derived(app.events.stellarium);
@@ -91,6 +91,7 @@
         hideLabel
         lazy
         integer
+        group={false}
         min={1024}
         max={65535}
         value={port}

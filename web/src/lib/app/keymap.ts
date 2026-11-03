@@ -72,6 +72,9 @@ export const KEYMAP: readonly ShortcutDef[] = [
   { id: 'review.sessions', keys: ['Mod+Shift+O'], label: 'Review sessions', scope: 'global', planned: true },
   { id: 'app.quit', keys: ['Mod+Q'], label: 'Quit ARGOS', scope: 'global', desktopOnly: true, planned: true },
   { id: 'help.shortcuts', keys: ['?'], label: 'Keyboard shortcuts', scope: 'global' },
+  // Command palette (PROPOSAL 3.1, W2 end): every action with its key or its
+  // unavailable reason; a hardware action opens its confirmation, never runs on Enter.
+  { id: 'palette.open', keys: ['Mod+K'], label: 'Command palette', scope: 'global' },
   { id: 'log.toggle', keys: ['L'], label: 'Activity log', scope: 'global' },
   {
     id: 'motion.abort',
@@ -90,13 +93,22 @@ export const KEYMAP: readonly ShortcutDef[] = [
     id: 'search.focus',
     keys: ['/'],
     label: 'Focus the search field',
-    scope: ['sequencer', 'analyze.r0', 'configuration'],
+    scope: ['sequencer', 'analyze.r0'],
     planned: true,
   },
+  { id: 'settings.filter', keys: ['/'], label: 'Filter the settings', scope: 'configuration' },
 
   // -- Observe -------------------------------------------------------------------
   { id: 'observe.capture', keys: ['E'], label: 'One exposure', scope: OBSERVE },
   { id: 'observe.live', keys: ['V'], label: 'Live view on / off', scope: OBSERVE },
+  // Task modes (owner D1; BRAND 2 principle 8): Alt+digit, matched on the
+  // physical key (macOS Option+1 types "¡"). The observer chooses; never automatic.
+  { id: 'observe.mode.framing', keys: ['Alt+1'], label: 'Framing mode', scope: OBSERVE, planned: true },
+  { id: 'observe.mode.focus', keys: ['Alt+2'], label: 'Focus mode', scope: OBSERVE, planned: true },
+  { id: 'observe.mode.field', keys: ['Alt+3'], label: 'Field mode', scope: OBSERVE, planned: true },
+  { id: 'observe.mode.run', keys: ['Alt+4'], label: 'Run mode', scope: OBSERVE, planned: true },
+  // Watch view (owner D3): while it is open only W, Esc, ? and Mod+K act.
+  { id: 'observe.watch', keys: ['W'], label: 'Watch view on / off', scope: OBSERVE, planned: true },
   ...VIEWER,
   { id: 'observe.jog-arm', keys: ['J'], label: 'Arm keyboard jogging', scope: OBSERVE, planned: true },
   {

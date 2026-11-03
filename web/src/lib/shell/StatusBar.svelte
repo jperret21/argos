@@ -1,5 +1,5 @@
 <!--
-  Bottom status bar, one 32 px row on every section (D18; 01 2.3.1, 2.3.2;
+  Bottom status bar, one 28 px row (owner D8) on every section (D18; 01 2.3.1, 2.3.2;
   replaces the Qt TopStatusBar, M11):
 
   - Left, global: the server link when it is not open (warning tone; the
@@ -35,6 +35,7 @@
   import DeviceMark from '../connection/DeviceMark.svelte';
   import { deviceTooltip, deviceViews, networkView } from '../connection/model';
   import { formatDec, formatDegrees, formatRA, separationDeg } from '../format/astro';
+  import { fixed, int, seconds } from '../format/number';
   import { utcClock, utcFull } from '../app/log';
 
   const app = useApp();
@@ -65,13 +66,20 @@
   );
   const activityText = $derived(activity ? (working ? activity.text : activity.text.replace(/…$/, '')) : '');
   /** Items that need room: Rate / Latency fold while they are shown. */
-  const crowded = $derived(linkDown || toGo !== null);
+  /** Wave 2: the Settings site disagrees with the mount (site check): one warning item, never folded. */
+  const siteAlert = $derived(app.siteMismatch && !app.stale);
+  const siteTip = $derived(
+    app.siteCheck?.separation_deg != null
+      ? `The Settings site disagrees with the mount (${fixed(app.siteCheck.separation_deg, 1)}° apart): airmass, BJD and the FITS site would be wrong. Open Settings › Observer & site`
+      : 'The Settings site disagrees with the mount: open Settings › Observer & site',
+  );
+  const crowded = $derived(linkDown || toGo !== null || siteAlert);
   const run = $derived.by(() => {
     if (app.stale) return null;
     if (app.live) return { icon: 'live', text: 'LIVE', tip: 'Live view running: open Observe' };
     if (app.running.exposing) {
       const s = app.camera?.exposure_s ?? 0;
-      return { icon: 'capture', text: `Exposing ${s.toFixed(s < 1 ? 3 : 1)} s`, tip: 'One exposure running: open Observe' };
+      return { icon: 'capture', text: `Exposing ${seconds(s)}`, tip: 'One exposure running: open Observe' };
     }
     return null;
   });
@@ -87,8 +95,10 @@
       : `Internet: ${net.internet.word}${net.internetChecked ? `, checked ${net.internetChecked}` : ''}`,
   );
 
+  /** Integer ADU grouped ("12 450"); float data keeps two decimals. */
+  const aduValue = (v: number) => (Number.isInteger(v) ? int(v) : fixed(v, 2, { group: true }));
   function adu(v: number | [number, number, number]): string {
-    return Array.isArray(v) ? v.join(' / ') : String(v);
+    return Array.isArray(v) ? v.map(aduValue).join(' / ') : aduValue(v);
   }
 </script>
 
@@ -171,6 +181,19 @@
     {/if}
   </span>
 
+  {#if siteAlert}
+    <span class="sep" aria-hidden="true"></span>
+    <button
+      type="button"
+      class="site-alert"
+      aria-label={siteTip}
+      use:tooltip={{ text: siteTip, placement: 'top' }}
+      onclick={() => app.openSettings('observer_site')}
+    >
+      <StatusBadge variant="bar" level="attention" label="Site ≠ mount" live={false} />
+    </button>
+  {/if}
+
   {#if run}
     <span class="sep" aria-hidden="true"></span>
     <button
@@ -189,8 +212,8 @@
     <span class="sep" aria-hidden="true"></span>
 
     <span class="item">
-      <span class="key">X</span><span class="num val" class:w4={!!app.pointer}>{app.pointer ? app.pointer.x : '—'}</span>
-      <span class="key">Y</span><span class="num val" class:w4={!!app.pointer}>{app.pointer ? app.pointer.y : '—'}</span>
+      <span class="key">X</span><span class="num val" class:w4={!!app.pointer}>{app.pointer ? int(app.pointer.x) : '—'}</span>
+      <span class="key">Y</span><span class="num val" class:w4={!!app.pointer}>{app.pointer ? int(app.pointer.y) : '—'}</span>
       <span class="key">Value</span>
       <span class="num val" class:w6={!!app.pointer}>{app.pointer ? `${adu(app.pointer.value)} ADU` : '—'}</span>
     </span>
@@ -240,7 +263,7 @@
     <Icon name="log" size="s" />
     <span>Log</span>
     {#if app.unseenProblems > 0 && !app.logShown}
-      <span class="badge num">{app.unseenProblems}</span>
+      <span class="badge num">{int(app.unseenProblems)}</span>
     {/if}
   </button>
 </footer>
@@ -340,6 +363,26 @@
     color: var(--text-muted);
   }
 
+  .site-alert {
+    display: inline-flex;
+    align-items: center;
+    flex: none;
+    height: 22px;
+    padding: 0 var(--space-1);
+    border: none;
+    border-radius: var(--radius-s);
+    background: none;
+    color: var(--fg);
+    font: inherit;
+    cursor: pointer;
+  }
+  .site-alert:hover {
+    background: var(--hover-bg);
+  }
+  .site-alert:focus-visible {
+    outline: var(--focus-ring-w) solid var(--focus-ring);
+    outline-offset: 1px;
+  }
   .run {
     display: inline-flex;
     align-items: center;
@@ -367,7 +410,7 @@
   }
 
   .w4 {
-    min-width: 4ch;
+    min-width: 5ch; /* "3 840": grouped from 1 000 (BRAND 5) */
   }
   .w6 {
     min-width: 10ch;

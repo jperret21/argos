@@ -78,6 +78,8 @@ export interface Status {
   devices?: DevicesState;
   /** API 2: the active telescope profile. */
   profile?: ProfileSummary;
+  /** API 2, wave 2: the Settings site against the mount's pointing (protocol.md "Site check"). */
+  site_check?: SiteCheck;
 }
 
 export type ConnectRequest = { mode: 'simulator' } | { mode: 'alpaca'; host: string; port: number };
@@ -289,6 +291,16 @@ export interface KeyMeta {
   category: string;
   advanced: boolean;
   read_only: boolean;
+  /** Wave 2: why a read_only key cannot be PATCHed (shown under the field). */
+  read_only_reason?: string | null;
+  /** Wave 2: what a "path" key names (FilePicker mode); null for other types. */
+  path_kind?: 'dir' | 'file' | 'exe' | null;
+}
+
+/** Wave 2: a key of 02 appendix A deliberately not in `meta`, with the reason. */
+export interface OmittedKey {
+  key: string;
+  reason: string;
 }
 
 export interface ConfigSnapshot {
@@ -296,6 +308,8 @@ export interface ConfigSnapshot {
   meta: Record<string, KeyMeta>;
   revision: number;
   path: string | null;
+  /** Wave 2: the appendix A keys left out on purpose (exit criterion of wave 2). */
+  omitted?: OmittedKey[];
 }
 
 export interface ConfigPatchResult {
@@ -326,6 +340,117 @@ export interface JobWire {
   cancellable: boolean;
   cancel_requested: boolean;
   seq: number;
+}
+
+// ---------------------------------------------------------------------------
+// API 2, wave 2: site check, files, sessions, support bundle, settings helpers
+// ---------------------------------------------------------------------------
+
+export type SiteCheckState = 'ok' | 'mismatch' | 'unknown';
+export type SiteCheckReason = 'no_mount' | 'no_site' | 'waiting' | 'no_position';
+
+export interface SiteCheck {
+  state: SiteCheckState;
+  /** Set when the state is unknown. */
+  reason: SiteCheckReason | null;
+  /** One line for the observer (the server's words). */
+  message: string;
+  tolerance_deg: number;
+  /** The clock the comparison used. */
+  checked_utc: string | null;
+  trigger: 'connect' | 'periodic' | 'site_change' | 'manual' | null;
+  site: { name: string; latitude: number; longitude: number } | null;
+  /** The mount reading compared. */
+  mount: { ra_hours: number; dec_deg: number; alt_deg: number; az_deg: number } | null;
+  /** The same RA / Dec seen from the Settings site. */
+  expected: { alt_deg: number; az_deg: number } | null;
+  /** Angle between the two directions (the rule). */
+  separation_deg: number | null;
+  /** Mount minus expected altitude (for the text only). */
+  altitude_diff_deg: number | null;
+  driver_site: {
+    latitude: number;
+    longitude: number;
+    elevation_m: number | null;
+    distance_km: number | null;
+    state: SiteCheckState;
+  } | null;
+}
+
+/** GET /api/sessions (A67, list only). */
+export interface SessionSummary {
+  path: string;
+  folder: string;
+  object: string;
+  started_utc: string;
+  frames: number;
+  lights: number;
+  filters: Record<string, number>;
+  image_types: Record<string, number>;
+  missing_frames: number;
+  curves: { target: number; comparison: number; check: number };
+  has_quality: boolean;
+  has_targets: boolean;
+  issues: string[];
+}
+
+export interface SessionPage {
+  root: string;
+  exists: boolean;
+  total: number;
+  offset: number;
+  limit: number;
+  sessions: SessionSummary[];
+  scanned_utc: string;
+}
+
+/** GET /api/diagnostics/crash-reports (A6). */
+export interface CrashReports {
+  directory: string | null;
+  reports: { path: string; name: string; t: string; size: number; summary: string }[];
+}
+
+/** GET /api/astrometry/astap (A81). */
+export interface AstapState {
+  astap: string | null;
+  configured: string;
+  configured_found: boolean;
+  database_dir: string | null;
+  database_source: 'configured' | 'detected' | null;
+  database_found: boolean;
+  database: string;
+  database_ignored: boolean;
+  database_args: string[];
+  message: string;
+}
+
+/** Result of a `site_search` job (A82). */
+export interface PlaceResult {
+  label: string;
+  latitude: number;
+  longitude: number;
+  elevation_m: number | null;
+}
+
+/** GET /api/caches (A83). */
+export interface CacheInfo {
+  kind: 'object' | 'exoplanet' | 'aavso' | 'gaia' | 'field_catalogue';
+  label: string;
+  key: string;
+  path: string;
+  path_kind: 'file' | 'dir';
+  exists: boolean;
+  files: number;
+  bytes: number;
+}
+
+/** GET /api/catalogues/essential (A84). */
+export interface EssentialCatalogue {
+  name: string;
+  version: string;
+  source: string;
+  source_url: string;
+  object_count: number;
 }
 
 export interface ExposureRequest {
@@ -394,6 +519,10 @@ export interface StellariumEvent extends StellariumState {
   type: 'stellarium';
 }
 
+export interface SiteCheckEvent extends SiteCheck {
+  type: 'site_check';
+}
+
 export type ServerEvent =
   | StatusEvent
   | MountEvent
@@ -404,7 +533,8 @@ export type ServerEvent =
   | ActivityEvent
   | ConfigEvent
   | JobEvent
-  | StellariumEvent;
+  | StellariumEvent
+  | SiteCheckEvent;
 
 // ---------------------------------------------------------------------------
 // WS /ws/frames (binary): see frames.ts for the byte layout

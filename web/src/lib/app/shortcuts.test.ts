@@ -151,6 +151,22 @@ describe('ShortcutRegistry', () => {
     expect(() => new ShortcutRegistry(KEYMAP, { mac: false, desktop: true })).not.toThrow();
   });
 
+  it('reserves W, Mod+K and Alt+1..4 (PROPOSAL 6) without a conflict', () => {
+    const r = new ShortcutRegistry(KEYMAP, { mac: true, desktop: true });
+    const ids = ['observe.watch', 'palette.open', 'observe.mode.framing', 'observe.mode.focus', 'observe.mode.field', 'observe.mode.run'];
+    for (const id of ids) expect(r.get(id), id).toBeDefined();
+    expect(r.get('palette.open')?.keys).toEqual(['Mod+K']);
+    expect(r.get('observe.watch')?.keys).toEqual(['W']);
+    // Alt+1 is not "1" (actual pixels) nor Mod+1 (Connection, desktop).
+    expect(chordOf('Alt+1')).not.toBe(chordOf('1'));
+    expect(chordOf('Alt+1')).not.toBe(chordOf('Mod+1'));
+    // macOS Option+1 types "¡": the physical key still selects Framing.
+    expect(matchesShortcut(ev('¡', { altKey: true, code: 'Digit1' }), 'Alt+1', true)).toBe(true);
+    expect(matchesShortcut(ev('1', { code: 'Digit1' }), 'Alt+1', true)).toBe(false);
+    // A W anywhere else in Observe would now throw.
+    expect(() => r.define({ id: 'x.w', keys: ['W'], label: 'x', scope: 'imaging' })).toThrow(/W is both/);
+  });
+
   it('dispatches only bound, active bindings, most specific scope first', () => {
     const r = make();
     const fit = vi.fn();

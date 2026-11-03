@@ -19,6 +19,7 @@
   import NumberField from '../components/NumberField.svelte';
   import Segmented from '../components/Segmented.svelte';
   import StatusBadge from '../components/StatusBadge.svelte';
+  import { fixed, int } from '../format/number';
   import type { RotationMode } from '../viewer/rotation';
   import type { StretchMode } from '../viewer/stretch';
   import Histogram from './Histogram.svelte';
@@ -57,7 +58,7 @@
     ['max', 'Max'],
   ];
   const formatStat = (key: StatKey, v: number) =>
-    key === 'min' || key === 'max' ? String(v) : v.toFixed(1);
+    key === 'min' || key === 'max' ? int(v) : fixed(v, 1, { group: true });
 
   const MODES: { value: StretchMode; label: string }[] = [
     { value: 'linear', label: 'Linear' },
@@ -76,6 +77,7 @@
     min={0}
     max={65535}
     integer
+    group
     {disabled}
     onchange={(v) => app.setLevel({ black: v })}
   />
@@ -100,6 +102,7 @@
     min={0}
     max={65535}
     integer
+    group
     {disabled}
     onchange={(v) => app.setLevel({ white: v })}
   />
@@ -259,10 +262,14 @@
     white-space: nowrap;
   }
 
+  /* Two rows of three: grouped values ("1 656", "1 800.0") side by side need a
+     column gap well above the group space, which is one full cell in Plex Mono
+     (BRAND 5); five columns at 18 px do not fit the strip at 1440 px. */
   .stats {
     display: grid;
-    grid-template-columns: repeat(5, auto);
-    gap: var(--space-1) var(--space-3);
+    grid-template-columns: repeat(3, auto);
+    justify-content: start;
+    gap: var(--space-2) var(--space-5);
     margin: var(--space-2) 0 0;
     padding-top: var(--space-2);
     border-top: var(--border-w) solid var(--border-soft);
@@ -284,7 +291,7 @@
   .stats dd {
     margin: 0;
     color: var(--fg);
-    font-size: var(--text-s);
+    font-size: var(--readout-s); /* 13 px compact, 16 px Comfortable (D7) */
     white-space: nowrap;
   }
 

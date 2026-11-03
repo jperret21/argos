@@ -2,15 +2,25 @@
   Unobtrusive notifications (API errors, notable events): bottom right, at
   most three, merged when identical, dismissed automatically. Errors are
   also written to the activity log, so closing a toast loses nothing.
+  The Undo toasts of the app's one queue (wave 2: remove a saved site,
+  reset a setting, reset all layouts) sit in the same column, above.
+  On Settings the column moves to the bottom left of the form column
+  (design review): the right-hand side holds the actions of the rows and
+  tables (Save current site, Reset, Clear…), which a toast must not cover
+  right after the change it offers to undo.
 -->
 <script lang="ts">
   import { useApp } from '../app/state.svelte';
   import IconButton from '../components/IconButton.svelte';
+  import UndoToast from '../components/UndoToast.svelte';
 
   const app = useApp();
 </script>
 
-<div class="toasts" aria-live="polite">
+<div class="toasts" class:in-settings={app.section === 'configuration'} aria-live="polite">
+  {#each app.undo.entries as entry (entry.id)}
+    <UndoToast queue={app.undo} {entry} />
+  {/each}
   {#each app.toasts as t (t.id)}
     <div class="toast level-{t.level}" role={t.level === 'error' ? 'alert' : 'status'}>
       <span class="mark" aria-hidden="true"></span>
@@ -45,9 +55,16 @@
     gap: var(--space-2);
     pointer-events: none;
   }
+  /* Settings: bottom left of the form column (rail + 208 px category list). */
+  .toasts.in-settings {
+    right: auto;
+    left: calc(var(--sidebar-w) + 208px + var(--space-5));
+    align-items: flex-start;
+  }
 
   .toast {
-    --mark: var(--accent);
+    /* Info: a neutral mark (BRAND 8: toasts are not part of the brass budget). */
+    --mark: var(--fg-muted);
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: start;

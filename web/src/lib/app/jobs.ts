@@ -13,6 +13,8 @@
  * - Finished jobs stay until dismissed, at most MAX_FINISHED of them.
  */
 
+import { duration } from '../format/time';
+
 export const JOB_STATES = ['queued', 'running', 'done', 'failed', 'cancelled'] as const;
 export type JobPhase = (typeof JOB_STATES)[number];
 
@@ -230,9 +232,5 @@ export function jobDuration(job: Pick<Job, 'started_utc' | 'ended_utc'>, now: nu
   const start = job.started_utc ? Date.parse(job.started_utc) : NaN;
   if (!Number.isFinite(start)) return null;
   const end = job.ended_utc ? Date.parse(job.ended_utc) : now;
-  const s = Math.max(0, Math.round((end - start) / 1000));
-  if (s < 60) return `${s} s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`;
-  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+  return duration(Math.max(0, (end - start) / 1000)); // one rule: format/time.ts
 }

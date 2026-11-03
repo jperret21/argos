@@ -139,7 +139,8 @@
   const probed = $derived(app.network?.host ? `${app.network.host}:${app.network.port}` : null);
 
   // -- Setup (Q-G11): the site lives in the Instrument card -------------------
-  const checklist = $derived(firstRunChecklist(app.configValues, app.appInfo?.astap_configured));
+  // ASTAP counts as set when a path is configured or one is found on PATH (A81 auto-detect).
+  const checklist = $derived(firstRunChecklist(app.configValues, app.appInfo?.astap_configured || !!app.astap?.astap));
   const missing = $derived(app.configValues ? checklist.filter((c) => !c.done && c.id !== 'site') : []);
   const setupText = $derived.by(() => {
     const names = missing.map((c) => (c.id === 'obscode' ? 'observer code' : c.label));
@@ -203,6 +204,7 @@
           hideLabel
           lazy
           integer
+          group={false}
           min={1}
           max={65535}
           value={app.alpacaPort}

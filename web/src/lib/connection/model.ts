@@ -21,6 +21,7 @@ import type {
 } from '../api/types';
 import { DEVICE_IDS } from '../api/types';
 import type { Tone } from '../app/status';
+import { fixed, int, signed, TIMES } from '../format/number';
 
 export { DEVICE_IDS };
 
@@ -273,21 +274,15 @@ export function deviceTooltip(v: DeviceView): string {
 // Profile and site
 // ---------------------------------------------------------------------------
 
-const MINUS = '−';
-
-function fixed(v: number, digits: number): string {
-  return v.toFixed(digits).replace('-', MINUS);
-}
-
 /** "30 mm · f/5.3 · IMX585 · 2.9 µm · 3.74″/px · 3.99° × 2.24° · GRBG" (BRAND 5 formats). */
 export function profileSpecs(p: Profile): string {
   const parts = [
-    `${Math.round(p.aperture_mm)} mm`,
-    `f/${p.focal_ratio.toFixed(1)}`,
+    `${int(p.aperture_mm)} mm`,
+    `f/${fixed(p.focal_ratio, 1)}`,
     p.sensor,
-    `${p.pixel_size_um.toFixed(1)} µm`,
-    `${p.arcsec_per_px.toFixed(2)}″/px`,
-    `${p.fov_deg[0].toFixed(2)}° × ${p.fov_deg[1].toFixed(2)}°`,
+    `${fixed(p.pixel_size_um, 1)} µm`,
+    `${fixed(p.arcsec_per_px, 2)}″/px`,
+    `${fixed(p.fov_deg[0], 2)}° ${TIMES} ${fixed(p.fov_deg[1], 2)}°`,
   ];
   if (p.bayer) parts.push(p.bayer);
   return parts.join(' · ');
@@ -304,11 +299,6 @@ export interface SiteSummary {
   elevation: string;
 }
 
-function signed(v: number, digits: number): string {
-  const s = fixed(Math.abs(v), digits);
-  return `${v < 0 ? MINUS : '+'}${s}`;
-}
-
 export function siteSummary(values: Record<string, unknown> | null | undefined): SiteSummary {
   const num = (k: string) => (typeof values?.[k] === 'number' ? (values[k] as number) : 0);
   const lat = num('site.latitude');
@@ -320,7 +310,7 @@ export function siteSummary(values: Record<string, unknown> | null | undefined):
     missing,
     name: name || (missing ? 'No site set' : 'Unnamed site'),
     coords: `${signed(lat, 5)}° ${signed(lon, 5)}°`,
-    elevation: `${Math.round(elev)} m`,
+    elevation: `${int(elev)} m`,
   };
 }
 

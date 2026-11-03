@@ -179,7 +179,7 @@
     display: flex;
     align-items: center;
     gap: var(--space-3);
-    height: calc(var(--control-h-m) + 2 * var(--space-2) + var(--border-w));
+    height: var(--toolbar-h); /* one 44 px row, border included (owner D8) */
     padding: 0 var(--space-4);
     border-bottom: var(--border-w) solid var(--border);
     min-width: 0;
