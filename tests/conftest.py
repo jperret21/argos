@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import socket
 import sys
 import threading
@@ -30,6 +31,14 @@ def _isolated_argos_home(tmp_path, monkeypatch):
     monkeypatch.setattr(config_module, "_CONFIG_DIR", home)
     monkeypatch.setattr(config_module, "_CONFIG_FILE", home / "config.json")
     monkeypatch.setattr(aavso, "_CACHE_DIR", home / "cache" / "catalog")
+
+    # Many tests build ``Config(dict(_DEFAULTS))``: a shallow copy, so a set()
+    # during the test (connect_mount stores alpaca.host) writes into the
+    # shared nested defaults and every later test sees it. Restore them.
+    defaults = copy.deepcopy(config_module._DEFAULTS)
+    yield
+    config_module._DEFAULTS.clear()
+    config_module._DEFAULTS.update(defaults)
 
 
 # ---------------------------------------------------------------------------
