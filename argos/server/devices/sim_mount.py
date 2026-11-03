@@ -117,6 +117,9 @@ class SimMount:
         if slew_rate_deg_s <= 0:
             raise ValueError("slew rate must be positive")
         self.poll_interval_s = float(poll_interval_s)
+        #: The mount's own site, as an Alpaca driver's SiteLatitude /
+        #: SiteLongitude / SiteElevation (the hub's site check compares it).
+        self.driver_site = (site.latitude_deg, site.longitude_deg, site.elevation_m)
         self._rate = float(slew_rate_deg_s)
         self._site = site
         self._clock = clock

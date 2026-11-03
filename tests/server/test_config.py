@@ -25,7 +25,7 @@ from tests.server.conftest import AUTH, TOKEN, receive_json, receive_until
 
 META_FIELDS = {
     "type", "default", "nullable", "min", "max", "step", "options", "unit", "label", "help",
-    "used_by", "category", "advanced", "read_only",
+    "used_by", "category", "advanced", "read_only", "read_only_reason", "path_kind", "personal",
 }  # fmt: skip
 CATEGORIES = {
     "connection", "observer_site", "instrument", "plate_solving", "catalogues", "photometry",
@@ -39,7 +39,7 @@ def _config_file(client) -> Path:
 
 def test_get_config_has_values_and_meta_for_every_key(client):
     body = client.get("/api/config", headers=AUTH).json()
-    assert set(body) == {"values", "meta", "revision", "path"}
+    assert set(body) == {"values", "meta", "omitted", "revision", "path"}  # omitted: wave 2
     assert set(body["values"]) == set(body["meta"]) == set(META)
     assert body["revision"] == 0
     assert not body["path"].startswith(str(Path.home() / ".argos"))
@@ -55,6 +55,39 @@ def test_get_config_has_values_and_meta_for_every_key(client):
     assert body["values"]["catalog.identification_max_objects"] == 400
     assert body["values"]["hardware.overrides.full_well_adu"] is None
     assert body["values"]["photometry.track_apertures"] is True  # missing from _DEFAULTS
+
+
+def test_personal_keys_are_the_observer_and_the_site(client):
+    """Wave 2 fix: these have no shipped default to reset to (0°, 0° is not a site)."""
+    meta = client.get("/api/config", headers=AUTH).json()["meta"]
+    personal = {k for k, m in meta.items() if m["personal"]}
+    assert personal == {
+        "observer.name", "observer.obscode",
+        "site.name", "site.latitude", "site.longitude", "site.elevation",
+    }  # fmt: skip
+
+
+def test_no_observer_facing_text_names_an_api_route(client):
+    meta = client.get("/api/config", headers=AUTH).json()["meta"]
+    for key, m in meta.items():
+        for text in (m["help"], m["label"], m["read_only_reason"] or ""):
+            assert "/api/" not in text and "PUT " not in text and "PATCH" not in text, key
+            # No config key and no JSON shape in the observer's words (the key has its own
+            # line in the "About this setting" column).
+            assert not any(k in text for k in META), (key, text)
+            assert '{"' not in text, (key, text)
+
+
+def test_meta_says_what_a_path_key_names(client):
+    """Wave 2 integration: the FilePicker opens in the mode the server validates with."""
+    meta = client.get("/api/config", headers=AUTH).json()["meta"]
+    kinds = {k: m["path_kind"] for k, m in meta.items() if m["type"] == "path"}
+    assert kinds["astrometry.astap_path"] == "exe"
+    assert kinds["data_paths.object_catalogue_cache"] == "file"
+    assert kinds["data_paths.exoplanet_cache"] == "file"
+    assert kinds["sessions_path"] == "dir"
+    assert kinds["astrometry.database_path"] == "dir"
+    assert all(m["path_kind"] is None for m in meta.values() if m["type"] != "path")
 
 
 def test_meta_defaults_match_the_core_defaults():
@@ -131,8 +164,24 @@ def test_unchanged_values_are_not_written(client):
         ("sessions_path", "relative/sessions", "must be an absolute path"),
         ("alpaca.host", "192.168.1.42 ", None),  # stripped, valid
         ("alpaca.host", "bad host!", "must be an IP address or a host name"),
-        ("hardware.profile", "s50", "is changed with PUT /api/profile"),
-        ("camera.full_well_adu", 50000, "is read-only"),
+        (
+            "hardware.profile",
+            "s50",
+            "is read-only. Changed on the Connection screen (Instrument card), which checks "
+            "that no equipment is connected.",
+        ),
+        (
+            "camera.full_well_adu",
+            50000,
+            "is read-only. Follows Saturation (full well) above, so the Qt app reads the same "
+            "value.",
+        ),
+        (
+            "photometry.default_band",
+            "XX",
+            "must be one of 'TG', 'TB', 'TR', 'V', 'B', 'U', "
+            "'R', 'I', 'CV', 'CR', 'CBB', 'SU', 'SG', 'SR', 'SI', 'SZ', 'J', 'H', 'K'",
+        ),
         ("no.such.key", 1, "unknown setting"),
         (
             "site.favorites",

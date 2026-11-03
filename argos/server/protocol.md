@@ -9,7 +9,10 @@ meaning and shape; v2 adds routes, events, record fields and log levels.
 Section [What API 2 adds](#what-api-2-adds) lists them; wave 1 of the web
 UI (`web/spec/README.md` §7, rows A1-A4, A8-A10, A13-A18, A80, plus the
 Stellarium bridge A19 brought forward from wave 3 so that every Qt
-Connection control has its web control) is what ships in API 2.
+Connection control has its web control) is what ships in API 2. Wave 2
+(Settings: rows A5, A6, A11, A67 list only, A81-A84, plus the site check of
+`web/lab/PROPOSAL.md` §7) adds the routes of
+[API 2 routes, wave 2](#api-2-routes-wave-2), still additive: `"api"` stays 2.
 
 ## Launching
 
@@ -97,8 +100,19 @@ Dependencies: `uv pip install --python .venv/bin/python fastapi 'uvicorn[standar
   protected.
 - **Network use.** The server opens network connections only to the devices
   the observer connects, to the configured Seestar address (reachability
-  probe), and for explicit requests: discovery (`POST /api/discovery`) and
-  the internet check (`POST /api/network/check` with `internet: true`).
+  probe), and for explicit requests: discovery (`POST /api/discovery`), the
+  internet check (`POST /api/network/check` with `internet: true`) and the
+  place search (`POST /api/site/search`: OpenStreetMap Nominatim, then
+  Open-Meteo for the elevation). The site check computes offline: astropy
+  never downloads an IERS or leap-second table for it.
+- **Files.** The server browses only the observer's home folder and the
+  ARGOS data folders (`GET /api/fs/list`, see
+  [File listing](#file-listing-a11)); it reads session folders only to list
+  them and to copy redacted metadata into a support bundle the observer
+  asked for, and never writes into a session. Wave 2 writes only the
+  support-bundle ZIP (at the destination the observer chose, inside those
+  folders, or in a private temporary folder for a download) and deletes
+  only the catalogue cache files of `DELETE /api/caches/{kind}`.
 
 ## Errors
 
@@ -119,22 +133,31 @@ start).
 | 400 | `invalid_argument` | Body fails validation: wrong type, out of range, unknown field, relative path, wrong file suffix. Request bodies are strict, so `"2"` is not a number, `80.0` is not an integer gain and `1` is not a boolean. `PATCH /api/config` adds `fields`. |
 | 400 | `invalid_fits` | The file exists but is not a displayable FITS image. |
 | 400 | `invalid_argument` | Also `open-fits` on a path the OS refuses to examine (name too long, unreadable directory). |
+| 400 | `session_invalid` | (wave 2) A support bundle's `session_dir` holds no `session.json`. |
 | 401 | `unauthorized` | Bad or missing token. |
 | 403 | `forbidden_host` / `forbidden_origin` | Request for a foreign `Host` name, or from a foreign `Origin` (see Security). |
-| 404 | `not_found` | Unknown route, unknown device id, unknown (or expired) job id, or `open-fits` on a missing file. |
+| 403 | `forbidden_path` | (wave 2) A path outside the folders the server may browse (home and the data folders), directly or through a symbolic link; or a folder the OS refuses to list. |
+| 404 | `not_found` | Unknown route, unknown device id, unknown (or expired) job id, or `open-fits` on a missing file. Wave 2: a missing folder in `GET /api/fs/list`, an unknown cache kind, a job with nothing to download. |
 | 405 | `method_not_allowed` | Wrong HTTP method on a known route. |
 | 409 | `not_connected` | Camera or mount command with that device not connected. Also a mount command whose device was disconnected while it ran: its result is discarded. |
 | 409 | `busy` | Exposure requested while the camera exposes, downloads, is live, or is still stopping. `POST /api/connection` or a device connect while devices are connected to **another** address or mode. `PUT /api/profile` while a device is connected (message says why). A job start while a job of the same kind runs (`owner` = its id). |
 | 409 | `parked` | `goto` or `tracking` on a parked mount. |
 | 409 | `not_live` | `PATCH /api/camera/live` while live view is not running. |
 | 409 | `unsupported` | `DELETE /api/jobs/{id}` on a job kind that cannot be cancelled. |
+| 409 | `file_exists` | (wave 2) A support bundle destination that exists, without `"overwrite": true`. |
+| 409 | `not_ready` | (wave 2) `GET /api/jobs/{id}/download` while the job still runs. |
 | 409 | `run_active` | Reserved: a photometry-geometry config change while a sequence runs (no sequence engine in API 2 yet, never sent). |
 | 500 | `internal_error` | Any unexpected failure; the traceback is in the server log. The answer keeps the CORS headers, so the browser can read it. |
 | 502 | `connection_failed` | The device could not be reached or refused to connect. Its device state becomes `error` with the full text. |
 | 502 | `device_error` | A connected device refused a command or stopped answering. |
 
 Codes reserved by `web/spec/README.md` §4.1 for later waves: `not_solved`,
-`no_target`, `no_comparison`, `no_frames`, `site_missing`, `session_invalid`.
+`no_target`, `no_comparison`, `no_frames`, `site_missing`.
+
+A failed job carries `{code, message}` in its `error` (see Jobs); wave 2
+adds the job error codes `lookup_failed` (place search: no network answer),
+`not_found` (place search: no place) and `bundle_failed` (the ZIP could not
+be written; the message is the OS reason).
 
 ## HTTP routes
 
@@ -145,7 +168,7 @@ Bodies and responses are JSON. All routes except health need the token.
 | Method | Path | Body | Returns |
 |---|---|---|---|
 | GET | `/api/health` | — | `{"ok": true, "version": "0.4.2", "api": 2, "boot_id": "<16 hex>"}` (v2 adds `boot_id`) |
-| GET | `/api/status` | — | `{"boot_id": string, "connection": ConnectionState, "camera": CameraState, "mount": MountState, "devices": DevicesState, "profile": ProfileSummary}` (v2 adds `boot_id` and the last two) |
+| GET | `/api/status` | — | `{"boot_id": string, "connection": ConnectionState, "camera": CameraState, "mount": MountState, "devices": DevicesState, "profile": ProfileSummary, "site_check": SiteCheck}` (v2 adds `boot_id`, `devices`, `profile`; wave 2 adds `site_check`) |
 | POST | `/api/connection` | `{"mode": "simulator"}` or `{"mode": "alpaca", "host": "<ip>", "port": <int>}` | ConnectionState |
 | DELETE | `/api/connection` | — | ConnectionState. Idempotent. Disconnects all four devices. |
 | POST | `/api/camera/capture` | `{"exposure_s": <float, 0 < x ≤ 3600>, "gain": <int, 0…1000>}` | CameraState (`exposing`); one frame follows. |
@@ -412,8 +435,9 @@ Job = {"id": string, "kind": "discovery"|…,
        "seq": int}                             // increases on every published change
 ```
 
-- Kinds in API 2: `discovery`. Reserved by `web/spec/README.md` §4.2:
-  `site_search`, `support_bundle`, `sessions_scan`, `session_open`,
+- Kinds in API 2: `discovery`; wave 2 adds `site_search` and
+  `support_bundle` (see [API 2 routes, wave 2](#api-2-routes-wave-2)).
+  Reserved by `web/spec/README.md` §4.2: `sessions_scan`, `session_open`,
   `file_solve`, `file_catalogue`, `rerun`, `export`.
 - Progress is published on `/ws/events` as `job` events, at most 4 per
   second per job; the final state is always sent.
@@ -433,7 +457,7 @@ AppInfo = {"name": "ARGOS", "version": "0.4.2", "api": 2,
            "profile": ProfileSummary, "log_level": "INFO",
            "diagnostics_enabled": bool, "astap_configured": bool,
            "licence": "GPL-3.0-or-later", "licence_name": "GNU GPL v3 or later",
-           "copyright": "Copyright © 2026 Argos contributors",
+           "copyright": "Copyright © 2026 ARGOS contributors",
            "author": "Jules Perret",
            "description": "Scientific acquisition and differential photometry for ZWO Seestar telescopes.",
            "credits": [{"name", "use", "licence", "url"}],
@@ -551,6 +575,403 @@ Category = "connection"|"observer_site"|"instrument"|"plate_solving"|"catalogues
   another program, is announced with a `config` event to every client.
   `revision` counts those changes since the server started (it restarts at
   0 with the server; compare it within one connection only).
+- **Two clients** (two browser tabs, or the web UI beside the Qt app) see
+  the same configuration: commits are serialised by the store lock, each one
+  re-reads a file another program changed before applying its keys, and the
+  `config` event of every commit carries the full `values`, so a client
+  that applies the newest event (highest `revision`) holds what `GET
+  /api/config` returns. Two PATCHes of different keys never lose either;
+  two PATCHes of the same key end with the later commit's value on every
+  client. `tests/server/test_settings_wave2.py` checks it.
+
+## API 2 routes, wave 2
+
+Wave 2 (`web/spec/README.md` §7 "Settings") adds the routes below, still
+under `"api": 2` (additive). Every route needs the token, answers JSON
+unless stated, and never blocks the event loop.
+
+| Method | Path | Body | Returns | Row |
+|---|---|---|---|---|
+| POST | `/api/support-bundle` | SupportBundleBody | `202 {"job_id", "job"}` (job `support_bundle`) | A5 |
+| GET | `/api/jobs/{id}/download` | — | the job's file (`application/zip`, attachment) | A5 |
+| GET | `/api/diagnostics/crash-reports?since=<ISO>` | — | CrashReports | A6 |
+| GET | `/api/fs/list?path=&kind=&ext=&counts=&hidden=` | — | Listing | A11 |
+| GET | `/api/sessions?offset=&limit=` | — | SessionPage | A67 (list only) |
+| GET | `/api/astrometry/astap?path=&database_path=&database=` | — | AstapState | A81 |
+| POST | `/api/site/search` | `{"query": string}` | `202 {"job_id", "job"}` (job `site_search`) | A82 |
+| GET | `/api/caches` | — | `{"caches": [Cache, …]}` | A83 |
+| DELETE | `/api/caches/{kind}` | — | `{"cache": Cache, "removed": int}` | A83 |
+| GET | `/api/catalogues/essential` | — | EssentialCatalogue | A84 |
+| GET | `/api/site/check` | — | SiteCheck | PROPOSAL §7 |
+| POST | `/api/site/check` | — | SiteCheck (checked now, from the latest mount reading) | PROPOSAL §7 |
+
+Job kinds in wave 2: `discovery`, `site_search`, `support_bundle`. Still
+reserved: `sessions_scan` (the session list is fast enough without it, see
+below), `session_open`, `file_solve`, `file_catalogue`, `rerun`, `export`.
+
+### Config meta, wave 2 additions (A8)
+
+```
+KeyMeta           += {"read_only_reason": string|null,   // why a read_only key cannot be PATCHed
+                      "path_kind": "dir"|"file"|"exe"|null, // what a "path" key names; null otherwise
+                      "personal": bool}                  // the observer's own value: no default to reset to
+ConfigSnapshot    += {"omitted": [{"key": string, "reason": string}, …]}
+```
+
+- `read_only_reason` is set on every `read_only` key, written for the
+  observer (shown under the field, so it names no route and no decision
+  code): `hardware.profile` ("Changed on the Connection screen (Instrument
+  card), which checks that no equipment is connected."; the route is `PUT
+  /api/profile`), the two legacy
+  `camera.*` mirrors, and `hardware.overrides.adc_bits` (new in wave 2,
+  `int|null`, read-only by decision Q-C1: the ADC depth is the sensor's, set
+  by the profile).
+- A `PATCH` of a read-only key is refused with that same reason:
+  `fields: {"hardware.profile": "is read-only. Changed on the Connection
+  screen (Instrument card), which checks that no equipment is connected."}`
+  (wave 2 review: the refusal named `PUT /api/profile`). No `help`, `label`
+  or reason names an API route, a config key or a JSON shape
+  (`tests/server/test_config.py`).
+- `personal` (wave 2 review) is true for `observer.name`,
+  `observer.obscode`, `site.name`, `site.latitude`, `site.longitude` and
+  `site.elevation`: their shipped default ("" or 0) is a placeholder, not
+  a value to go back to. The web form offers no "Reset to the default" and
+  Restore defaults leaves them alone, so one click never moves the site to
+  0°, 0° or blanks the AAVSO code (the class of the 2026-09-25 wrong-site
+  incident). The server still accepts any valid value for them.
+- `photometry.default_band` has `options` (wave 2 review): the AAVSO
+  filter codes TG, TB, TR, V, B, U, R, I, CV, CR, CBB, SU, SG, SR, SI, SZ,
+  J, H, K, with words ("TG · Tri-colour green"); another value is `400 invalid_argument`
+  ("must be one of …"), so a typo can no longer write a wrong FILT into
+  every report. A configuration file that already holds another code is
+  read as it is (validation applies to `PATCH` only).
+- `catalog.identification_max_objects` labels its options with the
+  numbers ("100" … "1 600", U+202F), so the five fit a segmented control;
+  the names (fast, balanced, detailed, dense field) are in its help.
+- `path_kind` says what a `path` key names, as the server validates it: a
+  folder (`dir`), a file (`file`: the two JSON caches) or a program (`exe`:
+  `astrometry.astap_path`). The web FilePicker opens in that mode.
+- `omitted` lists the keys of `web/spec/02-connection-and-settings.md`
+  appendix A that are deliberately **not** in `meta`, each with its reason
+  (Qt window state, the dead keys of Q-C7, internal markers, the legacy
+  `observer.*` site). With `meta`, it covers every key of appendix A: the
+  wave 2 exit criterion ("every key editable or deliberately read-only")
+  is checked by `tests/server/test_settings_wave2.py` against that table.
+- Changing `site.name`, `site.latitude` or `site.longitude` re-runs the
+  site check (below) on the first mount reading that is not a slew once
+  the site has stayed unchanged for 2 s.
+
+### File listing (A11)
+
+```
+GET /api/fs/list?path=<absolute>&kind=any|dir|file&ext=.fits,.fit,.fts&counts=fits&hidden=false
+
+Listing = {"path": path,            // the folder listed, symbolic links resolved
+           "parent": path|null,     // null at an allowed root's top (nothing above to browse)
+           "root": path,            // the allowed root that contains it
+           "places": [Place, …],    // shortcuts for the picker's side list
+           "entries": [Entry, …],   // folders first, then files; each group by name (case-insensitive)
+           "truncated": bool}       // more than 5 000 entries: the first 5 000 are listed
+Place   = {"id": "home"|"desktop"|"sessions"|"presets"|"calibrations"|"diagnostics"|"config",
+           "label": string, "path": path, "exists": bool}
+Entry   = {"name": string, "kind": "dir"|"file", "size": int|null,   // null for a folder
+           "mtime": ISO, "symlink": bool,
+           "fits_count": int|null}  // with counts=fits: .fit/.fits/.fts files directly inside a folder
+```
+
+Read-only and limited (decisions D20, Q-G7, Q-R4): the server lists only
+folders inside **its allowed roots**: the observer's home folder and the
+ARGOS data folders (`sessions_path`, `data_paths.sequence_presets_directory`,
+`data_paths.camera_calibration_directory`, the five catalogue caches, the
+config folder and the log folder), each taken with its symbolic links
+resolved, so a data folder moved to another disk and linked from home
+stays browsable.
+
+- `path` defaults to `sessions_path` (home when that folder does not exist
+  yet). It must be absolute (`~` is expanded); a relative path is `400
+  invalid_argument`. It is resolved (`realpath`) before the check, so
+  neither `..` nor a symbolic link can leave the roots: outside them is
+  `403 forbidden_path`. A missing folder is `404 not_found`; a file is `400
+  invalid_argument` ("not a folder"); a folder the OS refuses to read is
+  `403 forbidden_path` with the OS reason.
+- Entries whose symbolic link points outside the roots, or nowhere, are
+  left out (never shown, never followed). Hidden names (leading `.`) are
+  left out unless `hidden=true`.
+- `kind=dir` lists folders only; `kind=file` lists folders (to navigate)
+  and the files whose suffix is in `ext` (comma-separated, any letter case;
+  every file when `ext` is empty); `kind=any` (default) lists everything,
+  `ext` still filtering files.
+- Nothing is read inside files and nothing is written. `fits_count` scans
+  one level (at most 10 000 names per folder).
+
+### Session list (A67, list only)
+
+```
+GET /api/sessions?offset=0&limit=50
+
+SessionPage    = {"root": path, "exists": bool, "total": int, "offset": int, "limit": int,
+                  "sessions": [SessionSummary, …], "scanned_utc": ISO}
+SessionSummary = {"path": path, "folder": string, "object": string, "started_utc": string,
+                  "frames": int, "lights": int,
+                  "filters": {"<filter>": int, …},      // "—" for frames without a filter
+                  "image_types": {"<IMAGETYP>": int, …},
+                  "missing_frames": int,                // frames of session.json whose FITS is not found
+                  "curves": {"target": int, "comparison": int, "check": int},
+                  "has_quality": bool,                  // photometry_quality.json
+                  "has_targets": bool,                  // targets.json
+                  "issues": [string]}
+```
+
+A session is a folder directly inside `sessions_path` that holds a
+`session.json`; folders without one are not listed. Sessions come newest
+first (`started_utc`, then the folder name). `limit` is 1…500 (default 50).
+The summary is a Qt-free port of `argos/core/session/review.py:76-175`
+(`load_session(read_temperature=False)` and `readiness_issues`; the module
+itself cannot be imported, `argos.core.session` loads PyQt6): same files,
+same readiness texts ("No light frames were recorded.", "No FITS frames
+found in this session folder.", "Could not read observation.json.", …),
+except that missing frames are counted in one line ("12 FITS frames listed
+in session.json are missing") instead of one line each. A folder whose
+`session.json` cannot be read is listed with `issues` saying why and zero
+frames. Curves are the `photometry/*.csv` files counted by their prefix
+`target_`, `comparison_`, `check_`. Summaries are cached per folder and
+recomputed when `session.json` or the folder changes, so a second call is
+a few milliseconds. The server never writes into a session.
+
+### Support bundle (A5) and crash reports (A6)
+
+```
+SupportBundleBody = {"destination": path|null,      // absolute .zip; null = the server keeps it for a download
+                     "include_session": bool,       // default false (decision Q-G17)
+                     "session_dir": path|null,      // required when include_session is true; ignored otherwise
+                     "include_site": bool,          // default false: site coordinates redacted everywhere
+                     "include_crash_reports": bool, // default true
+                     "overwrite": bool}             // default false
+
+Job result = {"path": path|null,   // the ZIP written at destination; null when kept for download
+              "name": string,       // argos-support-<version>-<UTC>.zip
+              "bytes": int, "files": [string, …],
+              "download": bool,     // true: fetch it with GET /api/jobs/{id}/download
+              "session_included": bool, "site_included": bool}
+
+CrashReports = {"directory": path|null,
+                "reports": [{"path": path, "name": string, "t": ISO, "size": int,
+                             "summary": string}, …]}   // newest first, at most 50
+```
+
+- Checked before the job starts: `destination` absolute and inside the
+  allowed roots of the file listing (`403 forbidden_path` otherwise); a
+  destination that names an existing folder is `400 invalid_argument` ("is
+  a folder: name the .zip file"), checked before any suffix is added; a
+  missing `.zip` suffix is appended (`c.tar.gz` becomes `c.tar.gz.zip`;
+  `support_bundle.py:177-179` swapped the suffix instead); an existing file
+  without `"overwrite": true` is `409 file_exists`; a path with a NUL byte
+  is `400 invalid_argument`;
+  `include_session` without `session_dir` is `400 invalid_argument`, a
+  `session_dir` outside the roots `403 forbidden_path`, one without
+  `session.json` `400 session_invalid`. One bundle at a time (`409 busy`
+  with `owner`). The job is not cancellable (seconds).
+- Content (a port of `create_support_bundle`, `support_bundle.py:162-221`,
+  run on the job thread): `README.txt`; `manifest.json` (format 1, version,
+  API, UTC time, platform, privacy flags, and the configuration summary of
+  `shell.py:511-516`: `hardware.profile`, `ui.log_level`,
+  `diagnostics.enabled`, ASTAP configured); `logs/argos.log*` from the log
+  folder (10 MB each); with `include_crash_reports`, the 20 newest
+  `crash/crash-*.txt` (1 MB each); with `include_session`, the session's
+  `.csv`, `.json` and `.jsonl` files (10 MB each, 50 MB in all, no links,
+  no FITS), as `support_bundle.py:224-302`.
+- Redaction, in every text that enters the ZIP: the bearer token (its value,
+  `token=…`, `Bearer …`, `ARGOS_TOKEN=…`), IPv4 addresses, the home folder
+  path (`~`) and, unless `include_site`, the observer's coordinates: every
+  writing of the Settings site's and saved sites' latitude, longitude and
+  elevation (2 to 8 decimals), `lat=` / `lon=` / `elev=` values, every
+  `(lat°, lon°)` pair (as the site check writes a site, also an older one), and in
+  session files the keys `site`, `latitude`, `longitude`, `elevation`,
+  `sitelat`, `sitelong`, `siteelev`, `lat`, `lon` (and the spellings
+  `lat_deg`, `lon_deg`, `lng`, `site_lon`, `site_latitude`,
+  `site_longitude`, `site_elevation`, `elevation_m`, `observing_site`,
+  `geo`, `location`; case and separators ignored), plus every JSON number,
+  under any key or in an array, that writes a site coordinate exactly or
+  rounded to 2-8 decimals (whole numbers are kept: frame counts, gains).
+  Free text in 1-decimal or degrees-minutes-seconds form is not recognised
+  (best effort). Observer and network
+  identity (`observer`, `obscode`, `host`, `ip`, `address`) and target
+  coordinates (`ra`, `dec`) are always redacted in session files, as the Qt
+  bundle does. The ZIP never leaves the computer.
+- `destination: null` (the browser build): the ZIP goes into a private
+  temporary folder of the server; `GET /api/jobs/{id}/download` serves it
+  (`Content-Disposition: attachment; filename="argos-support-….zip"`) for
+  as long as the job is kept (10 min), then it is deleted (also at
+  shutdown). `404 not_found` for a job with no file, `409 not_ready` while
+  it runs.
+- Logs (topic `app`): INFO "Support bundle created: <name> (<n> files).
+  ARGOS did not upload it."; ERROR "Support bundle failed: <reason>" (job
+  error `bundle_failed`).
+- Crash reports are the `crash-<UTC>-<pid>.txt` files of the log folder
+  (`support_bundle.py:104-122`); `t` comes from the name's stamp (else the
+  file time), `summary` is the report's last line (the exception), home
+  path redacted. `since` keeps the reports with `t` after it.
+
+### ASTAP detection (A81)
+
+```
+GET /api/astrometry/astap?path=<exe>&database_path=<folder>&database=<set>   // each defaults to the config's
+
+AstapState = {"astap": path|null,                 // the binary ASTAP would run
+              "configured": string,               // the path asked about ("" = auto-detect)
+              "configured_found": bool,           // that path is an existing file
+              "database_dir": path|null,          // the folder of star files used
+              "database_source": "configured"|"detected"|null,
+              "database_found": bool,             // star files (*.1476, *.290, *.101) in that folder
+              "database": string,                 // the database set asked about
+              "database_ignored": bool,           // a set and a folder are both given: the set is ignored (Q-C9)
+              "database_args": [string],          // the -D / -d flags the solve will pass
+              "message": string}                  // one line for Settings › Plate solving
+```
+
+Port of `ConfigurationPage._refresh_astap_status`
+(`configuration_page.py:1208-1231`) with `find_astap`, `find_astap_db` and
+`_database_args` (`platesolve.py:119-144, 305-319`) and the database choice
+of `astrometry_session.py:64`. It only looks at the filesystem (no ASTAP
+run), so the form can call it on every committed change.
+
+### Place search (A82)
+
+`POST /api/site/search {"query": "Saint-Michel-l'Observatoire"}` starts a
+job of kind `site_search` (an empty query is `400 invalid_argument` "Enter
+a city, country, or address first."; one search at a time, `409 busy`).
+Port of `search_locations` (`location_resolver.py:34-87`): one
+OpenStreetMap Nominatim query (up to 5 places), then one Open-Meteo
+elevation query per place, 8 s each; the User-Agent carries the server's
+version (`Argos/<version> (astronomical observing-site search)`).
+
+| `stage` | done / total | |
+|---|---|---|
+| `search` | 0 / n+1 | The place query. |
+| `elevation` | i / n+1 | Elevation of place i (a failure gives `elevation_m: null`, never fails the job). |
+
+Result `{"query": string, "places": [{"label": string, "latitude": float,
+"longitude": float, "elevation_m": float|null}, …]}`. Failures end the
+job `failed` with `error.code` `lookup_failed` ("Location search is
+unavailable. Check your internet connection.") or `not_found` ("No place
+found for ‘…’." / "No usable coordinates found for ‘…’."). Cancel is
+honoured within about 0.25 s, even during an HTTP request (its answer is
+then dropped). Nothing is written: the client PATCHes `site.*` when the
+observer picks a place. The elevation is a 90 m DEM estimate: the form says
+so.
+
+### Catalogue caches (A83) and the essential catalogue (A84)
+
+```
+Cache = {"kind": "object"|"exoplanet"|"aavso"|"gaia"|"field_catalogue",
+         "label": string,        // "CDS/SIMBAD target-name cache", …
+         "key": string,          // the data_paths.* config key
+         "path": path, "path_kind": "file"|"dir",
+         "exists": bool, "files": int, "bytes": int}
+EssentialCatalogue = {"name": string, "version": string, "source": string,
+                      "source_url": string, "object_count": int}
+```
+
+A port of `configuration_page.py:1104-1163`: the same five caches, the same
+files counted and cleared: only the files each cache writes, so a cache
+pointed at a general folder never loses the observer's own files (`object`,
+`exoplanet`: the JSON file; `aavso`: SHA-1 hex names `<40 hex>.json`
+(`aavso.py:188-189`); `gaia`: `<64 hex>.csv` (`gaia.py:57-58`);
+`field_catalogue`: `<64 hex>.json` in its `simbad/` and `nasa/` subfolders
+only (`field_objects.py:52,66`, `exoplanets.py:37,91`); symbolic links
+never followed). The Qt page cleared every `*.json` / `*.csv`, recursively
+for the field identities (`configuration_page.py:1149-1152`). `DELETE /api/caches/{kind}` clears one
+synchronously (the client confirms first, as the Qt dialog did), logs INFO
+"Cleared the <label> (<n> files)." (topic `config`), and downloads nothing;
+an unknown kind is `404 not_found`, an OS refusal `500 internal_error` with
+the reason. `GET /api/catalogues/essential` is
+`argos.core.catalog.offline.essential_catalogue_info()` (bundled, offline).
+
+### Site check (PROPOSAL §7)
+
+The mount reports where it points (altitude, azimuth) from **its own** site
+and clock (the Seestar takes them from the phone); ARGOS computes airmass,
+BJD_TDB and FITS `SITELAT` / `SITELONG` from the **Settings** site. On
+2026-09-25 the Settings site was Berkeley while the telescope was in
+France: the mount put RR Lyr at altitude 75.4°, the Settings site at 13.8°,
+and the run's airmass and AAVSO AMASS are wrong. The server compares the
+two, as the Qt release does (commit `de5732f` on `release/0.5.0`,
+`DeviceSession._check_site_against_mount`):
+
+```
+SiteCheck = {"state": "ok"|"mismatch"|"unknown",
+             "reason": "no_mount"|"no_site"|"waiting"|"no_position"|null,  // set when unknown
+             "message": string,                  // one line for the observer
+             "tolerance_deg": 5.0,
+             "checked_utc": ISO|null,            // the clock the comparison used
+             "trigger": "connect"|"periodic"|"site_change"|"manual"|null,
+             "site": {"name": string, "latitude": float, "longitude": float}|null,
+             "mount": {"ra_hours": float, "dec_deg": float,
+                       "alt_deg": float, "az_deg": float}|null,   // the reading compared
+             "expected": {"alt_deg": float, "az_deg": float}|null, // same RA/Dec from the Settings site
+             "separation_deg": float|null,       // angle between the two DIRECTIONS
+             "altitude_diff_deg": float|null,    // mount minus expected, for the text only
+             "driver_site": {"latitude": float, "longitude": float,
+                             "elevation_m": float|null,
+                             "distance_km": float|null,    // to the Settings site (null without one)
+                             "state": "ok"|"mismatch"|"unknown"}|null}  // null: the driver does not say
+```
+
+- **The rule compares whole directions, never the altitude alone**:
+  `separation_deg` is the angle between the mount's (alt, az) and the
+  (alt, az) of the mount's own RA/Dec seen from the Settings site at the
+  computer's clock. Over the 2026-09-25 run the altitudes were 61.5° apart
+  at the start but only 6.2° at the end, while the directions stayed
+  83.6-88.5° apart; sessions with the right site agree within 1.9-3.1°.
+  More than `tolerance_deg` (5°) is `mismatch`.
+- The expected direction uses the fast spherical trigonometry of
+  `sky_geometry.horizontal_at` (`de5732f`; GMST IAU 1982 linear term, no
+  precession, nutation or refraction). With coordinates of date (what the
+  mount reports) it agrees with astropy (FK5 of date, no refraction) within
+  0.01°; fed J2000 coordinates it is off by the precession since 2000, up to
+  about 0.4° in 2026 (`tests/server/test_site_check.py` sweeps 120 random
+  directions, sites and 2026 dates with bounds of 0.05° and 0.5°). Either
+  way far inside the 5° tolerance. It never downloads anything.
+- A Settings site counts as set when it has a name or when its coordinates
+  are not the 0/0 default (`argos.core.config.observing_site`, `de5732f`);
+  otherwise the check is `unknown` / `no_site` and nothing is compared.
+- When: on the **first mount reading that is not a slew** after each
+  connection and each automatic reconnection (`trigger: "connect"`), again
+  every 5 minutes while the mount is connected (`"periodic"`, skipped while
+  it slews), on the first reading once `site.name`, `site.latitude` and
+  `site.longitude` have stayed unchanged for 2 s after a change
+  (`"site_change"`; latitude and longitude are separate commits, so the
+  pause keeps a half-typed site from being compared and logged), and on
+  `POST /api/site/check`
+  (`"manual"`, from the latest reading, `409 not_connected` without a
+  mount). Before the first such reading the state is `unknown` /
+  `waiting`; without a mount `unknown` / `no_mount`; a reading without
+  alt/az is `unknown` / `no_position`.
+- **Driver site.** When the Alpaca driver exposes `SiteLatitude` /
+  `SiteLongitude` (`telescope.py:193-215`; several Seestar firmwares do
+  not), they are read once per connection and compared directly:
+  `distance_km` is the great-circle distance to the Settings site and
+  `state` is `mismatch` beyond 100 km (about 1° of sky: a choice of this
+  server, not a measured bound). The simulator reports its fixed site (APC,
+  Paris). A driver-site mismatch alone makes the whole check `mismatch`.
+- Logs (source `mount`, topic `mount`): on the first check of a connection
+  or after a site change, WARN "Site check: the mount points at altitude
+  75.4°, azimuth 258.9°; from the Settings site (37.871°, -122.273°) the
+  same RA/Dec is at altitude 13.8°, azimuth 45.9°, 88.5° apart. Airmass,
+  BJD and the FITS site use the Settings site: correct Settings › Observer
+  & site if the telescope is elsewhere." or INFO "Site check: the Settings
+  site agrees with the mount (2.8° apart)."; a periodic check logs only a
+  change of state (the WARN, or INFO "Site check: the Settings site agrees
+  with the mount again (…° apart)."). The driver-site comparison adds WARN
+  "Site check: the mount's own site (…) is <d> km from the Settings site.";
+  when the pointing agrees but the driver site does not, that WARN reads
+  "Site check: the pointing agrees with the Settings site (2.8° apart), but
+  the mount's own site (…) is <d> km from the Settings site." and no INFO
+  "agrees" line is written (the log never contradicts the `mismatch`
+  verdict).
+- Published as `{"type": "site_check", …SiteCheck}` after every check and
+  every state change, and inside the status record (`status.site_check`),
+  so a client opened later has it at once.
 
 ## State records
 
@@ -620,7 +1041,7 @@ DeviceState     = {"state": "disconnected"|"connecting"|"connected"|"busy"|"erro
 
 | Message | When |
 |---|---|
-| `{"type": "status", "connection": …, "camera": …, "mount": …, "devices": …, "profile": …}` | Immediately on connect, then on every state transition: connection change, any device-state change, a profile change, any camera change, or a mount change of `state`, `tracking`, `pier_side` or `target`. |
+| `{"type": "status", "connection": …, "camera": …, "mount": …, "devices": …, "profile": …, "site_check": …}` | Immediately on connect, then on every state transition: connection change, any device-state change, a profile change, any camera change, a mount change of `state`, `tracking`, `pier_side` or `target`, or a new site check (wave 2). |
 | `{"type": "camera", "camera": CameraState}` | On every camera change, including each new frame in live view. |
 | `{"type": "mount", "mount": MountState}` | Telemetry while connected: every 0.25 s for the simulator (4 Hz) and every 2 s for a Seestar, the Qt app's polling period. |
 | `{"type": "devices", "devices": DevicesState}` | API 2. On every device-state change (with a `status`). |
@@ -628,6 +1049,7 @@ DeviceState     = {"state": "disconnected"|"connecting"|"connected"|"busy"|"erro
 | `{"type": "activity", "text": string, "source": string, "t": ISO}` | API 2. The last action started **or its outcome** (status-bar activity text). Starts end with "…" ("Connecting mount 192.168.1.42:32323…", "Searching for Alpaca devices…", "Exposing 2 s…", "Slewing"); every outcome replaces them, without an ellipsis: "<Device> connected", "<Device>: <full error>", "Equipment ready" or "3 of 4 devices ready · camera failed" (end of a Connect all), "Cannot reach <host>:<port> — … (… not connected)", "<Device> disconnected", "Disconnected", "Discovery: 2 devices found", "Discovery: no Alpaca device found", "Discovery cancelled", "Discovery failed: …", "Frame #12 received (2 s)", "Camera: <error>", "Slew finished", "Slew stopped", "Mount connection lost · retrying every 10 s", "Mount reconnected". A start is also a `cmd` log line, unless a more detailed line says the same; outcomes have their own OK / ERROR lines. Sent once right after the first `status` when there is one. |
 | `{"type": "config", "changed": {key: value}, "values": {…}, "revision": int, "source": "api"\|"file"}` | API 2. After every config commit (`source: "api"`), or when the server finds the file changed by another program (`"file"`). `values` is the full value set, so the newest event alone is enough. |
 | `{"type": "job", "job": Job}` | API 2. Job progress (≤ 4 Hz per job) and the final state. |
+| `{"type": "site_check", …SiteCheck}` | API 2, wave 2. After every site check and every change of its state (mount connected or gone, site changed); the same record is in `status.site_check`. |
 | `{"type": "stellarium", …StellariumState}` | API 2. The Stellarium bridge's record after every change; once right after the first `status` (after `network`). |
 | `{"type": "log", …LogEntry}` | Server events, plus WARNING-and-above records from `argos.core`, such as Alpaca driver warnings (core INFO, logged on every exposure, stays in the server log; a core message repeated within 60 s is sent once). Right after the first `status` (and `network`, `stellarium`, `activity`, in that order), a new client receives the last 200 log lines, oldest first, so a page opened mid-session shows what happened before; older lines come from `GET /api/logs`. A client that reconnects drops the lines whose `seq` it already holds. |
 
@@ -641,7 +1063,7 @@ for example `connecting` before `connected`, or `exposing` → `downloading`
 A slow client never makes the server buffer without bound. Once 256
 messages are pending for a client, its backlog is compacted: only the
 newest snapshot of each type (`status`, `camera`, `mount`, `devices`,
-`network`, `activity`, `config`, `stellarium`) and the newest `job` event **of each job**
+`network`, `activity`, `config`, `stellarium`, `site_check`) and the newest `job` event **of each job**
 are kept, then the oldest log lines are dropped. A lagging client loses
 history, never the current state. Every snapshot is complete, so a client
 can always replace its state with the latest one it received. Log lines
@@ -769,3 +1191,9 @@ wide by 1920 px high, 16-bit, mono.
 | A19 | Stellarium bridge: `GET` / `POST` / `DELETE /api/stellarium`, `stellarium` event (brought forward from wave 3) |
 | A80 | Job model: `job` event, `GET /api/jobs`, `GET` / `DELETE /api/jobs/{id}` |
 | — | `boot_id` in `/api/health`, `status` and LogPage (log `seq` restarts at 1 in a new process); Connect all claims its devices (`info: "queued"`) before the address check; activity outcomes |
+| A5, A6 | Wave 2: `POST /api/support-bundle` (job `support_bundle`, redacted), `GET /api/jobs/{id}/download`, `GET /api/diagnostics/crash-reports` |
+| A8 | Wave 2: `read_only_reason` in KeyMeta, `omitted` in ConfigSnapshot, `hardware.overrides.adc_bits` (read-only) |
+| A11 | Wave 2: `GET /api/fs/list`, read-only, limited to home and the data folders |
+| A67 | Wave 2: `GET /api/sessions` (list only) |
+| A81-A84 | Wave 2: `GET /api/astrometry/astap`, `POST /api/site/search` (job `site_search`), `GET` / `DELETE /api/caches[/{kind}]`, `GET /api/catalogues/essential` |
+| §7 | Wave 2: site check: `site_check` in the status record and as an event, `GET` / `POST /api/site/check` |

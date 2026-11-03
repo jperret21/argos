@@ -34,8 +34,15 @@ Locking: ``_lock`` guards the records and is never held across device I/O,
 a thread join or a configuration write. Every state change happens under it
 together with the publication of its event and a fresh sequence number, so
 events leave in the order the changes happened. Lock order, outermost
-first: ``_profile_guard`` → the config store's lock → ``_lock``; the hub
-never waits for the store while holding ``_lock``.
+first: ``_profile_guard`` → the config store's lock → ``_lock`` → the
+site check's own lock (``site_check.py``, wave 2), which never calls out
+while held; the hub never waits for the store while holding ``_lock``.
+
+Wave 2 (Settings) adds services that are no device: the read-only file
+listing (``fs.py``), the session list (``sessions.py``), the support bundle
+and crash reports (``support.py``), the Settings helpers
+(``settings_helpers.py``: ASTAP, caches, place search) and the site check
+(``site_check.py``), fed by the mount poller.
 
 A command or connect that was already talking to a device when the observer
 disconnected it must not write its answer into the state afterwards: every
@@ -48,15 +55,20 @@ from __future__ import annotations
 import dataclasses
 import logging
 import secrets
+import shutil
 import socket
+import tempfile
 import threading
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
 from argos.core.hardware import active, catalog
+from argos.server import API_VERSION
 from argos.server import profiles as profile_records
 from argos.server import runtime
+from argos.server import settings_helpers, support
 from argos.server.config_meta import DATA_PATH_KEYS
 from argos.server.config_store import ConfigStore
 from argos.server.devices.base import (
@@ -72,10 +84,13 @@ from argos.server.errors import ApiError
 from argos.server.events import EventBus
 from argos.server.fits_source import FITS_SUFFIXES, FitsReadError, load_fits_frame
 from argos.server.frames import FrameSource, encode_frame
+from argos.server.fs import AllowedRoots, list_folder, parse_exts
 from argos.server.jobs import JobCancelled, JobContext, JobManager
 from argos.server.logbook import LOG_HISTORY, LogBook
 from argos.server.network import NetworkMonitor
+from argos.server.sessions import SessionIndex, is_session
 from argos.server.settings import Settings, SimOptions
+from argos.server.site_check import SITE_KEYS, SiteCheck
 from argos.server.stellarium import StellariumBridge
 from argos.server.state import (
     CAMERA_BUSY,
@@ -233,6 +248,25 @@ class Hub:
         )
         #: The layered discovery's network operations (tests replace them).
         self.discovery_layers: DiscoveryLayers = DEFAULT_LAYERS
+        #: The place search's HTTP getter (tests replace it; row A82).
+        self.place_http_get: settings_helpers.HttpGet = settings_helpers.requests_get
+        #: Folders the file listing and the support bundle may touch (row A11).
+        self.fs_roots = AllowedRoots(
+            self.config.get, extra=lambda: (self.config.directory, self._settings.log_dir)
+        )
+        self.sessions = SessionIndex()
+        #: Files a finished job serves on ``GET /api/jobs/{id}/download``.
+        self._downloads: dict[str, tuple[Path, str]] = {}
+        self._download_dir: Path | None = None
+        self._downloads_lock = threading.Lock()
+        #: Settings site against the mount (PROPOSAL §7; protocol.md "Site check").
+        self.site_check = SiteCheck(
+            self.config.get,
+            self._announce_site_check,
+            self._site_check_log,
+            period_s=self._settings.site_check_period_s,
+            settle_s=self._settings.site_check_settle_s,
+        )
         self.config.add_listener(self._on_config_changed)
         if self.config.load_error:
             self.log(
@@ -261,6 +295,11 @@ class Hub:
             self._disconnect_device(dev, quiet=True)
         with self._lock:
             self._publish_status()
+        with self._downloads_lock:
+            folder, self._download_dir = self._download_dir, None
+            self._downloads.clear()
+        if folder is not None:
+            shutil.rmtree(folder, ignore_errors=True)
         self.log("info", "Server shutting down — devices released", topic="app")
 
     # ------------------------------------------------------------------
@@ -320,6 +359,7 @@ class Hub:
             "mount": self._mount_state.to_dict(),
             "devices": self._devices_payload(),
             "profile": profile_records.summary(active.profile()),
+            "site_check": self.site_check.record(),
         }
 
     def status(self) -> dict[str, Any]:
@@ -449,6 +489,29 @@ class Hub:
         if log:
             self.log("cmd", text, source=source, topic=topic)
 
+    # -- site check (PROPOSAL §7) -------------------------------------------------
+
+    def _announce_site_check(self) -> None:
+        """Publish the site-check record and a ``status`` (called with no checker lock)."""
+        with self._lock:
+            self._publish("site_check", self.site_check.record())
+            self._publish_status()
+
+    def _site_check_log(self, level: str, message: str) -> None:
+        known: LogLevel = level if level in _PY_LEVELS else "info"  # type: ignore[assignment]
+        self.log(known, message, source="mount", topic="mount")
+
+    def site_check_state(self) -> dict[str, Any]:
+        """``GET /api/site/check``."""
+        return self.site_check.record()
+
+    def site_check_now(self) -> dict[str, Any]:
+        """``POST /api/site/check``: compare the latest mount reading now."""
+        record = self.site_check.check_now()
+        if record is None:
+            raise ApiError(409, "not_connected", "No mount connected")
+        return record
+
     # ------------------------------------------------------------------
     # Configuration side effects (called with the store lock held)
     # ------------------------------------------------------------------
@@ -468,6 +531,8 @@ class Hub:
                 runtime.apply_data_paths(self.config.get)
         if "alpaca.host" in changed or "alpaca.port" in changed:
             self.network.wake()
+        if SITE_KEYS & changed.keys():
+            self.site_check.site_changed()
         if "hardware.profile" in changed or any(
             key.startswith("hardware.overrides.") for key in changed
         ):
@@ -779,6 +844,8 @@ class Hub:
             self._publish_status()
         if settled is not None:
             settled.set()
+        if device_id == "mount":
+            self.site_check.mount_connected(generation, _driver_site(handle))
         return True
 
     def _remember_address(self, link: Link) -> None:
@@ -842,12 +909,15 @@ class Hub:
         if handle is not None:
             _close_quietly(handle)
         with self._lock:
-            if slot.generation == generation:  # no new connect started meanwhile
+            current = slot.generation == generation  # no new connect started meanwhile
+            if current:
                 if device_id == "camera":
                     self._set_camera(state="idle", sensor=None)
                 elif device_id == "mount" and self._mount_state != MountState():
                     self._mount_state = MountState()
                     self._publish_status()
+        if device_id == "mount" and current:
+            self.site_check.mount_disconnected(before=generation)
         if not quiet and not was_queued and (was in ("connecting", "connected") or was_retrying):
             self.log("info", f"{label} disconnected.", source=device_id, topic="connection")
             self.set_activity(
@@ -1094,6 +1164,244 @@ class Hub:
             return result
 
         return self.jobs.start("discovery", body, total=3, stage="broadcast")
+
+    # ------------------------------------------------------------------
+    # Wave 2: files, sessions, support bundle, Settings helpers (A5-A6, A11, A67, A81-A84)
+    # ------------------------------------------------------------------
+
+    def _places_extra(self) -> list[tuple[str, str, Path | None]]:
+        return [
+            ("diagnostics", "Logs", self._settings.log_dir),
+            ("config", "Configuration", self.config.directory),
+        ]
+
+    def _sessions_root(self) -> Path:
+        return Path(str(self.config.get("sessions_path", "") or "~/Argos/sessions")).expanduser()
+
+    def fs_list(
+        self,
+        path: str | None,
+        kind: str = "any",
+        ext: str | None = None,
+        counts: str | None = None,
+        hidden: bool = False,
+    ) -> dict[str, Any]:
+        """``GET /api/fs/list`` (row A11)."""
+        return list_folder(
+            self.fs_roots,
+            path,
+            default=self._sessions_root(),
+            kind=kind,
+            exts=parse_exts(ext),
+            counts=counts,
+            hidden=hidden,
+            places=self.fs_roots.places(self._places_extra()),
+        )
+
+    def sessions_page(self, offset: int = 0, limit: int = 50) -> dict[str, Any]:
+        """``GET /api/sessions`` (row A67, list only)."""
+        return self.sessions.page(self._sessions_root(), offset=offset, limit=limit)
+
+    def crash_reports(self, since: str | None = None) -> dict[str, Any]:
+        """``GET /api/diagnostics/crash-reports`` (row A6)."""
+        directory = self._settings.log_dir
+        reports = support.crash_reports(directory)
+        if since:
+            try:
+                after = datetime.fromisoformat(since.strip().replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ApiError(400, "invalid_argument", f"since: not an ISO time: {since}") from exc
+            if after.tzinfo is None:
+                after = after.replace(tzinfo=timezone.utc)
+            reports = [
+                r for r in reports if datetime.fromisoformat(r["t"].replace("Z", "+00:00")) > after
+            ]
+        return {"directory": str(directory) if directory else None, "reports": reports}
+
+    def astap_state(
+        self, path: str | None = None, database_path: str | None = None, database: str | None = None
+    ) -> dict[str, Any]:
+        """``GET /api/astrometry/astap`` (row A81); each argument defaults to the config."""
+        get = self.config.get
+        return settings_helpers.astap_state(
+            path if path is not None else str(get("astrometry.astap_path", "") or ""),
+            (
+                database_path
+                if database_path is not None
+                else str(get("astrometry.database_path", "") or "")
+            ),
+            database if database is not None else str(get("astrometry.database", "") or ""),
+        )
+
+    def caches(self) -> dict[str, Any]:
+        """``GET /api/caches`` (row A83)."""
+        return {"caches": settings_helpers.cache_records(self.config.get)}
+
+    def clear_cache(self, kind: str) -> dict[str, Any]:
+        """``DELETE /api/caches/{kind}`` (row A83): local only, nothing downloaded."""
+        record, removed = settings_helpers.clear_cache(kind, self.config.get)
+        noun = "file" if removed == 1 else "files"
+        self.log("info", f"Cleared the {record['label']} ({removed} {noun}).", topic="config")
+        return {"cache": record, "removed": removed}
+
+    def start_site_search(self, query: str) -> dict[str, Any]:
+        """``POST /api/site/search`` (row A82): a cancellable ``site_search`` job."""
+        text = " ".join(str(query).split())
+        if not text:
+            raise ApiError(400, "invalid_argument", "Enter a city, country, or address first.")
+        http_get = self.place_http_get
+
+        def body(ctx: JobContext) -> dict[str, Any]:
+            def progress(done: int, total: int, stage: str) -> None:
+                ctx.progress(done, total=total, stage=stage)
+
+            try:
+                places = settings_helpers.search_places(
+                    text, http_get=http_get, cancel=ctx.cancel_event, progress=progress
+                )
+            except settings_helpers.LookupFailed as exc:
+                self.log("warning", f"Place search: {exc}", source="server", topic="config")
+                raise ApiError(502, "lookup_failed", str(exc)) from exc
+            except settings_helpers.PlaceNotFound as exc:
+                raise ApiError(404, "not_found", str(exc)) from exc
+            ctx.check()
+            return {"query": text, "places": places}
+
+        return self.jobs.start("site_search", body, total=None, stage="search")
+
+    def _bundle_target(self, destination: str, overwrite: bool) -> Path:
+        real, _root = self.fs_roots.resolve(destination, what="destination")
+        # A folder is refused before any suffix is added: "<folder>" must not
+        # silently become "<folder>.zip" next to it.
+        if real.is_dir():
+            raise ApiError(400, "invalid_argument", f"{real} is a folder: name the .zip file")
+        if real.suffix.lower() != ".zip":
+            # Appended, never swapped: "c.tar.gz" -> "c.tar.gz.zip", not "c.tar.zip"
+            # (support_bundle.py:177-179 swapped it).
+            real = real.with_name(real.name + ".zip")
+        if not self.fs_roots.allows(real):
+            raise ApiError(403, "forbidden_path", f"{real} is outside the allowed folders")
+        if real.is_dir():
+            raise ApiError(400, "invalid_argument", f"{real} is a folder: name the .zip file")
+        if real.exists() and not overwrite:
+            raise ApiError(
+                409, "file_exists", f"{real.name} already exists: choose another name or replace it"
+            )
+        return real
+
+    def start_support_bundle(
+        self,
+        destination: str | None = None,
+        include_session: bool = False,
+        session_dir: str | None = None,
+        include_site: bool = False,
+        include_crash_reports: bool = True,
+        overwrite: bool = False,
+    ) -> dict[str, Any]:
+        """``POST /api/support-bundle`` (row A5): a ``support_bundle`` job (not cancellable)."""
+        target = self._bundle_target(destination, overwrite) if destination else None
+        session: Path | None = None
+        if include_session:
+            if not session_dir:
+                raise ApiError(
+                    400, "invalid_argument", "Choose the session whose metadata to include"
+                )
+            session, _root = self.fs_roots.resolve(session_dir, what="session folder")
+            if not is_session(session):
+                raise ApiError(
+                    400, "session_invalid", f"{session} is not an ARGOS session (no session.json)"
+                )
+        get = self.config.get
+        coordinates = support.site_coordinates(get)
+        driver = self.site_check.record().get("driver_site")
+        if driver:
+            coordinates += [driver["latitude"], driver["longitude"], driver["elevation_m"]]
+        redactor = support.Redactor(
+            token=self._settings.token,
+            home=Path.home(),
+            include_site=include_site,
+            coordinates=coordinates,
+        )
+        summary = {
+            "hardware.profile": get("hardware.profile", ""),
+            "ui.log_level": get("ui.log_level", "INFO"),
+            "diagnostics.enabled": bool(get("diagnostics.enabled", False)),
+            "astap_configured": bool(get("astrometry.astap_path", "")),  # shell.py:511-516
+            "api": API_VERSION,
+        }
+        log_dir = self._settings.log_dir
+
+        def body(ctx: JobContext) -> dict[str, Any]:
+            name = target.name if target is not None else support.default_name()
+            path = target if target is not None else self._download_path(ctx.id, name)
+            try:
+                result = support.create_bundle(
+                    path,
+                    redactor=redactor,
+                    log_directory=log_dir,
+                    session_directory=session,
+                    include_crash_reports=include_crash_reports,
+                    config_summary=summary,
+                )
+            except (support.BundleError, OSError) as exc:
+                reason = str(exc)
+                self.log("error", f"Support bundle failed: {reason}", topic="app")
+                raise ApiError(500, "bundle_failed", f"Could not create the ZIP: {reason}") from exc
+            if target is None:
+                with self._downloads_lock:
+                    self._downloads[ctx.id] = (result.path, name)
+            count = len(result.files)
+            self.log(
+                "info",
+                f"Support bundle created: {name} ({count} file{'s' if count != 1 else ''}). "
+                "ARGOS did not upload it.",
+                topic="app",
+            )
+            return {
+                "path": str(result.path) if target is not None else None,
+                "name": name,
+                "bytes": result.bytes,
+                "files": list(result.files),
+                "download": target is None,
+                "session_included": session is not None,
+                "site_included": include_site,
+            }
+
+        self._prune_downloads()
+        return self.jobs.start("support_bundle", body, cancellable=False, stage="writing")
+
+    def _download_path(self, job_id: str, name: str) -> Path:
+        with self._downloads_lock:
+            if self._download_dir is None:
+                self._download_dir = Path(tempfile.mkdtemp(prefix="argos-downloads-"))
+            folder = self._download_dir / job_id
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder / name
+
+    def _prune_downloads(self) -> None:
+        """Delete the files of jobs that have expired (kept as long as the job, 10 min)."""
+        with self._downloads_lock:
+            ids = list(self._downloads)
+        for job_id in ids:
+            try:
+                self.jobs.get(job_id)
+            except ApiError:
+                with self._downloads_lock:
+                    entry = self._downloads.pop(job_id, None)
+                if entry is not None:
+                    shutil.rmtree(entry[0].parent, ignore_errors=True)
+
+    def job_download(self, job_id: str) -> tuple[Path, str]:
+        """``GET /api/jobs/{id}/download``: the file a finished job left for the browser."""
+        self._prune_downloads()
+        job = self.jobs.get(job_id)  # 404 for an unknown or expired job
+        if job["state"] in ("queued", "running"):
+            raise ApiError(409, "not_ready", "The job is still running")
+        with self._downloads_lock:
+            entry = self._downloads.get(job_id)
+        if entry is None or not entry[0].is_file():
+            raise ApiError(404, "not_found", "This job has no file to download")
+        return entry
 
     # ------------------------------------------------------------------
     # Network (row A18)
@@ -1544,6 +1852,7 @@ class Hub:
                 recovered = self._mount_failing
                 self._mount_failing = False
                 self._apply_mount(self._mount_from_reading(reading), telemetry=True)
+            self.site_check.on_reading(reading, generation)
             if recovered:
                 self.log("info", "Mount responding again", source="mount", topic="mount")
 
@@ -1567,6 +1876,7 @@ class Hub:
             slot.retry_stop = stop
             self._publish_status()
         _close_quietly(mount)
+        self.site_check.mount_disconnected(before=retry_generation)
         self.set_activity(
             f"Mount connection lost · retrying every {interval:g} s",
             source="mount",
@@ -1623,6 +1933,7 @@ class Hub:
             if stale:
                 _close_quietly(handle)
                 return
+            self.site_check.mount_connected(generation, _driver_site(handle))
             self.log("ok", f"Mount reconnected: {slot.name}", source="mount", topic="connection")
             self.set_activity("Mount reconnected", source="mount", topic="connection", log=False)
             self._log_report(report, "mount")
@@ -1640,6 +1951,21 @@ def _connect_all_outcome(devices: dict[str, Any]) -> str:
     if failed:
         text += f" · {', '.join(failed)} failed"
     return text
+
+
+def _driver_site(handle: Any) -> tuple[float, float, float | None] | None:
+    """The mount driver's own site, read by the adapter at connect time (or ``None``)."""
+    site = getattr(handle, "driver_site", None)
+    if site is None:
+        return None
+    try:
+        lat, lon = float(site[0]), float(site[1])
+        elev = float(site[2]) if len(site) > 2 and site[2] is not None else None
+    except (TypeError, ValueError, IndexError):
+        return None
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return None
+    return lat, lon, elev
 
 
 def _close_quietly(device: Any) -> None:

@@ -43,6 +43,7 @@ from argos.core.hardware import active, catalog
 from argos.server.config_meta import (
     LEGACY_MIRROR,
     META,
+    OMITTED,
     InvalidValue,
     validate_value,
 )
@@ -192,6 +193,7 @@ class ConfigStore:
         return {
             "values": self.values(),
             "meta": {key: meta.to_dict() for key, meta in META.items()},
+            "omitted": [{"key": key, "reason": reason} for key, reason in OMITTED],
             "revision": self._revision,
             "path": str(self._path) if self._path is not None else None,
         }
@@ -239,11 +241,9 @@ class ConfigStore:
                 errors[key] = "unknown setting"
                 continue
             if meta.read_only:
-                errors[key] = (
-                    "is changed with PUT /api/profile"
-                    if key == "hardware.profile"
-                    else "is read-only"
-                )
+                # The observer's words: the same reason the form shows (no API route).
+                reason = meta.read_only_reason
+                errors[key] = f"is read-only. {reason}" if reason else "is read-only"
                 continue
             try:
                 normalised[key], warning = validate_value(meta, value)

@@ -42,10 +42,11 @@ logger = logging.getLogger(__name__)
 #: other kind (``network``, ``activity``, ``config``, ``job:<id>``…) covers
 #: only itself; ``log`` is a stream and is never covered.
 _COVERED_BY = {
-    "status": ("status", "camera", "mount", "devices"),
+    "status": ("status", "camera", "mount", "devices", "site_check"),
     "camera": ("camera",),
     "mount": ("mount",),
     "devices": ("devices",),
+    "site_check": ("site_check",),
 }
 
 #: Pending messages per client before the backlog is compacted.

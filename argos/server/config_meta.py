@@ -63,6 +63,9 @@ class KeyMeta:
     nullable: bool = False
     advanced: bool = False
     read_only: bool = False
+    #: Why a ``read_only`` key cannot be changed through ``PATCH /api/config``
+    #: (shown under the field; wave 2).
+    read_only_reason: str | None = None
     #: ``path`` keys: what the path names, and whether "" (auto) is allowed.
     path_kind: Literal["dir", "file", "exe"] = "dir"
     allow_empty: bool = False
@@ -70,6 +73,12 @@ class KeyMeta:
     #: ``str`` keys: a full-match pattern and an upper-casing normaliser.
     pattern: str | None = None
     upper: bool = False
+    #: The observer's own value (name, AAVSO code, site): its shipped default
+    #: ("" or 0) is a placeholder, not a value to go back to. The web form
+    #: offers no "Reset to the default" and Restore defaults skips it, so one
+    #: click never moves the site to 0°, 0° (the class of the 2026-09-25
+    #: wrong-site incident) or blanks the AAVSO code (wave 2 fix).
+    personal: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -92,6 +101,11 @@ class KeyMeta:
             "category": self.category,
             "advanced": self.advanced,
             "read_only": self.read_only,
+            "read_only_reason": self.read_only_reason,
+            # Wave 2 (integration): what a ``path`` key names, so the in-app
+            # FilePicker opens in the right mode; null for other types.
+            "path_kind": self.path_kind if self.type == "path" else None,
+            "personal": self.personal,
         }
 
 
@@ -100,6 +114,31 @@ def _k(key: str, type_: KeyType, default: Any, label: str, help_: str, category:
         key=key, type=type_, default=default, label=label, help=help_, category=category, **kw
     )
 
+
+#: AAVSO filter codes offered for ``photometry.default_band`` (AAVSO WebObs
+#: filter list); a colour sensor's channels first, then Johnson-Cousins,
+#: unfiltered, Sloan and near-infrared.
+_AAVSO_BANDS: tuple[tuple[str, str], ...] = (
+    ("TG", "TG · Tri-colour green"),
+    ("TB", "TB · Tri-colour blue"),
+    ("TR", "TR · Tri-colour red"),
+    ("V", "V · Johnson V"),
+    ("B", "B · Johnson B"),
+    ("U", "U · Johnson U"),
+    ("R", "R · Cousins R"),
+    ("I", "I · Cousins I"),
+    ("CV", "CV · Clear, V zero point"),
+    ("CR", "CR · Clear, R zero point"),
+    ("CBB", "CBB · Clear, blue-blocking"),
+    ("SU", "SU · Sloan u"),
+    ("SG", "SG · Sloan g"),
+    ("SR", "SR · Sloan r"),
+    ("SI", "SI · Sloan i"),
+    ("SZ", "SZ · Sloan z"),
+    ("J", "J · NIR 1.2 µm"),
+    ("H", "H · NIR 1.6 µm"),
+    ("K", "K · NIR 2.2 µm"),
+)
 
 _PROFILE_OPTIONS = tuple(
     (p.key, p.name if p.validated else f"{p.name} (unvalidated)") for p in catalog.PROFILES.values()
@@ -127,65 +166,78 @@ KEYS: tuple[KeyMeta, ...] = (
     _k("stellarium.online_target_lookup", "bool", False,
        "Look up target names online after a GoTo",
        "When no local catalogue match exists, send the GoTo coordinates to CDS/SIMBAD to "
-       "suggest a target name. Argos always asks before changing FITS metadata.",
+       "suggest a target name. ARGOS always asks before changing FITS metadata.",
        "connection", used_by=("Stellarium GoTo name suggestion",)),
     # -- Observer & site ----------------------------------------------------------
     _k("observer.name", "str", "", "Observer name", "Written to the FITS OBSERVER keyword.",
-       "observer_site", used_by=("FITS OBSERVER",), max_length=68),
+       "observer_site", used_by=("FITS OBSERVER",), max_length=68, personal=True),
     _k("observer.obscode", "str", "", "AAVSO observer code",
        "Stamped on every AAVSO export. Letters and digits, upper-cased.",
        "observer_site", used_by=("AAVSO export OBSCODE",), max_length=10,
-       pattern=r"[A-Z0-9]*", upper=True),
+       pattern=r"[A-Z0-9]*", upper=True, personal=True),
     _k("site.name", "str", "", "Site name", "Name of the default observing site.",
-       "observer_site", used_by=("Plan visibility",), max_length=80),
+       "observer_site", used_by=("Plan visibility",), max_length=80, personal=True),
     _k("site.latitude", "float", 0.0, "Latitude",
        "Geodetic latitude, north positive. Written to FITS SITELAT; used for altitude, "
        "airmass and target visibility.",
        "observer_site", used_by=("FITS SITELAT", "airmass", "Plan visibility"),
-       min=-90.0, max=90.0, step=0.00001, unit="°"),
+       min=-90.0, max=90.0, step=0.00001, unit="°", personal=True),
     _k("site.longitude", "float", 0.0, "Longitude",
        "Geodetic longitude, east positive. Written to FITS SITELONG; used for altitude, "
        "airmass and target visibility.",
        "observer_site", used_by=("FITS SITELONG", "airmass", "Plan visibility"),
-       min=-180.0, max=180.0, step=0.00001, unit="°"),
+       min=-180.0, max=180.0, step=0.00001, unit="°", personal=True),
     _k("site.elevation", "float", 0.0, "Elevation",
        "Height above sea level. Written to FITS SITEELEV.",
        "observer_site", used_by=("FITS SITEELEV", "airmass"),
-       min=-500.0, max=9000.0, step=0.1, unit="m"),  # configuration_page.py:179
+       min=-500.0, max=9000.0, step=0.1, unit="m", personal=True),  # configuration_page.py:179
     _k("site.favorites", "list", [], "Saved sites",
        "Saved observing sites: name, latitude, longitude, elevation.",
        "observer_site", used_by=("Settings › Observer & site",)),
     # -- Instrument -------------------------------------------------------------------
     _k("hardware.profile", "str", catalog.DEFAULT_PROFILE.key, "Telescope",
-       "The instrument model: plate scale, sensor geometry and FITS identity. Changed with "
-       "PUT /api/profile (Connection › Instrument), locked while equipment is connected.",
+       "The instrument model: plate scale, sensor geometry and FITS identity. Changed on the "
+       "Connection screen (Instrument card); locked while equipment is connected.",
        "instrument", used_by=("plate scale", "FITS TELESCOP / FOCALLEN / BAYERPAT", "discovery"),
-       options=_PROFILE_OPTIONS, read_only=True),
+       options=_PROFILE_OPTIONS, read_only=True,
+       # Set with PUT /api/profile; the reason is shown to the observer.
+       read_only_reason="Changed on the Connection screen (Instrument card), which checks "
+                        "that no equipment is connected."),
     _k("hardware.overrides.full_well_adu", "int", None, "Saturation (full well)",
-       "Saturation threshold of your unit; empty uses the profile's value. Also written to "
-       "camera.full_well_adu, which the Qt app reads.",
+       "Saturation threshold of your unit; empty uses the telescope profile's value. The Qt "
+       "app reads the same value.",
        "instrument", used_by=("saturation overlay",), min=0, max=65535, step=1, unit="ADU",
        nullable=True),  # configuration_page.py:617
     _k("hardware.overrides.linearity_max_adu", "int", None, "Linearity limit",
-       "Upper bound of the trusted linear range; empty uses the profile's value. Also written "
-       "to camera.linearity_max_adu, which the Qt app reads.",
+       "Upper bound of the trusted linear range; empty uses the telescope profile's value. The "
+       "Qt app reads the same value.",
        "instrument", used_by=("photometry saturation flag",), min=0, max=65535, step=1,
        unit="ADU", nullable=True),  # configuration_page.py:623
+    _k("hardware.overrides.adc_bits", "int", None, "ADC depth",
+       "Bits of the sensor's analogue-to-digital converter, from the telescope profile.",
+       "instrument", used_by=("effective ADC depth note",), min=8, max=16, step=1, unit="bit",
+       nullable=True, advanced=True, read_only=True,
+       # Decision Q-C1 (web/spec/README.md 8.2); the reason is shown to the observer.
+       read_only_reason="The ADC depth is the sensor's, set by the telescope profile."),
     _k("hardware.overrides.ap_host", "host", None, "Access-point address",
        "Address the telescope serves on in its own Wi-Fi access-point mode; empty uses the "
        "profile's value. Probed by discovery when the broadcast is silent.",
        "instrument", used_by=("discovery candidate",), nullable=True, advanced=True),
-    _k("camera.full_well_adu", "int", 60000, "Saturation (Qt key)",
-       "Legacy key the Qt app reads; follows hardware.overrides.full_well_adu.",
+    _k("camera.full_well_adu", "int", 60000, "Qt app saturation",
+       "The copy of Saturation (full well) the Qt app reads.",
        "instrument", used_by=("Qt saturation overlay",), min=0, max=65535, unit="ADU",
-       read_only=True, advanced=True),
-    _k("camera.linearity_max_adu", "int", 50000, "Linearity limit (Qt key)",
-       "Legacy key the Qt app reads; follows hardware.overrides.linearity_max_adu.",
+       read_only=True, advanced=True,
+       read_only_reason="Follows Saturation (full well) above, so the Qt app reads the same "
+                        "value."),  # Q-C1
+    _k("camera.linearity_max_adu", "int", 50000, "Qt app linearity limit",
+       "The copy of Linearity limit the Qt app reads.",
        "instrument", used_by=("Qt photometry saturation flag",), min=0, max=65535, unit="ADU",
-       read_only=True, advanced=True),
+       read_only=True, advanced=True,
+       read_only_reason="Follows Linearity limit above, so the Qt app reads the same "
+                        "value."),  # Q-C1
     _k("camera.egain_table", "object", {}, "Electron gain table",
-       "Measured e⁻/ADU per gain setting, {\"gain\": e/ADU}; empty uses the driver's value or "
-       "the sensor reference curve.",
+       "Measured electrons per ADU at each gain setting; empty uses the driver's value or the "
+       "sensor reference curve.",
        "instrument", used_by=("photometry noise model",), advanced=True),
     _k("data_paths.camera_calibration_directory", "path", str(_HOME / ".argos"),
        "Photon-transfer calibrations",
@@ -237,11 +289,13 @@ KEYS: tuple[KeyMeta, ...] = (
        step=1.0, unit="s", advanced=True),
     # -- Catalogues --------------------------------------------------------------------
     _k("catalog.identification_max_objects", "int", 400, "Identification budget",
-       "Total online identities for one field, shared by Gaia and SIMBAD.",
-       "catalogues", used_by=("field catalogue fetch",),
-       options=((100, "Fast · 100 objects"), (200, "Fast · 200 objects"),
-                (400, "Balanced · 400 objects"), (800, "Detailed · 800 objects"),
-                (1600, "Dense field · 1,600 objects"))),  # configuration_page.py:396-406
+       "Online identities for one field, shared by Gaia and SIMBAD: fast 100 or 200, "
+       "balanced 400, detailed 800, dense field 1\u202f600.",
+       "catalogues", used_by=("field catalogue fetch",), unit="objects",
+       # Numbers as labels, so the five fit side by side (02 2.2: a Segmented
+       # 100 / 200 / 400 / 800 / 1 600); the names are in the help.
+       options=((100, "100"), (200, "200"), (400, "400"), (800, "800"),
+                (1600, "1\u202f600"))),  # configuration_page.py:396-406
     _k("catalog.mag_limit", "float", 15.0, "VSX faint limit",
        "Faintest variable star (maximum brightness) fetched from AAVSO VSX.",
        "catalogues", used_by=("variable-star catalogue",), min=5.0, max=20.0, step=0.5,
@@ -265,7 +319,7 @@ KEYS: tuple[KeyMeta, ...] = (
        "Hide catalogue stars the local peak detector did not find.",
        "catalogues", used_by=("field overlay",)),
     _k("catalog.show_essential_objects", "bool", True, "Show bundled Messier, NGC and IC objects",
-       "Local catalogue shipped with Argos; never online.",
+       "Local catalogue shipped with ARGOS; never online.",
        "catalogues", used_by=("field overlay",)),
     _k("catalog.show_cached_exoplanets", "bool", True, "Show cached exoplanet hosts",
        "Exoplanet hosts already in the local cache; never online.",
@@ -290,7 +344,7 @@ KEYS: tuple[KeyMeta, ...] = (
        "Radius of the star-measurement aperture, in green-plane pixels.",
        "observe", used_by=("star measurement", "frame metrics"), min=2, max=30, step=1,
        unit="px"),  # histogram_dock.py:163; metrics.py:28
-    _k("ui.display.rotation", "str", "auto", "Image rotation",
+    _k("ui.display.rotation", "str", "auto", "Qt app image rotation",
        "Display rotation the Qt app uses; the web UI seeds its per-viewer rotation from it once.",
        "observe", used_by=("viewer (seed)",),
        options=(("auto", "Auto"), ("0", "0°"), ("90", "90°"), ("180", "180°"),
@@ -317,8 +371,12 @@ KEYS: tuple[KeyMeta, ...] = (
        "photometry", used_by=("comparison selection",), min=1, max=20,
        step=1),  # astrometry_settings.py:263
     _k("photometry.default_band", "str", "TG", "AAVSO band",
-       "FILT value of every AAVSO report (TG = Tri-colour green).",
-       "photometry", used_by=("AAVSO export FILT",), max_length=4, pattern=r"[A-Za-z0-9]+"),
+       "FILT value of every AAVSO report. TG for the green channel of a colour (Bayer) "
+       "sensor such as the Seestar's.",
+       "photometry", used_by=("AAVSO export FILT",), max_length=4, pattern=r"[A-Za-z0-9]+",
+       # A list, not free text: a typo would write a wrong FILT into every report.
+       # AAVSO filter codes (WebObs "Filters"): the colour-sensor channels first.
+       options=_AAVSO_BANDS),
     _k("photometry.comparison_min_snr", "float", 10.0, "Comparison minimum SNR",
        "Pilot-frame SNR a comparison star needs to be selected automatically.",
        "photometry", used_by=("comparison selection",), min=3.0, max=100.0, step=1.0,
@@ -393,7 +451,7 @@ KEYS: tuple[KeyMeta, ...] = (
        "privacy_diagnostics", used_by=("server log",),
        options=(("DEBUG", "DEBUG"), ("INFO", "INFO"), ("WARNING", "WARNING"), ("ERROR", "ERROR"))),
     # -- Appearance ------------------------------------------------------------------------
-    _k("ui.theme.preset", "str", "Observatory", "Theme",
+    _k("ui.theme.preset", "str", "Observatory", "Qt app theme",
        "Colour theme of the Qt app; the web UI seeds its per-viewer theme from it once.",
        "appearance", used_by=("Qt theme", "web theme (seed)"),
        options=(("Observatory", "Observatory"), ("Charcoal", "Charcoal"),
@@ -402,6 +460,32 @@ KEYS: tuple[KeyMeta, ...] = (
 # fmt: on
 
 META: dict[str, KeyMeta] = {m.key: m for m in KEYS}
+
+#: Keys of ``web/spec/02-connection-and-settings.md`` appendix A that are
+#: deliberately not exposed, with the reason (``ConfigSnapshot.omitted``).
+#: With :data:`META` this covers every key of that table (wave 2 exit
+#: criterion); the file keeps them untouched.
+OMITTED: tuple[tuple[str, str], ...] = (
+    ("observer.latitude", "Legacy site key, migrated to site.latitude on load (config.py:328-342)."),
+    ("observer.longitude", "Legacy site key, migrated to site.longitude on load."),
+    ("observer.elevation", "Legacy site key, migrated to site.elevation on load."),
+    ("ui.window_state", "Dead default: no reader (decision Q-C7)."),
+    ("ui.window_geometry", "Dead default: no reader (decision Q-C7)."),
+    ("ui.language", "No translation exists; the selector is dropped (decisions Q-G12, Q-C7)."),
+    ("ui.shell.geometry", "Qt window state; the web UI keeps its layout per viewer."),
+    ("ui.shell.state", "Qt window state; the web UI keeps its layout per viewer."),
+    ("ui.shell.mode", "Qt window state; the web UI keeps its section per viewer."),
+    ("ui.imaging.layout", "Qt dock layout; the web UI keeps its layout per viewer."),
+    ("ui.sequencer.layout", "Qt dock layout; the web UI keeps its layout per viewer."),
+    ("ui.review.layout", "Qt dock layout; the web UI keeps its layout per viewer."),
+    ("camera.adc_bits", "Deprecated (config.py:75-77), no reader; the profile gives the ADC "
+                        "depth (decision Q-C7)."),
+    ("catalog.field_stars_max_results", "Dead: no reader (decision Q-C7)."),
+    ("catalog.named_objects_max_results", "Dead: no reader (decision Q-C7)."),
+    ("catalog.display_limit_version", "Internal migration marker (config.py:354)."),
+    ("diagnostics.local_opt_in_v1", "Internal marker, written with diagnostics.enabled "
+                                    "(configuration_page.py:1200-1206)."),
+)  # fmt: skip
 
 #: Keys that change process-wide data locations (applied to core modules).
 DATA_PATH_KEYS = frozenset(

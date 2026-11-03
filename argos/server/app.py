@@ -23,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
-from starlette.responses import JSONResponse
+from starlette.responses import FileResponse, JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
@@ -125,6 +125,23 @@ class StellariumBody(_Body):
 
     host: str | None = Field(default=None, min_length=1, max_length=253)
     port: int | None = Field(default=None, ge=1024, le=65535)
+
+
+class SupportBundleBody(_Body):
+    """A5: where to write the ZIP (``null`` = keep it for a download) and what goes in."""
+
+    destination: str | None = Field(default=None, min_length=1, max_length=4096)
+    include_session: bool = False
+    session_dir: str | None = Field(default=None, min_length=1, max_length=4096)
+    include_site: bool = False
+    include_crash_reports: bool = True
+    overwrite: bool = False
+
+
+class SiteSearchBody(_Body):
+    """A82: the free-form place query (an empty one is refused with the Qt text)."""
+
+    query: str = Field(max_length=200)
 
 
 #: Server-side software credited by ``/api/app/info`` (the front-end adds its own).
@@ -347,7 +364,7 @@ def app_info(settings: Settings, hub: Hub) -> dict[str, Any]:
         "astap_configured": bool(get("astrometry.astap_path", "")),
         "licence": "GPL-3.0-or-later",
         "licence_name": "GNU GPL v3 or later",
-        "copyright": "Copyright © 2026 Argos contributors",
+        "copyright": "Copyright © 2026 ARGOS contributors",
         "author": "Jules Perret",
         "description": (
             "Scientific acquisition and differential photometry for ZWO Seestar telescopes."
@@ -555,6 +572,81 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
     @api.delete("/jobs/{job_id}")
     def cancel_job(job_id: str) -> dict[str, Any]:
         return hub.jobs.cancel(job_id)
+
+    # -- API 2 (wave 2: Settings) ---------------------------------------------
+
+    @api.get("/jobs/{job_id}/download")
+    def job_download(job_id: str) -> FileResponse:
+        path, name = hub.job_download(job_id)
+        return FileResponse(path, media_type="application/zip", filename=name)
+
+    @api.post("/support-bundle", status_code=202)
+    def support_bundle(body: SupportBundleBody | None = None) -> dict[str, Any]:
+        body = body or SupportBundleBody()
+        job = hub.start_support_bundle(
+            destination=body.destination,
+            include_session=body.include_session,
+            session_dir=body.session_dir,
+            include_site=body.include_site,
+            include_crash_reports=body.include_crash_reports,
+            overwrite=body.overwrite,
+        )
+        return {"job_id": job["id"], "job": job}
+
+    @api.get("/diagnostics/crash-reports")
+    def crash_reports(since: str | None = Query(default=None, max_length=40)) -> dict[str, Any]:
+        return hub.crash_reports(since)
+
+    @api.get("/fs/list")
+    def fs_list(
+        path: str | None = Query(default=None, max_length=4096),
+        kind: Literal["any", "dir", "file"] = "any",
+        ext: str | None = Query(default=None, max_length=200),
+        counts: Literal["fits"] | None = None,
+        hidden: bool = False,
+    ) -> dict[str, Any]:
+        return hub.fs_list(path, kind=kind, ext=ext, counts=counts, hidden=hidden)
+
+    @api.get("/sessions")
+    def sessions(
+        offset: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=500)
+    ) -> dict[str, Any]:
+        return hub.sessions_page(offset=offset, limit=limit)
+
+    @api.get("/astrometry/astap")
+    def astap(
+        path: str | None = Query(default=None, max_length=4096),
+        database_path: str | None = Query(default=None, max_length=4096),
+        database: str | None = Query(default=None, max_length=40),
+    ) -> dict[str, Any]:
+        return hub.astap_state(path, database_path, database)
+
+    @api.post("/site/search", status_code=202)
+    def site_search(body: SiteSearchBody) -> dict[str, Any]:
+        job = hub.start_site_search(body.query)
+        return {"job_id": job["id"], "job": job}
+
+    @api.get("/site/check")
+    def site_check() -> dict[str, Any]:
+        return hub.site_check_state()
+
+    @api.post("/site/check")
+    def site_check_now() -> dict[str, Any]:
+        return hub.site_check_now()
+
+    @api.get("/caches")
+    def caches() -> dict[str, Any]:
+        return hub.caches()
+
+    @api.delete("/caches/{kind}")
+    def clear_cache(kind: str) -> dict[str, Any]:
+        return hub.clear_cache(kind)
+
+    @api.get("/catalogues/essential")
+    def essential_catalogue() -> dict[str, Any]:
+        from argos.core.catalog.offline import essential_catalogue_info
+
+        return dict(essential_catalogue_info())
 
     @app.websocket("/ws/events")
     async def ws_events(websocket: WebSocket) -> None:

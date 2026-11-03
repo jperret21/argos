@@ -152,6 +152,40 @@ class AlpacaMount:
             self.name = self._scope.connect()
         except AlpacaError as exc:
             raise DeviceError(f"Mount: {exc}") from exc
+        #: The driver's own site ``(lat, lon, elev|None)``, or ``None`` when it
+        #: does not expose one; read once here, at connect time, on the
+        #: connecting thread (the site check compares it, wave 2).
+        self.driver_site = self._read_driver_site()
+
+    def _read_driver_site(self) -> tuple[float, float, float | None] | None:
+        """``SiteLatitude`` / ``SiteLongitude`` (``telescope.py:193-215``).
+
+        ``Telescope.connect`` reads them only for a topocentric driver and keeps
+        them private (``_site``); otherwise they are read here, once, from the
+        alpyca device. Several Seestar firmwares do not expose them: ``None``.
+        """
+        site = getattr(self._scope, "_site", None)
+        if site is not None:
+            try:
+                return float(site[0]), float(site[1]), float(site[2])
+            except (TypeError, ValueError, IndexError):
+                return None
+        device = getattr(self._scope, "_scope", None)
+        if device is None:
+            return None
+        try:
+            latitude = float(device.SiteLatitude)
+            longitude = float(device.SiteLongitude)
+        except Exception as exc:  # property not implemented, or no answer
+            logger.info("Mount site unavailable: %s", exc)
+            return None
+        if not (-90.0 <= latitude <= 90.0 and -180.0 <= longitude <= 180.0):
+            return None
+        try:
+            elevation: float | None = float(device.SiteElevation)
+        except Exception:
+            elevation = None
+        return latitude, longitude, elevation
 
     def connect_report(self) -> ConnectReport:
         """The Qt mount connect messages (``device_session.py:276-291``), as data."""

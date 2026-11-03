@@ -58,6 +58,10 @@ class Settings:
             connection lost (``polling_worker.py:49``: 3).
         mount_retry_s: Period of the mount auto-reconnect
             (``device_session.py:159``: 10 s).
+        site_check_period_s: Period of the site-against-mount re-check while
+            the mount is connected (wave 2, ``site_check.py``: 300 s).
+        site_check_settle_s: After a site change, wait until the site has
+            stayed unchanged this long before checking (``site_check.py``: 2 s).
     """
 
     token: str
@@ -74,3 +78,5 @@ class Settings:
     network_probe_timeout_s: float = 1.5
     mount_lost_after: int = 3
     mount_retry_s: float = 10.0
+    site_check_period_s: float = 300.0
+    site_check_settle_s: float = 2.0
