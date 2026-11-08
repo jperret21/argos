@@ -135,3 +135,10 @@ kbd.key {
   line-height: 16px;
   text-align: center;
 }
+
+/* Section and mode switches (PROPOSAL 3.4 "View Transitions … (180 ms)"): a short
+   cross-fade, never longer; reduced motion skips it in script (workspace.svelte.ts). */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 180ms;
+}

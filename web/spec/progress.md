@@ -531,3 +531,375 @@ still last modified Sep 28, `~/Argos/sessions` untouched):
   band list) and restore (9/9, new dialog title) checks pass again.
 - 51 screenshots read; 9 Night Red shots pass `scripts/audit-png.mjs` (rules A and B, 0 px);
   no console error and no request off the machine in any capture.
+
+## Wave 3: Observe, acquisition (2026-11-08)
+
+Scope (README section 7, row W3): API rows A19-A31 and A34-A41 (server,
+`argos/server/protocol.md` "API 2 routes, wave 3"); the shared components of the row
+(segmented filter control, jog pad, `VCurvePlot`, `ConditionsTimeline`, HUD chips); the
+Camera, Mount and Focuser cards, the Conditions drawer tab, the Open FITS dialog, the
+status-bar frame and HFD segments, the Planetarium card's target-name suggestions; the
+mapping rows M4, M38-M43, M48-M49, M59-M67; the W3 rows of `web/lab/PROPOSAL.md` section 6
+and its "before W3" icon row; the owner decisions D1 (task modes, Framing and Focus), D4
+(Park by hold), D6 (cursor readout on the image), D8 (sizes), D9 (queued focuser taps) and
+D11 (data ramps, hatching).
+The wave was built by four roles (server, controls and instruments, workspace and charts,
+integration) after a first start was stopped; the integration wired the screen end to end.
+Screenshots: `web/screenshots/2026-11-08_wave3-observe/` (40 shots with a manifest:
+10 scenes at 1 440 x 900 in the three themes and at 1 280 x 800 Observatory), retaken
+after the review round (section 6).
+
+**Status: wave 3 is complete for its exit criterion and reviewed** (section 2, checked
+through the real UI against the simulator; the design, technical and science reviews were
+applied, section 6). Rows left partial wait for a later wave or a core change (section 5).
+Not committed: the owner reviews it first.
+
+Verification after the review round (2026-11-08, server on port 8746 and vite on 5177 with
+a temporary `--config-dir`, `--log-dir`, sessions folder, `HOME` and `TMPDIR`, simulator;
+`~/.argos/config.json` untouched, nothing written to `~/Argos/sessions`; `argos/ui`,
+`argos/workers`, `argos/core` unchanged):
+
+- End-to-end through the UI (`e2e.mjs`, the integration's checks plus three for the fixes:
+  a Light refused on the Dark slot, plain Stop unavailable during autofocus, the jog after
+  closing and reopening its section): **64 of 64 pass**, no page error.
+- FITS headers of the four frames saved through the UI: **80 of 80 checks pass** against
+  `FITSWriter` fed the same inputs (`fits_compare.py`).
+- `.venv/bin/python -m pytest -q`: **1 171 passed, 71 skipped** (1 154 before the review
+  round; 17 new server tests); ruff and black clean.
+- `npm run check` 0 errors, 0 warnings (579 files); `npm test` **646 passed** (59 files);
+  `npm run build` OK (JS 750 kB, 244 kB gzip).
+- Night Red audit: the 10 Night Red originals pass rules A and B with 0 px. Brass, accent
+  px at DPR 2, 1 440 Observatory: Framing live 4 382 (was 5 848), Park hold 4 028 (5 343),
+  wheel moving 3 878, AF progress 2 515, AF done 2 859, Conditions 2 873, Dark refused
+  5 397 (focus ring and tooltip), GoTo suggestions 7 689 (focused field), Open FITS 7 266
+  (the dialog's primary button), jog active 9 368 (17 629: the armed pad edge and the held
+  key remain, Slew no longer turns primary).
+
+The integration's verification follows (it is kept as the record of that phase).
+
+Verification (2026-11-08, server on port 8745 with a temporary `--config-dir`, `--log-dir`,
+sessions folder, `HOME` and `TMPDIR`, simulator; vite on 5176; `~/.argos/config.json`
+untouched, `~/Argos/sessions` only read: one raw frame copied into the temporary HOME for
+Open FITS, no personal metadata printed):
+
+- End-to-end, real keyboard and pointer input in headless Chrome (`e2e.mjs`): **61 of 61
+  checks pass**, no page error. GoTo by name, Take shot (Light, Dark, during live view),
+  the Dark-slot refusal, autofocus run / stop / halt, focuser Go to refusals, the
+  Conditions tab, jog (key-up, diagonal, blur, lost renewals, Escape, closed socket), Open
+  FITS (refused calibrated frame, opened raw frame), Park (tap, keyboard confirmation,
+  700 ms hold), the Stellarium suggestion on both cards, the command palette.
+- FITS headers: **80 of 80 checks pass** on the four files of the run (two Lights, one taken
+  during live view, two Darks), against what was asked and against a header rebuilt with
+  `argos.core.imaging.fits_writer.FITSWriter` from the same inputs (section 2).
+- `npm run check` 0 errors, 0 warnings (576 files, `src/lab` included); `npm test` 629
+  passed (58 files); `npm run build` OK (JS 740 kB, 241 kB gzip: still over Vite's 500 kB
+  warning; the frame-statistics worker is its own 2 kB chunk, no lab code in `dist`);
+  `.venv/bin/python -m pytest -q` (temporary HOME and TMPDIR): 1 154 passed, 71 skipped
+  (1 039 before the wave; the integration added one focuser test); ruff and black clean on
+  `argos/server` and `tests/server`.
+- 40 screenshots read; Night Red and brass audits in section 4.
+
+### 1. Mapping rows closed by the wave
+
+| Row | Qt element | Web | Status |
+|---|---|---|---|
+| M4 | File menu: Open FITS image… (⌘O) | Toolbar `open-image` and ⌘O from any section open the in-app FilePicker (FITS types first); the file opens into Observe | Done for Open FITS. ⌘⇧O (Review R0) is W7, Quit (desktop) W8. |
+| M38 | `ImagingPage` | Observe screen with the task modes (D1): Framing and Focus; Field and Run listed, unavailable, and say which wave brings them | Done for Framing and Focus; Field W4, Run W5-W6 |
+| M39 | `ImageToolbar` (Open image, Preview, Palette, caption) | `open-image` in the toolbar; caption in the tooltip | Partial: Preview (Colour / Raw / R / G / B) and Palette go to the Display options with the W4 palettes |
+| M40 | Panel-toggle strip | Arrange popover per mode (cards Open / Folded / Hidden, band, drawer, rail width) + card fold | Done |
+| M41 | "Panels ▾" menu | Arrange popover | Done |
+| M42 | "Arrange ▾" + Reset layout | Reset per mode and for all modes, with Undo; Float / Dock dropped (D27) | Done |
+| M43 | 8 docks | Rail cards Camera, Mount, Focuser; band Levels + exposure check (Framing) and V-curve + HFD trend (Focus); drawer tabs Conditions, Log | Done for wave 3; Statistics card W4, Light curve W5 |
+| M48 | Context bar under the image | Status-bar Frame segment (number, saved or opened file name) and run chip (LIVE, AF n/N, Wheel → Dark, exposing) | Done |
+| M49 | Open FITS `QFileDialog` | FilePicker "Open FITS image": raw 16-bit frames only; a refusal stays in the dialog in the server's words; live view stops first (Q-O11) | Done |
+| M59 | `CameraDock` | Camera card: exposure and gain within the driver's limits (one `PUT /api/camera/settings` per commit, never clamped), frame type, filter (wheel or metadata only), Sensor disclosure (offset, binning), sensor °C, the frame in progress vs the next frame, the owner in one line | Done except Preview quality (Q-O14: replaced by a client stream decimation that is not built). HFD and stars are in the status bar and the band (D18, one home per value). |
+| M60 | `MountDock` | Mount card: readouts, tracking + rate (read back), Park by hold, Object field (offline names, resolve, Slew sends the object with its name), coordinates, Abort, the clock guard, the Stellarium suggestion, the Jog section | Done except the Solved-field row (Centre, Sync: W4) |
+| M61 | Park confirmation box | HoldButton (700 ms ring) + inline confirmation from the keyboard (D4) | Done |
+| M62 | `FocuserDock` | Focuser card: gauge, queued taps (D9), Go to bounded by MaxStep, Autofocus / Stop AF (returns to the start), Halt always; unfolds when autofocus starts | Done |
+| M63 | `VCurveWidget` | `VCurvePlot` in the Focus band, and in the Focuser card when the band does not show it | Done |
+| M64 | `HfdHistoryDock` | Conditions drawer tab | Done; "Copy data (TSV)" and the lab's time pan are not promoted (section 5) |
+| M65 | `MetricsPanel` | Conditions tab (Observe) | Done for Observe; the Review facet is W7 |
+| M66 | `ManualControlDialog` | Jog section of the Mount card + J arms the arrow keys + server dead-man (D23) | Done |
+| M67 | Dock chrome | Card fold per mode, P, D, drawer tabs | Done |
+
+API rows A19-A31 and A34-A41 are all used by the UI (A32-A33, Centre and Sync, are W4).
+Wave 1 gaps closed: the Alt-Az / EQ chip of the status bar (A29), the Stellarium
+target-name suggestion (A20), the `observation`, `stellarium` suggestion and wave-3
+snapshot events (M19).
+
+### 2. Exit criterion and its evidence
+
+**Take shot writes correct FITS metadata (S1-S3 fixed).** Four frames written through the
+UI (Take shot button, E during live view), each compared by `fits_compare.py` with what
+was asked and with a reference header built by `FITSWriter.write` from the same inputs, as
+`AcquisitionEngine._save_fits_async` does (`acquisition_engine.py:1811-1898`): pointing and
+camera reads taken from the file, everything else from the request; QA values recomputed
+on the saved array. Same keys in the same order and same values for all four (time-derived
+MJD and Moon keys within 1 ms, DATE-OBS being stored to the millisecond).
+
+| Check | Light | Dark | Dark (wheel was on LP) | Light during live view |
+|---|---|---|---|---|
+| EXPTIME / GAIN / OFFSET | 2.0 / 80 / 10 | 2.0 / 80 / 10 | 2.0 / 80 / 10 | 2.0 / 80 / 10 |
+| IMAGETYP | Light Frame | Dark Frame | Dark Frame | Light Frame |
+| FILTER (read back, S3) | IR | Dark | Dark | IR |
+| OBJECT (D11) | M 13 | M 13 | M 13 | M 13 |
+| DATE-AVG − DATE-OBS | 1.001 s | 1.000 s | 1.004 s | 1.003 s |
+| RA / DEC / ALT / AZ / AIRMASS (X1) | present | present | present | present |
+| TARGRA / TARGDEC | the GoTo target (16.695 h, +36.46667°) | same | same | same |
+| SITE* (X2, no site set) | absent | absent | absent | absent |
+| HFD, NSTARS, SKYLEVEL, FWHM, ECCENTR (S20) | = recomputed | = recomputed (FWHM, ECCENTR absent: no star) | same | = recomputed |
+| Median (light blocked?) | 2 000 | 1 600 (pedestal) | 1 600 | 2 000 |
+
+S1 in the UI: with Dark chosen, the Camera card says the wheel turns to Dark first; a Take
+shot then shows `waiting_for: filterwheel` ("Wheel → Dark" run chip) and the server logs
+"Filter → Dark for the Dark Frame (the Seestar has no shutter)." While the wheel turns to LP
+the server refuses a Dark (409 "The filter wheel is moving to 'LP' — wait for it, then take
+the Dark Frame."), and the UI says so before the press (Take shot unavailable, the card's
+line) and on the press (tooltip reason); once the wheel has settled on LP the same Take
+shot is accepted: the wheel turns LP → Dark, then the frame is exposed and saved with
+FILTER Dark. S2 (settings frozen per frame) and the frame-exposed-while-the-wheel-turned
+rule are covered by the server tests (`tests/server/test_take_shot.py`).
+
+**Autofocus runs, cancels and halts cleanly** (simulator V-curve minimum 5 300 steps):
+
+- Run: Autofocus in the toolbar (Focus mode) → the button becomes "Stop AF" with the
+  sweep's ring (the count "3/14" was on its face before the review round; it is now in the
+  Focus band and the status bar), the Focuser card unfolds with "Autofocus", the Camera fields wait with one
+  line ("autofocus owns the camera until it ends"), Go to and Out / In are refused ("Autofocus
+  owns the focuser.", 409 from the server too). A full run ended "Autofocus complete — best
+  pos=5188 HFD=5.7", parabola, focuser left at 5 188 (the previous runs: 5 253, 5 325, 5 349);
+  the V-curve shows the worker's points,
+  the hyperbola display fit, the provisional vertex during the run and the best line after.
+- Stop AF (toolbar): "Returned to 5333." with the focuser read back at its start (5 333) and
+  the camera released after the return (S23).
+- Halt (Focuser card) during a run: "Halted at 3959: focus left there.", focuser idle,
+  camera released (Q-O6).
+- Go to 120 000: refused in words ("Go to must be between 0 and 10 000"), never clamped,
+  the focuser does not move (H10).
+
+**Jog stops on key-up, blur and socket loss** (J armed, simulator mount, `jog` record polled
+from the server):
+
+| Event | Server stopped the axis after | Server's reason |
+|---|---|---|
+| ArrowRight released | 6 ms | client stop |
+| Diagonal (↑ + ←), ← released | only the primary axis stops (H3) | client stop |
+| Window blur | 6 ms | `jog_stop` on the socket ("the client left the window") |
+| Renewals blocked (requests aborted) | 1 094 ms | "no renewal for 1.0 s"; the held key turns dashed (stalled) |
+| Escape | immediate | client stop |
+| Page closed (event socket gone) | 39 ms | "the client left the window" |
+
+Held for 1.5 s with renewals, the axis keeps moving (no false dead-man stop). Times are from
+the final run; the earlier runs gave the same picture (key-up 7-38 ms, blur 3-10 ms, dead-man
+1 048-1 067 ms, socket 27-41 ms).
+
+### 3. PROPOSAL section 6, W3 promotions
+
+| Lab source | In `web/src/lib` | Status |
+|---|---|---|
+| `Seg.svelte` | `components/Segmented.svelte` (manual activation, busy segment, sliding block) | Done (controls role); the filter wheel and the tracking rate use it |
+| `SplitButton.svelte` | `components/SplitButton.svelte` | Done; Take shot and Autofocus. Added in the integration: `stoppable` (a running action whose button stops it: Stop AF) |
+| `Toolbar.svelte`, `overflow.ts` | `components/Toolbar.svelte` (+ `toolbar.ts`) | Done: the Observe toolbar is built from data (`embedded` mode between the mode bar and Arrange); counted overflow; one tab stop |
+| `HoldButton.svelte` | `components/HoldButton.svelte` | Done: Park |
+| `FocuserControl`, `FocuserGauge` | `imaging/instruments/*` + `imaging/FocuserCard.svelte` | Done |
+| `JogPad.svelte`, `jog.ts` | `imaging/instruments/JogPad.svelte`, `jog.ts` | Done, in the Mount card's Jog section |
+| `layout.ts`, `ModeBar`, `ArrangePopover`, `Band` | `imaging/modes/*` | Done for Framing and Focus |
+| `splitter.ts`, frame gestures | `app/attachments/*` | Splitters done; the pan / zoom / pinch attachment is promoted and tested but not wired (FitsViewer keeps its own) |
+| `Viewer.svelte` HUD parts | `viewer/Hud.svelte` | Done for W3 (chips, cursor readout, mini histogram); compass and scale bar W4 |
+| `FramingBand` exposure check | `imaging/modes/ExposureCheck.svelte` | Done |
+| `VCurve.svelte`, `core/fit.ts` | `charts/VCurvePlot.svelte`, `charts/fit.ts`, `vcurve.ts` | Done |
+| `ConditionsTimeline`, `Trend` | `charts/ConditionsTimeline.svelte` (one implementation) | Done |
+| `HistogramStretch.svelte` | `imaging/Histogram.svelte` | Done (keyboard handles, clipped fractions, ramp, D11) |
+| `research/frame/*` statistics | `viewer/framestats*` (worker) | Done (stats); palettes and R16UI are W4 |
+| `charts/mini/*` | `charts/mini/*` | Done for Conditions; run progress W6 |
+| `workspace/model/frame.worker.ts` | dev only | Not in the production bundle |
+| `LabIcon` glyphs | `icons/watch.svg`, `attention.svg`, `inspector.svg` | Done (before W3); watch and inspector redrawn, inspector needs the owner's sign-off (BRAND 6.10) |
+
+### 4. Fixed during the integration (found in the running UI)
+
+- The mode-switch View Transition held every pointer input for 3.5 s on a software renderer
+  (clicks hit the document root): capped at 400 ms with `skipTransition()`, 180 ms
+  animations (`modes/workspace.svelte.ts`, `app.css`).
+- Stop AF could not be pressed in the toolbar (a split button ignored presses while it
+  showed progress): `stoppable`.
+- A press on the image left the focus in a field, so E, V, D, J and the arrows typed into it:
+  the image now ends typing (the field commits on blur).
+- E during live view did nothing; it is now Take shot (the next live frame is saved).
+- Server (with a test): the focuser record kept the last manual target while autofocus drove
+  the focuser (the card read "Target 4 500" at 5 349): autofocus now reports each move it
+  sends (`FocuserService.note_target`, `tests/server/test_autofocus.py`).
+- The FilePicker closed before the server answered: `onchoose` may return a promise, and its
+  refusal stays in the dialog (Open FITS).
+- Layout: the Tracking row overflowed (Unpark cut) and the mount geometry word overflowed
+  the Target line: Park / Unpark have their own row, the geometry is in the status bar; the
+  status bar's Log button was cut during autofocus (rate and latency now fold for a non-live
+  run chip); the activity time read ":34:02" at 1 280 px (no longer cut on its left);
+  disclosure chevrons pointed left when open; the exposure read "2" instead of "2.0 s"; an
+  empty reserved line under Frame for Light frames; the ownership reason repeated under
+  each field (one line now); "5 300/ 10 000" in the folded Focuser header.
+
+### 5. Known gaps and issues (before wave 4)
+
+- **Online lookups not exercised**: this machine had no internet during the run. A name
+  outside the bundled catalogue is refused in the resolver's words ("Catalogue unavailable.
+  Connect to the internet or use a previously searched target."). The bundled catalogue has
+  no variable stars, so the variable-star photometry target (Q-P8) was not exercised through
+  the UI (server tests cover it).
+- **Preview quality** (Q-O14): no stream decimation yet; frames always travel at full size.
+- **Autofocus settings** (Q-O9): the `autofocus.*` keys need defaults in
+  `argos/core/config.py`, which this wave does not change; the sweep range and positions are
+  options of the Autofocus split button, remembered per viewer, sent with each start.
+- **Binning**: segments above 1× are unavailable with the reason (the server refuses a
+  binned Take shot: `fits_writer` writes XBINNING = 1).
+- **Each Take shot gets its own session folder** `<start UTC>_<OBJECT>`: the Qt engine does
+  the same (`acquisition_engine.py:1845`, run id = exposure start); sequences (W6) group
+  frames.
+- **Real Seestar**: never connected; Alpaca additions (MoveAxis, TrackingRates, wheel,
+  focuser, offset, binning) are tested against the simulator and fakes only.
+- **Engines**: headless Chrome with SwiftShader only (WebKit, Tauri, touch and trackpad
+  untested). Time-bound screenshots (wheel turning, Park hold) depend on capture speed; the
+  Park hold scene cancels the hold from the page before it completes.
+- **Autofocus from an off-focus start**: one run starting at 3 962 ended at 5 462 with the
+  raw minimum (the parabola was not accepted); others ended at 5 253-5 349 with the
+  parabola. That is the core algorithm on the simulator's curve, unchanged by this wave.
+- **Conditions**: the lab's time pan and +/− and "Copy data (TSV)" are not promoted; rows are
+  not yet recorded with a session folder (W6).
+- **Jog `last_stop`** has no client field: the pad tells a server stop from its own echo by
+  timing (1 s window).
+- **Bundle** 750 kB (244 kB gzip) after the review round, up from 649 kB before the wave.
+- **Version string**: FITS SOFTWARE reads "Argos v0.4.2" (`argos/__init__.py`, core,
+  unchanged by this wave; the next release is 0.5.0).
+
+### 6. Review round (2026-11-08): what was fixed
+
+Three reviews ran on the integrated wave: design (19 findings), technical (12) and science
+(12). Every high and medium finding was applied; the low ones were applied when cheap, and
+the few left are listed with the reason. Science first.
+
+**Science (FITS truthfulness).**
+
+- **The gain is sent before every exposure** (medium): the Alpaca adapter sent it once per
+  change, so one failed `set_gain` or a gain changed by another client (the Seestar app, a
+  driver restart) left every later frame at the old gain while GAIN / EGAIN recorded the
+  requested one. It is now sent before each frame as `LivePreviewWorker` does
+  (`exposure_worker.py:145-149`), a refusal logged once per streak. The wave-1 test that
+  asserted "once per change" now asserts the Qt behaviour, plus a retry after a refusal
+  and a restore after an outside change (`test_alpaca_adapter.py`).
+- **OFFSET always describes the frame** (medium): FITS OFFSET is read from the camera at
+  save time. Offset and binning changes are now `409 busy` while a Take shot waits or is
+  being written, and a frame exposed across an offset or binning change is never saved
+  (the next one is, INFO says why). Tests: `test_offset_and_binning_cannot_change_while_a_
+  take_shot_waits`, `test_a_frame_exposed_across_an_offset_change_is_not_saved`.
+- **No Light or Flat behind the Dark slot** (medium): the server turns the wheel to Dark for
+  darks and nothing turns it back, so "darks, then a light" saved a pure-pedestal frame as
+  a Light Frame (median 1 600). Now `409 dark_slot` with the reason, and the Camera card and
+  Take shot say it before the press (`darkGuard`). Checked through the UI too.
+- **Stop AF never claims a return it did not read back** (medium, also technical): a
+  focuser lost during the return, an unreadable position or a return slower than the 30 s
+  wait now end `failed` with what is known ("Stopped — focuser at 4972 and still moving,
+  not yet back at its start (5000).") and an ERROR line; "Returned to 5000." only after a
+  read-back at the start, idle. Two tests (lost focuser, slow return).
+- Low: binning cannot change while a shot waits, and a binned frame arriving anyway is
+  dropped; autofocus is `409 dark_slot` behind the Dark slot (and `409 busy` while the
+  wheel turns); a live Take shot that saves the frame in progress says when its exposure or
+  gain differ from the request (the S2 rule and its test are kept: Qt parity); an Open FITS
+  `DATE-OBS` without a time is no longer read as midnight, and its WARN says "no usable
+  DATE-OBS time".
+
+**Technical.**
+
+- **Jog after the pad is reopened** (high): each pad restarted its command numbers at 0
+  while the server remembered the page's highest, so every key was silently ignored. The
+  numbers now come from one counter per page (`AppState.jogTransport.nextSeq`), and every
+  answer says how the command was handled (`jog_command`: started, renewed, pending,
+  ignored with stale / stopped / late). Checked through the UI (close and reopen the Jog
+  section, then hold an arrow) and in `instruments.test.ts`.
+- **A slow MoveAxis starved the server** (high): renewals now never wait on device I/O
+  (answered under the state lock; `pending` while that axis's start is in its MoveAxis), a
+  start that waited longer than the dead-man for the device lock is dropped, a start sent
+  before its client's socket closed or blurred is dropped, a renewal (`renew: true`) never
+  restarts an axis the server stopped, and the client never sends a renewal while its
+  previous request for that axis is unanswered. Tests: `test_renewals_never_wait_behind_a_
+  slow_moveaxis`, `test_a_start_that_waited_longer_than_the_dead_man_is_dropped`,
+  `test_a_renewal_never_restarts_an_axis_the_server_stopped`.
+- Medium: **a stop is never dropped as stale** (numbers compared per client and per axis; a
+  key-up overtaken by the other axis's renewal still stops its axis); **a stop that keeps
+  failing stays pending** (`stop_failed`, retried every 5 s, no false dead-man stop, OK
+  "Stop confirmed" when it goes through); **the conditions history survives a reload while
+  frames arrive** (live rows are held during the REST read and merged after it); **a Light
+  shot waiting for the wheel snapshots its settings once the wheel has settled** (frame
+  header, HUD and conditions row name the new slot); the AF return (above).
+- Low: the settings PUT checks the wheel before any device call (one commit); a second
+  window cannot reverse an axis another window jogs (`409 busy`, owner `jog`); Cmd on macOS
+  releases the arrow holds (no stuck key); each event message is parsed once.
+
+**Design.**
+
+- **Conditions plots no longer invent data** (high): an interval with no frame longer than
+  max(2 × cadence, cadence + 60 s) breaks every series and is a neutral hatched period
+  named by its cause ("autofocus 13:36–13:38", else "no frame").
+- **The exposure check never blinks** (high): the last measured peaks stay (up to 10 frames
+  behind) at one emphasis with a stamp ("#34 · 1 frame behind"), the list keeps its height,
+  two or more clipped stars are one line drawn as a solid full bar with an end cap (no
+  hatching).
+- **V-curve** (medium): when the worker's few samples give no hyperbola the display fit
+  uses every coarse and fine sample, so the decided state keeps its evidence; the legend
+  lists only what is drawn (or says "no hyperbola: …"); the band title says "this
+  autofocus" while it runs and "last autofocus · HH:MM UTC" after.
+- **One home per value in Focus mode** (medium): the band owns the AF numbers (no Focuser
+  column), the Focuser card says in words what the focuser does and its Stop AF has no
+  count, the toolbar's Stop AF has the ring only, the status-bar chip keeps the count; the
+  Camera card's filter control no longer repeats "Autofocus owns the camera".
+- **Toolbar** (medium): the Take shot face reserves the width of its widest value (no
+  reflow), the zoom % is kept at 1 440 (priority raised); plain Stop is unavailable while
+  autofocus owns the camera, with the reason (Stop AF returns, Halt stops where it is), and
+  `stopAll` never ends a sweep half-way.
+- **Brass** (medium): Slew is primary only while the fields hold a new target (never
+  because a jog moved the mount away, never while the jog is armed); Tracking is drawn as a
+  neutral toggle (fill, `--fg` glyph). This departs from the BRAND 8 table's "(tracking)"
+  example of an outlined toggled-on secondary: to confirm with the owner.
+- **Numbers in Mono** (medium): `NumText` sets the numbers of a Sans sentence in Plex Mono
+  (Hold caption, NumberField messages, menu labels, the Focuser line, the Focus band line);
+  server sentences get the U+202F grouping ("Returned to 5 000.").
+- **Key hints** (medium): the task modes show their Alt+1 / Alt+2 caps while ⌘ is held.
+- **Framing band** (medium): the level handles carry only their letter (the fields hold the
+  values), the "display only" sentence is the Levels header's tooltip, the freed height
+  shows the share of pixels shown black and white (the ADC's clipped count keeps its one
+  home in the exposure check), and the
+  histogram's beyond-range count is in its header row, never over the data.
+- **Status bar** (medium): below about 16 characters the activity segment is left empty
+  (never "13:36:19 C…") and the Log button's tooltip says the last action.
+- **Jog pad** (medium): the offset readout and scope follow the key words' frame (ΔRA as
+  time and ΔDec in arcmin on an equatorial mount) and the scope's scale grows (±2°, ±10°,
+  ±45°, ±180°) instead of pinning the dot on the rim.
+- Low, applied: natural order of the name suggestions (M 1, M 10 … M 19, then M 100); the
+  Camera card's reserved progress row is gone (the toolbar ring and the HUD own the
+  progress), a turning wheel spins on its slot without inserting a line, NEXT FRAME says
+  "filter LP (turning)", the facts read Sensor (°C) and Format; the Focus trend shows
+  min(30 min, the session) and says which; the Open FITS breadcrumb draws the root once
+  and keeps the last three folders ("/ … / home / fits"); the HUD hint shows only until the
+  first pointing (then the last values, muted), the AF chip loses its dot once the sweep
+  has ended, the type chip reads "Dark frame"; the drawer and H no longer light the
+  "layout changed" mark; the Focuser readouts put "steps" inline.
+
+**Not applied (reason).**
+
+- OBJECT vs TARGRA / TARGDEC and the pointing sampled at frame arrival (science, low):
+  both are Qt parity; changing them changes the FITS headers the parity tests check. They
+  are documented in `protocol.md` for the owner to decide.
+- Simulator frames carry the active profile's instrument (science, low): simulator only;
+  a marker in the header would break the header parity with `FITSWriter`. Owner decision.
+- SOFTWARE "Argos v0.4.2" (science, low): `argos/__init__.py` is core; the release bump to
+  0.5.0 is on the release checklist.
+- Exposure check rows linked to stars on the image (design, medium, part of the finding):
+  the collapse and the bar style are done; marking a star on hover needs a viewer overlay
+  and the roles of wave 4.
+- Name suggestions with type, magnitude and altitude (design, low): the offline suggest
+  route returns names only; it needs a server change of the catalogue lookup (W4).
+- TARGET line reduced to its state (design, low): the fields can hold a typed target not
+  yet slewed to, so the line is the only place that shows the mount's own target.
+- Key caps on the drawer tabs and a registry-wide cap test (design, medium, part): the
+  drawer's D / L have no visible control while the drawer is closed; the modes, the
+  toolbar, the rail and J show their caps.
+- The Focus band's one-row summary when the drawer is open at 1 280 (design, low): the
+  size rule allows it; left for the owner's layout review.

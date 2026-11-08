@@ -41,7 +41,20 @@ import type { LinkState } from '../api/socket';
 import type {
   AppInfo,
   AstapState,
+  AutofocusBody,
   CameraState,
+  CaptureSettings,
+  CaptureSettingsBody,
+  FilterWheelState,
+  FocuserCommand,
+  FocuserState,
+  FrameSaved,
+  FrameType,
+  Observation,
+  ObservationTargetBody,
+  Resolved,
+  TargetSuggestions,
+  TrackingRate,
   ConfigEvent,
   ConfigPatchResult,
   OmittedKey,
@@ -58,6 +71,17 @@ import type {
   SiteCheck,
 } from '../api/types';
 import { type ArgosConfig, loadConfig } from '../config';
+import { ConditionsStore } from '../charts/conditions.svelte';
+import type { ConditionsPage, TimelinePeriod } from '../charts/conditions';
+import { clockUtc } from '../format/time';
+import { ConditionsView } from '../charts/conditionsView.svelte';
+import type { AutofocusRecord } from '../charts/vcurve';
+import type { FrameMetricsRecord } from '../imaging/modes/exposure';
+import { ObserveWorkspace, viewTransition } from '../imaging/modes/workspace.svelte';
+import type { JogTransport } from '../imaging/instruments/jog';
+import { autofocusWheelGuard, darkGuard } from '../imaging/capture';
+import { separationDeg } from '../format/astro';
+import { FrameStatsWorker } from '../viewer/framestats.svelte';
 import {
   currentLink,
   DEVICE_IDS,
@@ -116,7 +140,13 @@ export type ActionKey =
   | 'park'
   | 'unpark'
   | 'tracking'
-  | 'siteCheck';
+  | 'trackingRate'
+  | 'siteCheck'
+  | 'settings'
+  | 'filter'
+  | 'autofocus'
+  | 'openFits'
+  | 'target';
 
 /** Outcome of a config commit: the server's per-key messages when it refused. */
 export interface CommitResult {
@@ -153,7 +183,10 @@ const ERROR_TITLES: Record<string, string> = {
   busy: 'Device busy',
   parked: 'Mount is parked',
   invalid_argument: 'Value refused',
-  invalid_fits: 'Not a FITS image',
+  invalid_fits: 'Not a raw camera frame',
+  clock_error: 'Mount clock is wrong',
+  lookup_failed: 'Catalogue unavailable',
+  unsupported: 'Not supported',
   not_found: 'Not found',
   unauthorized: 'Token rejected',
   connection_failed: 'Connection failed',
@@ -294,6 +327,32 @@ export class ArgosApp {
   settingsFocus: { key: string; n: number } | null = $state.raw(null);
   /** Bumped by "Reset all layouts": screens holding their own layout state re-read it. */
   layoutGeneration = $state(0);
+
+  // -- Wave 3: the Observe workspace and its data feeds ----------------------------
+  /** Observe task modes and the layout each remembers (D1, imaging/modes). */
+  readonly observe: ObserveWorkspace;
+  /** Conditions rows of the session (A37), typed-array columns. */
+  readonly conditions: ConditionsStore;
+  /** What the Conditions timeline shows (metrics, kept zoom), per viewer. */
+  readonly conditionsView = new ConditionsView();
+  /** The newest `frame_metrics` (A26); compare its `seq` with the frame on screen. */
+  frameMetrics: FrameMetricsRecord | null = $state.raw(null);
+  /** The newest `frame_saved` (A24): its frame_seq marks the frame on screen as saved. */
+  lastSaved: { seq: number; frame_seq: number; name: string; path: string } | null = $state.raw(null);
+  /** Take shots saved since this page opened, newest last (A24; gaps re-read from GET /api/camera/saved). */
+  savedCount = $state(0);
+  /** Keyboard jogging armed (J, D23): arrow keys jog while the Observe screen is shown. */
+  jogArmed = $state(false);
+  /** The Jog section of the Mount card is open (per viewer). */
+  jogOpen: boolean = $state(loadPref('argos.mount.jog-open', isBoolean, false));
+  /** The Open FITS image dialog (Mod+O, M49). */
+  openFitsOpen = $state(false);
+  /** Folder the Open FITS dialog starts in (the last one used, else the sessions). */
+  openFitsStart: string | null = $state(loadPref('argos.open-fits.dir', (v): v is string => typeof v === 'string', null));
+  /** A target-name suggestion the observer dismissed (its time): not shown again. */
+  suggestionDismissed: string | null = $state(null);
+  /** Star peaks of the exposure check, off the main thread (created by start()). */
+  frameStats: FrameStatsWorker | null = null;
   /** A GET /api/logs is running (fills a gap or the history after a (re)connection). */
   private logFetch: Promise<void> | null = null;
   private nextToastId = 1;
@@ -317,6 +376,78 @@ export class ArgosApp {
       onError: (err) => this.log.push('warning', `Frame dropped: ${err.message}`, { source: 'web', topic: 'camera' }),
     });
     this.jobs = new JobStore({ cancel: (id) => this.client.cancelJob(id) });
+    this.observe = new ObserveWorkspace({
+      onreset: (what, undo) => this.undo.push({ title: what, detail: 'Its panels, band and drawer are back to the preset', undo }),
+      transition: viewTransition,
+    });
+    this.conditions = new ConditionsStore((since) =>
+      this.client.request<ConditionsPage>(
+        'GET',
+        `/api/session/conditions?limit=20000${since !== null ? `&since_seq=${since}` : ''}`,
+      ),
+    );
+    this.events.on('conditions', (m) => this.conditions.ingest(m));
+    this.events.on('frame_metrics', (m) => {
+      if (typeof m.seq === 'number') this.frameMetrics = m as unknown as FrameMetricsRecord;
+    });
+    this.events.on('frame_saved', (m) => {
+      if (typeof m.frame_seq === 'number' && typeof m.name === 'string' && typeof m.seq === 'number') {
+        this.onFrameSaved(m as unknown as FrameSaved);
+      }
+    });
+    this.events.on('autofocus', (m) => {
+      this.noteAfPeriod(m as { started_utc?: string | null; ended_utc?: string | null });
+      this.onAutofocusEvent(m.state as string | undefined, typeof m.message === 'string' ? m.message : null);
+    });
+    this.events.on('status', (m) => {
+      if (m.autofocus && typeof m.autofocus === 'object') this.noteAfPeriod(m.autofocus as { started_utc?: string | null; ended_utc?: string | null });
+    });
+  }
+
+  /** The server's autofocus record (A36: `autofocus` events and status.autofocus). */
+  get autofocus(): AutofocusRecord | null {
+    return this.events.autofocus as AutofocusRecord | null;
+  }
+
+  /** Filter wheel (A28), focuser (A34), observation identity (A38), Stellarium names (A20). */
+  get filterwheel(): FilterWheelState | null {
+    return this.events.filterwheel;
+  }
+
+  get focuser(): FocuserState | null {
+    return this.events.focuser;
+  }
+
+  get observation(): Observation | null {
+    return this.events.observation;
+  }
+
+  /**
+   * The newest target-name suggestion after a Stellarium GoTo, unless dismissed,
+   * and only while the mount's target is still that GoTo (within 0.5°): once the
+   * observer has sent the mount elsewhere the names no longer describe the field.
+   */
+  get suggestions(): TargetSuggestions | null {
+    const s = this.events.suggestions;
+    if (!s || s.t === this.suggestionDismissed) return null;
+    const t = this.mountReady ? this.mount?.target : null;
+    if (t && separationDeg(t.ra_hours, t.dec_deg, s.ra_hours, s.dec_deg) > 0.5) return null;
+    return s;
+  }
+
+  /** What the NEXT frame uses (server state shared by every client, Q-O13). */
+  get settings(): CaptureSettings | null {
+    return this.events.camera?.settings ?? null;
+  }
+
+  /** Who drives the camera ("idle" for an API 1 record). */
+  get cameraOwner(): string {
+    return this.events.camera?.owner ?? 'idle';
+  }
+
+  get autofocusRunning(): boolean {
+    const s = this.events.autofocus?.state;
+    return s === 'running' || s === 'stopping';
   }
 
   // -- Derived views of the server state --------------------------------------
@@ -483,7 +614,8 @@ export class ArgosApp {
   get livePending(): boolean {
     const cam = this.camera;
     if (!this.live || !cam) return false;
-    return Math.abs(cam.exposure_s - this.exposure) > 1e-9 || cam.gain !== Math.round(this.gain);
+    const now = cam.current ?? cam;
+    return Math.abs(now.exposure_s - this.exposure) > 1e-9 || now.gain !== Math.round(this.gain);
   }
 
   /** Levels currently drawn (auto levels of the shown frame, or the manual ones). */
@@ -504,6 +636,7 @@ export class ArgosApp {
     applyDensity(this.density);
     this.events.start();
     this.frames.start();
+    this.frameStats ??= new FrameStatsWorker();
     this.readHealth();
     const tick = setInterval(() => (this.clock = Date.now()), 1000);
     const statusTimer = setTimeout(() => (this.firstStatusTimedOut = true), FIRST_STATUS_TIMEOUT_MS);
@@ -542,6 +675,8 @@ export class ArgosApp {
       stopKeys();
       this.events.stop();
       this.frames.stop();
+      this.frameStats?.dispose();
+      this.frameStats = null;
       for (const t of this.toastTimers.values()) clearTimeout(t);
       this.toastTimers.clear();
     };
@@ -596,6 +731,9 @@ export class ArgosApp {
       .then((n) => this.events.applyNetwork(n))
       .catch(quiet('Network'));
     void this.fillLog(restarted ? 0 : (this.log.lastSeq ?? 0), restarted);
+    // Conditions rows missed while the link was down (or all of a restarted server's).
+    if (restarted) this.conditions.clear();
+    void this.conditions.sync().catch(() => undefined);
   }
 
   // -- Log v2 ---------------------------------------------------------------------
@@ -817,11 +955,14 @@ export class ArgosApp {
   /** Adopt the server's exposure and gain whenever they change there. */
   private followCamera(cam: CameraState | null): void {
     if (!cam) return;
-    const key = `${cam.exposure_s}|${cam.gain}`;
+    // Wave 3: the fields show what the NEXT frame uses (settings); v1: the request.
+    const exposure = cam.settings?.exposure_s ?? cam.exposure_s;
+    const gain = cam.settings?.gain ?? cam.gain;
+    const key = `${exposure}|${gain}`;
     if (key === this.seenSettings) return;
     this.seenSettings = key;
-    this.exposure = cam.exposure_s;
-    this.gain = cam.gain;
+    this.exposure = exposure;
+    this.gain = gain;
     this.exposureInvalid = false;
     this.gainInvalid = false;
   }
@@ -895,6 +1036,10 @@ export class ArgosApp {
       this.shortcuts.handle('nav.settings.mod', () => this.go('configuration')),
       this.shortcuts.handle('palette.open', () => (this.paletteOpen = !this.paletteOpen)),
       this.shortcuts.handle('motion.abort', () => this.abortMotion()),
+      // D19: Open FITS image opens into Observe from every section (Review's inspector is wave 7).
+      this.shortcuts.handle('file.open-fits', () => {
+        if (!this.stale) this.openFitsOpen = true;
+      }),
     ];
     const detach = typeof window === 'undefined' ? () => {} : this.shortcuts.attach(window);
     setReservedKeys((e) => this.shortcuts.reserves(e));
@@ -1047,6 +1192,7 @@ export class ArgosApp {
     this.railOpen = true;
     this.stripOpen = true;
     this.layoutGeneration++;
+    this.observe.reload();
     this.undo.push({
       title: 'Layouts reset',
       detail: saved.length ? `${saved.length} remembered panel ${saved.length === 1 ? 'state' : 'states'} cleared` : 'Every section is back to its default panels',
@@ -1059,6 +1205,7 @@ export class ArgosApp {
         this.railOpen = rail;
         this.stripOpen = strip;
         this.layoutGeneration++;
+        this.observe.reload();
       },
     });
   }
@@ -1087,6 +1234,12 @@ export class ArgosApp {
 
   onDisplay(info: DisplayInfo): void {
     this.shown = info;
+    const ws = this.observe;
+    if (this.section === 'imaging' && ws.mode === 'framing' && ws.layout.bandOpen) {
+      const h = info.frame.header as { bayer?: string | null };
+      const bayer = h.bayer !== undefined ? h.bayer : (this.camera?.sensor?.bayer ?? null);
+      this.frameStats?.measure(info.frame, bayer);
+    }
     // The server replays its latest frame to every new socket: an old frame
     // shown again is not a measure of the live rate or latency.
     const h = info.frame.header;
@@ -1181,12 +1334,15 @@ export class ArgosApp {
   }
 
   setLogOpen(open: boolean): void {
-    this.logOpen = open;
+    // Observe: the drawer belongs to the current task mode (D1).
+    if (this.section === 'imaging') this.observe.setDrawer(open ? { drawerOpen: true, drawerTab: 'log' } : { drawerOpen: false });
+    else this.logOpen = open;
     this.log.markSeen();
   }
 
   /** The full activity log is on screen: the drawer, or on Connection its log region widened to every topic. */
   get logShown(): boolean {
+    if (this.section === 'imaging') return this.observe.layout.drawerOpen && this.observe.layout.drawerTab === 'log';
     return this.section === 'connection' ? this.connectionLogAll : this.logOpen;
   }
 
@@ -1194,6 +1350,9 @@ export class ArgosApp {
   toggleLog(): void {
     if (this.section === 'connection') {
       this.connectionLogAll = !this.connectionLogAll;
+      this.log.markSeen();
+    } else if (this.section === 'imaging') {
+      this.observe.toggleDrawer('log');
       this.log.markSeen();
     } else {
       this.setLogOpen(!this.logOpen);
@@ -1461,69 +1620,63 @@ export class ArgosApp {
     return { exposure_s: this.exposure, gain: Math.round(this.gain) };
   }
 
-  /** A committed Exposure field value (NumberField onchange). */
-  setExposure(v: number): void {
+  /**
+   * A committed Exposure field value: one PUT /api/camera/settings (wave 3,
+   * A22), applied from the next frame in any mode, live view included.
+   * Rejects with the server's words (the field shows them, never clamped).
+   */
+  setExposure(v: number): Promise<unknown> {
     this.exposure = v;
-    if (this.live) void this.applyLiveSettings();
+    return this.putSettings({ exposure_s: v });
   }
 
-  setGain(v: number): void {
+  setGain(v: number): Promise<unknown> {
     this.gain = v;
-    if (this.live) void this.applyLiveSettings();
-  }
-
-  private liveSettingsQueued = false;
-
-  /** Send the fields to the running live view (they apply from its next frame). */
-  async applyLiveSettings(): Promise<void> {
-    if (this.exposureProblem()) return;
-    if (this.busy.liveSettings) {
-      this.liveSettingsQueued = true; // send the newest values once this one is answered
-      return;
-    }
-    await this.run('liveSettings', 'Live settings', async () => {
-      const camera = await this.client.updateLive(this.exposureRequest());
-      this.events.applyStatus({ camera });
-    });
-    if (this.liveSettingsQueued) {
-      this.liveSettingsQueued = false;
-      if (this.live) await this.applyLiveSettings();
-    }
+    return this.putSettings({ gain: Math.round(v) });
   }
 
   /** Drop a pending change: back to the settings of the frame being taken. */
   revertLiveSettings(): void {
     const cam = this.camera;
     if (!cam) return;
-    this.exposure = cam.exposure_s;
-    this.gain = cam.gain;
+    const now = cam.current ?? cam;
+    this.exposure = now.exposure_s;
+    this.gain = now.gain;
     this.exposureInvalid = false;
     this.gainInvalid = false;
-    if (this.live) void this.applyLiveSettings();
+    void this.run('liveSettings', 'Live settings', () => this.putSettings({ exposure_s: now.exposure_s, gain: now.gain }));
   }
 
   /** Why an exposure cannot start, or null. */
   exposureProblem(): string | null {
     if (this.exposureInvalid) return 'fix the exposure time';
     if (this.gainInvalid) return 'fix the gain';
-    if (!Number.isFinite(this.exposure) || this.exposure < EXPOSURE_LIMITS.min || this.exposure > EXPOSURE_LIMITS.max) {
-      return `Exposure must be between ${EXPOSURE_LIMITS.min} and ${EXPOSURE_LIMITS.max} s`;
+    const lim = this.captureLimits;
+    if (!Number.isFinite(this.exposure) || this.exposure < lim.exposureMin || this.exposure > lim.exposureMax) {
+      return `Exposure must be between ${lim.exposureMin} and ${lim.exposureMax} s`;
     }
-    if (!Number.isFinite(this.gain) || this.gain < GAIN_LIMITS.min || this.gain > GAIN_LIMITS.max) {
-      return `Gain must be between ${GAIN_LIMITS.min} and ${GAIN_LIMITS.max}`;
+    if (!Number.isFinite(this.gain) || this.gain < lim.gainMin || this.gain > lim.gainMax) {
+      return `Gain must be between ${lim.gainMin} and ${lim.gainMax}`;
     }
     return null;
   }
 
+  /** The driver's limits once connected (A21), else the server's own bounds. */
+  get captureLimits(): { exposureMin: number; exposureMax: number; gainMin: number; gainMax: number; driver: boolean } {
+    const l = this.cameraReady ? this.camera?.limits : null;
+    return l
+      ? { exposureMin: l.exposure_min_s, exposureMax: l.exposure_max_s, gainMin: l.gain_min, gainMax: l.gain_max, driver: true }
+      : { exposureMin: EXPOSURE_LIMITS.min, exposureMax: EXPOSURE_LIMITS.max, gainMin: GAIN_LIMITS.min, gainMax: GAIN_LIMITS.max, driver: false };
+  }
+
+  /** E, the toolbar and the palette: Take shot (saved as FITS, A23). */
   capture(): Promise<unknown> {
-    return this.run('capture', 'Capture', async () => {
-      const camera = await this.client.capture(this.exposureRequest());
-      this.events.applyStatus({ camera });
-    });
+    return this.takeShot();
   }
 
   startLive(): Promise<unknown> {
     return this.run('live', 'Live view', async () => {
+      await this.flushSettings();
       const camera = await this.client.startLive(this.exposureRequest());
       this.events.applyStatus({ camera });
     });
@@ -1577,7 +1730,8 @@ export class ArgosApp {
 
   /** Toolbar Stop: stop whatever is running (exposure or live view, and a slew). */
   stopAll(): void {
-    if (this.cameraBusy) void this.stopCamera();
+    // Autofocus has its own Stop AF (return to the start): plain Stop never ends it half-way.
+    if (this.cameraBusy && this.cameraOwner !== 'autofocus') void this.stopCamera();
     if (this.slewing) void this.stopMount();
   }
 
@@ -1588,6 +1742,335 @@ export class ArgosApp {
    */
   abortMotion(): void {
     if (this.slewing) void this.stopMount();
+    // D21: a manual focuser move too (never the autofocus: Q-O8, Stop AF is its own button).
+    const f = this.focuser;
+    if (f?.state === 'moving' && !this.autofocusRunning && this.canFocuser) void this.focuserHalt().catch(() => undefined);
+    // The jog pad stops its own axes on Escape; without a mounted pad, stop what the server still moves.
+    const jog = this.mount?.jog;
+    if (jog && (jog.primary !== 0 || jog.secondary !== 0) && this.canMount) {
+      void this.client.jogStop({ client: this.events.clientId }).then((mount) => this.events.applyStatus({ mount }), () => undefined);
+    }
+  }
+
+  // -- Wave 3: capture settings, Take shot, filter wheel (A21-A24, A28) -------------------
+
+  /** Writes of the capture settings still in flight: a Take shot waits for them (H11). */
+  private settingsWrites = new Set<Promise<unknown>>();
+
+  /**
+   * One commit of the capture settings (PUT /api/camera/settings): applies
+   * from the next frame in any mode, never clamped. Rejects with the
+   * server's words (the field shows them); the record answered is applied.
+   */
+  putSettings(body: CaptureSettingsBody): Promise<CameraState> {
+    const p = this.client.putCameraSettings(body).then((camera) => {
+      this.events.applyStatus({ camera });
+      return camera;
+    });
+    this.settingsWrites.add(p);
+    void p.finally(() => this.settingsWrites.delete(p)).catch(() => undefined);
+    return p;
+  }
+
+  /**
+   * A value still being typed is applied before an exposure starts (H11: a
+   * click does not move the focus on macOS): blur the field, then wait for
+   * its commit to be answered.
+   */
+  async flushSettings(): Promise<void> {
+    const el = typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null;
+    if (el && el.tagName === 'INPUT' && el.closest('[data-capture-settings]')) {
+      el.blur();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    if (this.settingsWrites.size) await Promise.allSettled([...this.settingsWrites]);
+  }
+
+  setFrameType(frameType: FrameType): Promise<unknown> {
+    return this.run('settings', 'Frame type', () => this.putSettings({ frame_type: frameType }));
+  }
+
+  /** The filter control: the wheel moves (A28), or without a wheel it is FITS metadata only (Q-O5). Rejects with the server's words. */
+  async chooseFilter(name: string): Promise<unknown> {
+    const wheel = this.filterwheel;
+    if (wheel && wheel.state !== 'disconnected') {
+      const state = await this.client.selectFilter(name);
+      this.events.filterwheel = state;
+      return state;
+    }
+    return this.putSettings({ filter: name });
+  }
+
+  /** Why a Take shot of this frame type cannot be taken now (mirrors the server's 409, S1), or null. */
+  darkGuard(frameType: FrameType | undefined = this.settings?.frame_type): string | null {
+    return darkGuard(frameType, this.filterwheel);
+  }
+
+  /**
+   * Take shot (A23): one exposure saved as FITS with the settings in use; during
+   * live view the next live frame of that type is saved. Dark / Bias: the
+   * server turns the wheel to Dark first (S1).
+   */
+  takeShot(frameType?: FrameType): Promise<unknown> {
+    return this.run('capture', 'Take shot', async () => {
+      await this.flushSettings();
+      const body: { save: true; frame_type?: FrameType } = { save: true };
+      if (frameType) body.frame_type = frameType;
+      const camera = await this.client.capture(body);
+      this.events.applyStatus({ camera });
+    });
+  }
+
+  private lastSavedSeq: number | null = null;
+
+  private onFrameSaved(m: FrameSaved): void {
+    const gap = this.lastSavedSeq !== null && m.seq > this.lastSavedSeq + 1;
+    const after = this.lastSavedSeq;
+    if (this.lastSavedSeq !== null && m.seq <= this.lastSavedSeq) return; // replayed
+    this.lastSavedSeq = m.seq;
+    this.lastSaved = { seq: m.seq, frame_seq: m.frame_seq, name: m.name, path: m.path };
+    this.savedCount += 1;
+    // The server logs OK "Saved <name>" (topic camera); the toast says it from any section.
+    this.toast('info', 'Frame saved', m.name);
+    if (gap) {
+      // Saves missed while the socket was busy: count them, keep the newest (protocol "Backpressure").
+      void this.client.savedFrames(after).then(
+        (page) => {
+          const missed = page.saves.filter((x) => x.seq < m.seq).length;
+          if (missed) this.toast('info', `${missed} more frame${missed > 1 ? 's' : ''} saved`, 'See the log for their names');
+        },
+        () => undefined,
+      );
+    }
+  }
+
+  // -- Wave 3: focuser and autofocus (A34-A36) ---------------------------------------------
+
+  get canFocuser(): boolean {
+    return !this.stale && deviceUsable(this.events.devices, 'focuser', this.events.connection) && !!this.focuser && this.focuser.state !== 'disconnected';
+  }
+
+  private applyFocuser(cmd: FocuserCommand): FocuserCommand {
+    this.events.focuser = cmd.focuser;
+    return cmd;
+  }
+
+  /** Out / In (a step from the queued or current target, clamped and reported, D9). Rejects with the server's words. */
+  focuserStep(delta: number): Promise<FocuserCommand> {
+    return this.client.focuserStep(delta).then((c) => this.applyFocuser(c));
+  }
+
+  /** Go to (bounded by MaxStep, refused, never clamped, H10). */
+  focuserMove(position: number): Promise<FocuserCommand> {
+    return this.client.focuserMove(position).then((c) => this.applyFocuser(c));
+  }
+
+  /** Halt where it is (also ends a running autofocus there, Q-O6). */
+  focuserHalt(): Promise<FocuserCommand> {
+    return this.client.focuserHalt().then((c) => this.applyFocuser(c));
+  }
+
+  /** Autofocus sweep options of this viewer (sent with the start; the server's defaults otherwise). */
+  afOptions: { half_range: number | null; num_steps: number | null } = $state(
+    loadPref(
+      'argos.autofocus.options',
+      (v): v is { half_range: number | null; num_steps: number | null } => typeof v === 'object' && v !== null && 'half_range' in v,
+      { half_range: null, num_steps: null },
+    ),
+  );
+
+  setAfOptions(patch: Partial<{ half_range: number | null; num_steps: number | null }>): void {
+    this.afOptions = { ...this.afOptions, ...patch };
+    savePref('argos.autofocus.options', this.afOptions);
+  }
+
+  /** Why autofocus cannot start beyond the focuser itself, or null. */
+  autofocusProblem(): string | null {
+    if (this.stale) return 'the ARGOS server is not reachable';
+    if (!this.cameraReady) return 'connect the camera first';
+    if (!this.canFocuser) return 'connect the focuser first';
+    if (this.cameraOwner === 'sequence') return 'the sequence owns the camera';
+    if (this.cameraOwner === 'single') return 'wait for the exposure in progress';
+    return autofocusWheelGuard(this.filterwheel);
+  }
+
+  /** Start autofocus (A36): the server applies the AF gain (S22); live view stops first. Rejects with the server's words. */
+  async startAutofocus(): Promise<unknown> {
+    await this.flushSettings();
+    const wasLive = this.live;
+    const body: AutofocusBody = {};
+    if (this.afOptions.half_range) body.half_range = this.afOptions.half_range;
+    if (this.afOptions.num_steps) body.num_steps = this.afOptions.num_steps;
+    const af = await this.client.startAutofocus(body);
+    this.events.autofocus = af;
+    if (wasLive) this.toast('info', 'Live view stopped', 'Autofocus owns the camera until it ends.');
+    // The Focuser card unfolds while autofocus runs (05 2.1).
+    if (this.observe.layout.cards.focuser === 'folded') this.observe.setCardOpen('focuser', true);
+    return af;
+  }
+
+  /** Stop AF = cancel and return to the start position (S23). */
+  async stopAutofocus(): Promise<unknown> {
+    const af = await this.client.stopAutofocus();
+    this.events.autofocus = af;
+    return af;
+  }
+
+  /** The toolbar and palette paths: a failure is a toast + log line. */
+  runAutofocus(): Promise<unknown> {
+    return this.run('autofocus', this.autofocusRunning ? 'Stop autofocus' : 'Autofocus', () =>
+      this.autofocusRunning ? this.stopAutofocus() : this.startAutofocus(),
+    );
+  }
+
+  private afState: string | undefined;
+
+  /** The autofocus runs of the session (they explain a gap in the conditions timeline). */
+  afPeriods: TimelinePeriod[] = $state([]);
+
+  private noteAfPeriod(af: { started_utc?: string | null; ended_utc?: string | null }): void {
+    if (!af.started_utc || !af.ended_utc) return;
+    const from = Date.parse(af.started_utc) / 1000;
+    const to = Date.parse(af.ended_utc) / 1000;
+    if (!Number.isFinite(from) || !Number.isFinite(to) || this.afPeriods.some((p) => p.from === from)) return;
+    const hm = (t: number) => clockUtc(t, false);
+    this.afPeriods = [...this.afPeriods, { from, to, label: `autofocus ${hm(from)}–${hm(to)}` }];
+  }
+
+  private onAutofocusEvent(state: string | undefined, message: string | null): void {
+    const before = this.afState;
+    this.afState = state;
+    if (!before || before === state || (before !== 'running' && before !== 'stopping')) return;
+    // The listener runs before the typed record is stored: the message comes with the event.
+    if (state === 'done') this.toast('info', 'Autofocus complete', message ?? '');
+    else if (state === 'rejected') this.toast('warning', 'Autofocus rejected', message ?? 'focus unchanged');
+    else if (state === 'failed') this.toast('error', 'Autofocus failed', message ?? '');
+    else if (state === 'cancelled') this.toast('info', 'Autofocus cancelled', message ?? '');
+  }
+
+  // -- Wave 3: mount geometry, tracking rate, jog (A29-A31) ----------------------------------
+
+  setTrackingRate(rate: TrackingRate): Promise<unknown> {
+    return this.run('trackingRate', 'Tracking rate', async () => {
+      const mount = await this.client.setTrackingRate(rate);
+      this.events.applyStatus({ mount });
+    });
+  }
+
+  /** The jog pad's calls (A30): this page's client id rides on every command for the dead-man. */
+  private jogSeq = 0;
+  readonly jogTransport: JogTransport = {
+    // One counter per page (the client id is per page): a remounted pad never starts again below
+    // the numbers the server already saw (it ignores an older one).
+    nextSeq: () => ++this.jogSeq,
+    start: async (axis, rate, seq, renew) => {
+      const body = { axis, rate_deg_s: rate, client: this.events.clientId, seq, ...(renew ? { renew: true } : {}) };
+      const mount = await this.client.jog(body);
+      this.events.applyStatus({ mount });
+      return mount;
+    },
+    stop: async (axis, seq) => {
+      const mount = await this.client.jogStop(axis ? { axis, client: this.events.clientId, seq } : { client: this.events.clientId, seq });
+      this.events.applyStatus({ mount });
+      return mount;
+    },
+    socketStop: () => {
+      this.events.send({ type: 'jog_stop' });
+    },
+  };
+
+  setJogOpen(open: boolean): void {
+    this.jogOpen = open;
+    savePref('argos.mount.jog-open', open);
+    if (!open) this.jogArmed = false;
+  }
+
+  /** J (D23): arm or disarm keyboard jogging; arming shows the pad (Mount card unfolded, Jog open). */
+  toggleJogArmed(): void {
+    if (this.jogArmed) {
+      this.jogArmed = false;
+      return;
+    }
+    if (this.observe.layout.cards.mount !== 'open') this.observe.setCardOpen('mount', true);
+    if (!this.jogOpen) this.setJogOpen(true);
+    this.jogArmed = true;
+  }
+
+  /** Why jogging is refused now, in the button's words, or null. */
+  jogProblem(): string | null {
+    if (this.stale) return 'the ARGOS server is not reachable';
+    if (!this.mountReady) return 'connect the mount first';
+    if (this.mount?.state === 'parked') return 'unpark the mount first';
+    if (this.slewing) return 'abort the slew before jogging (Esc)';
+    return null;
+  }
+
+  // -- Wave 3: observation identity and catalogue lookup (A20, A38-A41) ---------------------
+
+  /** The Object field (D11): the FITS OBJECT and its folder. Rejects with the server's words. */
+  async setObjectName(name: string): Promise<Observation> {
+    const obs = await this.client.setObjectName(name);
+    this.events.observation = obs;
+    return obs;
+  }
+
+  /** A catalogue result becomes the target (name, coordinates; photometry target for a variable star, Q-P8). */
+  async setTarget(body: ObservationTargetBody): Promise<Observation> {
+    const obs = await this.client.setObservationTarget(body);
+    this.events.observation = obs;
+    return obs;
+  }
+
+  resolveName(q: string, signal?: AbortSignal): Promise<Resolved> {
+    return this.client.resolve(q, { signal });
+  }
+
+  suggestNames(q: string, signal?: AbortSignal): Promise<string[]> {
+    return this.client.suggest(q, 8, { signal }).then((r) => r.names);
+  }
+
+  /** Accept a Stellarium name suggestion: it becomes the observation target (A20 -> A39). */
+  useSuggestion(c: { name: string; ra_hours: number; dec_deg: number; object_type: string; source: string; is_variable?: boolean }): Promise<unknown> {
+    return this.run('target', 'Target name', async () => {
+      await this.setTarget({ name: c.name, ra_hours: c.ra_hours, dec_deg: c.dec_deg, object_type: c.object_type, source: c.source });
+      this.dismissSuggestion();
+      this.log.push('info', `Target name from the Stellarium GoTo: ${c.name}`, { source: 'web', topic: 'planetarium' });
+    });
+  }
+
+  dismissSuggestion(): void {
+    this.suggestionDismissed = this.events.suggestions?.t ?? null;
+  }
+
+  // -- Wave 3: Open FITS (A25, A27; M4, M49) ------------------------------------------------
+
+  /**
+   * Open a FITS file into Observe (raw 16-bit counts only, live view stopped
+   * first, Q-O11). Resolves to the server's refusal in its words (the dialog
+   * keeps it on screen), or null once opened.
+   */
+  async openFits(path: string): Promise<string | null> {
+    if (this.busy.openFits) return 'Opening another file…';
+    this.busy.openFits = true;
+    const wasLive = this.live;
+    try {
+      const camera = await this.client.openFits(path);
+      this.events.applyStatus({ camera });
+      const dir = path.replace(/[\\/][^\\/]*$/, '');
+      if (dir) {
+        this.openFitsStart = dir;
+        savePref('argos.open-fits.dir', dir);
+      }
+      if (this.section !== 'imaging') this.go('imaging');
+      if (wasLive) this.toast('info', 'Live view stopped', 'To show the file you opened.');
+      return null;
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err);
+      this.log.push('warning', `Open FITS: ${msg}`, { source: 'web', topic: 'camera' });
+      return msg;
+    } finally {
+      this.busy.openFits = false;
+    }
   }
 }
 

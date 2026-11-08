@@ -14,8 +14,22 @@ import type { BundleRequest } from '../components/supportbundle';
 import type {
   AppInfo,
   AstapState,
+  AutofocusBody,
+  AutofocusState,
   CacheInfo,
   CameraState,
+  Candidate,
+  CaptureBody,
+  CaptureSettings,
+  CaptureSettingsBody,
+  FilterWheelState,
+  FocuserCommand,
+  FocuserState,
+  FrameSaved,
+  Observation,
+  ObservationTargetBody,
+  Resolved,
+  TrackingRate,
   ConfigPatchResult,
   ConfigSnapshot,
   ConfigValue,
@@ -216,8 +230,90 @@ export class ArgosClient {
 
   // -- Camera ---------------------------------------------------------------
 
-  capture(body: ExposureRequest, options?: RequestOptions): Promise<CameraState> {
+  /** v1 body (exposure, gain) or wave 3 (`frame_type`, `save`: a Take shot, A23). */
+  capture(body: ExposureRequest | CaptureBody, options?: RequestOptions): Promise<CameraState> {
     return this.request('POST', '/api/camera/capture', body, options);
+  }
+
+  // -- Wave 3: capture settings, saves, filter wheel (A21-A24, A28) ------------
+
+  cameraSettings(options?: RequestOptions): Promise<CaptureSettings> {
+    return this.request('GET', '/api/camera/settings', undefined, options);
+  }
+
+  /** One commit: every field checked first, never clamped (400 with the reason). */
+  putCameraSettings(body: CaptureSettingsBody, options?: RequestOptions): Promise<CameraState> {
+    return this.request('PUT', '/api/camera/settings', body, options);
+  }
+
+  savedFrames(after: number | null, options?: RequestOptions): Promise<{ saves: FrameSaved[]; last_seq: number | null }> {
+    return this.request('GET', `/api/camera/saved${after !== null ? `?after=${after}` : ''}`, undefined, options);
+  }
+
+  selectFilter(name: string, options?: RequestOptions): Promise<FilterWheelState> {
+    return this.request('POST', '/api/filterwheel/select', { name }, options);
+  }
+
+  // -- Wave 3: focuser and autofocus (A34-A36) ----------------------------------
+
+  focuser(options?: RequestOptions): Promise<FocuserState> {
+    return this.request('GET', '/api/focuser', undefined, options);
+  }
+
+  focuserMove(position: number, options?: RequestOptions): Promise<FocuserCommand> {
+    return this.request('POST', '/api/focuser/move', { position }, options);
+  }
+
+  focuserStep(delta: number, options?: RequestOptions): Promise<FocuserCommand> {
+    return this.request('POST', '/api/focuser/step', { delta }, options);
+  }
+
+  focuserHalt(options?: RequestOptions): Promise<FocuserCommand> {
+    return this.request('POST', '/api/focuser/halt', undefined, options);
+  }
+
+  startAutofocus(body: AutofocusBody = {}, options?: RequestOptions): Promise<AutofocusState> {
+    return this.request('POST', '/api/autofocus/start', body, options);
+  }
+
+  stopAutofocus(options?: RequestOptions): Promise<AutofocusState> {
+    return this.request('POST', '/api/autofocus/stop', undefined, options);
+  }
+
+  // -- Wave 3: observation and catalogue lookup (A20, A38-A41) -------------------
+
+  observation(options?: RequestOptions): Promise<Observation> {
+    return this.request('GET', '/api/observation', undefined, options);
+  }
+
+  setObjectName(objectName: string, options?: RequestOptions): Promise<Observation> {
+    return this.request('PUT', '/api/observation', { object_name: objectName }, options);
+  }
+
+  setObservationTarget(body: ObservationTargetBody, options?: RequestOptions): Promise<Observation> {
+    return this.request('POST', '/api/observation/target', body, options);
+  }
+
+  clearObservationTarget(options?: RequestOptions): Promise<Observation> {
+    return this.request('DELETE', '/api/observation/target', undefined, options);
+  }
+
+  /** Bundled catalogue, cache, then CDS Sesame online (8 s): 404 not_found, 502 lookup_failed. */
+  resolve(q: string, options?: RequestOptions): Promise<Resolved> {
+    return this.request('GET', `/api/catalog/resolve?q=${encodeURIComponent(q)}`, undefined, { timeoutMs: 20_000, ...options });
+  }
+
+  /** Offline names (bundled catalogue and earlier lookups). */
+  suggest(q: string, limit = 8, options?: RequestOptions): Promise<{ query: string; names: string[] }> {
+    return this.request('GET', `/api/catalog/suggest?q=${encodeURIComponent(q)}&limit=${limit}`, undefined, options);
+  }
+
+  nearby(
+    q: { ra_hours: number; dec_deg: number; network?: boolean; radius_arcsec?: number },
+    options?: RequestOptions,
+  ): Promise<{ candidates: Candidate[]; network: boolean }> {
+    const params = `ra_hours=${q.ra_hours}&dec_deg=${q.dec_deg}&network=${q.network ? 'true' : 'false'}${q.radius_arcsec ? `&radius_arcsec=${q.radius_arcsec}` : ''}`;
+    return this.request('GET', `/api/catalog/nearby?${params}`, undefined, options);
   }
 
   startLive(body: ExposureRequest, options?: RequestOptions): Promise<CameraState> {
@@ -262,6 +358,21 @@ export class ArgosClient {
 
   setTracking(enabled: boolean, options?: RequestOptions): Promise<MountState> {
     return this.request('POST', '/api/mount/tracking', { enabled }, options);
+  }
+
+  /** A31: set the ASCOM TrackingRate; the answer is what the driver then reports (H6). */
+  setTrackingRate(rate: TrackingRate, options?: RequestOptions): Promise<MountState> {
+    return this.request('POST', '/api/mount/tracking-rate', { rate }, options);
+  }
+
+  /** A30: start an axis, or with the same rate renew it (the server's dead-man). */
+  jog(body: { axis: 'primary' | 'secondary'; rate_deg_s: number; client?: string; seq?: number; renew?: boolean }, options?: RequestOptions): Promise<MountState & { jog_command?: { outcome: string; why: string | null } }> {
+    return this.request('POST', '/api/mount/jog', body, { timeoutMs: 4000, ...options });
+  }
+
+  /** A30: stop one axis, or without `axis` both "whatever the server believes". */
+  jogStop(body: { axis?: 'primary' | 'secondary'; client?: string; seq?: number }, options?: RequestOptions): Promise<MountState> {
+    return this.request('POST', '/api/mount/jog/stop', body, { timeoutMs: 4000, ...options });
   }
 
   // -- API 2: application, log, configuration --------------------------------

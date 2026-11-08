@@ -42,7 +42,7 @@ const VIEWER: ShortcutDef[] = [
   { id: 'view.one-to-one', keys: ['1'], label: 'Actual pixels (1:1)', scope: OBSERVE },
   { id: 'view.stretch-auto', keys: ['A'], label: 'Auto stretch on / off', scope: OBSERVE },
   { id: 'view.stretch-reset', keys: ['Shift+A'], label: 'Reset stretch (linear)', scope: OBSERVE },
-  { id: 'view.levels', keys: ['H'], label: 'Levels strip / Display card', scope: OBSERVE },
+  { id: 'view.levels', keys: ['H'], label: 'Task band under the image (levels, V-curve)', scope: OBSERVE },
   { id: 'view.crosshair', keys: ['X'], label: 'Crosshair', scope: OBSERVE },
   { id: 'view.loupe', keys: ['Z'], label: 'Loupe', scope: OBSERVE, planned: true },
   { id: 'view.saturation', keys: ['C'], label: 'Saturation highlight', scope: OBSERVE, planned: true },
@@ -68,7 +68,7 @@ export const KEYMAP: readonly ShortcutDef[] = [
   { id: 'nav.review.desktop', keys: ['Mod+4'], label: 'Review', scope: 'global', desktopOnly: true },
   { id: 'nav.settings.desktop', keys: ['Mod+5'], label: 'Settings', scope: 'global', desktopOnly: true },
   { id: 'nav.settings.mod', keys: ['Mod+,'], label: 'Settings', scope: 'global' },
-  { id: 'file.open-fits', keys: ['Mod+O'], label: 'Open FITS image', scope: 'global', planned: true },
+  { id: 'file.open-fits', keys: ['Mod+O'], label: 'Open FITS image', scope: 'global' },
   { id: 'review.sessions', keys: ['Mod+Shift+O'], label: 'Review sessions', scope: 'global', planned: true },
   { id: 'app.quit', keys: ['Mod+Q'], label: 'Quit ARGOS', scope: 'global', desktopOnly: true, planned: true },
   { id: 'help.shortcuts', keys: ['?'], label: 'Keyboard shortcuts', scope: 'global' },
@@ -86,7 +86,8 @@ export const KEYMAP: readonly ShortcutDef[] = [
   },
 
   // -- Sections ----------------------------------------------------------------
-  { id: 'drawer.toggle', keys: ['D'], label: 'Bottom drawer', scope: [OBSERVE, 'sequencer', 'analyze'], planned: true },
+  { id: 'drawer.toggle', keys: ['D'], label: 'Bottom drawer', scope: OBSERVE },
+  { id: 'drawer.toggle.other', keys: ['D'], label: 'Bottom drawer', scope: ['sequencer', 'analyze'], planned: true },
   { id: 'rail.toggle', keys: ['P'], label: 'Instrument rail', scope: OBSERVE },
   { id: 'rail.toggle.other', keys: ['P'], label: 'Right rail', scope: ['sequencer', 'analyze.r1', R2], planned: true },
   {
@@ -103,21 +104,22 @@ export const KEYMAP: readonly ShortcutDef[] = [
   { id: 'observe.live', keys: ['V'], label: 'Live view on / off', scope: OBSERVE },
   // Task modes (owner D1; BRAND 2 principle 8): Alt+digit, matched on the
   // physical key (macOS Option+1 types "¡"). The observer chooses; never automatic.
-  { id: 'observe.mode.framing', keys: ['Alt+1'], label: 'Framing mode', scope: OBSERVE, planned: true },
-  { id: 'observe.mode.focus', keys: ['Alt+2'], label: 'Focus mode', scope: OBSERVE, planned: true },
+  { id: 'observe.mode.framing', keys: ['Alt+1'], label: 'Framing mode', scope: OBSERVE },
+  { id: 'observe.mode.focus', keys: ['Alt+2'], label: 'Focus mode', scope: OBSERVE },
+  // Field (wave 4) and Run (waves 5 and 6): listed in the mode bar, unavailable in this build.
   { id: 'observe.mode.field', keys: ['Alt+3'], label: 'Field mode', scope: OBSERVE, planned: true },
   { id: 'observe.mode.run', keys: ['Alt+4'], label: 'Run mode', scope: OBSERVE, planned: true },
   // Watch view (owner D3): while it is open only W, Esc, ? and Mod+K act.
   { id: 'observe.watch', keys: ['W'], label: 'Watch view on / off', scope: OBSERVE, planned: true },
   ...VIEWER,
-  { id: 'observe.jog-arm', keys: ['J'], label: 'Arm keyboard jogging', scope: OBSERVE, planned: true },
+  // D23: J arms the arrow keys (it moves nothing by itself); the jog pad handles the arrows.
+  { id: 'observe.jog-arm', keys: ['J'], label: 'Arm / disarm keyboard jogging', scope: OBSERVE },
   {
     id: 'observe.jog',
     keys: ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'],
     label: 'Jog N / S / W / E (hold; jog pad focused or armed)',
     scope: 'imaging.jog',
     local: true,
-    planned: true,
   },
 
   // -- Review ----------------------------------------------------------------------

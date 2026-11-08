@@ -70,6 +70,8 @@ export interface WebSocketLike {
   onerror: ((ev: Event) => unknown) | null;
   onmessage: ((ev: MessageEvent) => unknown) | null;
   close(code?: number, reason?: string): void;
+  /** Optional in test fakes: the client messages of /ws/events (wave 3 `jog_stop`). */
+  send?(data: string): void;
 }
 
 export type WebSocketFactory = (url: string) => WebSocketLike;
@@ -117,6 +119,21 @@ export class ReconnectingSocket {
     this.clearRetry();
     this.dropSocket();
     this.setState('idle');
+  }
+
+  /**
+   * Send one text message on the open socket (wave 3: `{"type":"jog_stop"}`).
+   * Returns false when no socket is open: the caller has an HTTP path too.
+   */
+  send(data: string): boolean {
+    const ws = this.socket;
+    if (!ws || this._state !== 'open' || typeof ws.send !== 'function') return false;
+    try {
+      ws.send(data);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** Stop then start again (e.g. after the token was fixed). */

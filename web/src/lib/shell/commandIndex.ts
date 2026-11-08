@@ -18,7 +18,7 @@
  * so the index is unit-tested without a server.
  */
 
-import type { ConfigValue, KeyMeta, MountState } from '../api/types';
+import type { CaptureSettings, ConfigValue, FilterWheelState, FocuserState, FrameType, KeyMeta, MountState, TrackingRate } from '../api/types';
 import type { Section } from '../app/state.svelte';
 import type { ShortcutDef } from '../app/shortcuts';
 import { THEME_LABELS, THEMES, type Theme } from '../app/theme';
@@ -67,6 +67,19 @@ export interface IndexSource {
   resetAllLayouts(): void;
   shortcutSheetOpen: boolean;
   supportBundleOpen: boolean;
+  // -- Wave 3 (optional: the unit tests' fake app may leave them out) --
+  autofocusRunning?: boolean;
+  autofocusProblem?(): string | null;
+  runAutofocus?(): Promise<unknown>;
+  focuser?: FocuserState | null;
+  canFocuser?: boolean;
+  focuserHalt?(): Promise<unknown>;
+  filterwheel?: FilterWheelState | null;
+  chooseFilter?(name: string): Promise<unknown>;
+  settings?: CaptureSettings | null;
+  setFrameType?(t: FrameType): Promise<unknown>;
+  setTrackingRate?(r: TrackingRate): Promise<unknown>;
+  darkGuard?(t?: FrameType): string | null;
 }
 
 /** After a section change, the screen binds its keys once it is mounted. */
@@ -101,6 +114,8 @@ const ICON: Record<string, string> = {
   'log.toggle': 'log',
   'observe.live': 'live',
   'observe.capture': 'capture',
+  'file.open-fits': 'open-image',
+  'observe.jog-arm': 'jog-pad',
   'help.shortcuts': 'help',
   'rail.toggle': 'panels',
   'settings.filter': 'search',
@@ -207,11 +222,87 @@ export function buildIndex(app: IndexSource, afterMount: AfterMount): Command[] 
     out.push({ id: 'hw.abort', title: 'Abort the slew', group: 'Hardware', icon: 'abort', keys: 'Escape', run: () => app.stopMount() });
   }
 
+  // -- Wave 3: autofocus, focuser, filter wheel, tracking rate (no single key, BRAND 7) ---------
+  if (app.runAutofocus) {
+    if (app.autofocusRunning) {
+      // Stopping is the safe direction: at once (it returns the focuser to its start, S23).
+      out.push({ id: 'hw.autofocus-stop', title: 'Stop autofocus (return to the start)', group: 'Hardware', icon: 'stop', keywords: 'af cancel focus', hint: 'Focuser', run: () => app.runAutofocus!() });
+    } else {
+      out.push({
+        id: 'hw.autofocus',
+        title: 'Run autofocus',
+        group: 'Hardware',
+        icon: 'autofocus',
+        keywords: 'af focus v-curve hfd sweep',
+        hint: 'Focuser',
+        hardware: {
+          question: 'Run autofocus?',
+          consequence: 'The focuser sweeps around its position with exposures of the Camera card (at most 10 s); live view stops. Stop AF returns it to its start.',
+          confirm: 'Run autofocus',
+        },
+        disabled: app.autofocusProblem?.() ?? null,
+        run: () => app.runAutofocus!(),
+      });
+    }
+  }
+  if (app.focuserHalt && app.focuser?.state === 'moving') {
+    out.push({ id: 'hw.focuser-halt', title: 'Halt the focuser', group: 'Hardware', icon: 'stop', keys: 'Escape', keywords: 'stop focus', hint: 'Focuser', run: () => app.focuserHalt!() });
+  }
+  const wheel = app.filterwheel;
+  if (app.chooseFilter && wheel && wheel.state !== 'disconnected') {
+    for (const slot of wheel.slots) {
+      out.push({
+        id: `hw.filter.${slot}`,
+        title: `Filter: ${slot}`,
+        group: 'Hardware',
+        icon: 'filter-wheel',
+        keywords: 'filter wheel slot dark ir lp',
+        hint: wheel.slot === slot ? 'current' : 'Camera',
+        hardware: { question: `Turn the filter wheel to ${slot}?`, consequence: 'The next frames use this filter (FITS FILTER is read back from the wheel).', confirm: `Filter ${slot}` },
+        disabled: serverDown ?? (wheel.state === 'moving' ? 'the wheel is turning' : wheel.slot === slot ? `the wheel is on ${slot} already` : null),
+        run: () => app.chooseFilter!(slot),
+      });
+    }
+  }
+  if (app.setFrameType && app.settings) {
+    for (const t of ['light', 'dark', 'flat', 'bias'] as FrameType[]) {
+      const word = t.charAt(0).toUpperCase() + t.slice(1);
+      out.push({
+        id: `act.frame.${t}`,
+        title: `Frame type: ${word}`,
+        group: 'Actions',
+        icon: 'capture',
+        keywords: 'take shot capture calibration',
+        hint: app.settings.frame_type === t ? 'current' : t === 'dark' || t === 'bias' ? 'wheel to Dark first' : 'Camera',
+        disabled: serverDown ?? (app.settings.frame_type === t ? 'it is the frame type already' : null),
+        run: () => app.setFrameType!(t),
+      });
+    }
+  }
+  const rates = (app.mount?.tracking_rates ?? []).filter((r) => r !== app.mount?.tracking_rate);
+  if (app.setTrackingRate && rates.length) {
+    for (const r of rates) {
+      const word = r.charAt(0).toUpperCase() + r.slice(1);
+      out.push({
+        id: `hw.rate.${r}`,
+        title: `Tracking rate: ${word}`,
+        group: 'Hardware',
+        icon: 'tracking',
+        keywords: 'sidereal lunar solar king',
+        hint: 'Mount',
+        hardware: { question: `Track at the ${r} rate?`, consequence: 'The mount reads the rate back; tracking keeps its on / off state.', confirm: `${word} rate` },
+        disabled: mountReason ?? (parked ? 'unpark the mount first' : null),
+        run: () => app.setTrackingRate!(r),
+      });
+    }
+  }
+
   // -- Actions that work from any section ---------------------------------------------
   const cameraReason = serverDown ?? (app.canCamera ? null : 'connect the camera first (Connection, F1)');
   const direct: Record<string, Pick<Command, 'disabled' | 'run'> & { title?: string }> = {
     'observe.capture': {
-      disabled: cameraReason ?? (app.cameraBusy ? 'the camera is busy' : app.exposureProblem()),
+      title: app.settings ? `Take shot (${app.settings.frame_type}, saved as FITS)` : 'Take shot (saved as FITS)',
+      disabled: cameraReason ?? (app.autofocusRunning ? 'autofocus owns the camera' : app.exposureProblem() ?? app.darkGuard?.() ?? null),
       run: () => app.capture(),
     },
     'observe.live': {

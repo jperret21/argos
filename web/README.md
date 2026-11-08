@@ -207,74 +207,117 @@ fields in place.
 ## The Observe screen
 
 ```
-┌──────┬────────────────────────────────────────────────────────────┬───────────────┐
-│ rail │ toolbar: [● Simulator] | capture live stop | zoom fit fill │               │
-│      ├────────────────────────────────────────────────────────────┤ Connection ▸ │
-│ F1…  │   16-bit image viewer (WebGL2), frame chips in the         │ Camera        │
-│ F5   │   image's corner, crosshair, pan / zoom                    │ Mount         │
-│      ├────────────────────────────────────────────────────────────┤               │
-│      │   levels strip: histogram + B/M/W handles | levels | view  │               │
-│      ├────────────────────────────────────────────────────────────┤               │
-│      │   activity log drawer (optional)                           │               │
-├──────┴────────────────────────────────────────────────────────────┴───────────────┤
-│ status: connection · mount state RA Dec (abort) · cursor x y ADU · rate · latency · Log │
-└─────────────────────────────────────────────────────────────────────────────────────┘
+┌──────┬──────────────────────────────────────────────────────────────────────┬───────────────┐
+│ rail │ [Disconnect all] Framing Focus (Field Run) │ open · Take shot ▾ Light · 2.0 s│               │
+│      │   Live Stop · Autofocus ▾ · zoom · display · [3] … arrange panels    │ Camera        │
+│ F1…  ├──────────────────────────────────────────────────────────────────────┤ Mount         │
+│ F5   │   16-bit image viewer (WebGL2), HUD chips (state, #, exposure,       │ Focuser       │
+│      │   filter, type, object, time, Saved), cursor X Y ADU on the image    │               │
+│      ├──────────────────────────────────────────────────────────────────────┤               │
+│      │   task band: Framing = levels + exposure check; Focus = V-curve +    │               │
+│      │   HFD trend (H hides it)                                             │               │
+│      ├──────────────────────────────────────────────────────────────────────┤               │
+│      │   drawer (D): Conditions · Log                                       │               │
+├──────┴──────────────────────────────────────────────────────────────────────┴───────────────┤
+│ devices · Seestar / Net · Mount state Alt-Az|EQ RA Dec · run chip (LIVE, AF n/N) · Frame # file · HFD Stars · Log │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Left rail**: the ARGOS lockup, then Connection, Observe, Plan, Review and Settings
-  (F1 to F5, as in Qt). Only Observe is built; the others show a short statement of
-  what they will hold. State dots: ready, running, needs attention.
-- **Toolbar**: the first slot is the equipment button (Connect all / Disconnect all,
-  the one shortcut to the Connection screen's actions, D10); routine tools are
-  icon-only with a tooltip (label + shortcut); Stop keeps its label (BRAND.md section 7,
-  inventory `display`). At the right end: Panels (show or hide cards, Reset layout)
-  and the rail toggle (P).
+- **Task modes** (owner D1): Framing (Alt+1) and Focus (Alt+2); Field and Run are listed,
+  unavailable, and say which wave brings them. Each mode remembers its rail width, card
+  states, band and drawer (Arrange, `arrange`, with Reset and Undo).
+- **Toolbar**, built from data (`components/Toolbar`): the equipment button and the modes,
+  then Open FITS (⌘O), **Take shot** (E; a split button whose face says the frame type and
+  exposure it will use; its menu sets them, never shoots; the face reserves the width of
+  its widest value, so the toolbar never reflows when the value changes), Live (V), Stop
+  (unavailable while autofocus owns the camera: Stop AF returns the focuser to its start,
+  the focuser's Halt stops it where it is), **Autofocus** (a split button: sweep range and
+  positions; while it runs it is "Stop AF" with the sweep's ring; the count is in the
+  Focus band and the status-bar chip), then zoom (the zoom % stays visible at 1 440) and
+  display tools. When the window is narrow the low-priority tools go into a counted
+  overflow menu; Take shot, Live and Stop never do. Holding ⌘ shows the key caps, the
+  task modes included (Alt+1, Alt+2).
 - **Viewer**: portrait Seestar frames are turned landscape by default ("auto", 90°
-  clockwise, like the Qt viewer); rotation is display-only and the cursor readout
-  stays in sensor pixels. Night Red draws the image as `v × --viewer-tint` (#d80000).
-  `F` frames the whole image, `Shift+F` fills the viewer and crops the long sides
-  (a "Fill · cropped" chip says so); the mode is remembered. The viewer is a tab stop:
-  arrow keys pan it (Shift: 10× steps).
-- **Levels strip** (H hides it), docked under the image and sized to the band a 16:9
-  frame leaves there (`lib/imaging/layout.ts`), so the fitted image has no black bands:
-  uPlot histogram on a log axis with **draggable black / midtones / white handles** on
-  its own ADU axis, the three levels as numbers, transfer, display rotation and the
-  frame statistics. With the rail closed it folds to one compact row.
-- **Right rail** (P hides it): Camera (exposure, gain, progress, settings in use,
-  sensor), Mount (RA / Dec /
-  Alt / Az, tracking, park / unpark, GoTo accepting sexagesimal or decimal input; Abort
-  is enabled only during a slew). Every card folds, remembered per viewer.
-- **Exposure and gain** always show the settings in use (they follow the server). While
-  live view runs, a change is committed on Enter, on blur or after a 600 ms pause, sent
-  with `PATCH /api/camera/live`, and applies from the next frame: until then the card
-  reads "Next frame: 2.0 s (now 1.0 s)" with a button to cancel, and the image chip
-  "1.0 → 2.0 s".
-- **Status bar**: connection (device in its tooltip), the mount's state and RA / Dec
-  (during a slew, the angle to go and an abort button), cursor X / Y / ADU, rate and
-  latency (shown only while frames flow), the log.
-- **Stale states**: a frame that is not current gets a muted "Last frame · hh:mm:ss UTC"
-  chip and a dashed edge; with the server link down, device badges read "No link",
-  readouts grey out and hardware actions are refused.
-- **Feedback**: API errors become a toast (bottom right, merged when repeated,
-  dismissed after a few seconds) and a line in the activity log, which also shows the
-  server's `/ws/events` log messages, including the last 200 sent before the page
-  opened (repeats after a reconnection are dropped).
+  clockwise, like the Qt viewer); rotation is display-only and the cursor readout stays in
+  sensor pixels. Night Red draws the image as `v × --viewer-tint`. `F` frames the whole
+  image, `Shift+F` fills the viewer and crops the long sides (a "Fill · cropped" chip says
+  so). The band under the image takes exactly the space the fitted frame leaves (BRAND
+  11.1) unless its edge is dragged; while a separator is dragged the image says what the
+  layout costs.
+- **Take shot saves a FITS** with exactly the metadata of the fixed Qt engine (server
+  `capture.py`): settings frozen per frame, FILTER read back from the wheel, a Dark or Bias
+  turns the wheel to Dark first (refused while the wheel turns elsewhere, said in words
+  before and on press), a Light or Flat is refused while the wheel sits on Dark (the
+  server leaves it there after darks), a frame exposed across a wheel move or an offset /
+  binning change is never saved, the gain is sent before every exposure, pointing only
+  from a live mount, the site only when set, QA values measured on the saved array.
+  During live view it saves the frame in progress (the log says when its exposure or gain
+  differ from the request). Each save is a toast, a log line and the status-bar Frame
+  segment (file name).
+- **Camera card**: exposure and gain within the driver's limits (one `PUT
+  /api/camera/settings` per commit, never clamped, refusals under the field in the
+  server's words), frame type, filter (manual activation, the requested slot spins, the
+  wheel's real slot after a refusal; metadata only without a wheel; a turning wheel spins
+  on its slot, no line is inserted), Sensor disclosure (offset, binning; refused while a
+  Take shot waits), the sensor's °C and format, the settings of the frame in progress
+  ("filter LP (turning)" while the wheel moves). Autofocus or a sequence owning the camera
+  says so in one line. The exposure's progress is the toolbar ring and the HUD's.
+- **Mount card**: RA / Dec / Alt / Az, tracking with its rate (as the driver lists them,
+  read back), **Park by a 700 ms hold** (Enter opens the inline confirmation), the
+  **Object** field (offline names while typing, Enter resolves; Slew sends the object
+  with its name: the observation's name and target are set first), typed coordinates,
+  Abort, the Stellarium target-name suggestion, and the **Jog** section (pad, rate,
+  dead-man meter; J arms the arrow keys; the offset readout and scope follow the key
+  words' frame: ΔRA / ΔDec on an equatorial mount, ΔAz / ΔAlt on alt-az, and the scope's
+  scale grows ±2°, ±10°, ±45°). Slew is brass only while the fields hold a new target,
+  never because a jog moved the mount away; Tracking is a neutral toggle. Offline name
+  suggestions come in natural order (M 1, M 10, M 11 …).
+- **Focuser card**: polled position on a two-scale gauge, taps queued during a move and
+  sent as one, Go to bounded by MaxStep (refused in words), Autofocus / Stop AF (returns
+  to the start; "Returned to" only once the focuser is read back there, else the server
+  says where it is), Halt always available. While autofocus runs the card says in words
+  what the focuser does; the numbers are the Focus band's. Autofocus is refused behind
+  the Dark slot.
+- **Focus band**: the V-curve ("this autofocus" while it runs, "last autofocus · HH:MM
+  UTC" after), its hyperbola kept in every state (over every sample when the worker's
+  few points give none, or the reason in words), the legend listing only what is drawn;
+  HFD now, step or best, verified HFD; the HFD trend over min(30 min, the session).
+- **Framing band**: the levels (handles carry only their letter, the fields hold the
+  values; under them the share of pixels shown black and white)
+  and the exposure check (the last measured peaks stay, at one emphasis, with "#34 · 1
+  frame behind"; two or more clipped stars are one line).
+- **Conditions** drawer tab: HFD, FWHM, stars, sky, peak, airmass, sensor and focuser per
+  frame, up to three small plots on one UTC axis, sparklines with current values. An
+  interval with no frame breaks every line and is a hatched period named by its cause
+  ("autofocus 13:36–13:38", else "no frame"). The history survives a reload while frames
+  arrive (live rows are held during the read and merged after it).
+- **Open FITS image** (⌘O from any section): the in-app file picker; raw 16-bit frames
+  only, a calibrated or stacked file is refused in the server's words and the dialog
+  stays open; live view stops first.
+- **Planetarium card** (Connection): the same target-name suggestion as the Mount card.
+- **Stale states**: a frame that is not current gets a muted "Last frame" chip and a
+  dashed edge; with the server link down, device badges read "No link", readouts grey out
+  and hardware actions are refused.
+- **Feedback**: API errors become a toast (merged when repeated) and a line in the
+  activity log, which also shows the server's log (the last 200 lines are replayed on
+  every connection).
 
-Keyboard (single keys never fire in a text field):
+Keyboard (single keys never fire in a text field; a press on the image ends typing):
 
 | Key | Action | Key | Action |
 |---|---|---|---|
-| E | one exposure | A | auto stretch on / off |
+| E | Take shot (saved FITS) | A | auto stretch on / off |
 | V | live view on / off | Shift+A | reset stretch (linear, full range) |
-| Esc | abort a slew (never an exposure), any section | H | levels strip |
+| Esc | abort a slew, a jog or a manual focuser move (never an exposure or the autofocus) | H | task band |
 | + / − | zoom in / out | X | crosshair |
 | F | fit: whole frame | P | instrument rail |
-| Shift+F | fill the viewer (crops) | F1…F5 | rail sections |
-| 1 | actual pixels (1:1) | arrows | pan (viewer focused; Shift ×10) |
-| L | log drawer (any section) | ? | keyboard shortcuts sheet |
+| Shift+F | fill the viewer (crops) | D | drawer (Conditions, Log) |
+| 1 | actual pixels (1:1) | J | arm / disarm keyboard jogging |
+| Alt+1 / Alt+2 | Framing / Focus | arrows | jog while armed or the pad has focus; else pan the viewer |
+| ⌘O | Open FITS image | L | log drawer (any section) |
 
-Tracking keeps no single key: the inventory proposes `T`, but starting or stopping the
-sidereal drive moves the mount, which BRAND.md forbids for single-key shortcuts.
+Tracking, autofocus and focuser steps keep no single key: they move hardware (BRAND 7);
+the command palette (⌘K) has them, with a confirmation in place.
 
 ## Architecture
 
@@ -385,11 +428,10 @@ npm run capture:lab -- controls --out /tmp/lab --only buttons-night-red
 
 ## Known limits
 
-- Connection, Observe and Settings exist; Plan and Review are placeholders (waves 3
-  to 7). No focuser or filter-wheel controls, plate solving, catalogue overlays, star
-  selection, photometry, sequences or FITS saving yet; the Stellarium bridge runs but
-  its target-name suggestion comes with the Observe wave. What is done and what is
-  missing, row by row: `spec/progress.md`.
+- Connection, Observe (Framing, Focus) and Settings exist; Plan and Review are
+  placeholders (waves 6 and 7). No plate solving, catalogue overlays, star selection,
+  photometry or sequences yet (waves 4 to 6). What is done and what is missing, row by
+  row: `spec/progress.md`.
 - Alpaca mode is wired but has only been exercised against a closed port (the error
   path); the server side was tested against fake devices, not a Seestar.
 - Seestar frames are raw colour mosaics (`channels: 1`, `sensor.bayer` set): they are

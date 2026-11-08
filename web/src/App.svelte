@@ -29,6 +29,7 @@
   import CommandPalette from './lib/shell/CommandPalette.svelte';
   import KeyHintBanner from './lib/shell/KeyHintBanner.svelte';
   import SupportBundle from './lib/shell/SupportBundle.svelte';
+  import OpenFits from './lib/shell/OpenFits.svelte';
   import EmptySection from './lib/shell/EmptySection.svelte';
   import LogDrawer from './lib/shell/LogDrawer.svelte';
   import NavRail, { type NavEntry } from './lib/shell/NavRail.svelte';
@@ -131,6 +132,7 @@
 </div>
 <Toasts />
 <SupportBundle />
+<OpenFits />
 <CommandPalette />
 <KeyHintBanner />
 {#if !startupGone}

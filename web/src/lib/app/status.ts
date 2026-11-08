@@ -64,6 +64,10 @@ export const NO_LINK: StatusView = { tone: 'idle', label: 'No link' };
 export function cameraStatus(cam: CameraState | null, connected: boolean, stale = false): StatusView {
   if (stale) return NO_LINK;
   if (!connected || !cam) return { tone: 'idle', label: 'Offline' };
+  // Wave 3 (A21): who owns the camera says more than its phase.
+  if (cam.owner === 'autofocus') return { tone: 'busy', label: 'Autofocus' };
+  if (cam.owner === 'sequence') return { tone: 'busy', label: 'Sequence' };
+  if (cam.waiting_for === 'filterwheel') return { tone: 'busy', label: 'Wheel to Dark' };
   switch (cam.state) {
     case 'exposing':
       return { tone: 'busy', label: 'Exposing' };

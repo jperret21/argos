@@ -283,11 +283,12 @@ describe('ShortcutRegistry', () => {
     const rows = browser.sheet().flatMap((g) => g.rows.map((r) => r.id));
     expect(rows).toContain('log.toggle');
     expect(rows).toContain('help.shortcuts');
-    expect(rows).not.toContain('file.open-fits'); // planned
+    expect(rows).not.toContain('review.sessions'); // planned (Review, wave 7)
+    expect(rows).toContain('file.open-fits'); // built in wave 3
     expect(rows).not.toContain('nav.observe.desktop'); // desktop only
     const desktop = new ShortcutRegistry(KEYMAP, { mac: true, desktop: true });
     expect(desktop.sheet().flatMap((g) => g.rows.map((r) => r.id))).toContain('nav.observe.desktop');
-    expect(browser.keyFor('file.open-fits')).toBeUndefined();
+    expect(browser.keyFor('review.sessions')).toBeUndefined();
     expect(browser.keyFor('log.toggle')).toBe('L');
   });
 

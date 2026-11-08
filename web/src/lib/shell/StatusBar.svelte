@@ -11,7 +11,11 @@
     during a slew the angle still to go with an abort button: BRAND 11.1,
     the Mount card can sit below the fold), the run chip (live view or an
     exposure).
-  - Middle, Observe only: cursor X / Y / value, display rate and latency.
+  - Middle, Observe only: the frame on screen (number, and its file name once
+    saved or opened: the Qt context bar, M48), its HFD and star count (the
+    server's frame_metrics of THAT frame, A26), display rate and latency. The
+    cursor readout moved to the image HUD (owner decision D6, one home per
+    value).
   - Right: the activity text (the last action started or its outcome, with
     its UTC time; full text in the tooltip), then the Log button with the
     count of unseen warnings and errors. Once nothing runs (no connect, no
@@ -37,6 +41,7 @@
   import { formatDec, formatDegrees, formatRA, separationDeg } from '../format/astro';
   import { fixed, int, seconds } from '../format/number';
   import { utcClock, utcFull } from '../app/log';
+  import { recent } from '../imaging/modes/exposure';
 
   const app = useApp();
 
@@ -73,9 +78,16 @@
       ? `The Settings site disagrees with the mount (${fixed(app.siteCheck.separation_deg, 1)}° apart): airmass, BJD and the FITS site would be wrong. Open Settings › Observer & site`
       : 'The Settings site disagrees with the mount: open Settings › Observer & site',
   );
-  const crowded = $derived(linkDown || toGo !== null || siteAlert);
   const run = $derived.by(() => {
     if (app.stale) return null;
+    // Wave 3: autofocus owns the camera (README 1.2 run chip "AF").
+    const af = app.autofocus;
+    if (af && (af.state === 'running' || af.state === 'stopping')) {
+      return af.state === 'stopping'
+        ? { icon: 'autofocus', text: 'AF returning', tip: 'Autofocus stopped: the focuser returns to its start position (open Observe)' }
+        : { icon: 'autofocus', text: `AF ${af.step ?? 0}/${af.total || '…'}`, tip: `Autofocus running, ${af.stage ?? ''} sweep: open Observe` };
+    }
+    if (app.camera?.waiting_for === 'filterwheel') return { icon: 'filter-wheel', text: 'Wheel → Dark', tip: 'A Dark / Bias shot waits for the wheel to settle on Dark: open Observe' };
     if (app.live) return { icon: 'live', text: 'LIVE', tip: 'Live view running: open Observe' };
     if (app.running.exposing) {
       const s = app.camera?.exposure_s ?? 0;
@@ -83,6 +95,9 @@
     }
     return null;
   });
+
+  // Wave 3: an autofocus or wheel chip (wider than LIVE, and the rate means little then) folds them too.
+  const crowded = $derived(linkDown || toGo !== null || siteAlert || (!!run && run.icon !== 'live' && run.icon !== 'capture'));
 
   const seestarTip = $derived(
     net.seestar.word === 'not configured'
@@ -96,13 +111,30 @@
   );
 
   /** Integer ADU grouped ("12 450"); float data keeps two decimals. */
-  const aduValue = (v: number) => (Number.isInteger(v) ? int(v) : fixed(v, 2, { group: true }));
-  function adu(v: number | [number, number, number]): string {
-    return Array.isArray(v) ? v.map(aduValue).join(' / ') : aduValue(v);
-  }
+  // -- Observe: the frame on screen (M48) and its metrics (A26) ----------------------
+  const shownHeader = $derived(
+    app.shown?.frame.header as { seq: number; file_name?: string | null; path?: string | null; origin?: string } | undefined,
+  );
+  const frameSeq = $derived(shownHeader?.seq ?? null);
+  const frameFile = $derived.by(() => {
+    const h = shownHeader;
+    if (!h) return null;
+    if (h.origin === 'file' || h.file_name) return h.file_name ?? null;
+    return app.lastSaved && app.lastSaved.frame_seq === h.seq ? app.lastSaved.name : null;
+  });
+  const frameTip = $derived(
+    frameFile
+      ? `Frame #${frameSeq} · ${(shownHeader?.path ?? app.lastSaved?.path) || frameFile}`
+      : 'Frame on screen: not saved (Take shot saves the next frame as FITS)',
+  );
+  // The frame on screen, or one just before it while this one is measured (never a later or an old one).
+  const metricsNow = $derived(app.frameMetrics && recent(app.frameMetrics.seq, frameSeq) ? app.frameMetrics : null);
+  const frameHfd = $derived(metricsNow?.hfd_px ?? null);
+  const frameStars = $derived(metricsNow?.star_count ?? null);
+
 </script>
 
-<footer class="statusbar" class:crowded>
+<footer class="statusbar" class:crowded class:observe>
   {#if linkDown}
     <span
       class="item server"
@@ -160,6 +192,14 @@
   <span class="item mount" class:stale={app.stale} aria-label="Mount">
     <span class="key">Mount</span>
     <span class="badge-w"><StatusBadge tone={mountBadge.tone} label={mountBadge.label} plain /></span>
+    {#if mount?.alignment}
+      <!-- A29: the mount geometry (Alt-Az or EQ), wave 1 gap of M11. -->
+      <span
+        class="key geo"
+        use:tooltip={{ text: mount.alignment === 'altaz' ? 'Alt-azimuth mount (axis words on the jog pad)' : mount.alignment === 'eq_gem' ? 'German equatorial mount' : 'Equatorial mount', placement: 'top' }}
+        >{mount.alignment === 'altaz' ? 'Alt-Az' : 'EQ'}</span
+      >
+    {/if}
     <span class="key">RA</span>
     <span class="num val" class:w-ra={!!mount}>{mount ? formatRA(mount.ra_hours) : '—'}</span>
     <span class="key">Dec</span>
@@ -211,11 +251,26 @@
   {#if observe}
     <span class="sep" aria-hidden="true"></span>
 
-    <span class="item">
-      <span class="key">X</span><span class="num val" class:w4={!!app.pointer}>{app.pointer ? int(app.pointer.x) : '—'}</span>
-      <span class="key">Y</span><span class="num val" class:w4={!!app.pointer}>{app.pointer ? int(app.pointer.y) : '—'}</span>
-      <span class="key">Value</span>
-      <span class="num val" class:w6={!!app.pointer}>{app.pointer ? `${adu(app.pointer.value)} ADU` : '—'}</span>
+    <span class="item frame" use:tooltip={{ text: frameTip, placement: 'top' }}>
+      <span class="key">Frame</span>
+      <span class="num val" class:w6={frameSeq !== null}>{frameSeq !== null ? `#${int(frameSeq)}` : '—'}</span>
+      {#if frameFile}<span class="file num">{frameFile}</span>{/if}
+    </span>
+
+    <span class="sep" aria-hidden="true"></span>
+
+    <span
+      class="item"
+      class:prev={metricsNow !== null && metricsNow.seq !== frameSeq}
+      use:tooltip={{
+        text: `Measured by the server on the full frame (green plane): half-flux diameter of the brightest star, stars above 5 σ${metricsNow ? ` · frame #${metricsNow.seq}` : ''}`,
+        placement: 'top',
+      }}
+    >
+      <span class="key">HFD</span>
+      <span class="num val" class:w6={frameHfd !== null}>{frameHfd !== null ? `${fixed(frameHfd, 2)} px` : '—'}</span>
+      <span class="key">Stars</span>
+      <span class="num val" class:w4={frameStars !== null}>{frameStars !== null ? int(frameStars) : '—'}</span>
     </span>
 
     <span class="sep rate-sep" aria-hidden="true"></span>
@@ -257,7 +312,13 @@
     aria-label={app.unseenProblems > 0
       ? `Activity log, ${app.unseenProblems} new warnings or errors`
       : 'Activity log'}
-    use:tooltip={{ text: 'Activity log', shortcut: 'L', placement: 'top' }}
+    use:tooltip={{
+      text: 'Activity log',
+      // The last action, also here: the activity segment hides when it is too narrow to read.
+      hint: activity ? `Last: ${utcClock(activity.t)} ${activityText}` : undefined,
+      shortcut: 'L',
+      placement: 'top',
+    }}
     onclick={() => app.toggleLog()}
   >
     <Icon name="log" size="s" />
@@ -409,6 +470,16 @@
     color: var(--fg);
   }
 
+  .item.prev .val {
+    color: var(--text-muted);
+  }
+  .frame .file {
+    max-width: 22ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
   .w4 {
     min-width: 5ch; /* "3 840": grouped from 1 000 (BRAND 5) */
   }
@@ -427,17 +498,29 @@
   }
 
   /* The activity text takes what is left and shrinks first (ellipsis). */
+  /* Right-aligned while there is room; when narrow the text ellipsizes first and the
+     time is never cut on its left (it read ":34:02" at 1280 px with flex-end). */
   .activity {
     display: inline-flex;
     flex: 1 1 0;
-    justify-content: flex-end;
     gap: var(--space-2);
     min-width: 0;
     overflow: hidden;
     color: var(--text-muted);
+    container: activity / inline-size;
+  }
+  /* Never a time followed by one letter ("13:36:19 C…", design review W3): below about
+     16 characters of text the segment is left empty, and the Log button's tooltip says
+     the last action. */
+  @container activity (max-width: 190px) {
+    .activity .when,
+    .activity .what {
+      display: none;
+    }
   }
   .activity .when {
     flex: none;
+    margin-left: auto;
   }
   .activity .what {
     min-width: 0;
@@ -501,6 +584,11 @@
     .rate,
     .rate-sep {
       display: none;
+    }
+    /* Observe's frame and HFD segments leave no room for it at 1 280 px: the activity
+       is in the log (L) rather than shown as a cut fragment ("13:18:1"). */
+    .observe .activity {
+      visibility: hidden; /* keeps its flexible space: Log stays at the right end */
     }
   }
 </style>

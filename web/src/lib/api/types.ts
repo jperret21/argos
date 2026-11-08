@@ -47,6 +47,217 @@ export interface CameraState {
   gain: number;
   last_frame_seq: number | null;
   sensor: SensorInfo | null;
+  // -- Wave 3 (A21-A24; protocol.md "Camera: capture settings, owner, Take shot").
+  // Optional so an API 1 / wave 1-2 record (and the test fixtures) stay valid.
+  /** Who drives the camera ("sequence": wave 6). */
+  owner?: CameraOwner;
+  /** What the NEXT frame uses: server state shared by every client (Q-O13). */
+  settings?: CaptureSettings;
+  /** The frame being exposed now (null when nothing exposes). */
+  current?: FrameSettings | null;
+  /** Take shots still waiting for their frame (0 or 1). */
+  save_pending?: number;
+  /** A Dark / Bias Take shot waiting for the wheel to settle on Dark (S1). */
+  waiting_for?: 'filterwheel' | null;
+  /** The driver's limits; null when disconnected. */
+  limits?: CameraLimits | null;
+  /** null: the driver has no Offset (field hidden). */
+  offset?: { min: number; max: number } | null;
+  /** null: MaxBin 1 (field hidden). */
+  binning?: { max: number } | null;
+  /** Sensor °C, read every 10 s while connected. */
+  temperature_c?: number | null;
+}
+
+export type CameraOwner = 'idle' | 'live' | 'single' | 'autofocus' | 'sequence';
+export type FrameType = 'light' | 'dark' | 'flat' | 'bias';
+
+export interface CameraLimits {
+  gain_min: number;
+  gain_max: number;
+  exposure_min_s: number;
+  exposure_max_s: number;
+}
+
+export interface CaptureSettings {
+  exposure_s: number;
+  gain: number;
+  frame_type: FrameType;
+  /** Slot for Light / Flat (FITS metadata only without a wheel, Q-O5). */
+  filter: string;
+  /** Read back from the driver; null when unsupported. */
+  offset: number | null;
+  binning: number;
+}
+
+export interface FrameSettings {
+  exposure_s: number;
+  gain: number;
+  frame_type: FrameType;
+  filter: string;
+  object_name: string;
+  light: boolean;
+  origin: 'single' | 'live' | 'autofocus';
+  /** This frame is the one a Take shot saves. */
+  save: boolean;
+  /** DATE-OBS of the frame. */
+  started_utc: string;
+}
+
+/** PUT /api/camera/settings: one commit, every field checked first, never clamped. */
+export type CaptureSettingsBody = Partial<Pick<CaptureSettings, 'exposure_s' | 'gain' | 'frame_type' | 'filter' | 'binning'>> & {
+  offset?: number;
+};
+
+/** POST /api/camera/capture (v1 body still valid; `save` makes it a Take shot). */
+export interface CaptureBody {
+  exposure_s?: number;
+  gain?: number;
+  frame_type?: FrameType;
+  save?: boolean;
+}
+
+/** WS `frame_saved` (A24) and the rows of GET /api/camera/saved. */
+export interface FrameSaved {
+  seq: number;
+  frame_seq: number;
+  path: string;
+  name: string;
+  source: 'single' | 'sequence';
+  object: string;
+  filter: string;
+  frame_type: FrameType;
+  image_type: string;
+  exposure_s: number;
+  gain: number;
+  date_obs: string;
+  t: string;
+  record?: {
+    hfd: number | null;
+    fwhm: number | null;
+    star_count: number | null;
+    sky_adu: number | null;
+    peak_adu: number | null;
+    eccentricity: number | null;
+  };
+}
+
+/** FilterWheelState (A28). */
+export interface FilterWheelState {
+  state: 'disconnected' | 'idle' | 'moving' | 'error';
+  name: string | null;
+  slots: string[];
+  dark_slot: boolean;
+  position: number | null;
+  slot: string | null;
+  target: string | null;
+  message: string | null;
+  settled_utc: string | null;
+}
+
+/** FocuserState (A34). */
+export interface FocuserState {
+  state: 'disconnected' | 'idle' | 'moving' | 'error';
+  name: string | null;
+  position: number | null;
+  target: number | null;
+  queued: number | null;
+  temperature_c: number | null;
+  max_step: number | null;
+  max_increment: number | null;
+  absolute: boolean | null;
+  step_size_um: number | null;
+  locked_by: 'autofocus' | null;
+  message: string | null;
+  t: string;
+}
+
+/** FocuserCommand: the answer of move / step / halt (A35). */
+export interface FocuserCommand {
+  focuser: FocuserState;
+  requested: number | null;
+  sent: number | null;
+  clamped: boolean;
+  queued: boolean;
+}
+
+/** AutofocusState (A36). */
+export interface AutofocusState {
+  state: 'idle' | 'running' | 'stopping' | 'done' | 'rejected' | 'cancelled' | 'failed';
+  stage: 'coarse' | 'fine' | 'verify' | 'returning' | null;
+  step: number;
+  total: number;
+  params: { exposure_s: number; gain: number; half_range: number; num_steps: number } | null;
+  start_position: number | null;
+  position: number | null;
+  samples: { position: number; hfd_px: number | null; stage: 'coarse' | 'fine' | 'verify'; t: string }[];
+  best: { position: number; hfd_px: number | null; fitted_hfd_px: number | null; method: 'parabola' | 'raw' | 'none' } | null;
+  fit: { coeffs: number[] | null; window: number[]; samples: number[][] } | null;
+  message: string | null;
+  run: number;
+  started_utc: string | null;
+  ended_utc: string | null;
+}
+
+export interface AutofocusBody {
+  exposure_s?: number;
+  gain?: number;
+  half_range?: number;
+  num_steps?: number;
+}
+
+/** Observation identity (A38, D11): the FITS OBJECT and its folder. */
+export interface Observation {
+  object_name: string;
+  target: {
+    name: string;
+    ra_hours: number;
+    dec_deg: number;
+    object_type: string;
+    type_label: string;
+    is_variable: boolean;
+    source: string;
+    programme: 'variable' | 'exoplanet' | 'other';
+  } | null;
+  photometry_target: { key: string; name: string; path: string } | null;
+  locked: boolean;
+  locked_reason: string | null;
+  revision: number;
+}
+
+export interface ObservationTargetBody {
+  name: string;
+  ra_hours: number;
+  dec_deg: number;
+  object_type?: string;
+  source?: string;
+  programme?: 'variable' | 'exoplanet' | 'other';
+}
+
+/** GET /api/catalog/resolve (A40). */
+export interface Resolved {
+  name: string;
+  ra_hours: number;
+  dec_deg: number;
+  object_type: string;
+  type_label: string;
+  is_variable: boolean;
+  source: string;
+}
+
+/** A name near some coordinates (A20). */
+export interface Candidate extends Resolved {
+  separation_arcsec: number;
+}
+
+/** WS `target_suggestions` (A20): names near the last Stellarium GoTo. */
+export interface TargetSuggestions {
+  ra_hours: number;
+  dec_deg: number;
+  state: 'checking' | 'ready' | 'failed';
+  candidates: Candidate[];
+  message: string | null;
+  t: string;
 }
 
 export type MountPhase = 'parked' | 'idle' | 'slewing' | 'tracking' | 'error';
@@ -66,6 +277,28 @@ export interface MountState {
   tracking: boolean;
   pier_side: PierSide | null;
   target: EquatorialTarget | null;
+  // -- Wave 3 (A29-A31), optional for API 1 / wave 1-2 records.
+  alignment?: 'altaz' | 'eq' | 'eq_gem' | null;
+  tracking_rate?: TrackingRate | null;
+  tracking_rates?: TrackingRate[];
+  /** GoTo / Sync / Center are refused (H4: mount clock more than 60 s off). */
+  goto_blocked?: { reason: 'clock'; clock_error_s: number; message: string } | null;
+  center_available?: boolean;
+  /** What the server commands now, per axis (deg/s, 0 = stopped); null without a mount. */
+  jog?: MountJog | null;
+}
+
+export type TrackingRate = 'sidereal' | 'lunar' | 'solar' | 'king';
+
+export interface MountJog {
+  primary: number;
+  secondary: number;
+  stop_pending: ('primary' | 'secondary')[];
+  /** Stops still failing after the retries (ERROR said "use Abort"): retried slower. */
+  stop_failed?: ('primary' | 'secondary')[];
+  max_rate_deg_s: number;
+  deadman_s: number;
+  last_stop: { axis: string; reason: string; t: string } | null;
 }
 
 export interface Status {
@@ -80,6 +313,11 @@ export interface Status {
   profile?: ProfileSummary;
   /** API 2, wave 2: the Settings site against the mount's pointing (protocol.md "Site check"). */
   site_check?: SiteCheck;
+  /** Wave 3: the snapshots a client opened later needs at once. */
+  filterwheel?: FilterWheelState;
+  focuser?: FocuserState;
+  autofocus?: AutofocusState;
+  observation?: Observation;
 }
 
 export type ConnectRequest = { mode: 'simulator' } | { mode: 'alpaca'; host: string; port: number };
@@ -272,6 +510,8 @@ export interface StellariumState {
   /** The bind error of the last start, kept until the next one. */
   error: string | null;
   last_goto: StellariumGoto | null;
+  /** Wave 3 (A20): the newest target-name suggestion after a Stellarium GoTo. */
+  suggestions?: TargetSuggestions | null;
 }
 
 export type ConfigValue = string | number | boolean | null | unknown[] | Record<string, unknown>;
@@ -523,6 +763,26 @@ export interface SiteCheckEvent extends SiteCheck {
   type: 'site_check';
 }
 
+export interface FilterWheelEvent extends FilterWheelState {
+  type: 'filterwheel';
+}
+
+export interface FocuserEvent extends FocuserState {
+  type: 'focuser';
+}
+
+export interface AutofocusEvent extends AutofocusState {
+  type: 'autofocus';
+}
+
+export interface ObservationEvent extends Observation {
+  type: 'observation';
+}
+
+export interface TargetSuggestionsEvent extends TargetSuggestions {
+  type: 'target_suggestions';
+}
+
 export type ServerEvent =
   | StatusEvent
   | MountEvent
@@ -534,7 +794,12 @@ export type ServerEvent =
   | ConfigEvent
   | JobEvent
   | StellariumEvent
-  | SiteCheckEvent;
+  | SiteCheckEvent
+  | FilterWheelEvent
+  | FocuserEvent
+  | AutofocusEvent
+  | ObservationEvent
+  | TargetSuggestionsEvent;
 
 // ---------------------------------------------------------------------------
 // WS /ws/frames (binary): see frames.ts for the byte layout

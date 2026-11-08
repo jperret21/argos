@@ -16,7 +16,8 @@
  * the UI can grey it out as stale instead of blanking the screen.
  *
  * Snapshot messages (status, camera, mount, devices, network, activity,
- * stellarium, site_check) replace the held record. Stream messages are handed to the owner of the
+ * stellarium, site_check; wave 3: filterwheel, focuser, autofocus,
+ * observation, target_suggestions) replace the held record. Stream messages are handed to the owner of the
  * matching store, which deduplicates and orders them by their sequence
  * numbers: `log` lines to the activity log (the server replays its last 200
  * lines after the first status of every connection), `job` events to the
@@ -29,7 +30,12 @@ import type { ArgosConfig } from '../config';
 import { type LinkState, ReconnectingSocket, type BackoffOptions, withToken } from './socket';
 import type {
   ActivityEvent,
+  AutofocusState,
   CameraState,
+  FilterWheelState,
+  FocuserState,
+  Observation,
+  TargetSuggestions,
   ConfigEvent,
   ConnectionState,
   DevicesState,
@@ -64,6 +70,11 @@ export function parseEventMessage(data: unknown): ServerEvent | null {
   } catch {
     return null;
   }
+  return checkEventMessage(msg);
+}
+
+/** The typed check of an already parsed message (one JSON.parse per message, review W3). */
+export function checkEventMessage(msg: unknown): ServerEvent | null {
   if (!isObject(msg)) return null;
   const ok = msg as unknown as ServerEvent;
   switch (msg.type) {
@@ -91,6 +102,17 @@ export function parseEventMessage(data: unknown): ServerEvent | null {
       return typeof msg.running === 'boolean' && typeof msg.clients === 'number' ? ok : null;
     case 'site_check':
       return typeof msg.state === 'string' && typeof msg.message === 'string' ? ok : null;
+    // Wave 3 snapshots (protocol.md "API 2 routes, wave 3").
+    case 'filterwheel':
+      return typeof msg.state === 'string' && Array.isArray(msg.slots) ? ok : null;
+    case 'focuser':
+      return typeof msg.state === 'string' && 'position' in msg ? ok : null;
+    case 'autofocus':
+      return typeof msg.state === 'string' && Array.isArray(msg.samples) ? ok : null;
+    case 'observation':
+      return typeof msg.object_name === 'string' ? ok : null;
+    case 'target_suggestions':
+      return typeof msg.state === 'string' && Array.isArray(msg.candidates) ? ok : null;
     default:
       return null;
   }
@@ -130,6 +152,16 @@ export class ArgosEvents {
   stellarium: StellariumState | null = $state.raw(null);
   /** API 2, wave 2: the Settings site against the mount (status.site_check, `site_check` events). */
   siteCheck: SiteCheck | null = $state.raw(null);
+  /** Wave 3: the filter wheel (A28; status.filterwheel, `filterwheel` events). */
+  filterwheel: FilterWheelState | null = $state.raw(null);
+  /** Wave 3: the focuser (A34). */
+  focuser: FocuserState | null = $state.raw(null);
+  /** Wave 3: the autofocus run (A36). */
+  autofocus: AutofocusState | null = $state.raw(null);
+  /** Wave 3: the observation identity (A38, D11). */
+  observation: Observation | null = $state.raw(null);
+  /** Wave 3: names near the last Stellarium GoTo (A20). */
+  suggestions: TargetSuggestions | null = $state.raw(null);
   /** API 2: the server process of the last `status` (a restart changes it). */
   bootId: string | null = $state(null);
   /** performance.now() of the last message, for staleness indicators. */
@@ -141,11 +173,20 @@ export class ArgosEvents {
 
   private readonly socket: ReconnectingSocket;
   private readonly options: ArgosEventsOptions;
+  /** Raw listeners by message type (wave 3 streams and snapshots: see `on`). */
+  private readonly listeners = new Map<string, Set<(msg: Record<string, unknown>) => void>>();
+
+  /**
+   * This page's id on /ws/events (`?client=`, wave 3): the server stops the
+   * axes this client jogs when this socket closes (the jog dead-man, A30).
+   */
+  readonly clientId: string;
 
   constructor(config: ArgosConfig, options: ArgosEventsOptions = {}) {
     this.options = options;
+    this.clientId = `web-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`;
     this.socket = new ReconnectingSocket({
-      url: withToken(`${config.wsBase}/ws/events`, config.token),
+      url: `${withToken(`${config.wsBase}/ws/events`, config.token)}&client=${this.clientId}`,
       backoff: options.backoff,
       onMessage: (data) => this.handle(data),
       onState: (state) => {
@@ -172,6 +213,11 @@ export class ArgosEvents {
     this.socket.restart();
   }
 
+  /** Send a client message on /ws/events (wave 3: `{"type":"jog_stop"}`); false when the link is down. */
+  send(message: Record<string, unknown>): boolean {
+    return this.socket.send(JSON.stringify(message));
+  }
+
   /** Apply a REST answer immediately (the WS echo will follow). */
   applyStatus(status: Partial<Status>): void {
     if (status.connection) this.connection = status.connection;
@@ -180,6 +226,10 @@ export class ArgosEvents {
     if (status.devices) this.devices = status.devices;
     if (status.profile) this.profile = status.profile;
     if (status.site_check) this.siteCheck = status.site_check;
+    if (status.filterwheel) this.filterwheel = status.filterwheel;
+    if (status.focuser) this.focuser = status.focuser;
+    if (status.autofocus) this.autofocus = status.autofocus;
+    if (status.observation) this.observation = status.observation;
   }
 
   applySiteCheck(check: SiteCheck): void {
@@ -198,8 +248,41 @@ export class ArgosEvents {
     this.stellarium = state;
   }
 
+  /**
+   * Listen to every message of one `type` as it arrives, before any typed
+   * parsing (wave 3: `conditions`, `frame_metrics`, `frame_saved`,
+   * `autofocus`, … and the `status` record that carries their snapshots).
+   * The owner validates its own messages; returns the unsubscribe function.
+   */
+  on(type: string, fn: (msg: Record<string, unknown>) => void): () => void {
+    let set = this.listeners.get(type);
+    if (!set) this.listeners.set(type, (set = new Set()));
+    set.add(fn);
+    return () => set.delete(fn);
+  }
+
+  private dispatch(msg: unknown): void {
+    if (this.listeners.size === 0) return;
+    if (!isObject(msg) || typeof msg.type !== 'string' || !this.listeners.has(msg.type)) return;
+    for (const fn of this.listeners.get(msg.type) ?? []) {
+      try {
+        fn(msg);
+      } catch (err) {
+        console.error(`[events] ${msg.type} listener failed`, err);
+      }
+    }
+  }
+
   private handle(data: unknown): void {
-    const msg = parseEventMessage(data);
+    if (typeof data !== 'string') return;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(data); // once: the raw listeners and the typed switch share it
+    } catch {
+      return;
+    }
+    this.dispatch(raw);
+    const msg = checkEventMessage(raw);
     if (!msg) return;
     this.lastMessageAt = performance.now();
     switch (msg.type) {
@@ -210,6 +293,10 @@ export class ArgosEvents {
         if (msg.devices) this.devices = msg.devices;
         if (msg.profile) this.profile = msg.profile;
         if (msg.site_check) this.siteCheck = msg.site_check;
+        if (msg.filterwheel) this.filterwheel = msg.filterwheel;
+        if (msg.focuser) this.focuser = msg.focuser;
+        if (msg.autofocus) this.autofocus = msg.autofocus;
+        if (msg.observation) this.observation = msg.observation;
         const first = !this.statusSeen;
         let restarted = false;
         if (typeof msg.boot_id === 'string') {
@@ -250,11 +337,37 @@ export class ArgosEvents {
       case 'stellarium': {
         const { type: _type, ...bridge } = msg;
         this.stellarium = bridge;
+        if (bridge.suggestions !== undefined) this.suggestions = bridge.suggestions ?? null;
         break;
       }
       case 'site_check': {
         const { type: _type, ...check } = msg;
         this.siteCheck = check;
+        break;
+      }
+      case 'filterwheel': {
+        const { type: _type, ...wheel } = msg;
+        this.filterwheel = wheel;
+        break;
+      }
+      case 'focuser': {
+        const { type: _type, ...focuser } = msg;
+        this.focuser = focuser;
+        break;
+      }
+      case 'autofocus': {
+        const { type: _type, ...af } = msg;
+        this.autofocus = af;
+        break;
+      }
+      case 'observation': {
+        const { type: _type, ...obs } = msg;
+        this.observation = obs;
+        break;
+      }
+      case 'target_suggestions': {
+        const { type: _type, ...sugg } = msg;
+        this.suggestions = sugg;
         break;
       }
     }

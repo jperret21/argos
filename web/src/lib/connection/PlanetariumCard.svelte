@@ -17,6 +17,9 @@
     same text and caption as Qt), saved at once.
   - "How to connect Stellarium": the Qt help text in a disclosure,
     remembered per viewer.
+  - Wave 3 (A20): after a GoTo the server offers catalogue names near it
+    (TargetSuggestions, also in the Observe Mount card); "Use as target
+    name" sets the observation's name and target (A39).
 -->
 <script lang="ts">
   import { isBoolean, loadPref, savePref } from '../app/prefs';
@@ -29,6 +32,7 @@
   import NumberField from '../components/NumberField.svelte';
   import StatusBadge from '../components/StatusBadge.svelte';
   import { formatDec, formatRA } from '../format/astro';
+  import TargetSuggestions from '../imaging/TargetSuggestions.svelte';
 
   const app = useApp();
 
@@ -147,6 +151,16 @@
         <span class="muted">none yet</span>
       {/if}
     </div>
+  {/if}
+  {#if app.suggestions}
+    <!-- Wave 3 (A20): names near the GoTo, offered; nothing changes until one is chosen. -->
+    <TargetSuggestions
+      suggestion={app.suggestions}
+      current={app.observation?.object_name ?? ''}
+      busy={!!app.busy.target}
+      onuse={(c) => void app.useSuggestion(c)}
+      ondismiss={() => app.dismissSuggestion()}
+    />
   {/if}
 
   <Checkbox
