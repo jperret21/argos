@@ -18,6 +18,19 @@
  * MAX_TAPS^2 texelFetches, averaged in linear ADU *before* the stretch, which
  * is the physically meaningful order and avoids stars twinkling in and out
  * of existence while zooming).
+ *
+ * Wave 4 (web/spec/04-viewer-and-image-tools.md 2.5, "client-only"):
+ *  - CFA preview (u_preview, palettes/cfa.ts): the super-pixel colour of each
+ *    2 x 2 cell with the display balance, or one real-sample plane, computed
+ *    from the raw mosaic texels; every view keeps the frame's geometry.
+ *  - Palettes (u_palette, u_lut, palettes/lut.ts): after the stretch, Negative
+ *    inverts, Fire and Ice read a 256-entry LUT whose OKLab lightness is the
+ *    stretched value. Night Red draws the luminance in red only, whatever
+ *    reaches here (D30 is enforced before, this is the last guard).
+ *  - Saturation (u_sat*): a displayed pixel is painted --viewer-saturated when
+ *    any RAW sample behind it (every tap, every sample of its CFA cell) reaches
+ *    the threshold, so the test is on the data, not on the stretched picture
+ *    (fixes Qt P5); black in Night Red, a hole in a red star.
  */
 
 /** Taps per axis of the zoomed-out box filter (8x8 = 64 fetches max). */
@@ -52,6 +65,15 @@ uniform float u_midtones;
 uniform int u_mode;          // 0 linear, 1 log, 2 asinh (stretch.py modes)
 uniform bool u_nightTint;    // red-only output for the Night Red theme
 uniform vec3 u_tint;         // full-scale colour (--viewer-tint): white, or #d80000 in Night Red
+uniform int u_preview;       // 0 as delivered, 1 CFA colour, 2 / 3 / 4 the R / G / B plane (palettes/cfa.ts)
+uniform ivec4 u_rb;          // CFA cell sites: R (x, y), B (x, y)
+uniform ivec4 u_gg;          // CFA cell sites: G1 (x, y), G2 (x, y)
+uniform vec3 u_gains;        // display balance of the colour preview (neutralise_rgb_for_display)
+uniform int u_palette;       // 0 none (grey), 1 negative, 2 the LUT (Fire, Ice)
+uniform sampler2D u_lut;     // 256 x 1 RGBA8 palette (texture unit 1)
+uniform bool u_satOn;        // saturation highlight
+uniform float u_satThreshold; // raw ADU
+uniform vec3 u_satColour;    // --viewer-saturated (black in Night Red)
 
 out vec4 outColor;
 
@@ -87,9 +109,34 @@ ivec2 toTexel(ivec2 p) {
   return p;
 }
 
-vec3 fetch(ivec2 p) {
-  ivec2 d = clamp(p, ivec2(0), displaySize() - 1);
-  return vec3(texelFetch(u_image, toTexel(d), 0).rgb);
+// What a displayed pixel shows, before the stretch: rgb, and in .a the largest RAW
+// sample behind it (the saturation test). Previews: palettes/cfa.ts.
+vec4 fetch(ivec2 p) {
+  ivec2 t = toTexel(clamp(p, ivec2(0), displaySize() - 1));
+  if (u_preview == 0) {
+    vec3 v = vec3(texelFetch(u_image, t, 0).rgb);
+    return vec4(v, u_channels == 1 ? v.r : max(v.r, max(v.g, v.b)));
+  }
+  if (u_channels == 3) {
+    // One channel of an RGB frame.
+    vec3 v = vec3(texelFetch(u_image, t, 0).rgb);
+    float c = u_preview == 2 ? v.r : (u_preview == 3 ? v.g : v.b);
+    return vec4(c, c, c, c);
+  }
+  // Raw mosaic: the 2 x 2 cell holding t (an odd last row / column repeats the last
+  // complete cell, debayer.expand_cfa_cells).
+  ivec2 cell = min((t / 2) * 2, (u_size / 2) * 2 - 2);
+  float r = float(texelFetch(u_image, cell + u_rb.xy, 0).r);
+  float b = float(texelFetch(u_image, cell + u_rb.zw, 0).r);
+  float g1 = float(texelFetch(u_image, cell + u_gg.xy, 0).r);
+  float g2 = float(texelFetch(u_image, cell + u_gg.zw, 0).r);
+  float g = floor((g1 + g2) * 0.5);  // (G1 + G2) >> 1
+  if (u_preview == 1) {
+    vec3 c = min(floor(vec3(r, g, b) * u_gains), vec3(65535.0));
+    return vec4(c, max(max(r, b), max(g1, g2)));
+  }
+  float c = u_preview == 2 ? r : (u_preview == 3 ? g : b);
+  return vec4(c, c, c, u_preview == 3 ? max(g1, g2) : c);
 }
 
 void main() {
@@ -103,32 +150,55 @@ void main() {
   }
 
   vec3 v;
+  float rawMax;
   if (u_taps <= 1) {
-    v = fetch(ivec2(floor(img)));
+    vec4 s = fetch(ivec2(floor(img)));
+    v = s.rgb;
+    rawMax = s.a;
   } else {
     // Box filter over the footprint of this device pixel in the image.
     float footprint = 1.0 / u_scale;
     float stepSize = footprint / float(u_taps);
     vec2 origin = img - 0.5 * footprint;
     vec3 acc = vec3(0.0);
+    rawMax = 0.0;
     for (int j = 0; j < MAX_TAPS; ++j) {
       if (j >= u_taps) break;
       for (int i = 0; i < MAX_TAPS; ++i) {
         if (i >= u_taps) break;
-        acc += fetch(ivec2(floor(origin + (vec2(float(i), float(j)) + 0.5) * stepSize)));
+        vec4 s = fetch(ivec2(floor(origin + (vec2(float(i), float(j)) + 0.5) * stepSize)));
+        acc += s.rgb;
+        rawMax = max(rawMax, s.a);
       }
     }
     v = acc / float(u_taps * u_taps);
   }
 
+  // A clipped sample anywhere behind this pixel: the data says so, not the picture.
+  if (u_satOn && rawMax >= u_satThreshold) {
+    outColor = vec4(u_satColour, 1.0);
+    return;
+  }
+
+  // One value per pixel: a mono frame, the raw mosaic, or one plane.
+  bool mono = (u_channels == 1 && u_preview != 1) || u_preview >= 2;
   vec3 c;
-  if (u_channels == 1) {
+  if (mono) {
     c = vec3(transfer(v.r));
   } else {
     c = vec3(transfer(v.r), transfer(v.g), transfer(v.b));
   }
+  if (u_palette != 0) {
+    float l = mono ? c.r : dot(c, vec3(0.2126, 0.7152, 0.0722));
+    if (u_palette == 1) {
+      c = mono ? vec3(1.0 - l) : vec3(1.0) - c;
+    } else {
+      // Entry centres: v = i / 255 sits at (i + 0.5) / 256.
+      c = texture(u_lut, vec2(l * (255.0 / 256.0) + 0.5 / 256.0, 0.5)).rgb;
+    }
+  }
   if (u_nightTint) {
-    float l = u_channels == 1 ? c.r : dot(c, vec3(0.2126, 0.7152, 0.0722));
+    float l = mono && u_palette == 0 ? c.r : dot(c, vec3(0.2126, 0.7152, 0.0722));
     c = vec3(l, 0.0, 0.0);
   }
   // BRAND.md 4.3: a stretched value v is drawn as v x --viewer-tint, so in

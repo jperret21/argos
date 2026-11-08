@@ -16,7 +16,9 @@
   import { ShortcutRegistry } from '../../app/shortcuts';
   import { type StartupStage } from '../../app/startup';
   import { isTheme, saveTheme, THEME_LABELS, THEMES, type Theme } from '../../app/theme';
+  import FieldGallery from '../../imaging/field/gallery/FieldGallery.svelte';
   import WorkspaceGallery from '../../imaging/modes/gallery/WorkspaceGallery.svelte';
+  import ToolsGallery from '../../viewer/tools/gallery/ToolsGallery.svelte';
   import RailFooter from '../../shell/RailFooter.svelte';
   import ShortcutSheet from '../../shell/ShortcutSheet.svelte';
   import StartupScreen from '../../shell/StartupScreen.svelte';
@@ -252,6 +254,12 @@
       onchange={(t: Theme) => saveTheme(t)}
     />
   </header>
+
+  <!-- Wave 4, field and overlays: overlay, star card, Catalogue layers popover, Field band, Inspector, virtual table. -->
+  <FieldGallery />
+
+  <!-- Wave 4, viewer tools and palettes: palettes, View options, Statistics card, context menu, compass. -->
+  <ToolsGallery />
 
   <!-- Wave 3: the controls and instruments of Observe: acquisition. -->
   <Wave3 />

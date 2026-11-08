@@ -31,6 +31,12 @@ export interface UndoRequest {
   /** The inverse; reject with the server's words when it cannot be undone. */
   undo: () => Promise<unknown> | unknown;
   durationMs?: number;
+  /**
+   * Changes of one kind made in a row (role changes on Observe) share ONE toast: a new one
+   * replaces the open toast of its group, which then undoes them all, newest first
+   * ("3 changes", the newest change as the detail).
+   */
+  group?: string;
 }
 
 export interface UndoEntry {
@@ -44,6 +50,9 @@ export interface UndoEntry {
   pausedLeft: number | null;
   /** Clock time when the window ends (meaningful while not paused). */
   endsAt: number;
+  group?: string | null;
+  /** Changes this toast undoes (a group's). */
+  count?: number;
 }
 
 export interface UndoClock {
@@ -74,17 +83,37 @@ export class UndoQueue {
   push(req: UndoRequest): number {
     const id = this.nextId++;
     const durationMs = req.durationMs ?? UNDO_MS;
+    let undo = req.undo;
+    let count = 1;
+    let title = req.title;
+    let detail = req.detail ?? null;
+    const prior = req.group ? this.entries.find((e) => e.group === req.group && e.state === 'open') : undefined;
+    if (prior) {
+      // One toast per group: this change and the earlier ones, undone newest first.
+      const older = this.inverses.get(prior.id);
+      const newer = req.undo;
+      undo = async () => {
+        await newer();
+        if (older) await older();
+      };
+      count = (prior.count ?? 1) + 1;
+      title = `${count} changes`;
+      detail = req.detail ? `${req.title} · ${req.detail}` : req.title;
+      this.remove(prior.id);
+    }
     const entry: UndoEntry = {
       id,
-      title: req.title,
-      detail: req.detail ?? null,
+      title,
+      detail,
       state: 'open',
       error: null,
       durationMs,
       pausedLeft: null,
       endsAt: this.clock.now() + durationMs,
+      group: req.group ?? null,
+      count,
     };
-    this.inverses.set(id, req.undo);
+    this.inverses.set(id, undo);
     this.entries = [...this.entries, entry];
     while (this.entries.filter((e) => e.state === 'open').length > MAX_UNDO) {
       const oldest = this.entries.find((e) => e.state === 'open');

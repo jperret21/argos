@@ -1,4 +1,5 @@
 import type { DecodedFrame } from '../api/frames';
+import type { Preview } from './palettes/cfa';
 import type { Histogram16, StretchParams } from './stretch';
 
 /** What is under the cursor, for the status bar. */
@@ -42,7 +43,14 @@ export interface DisplayInfo {
   frame: DecodedFrame;
   /** Exact 65536-bin histogram of the displayed samples (reuse it for plots). */
   histogram: Histogram16;
-  /** auto_stf() of this frame, whether or not auto-stretch is active. */
+  /**
+   * auto_stf() of what is displayed, whether or not auto-stretch is active: the raw
+   * samples, or the CFA preview's view (palettes/cfa.ts), as Qt's auto levels did.
+   */
   auto: StretchParams;
+  /** The CFA preview drawn (palettes/cfa.ts; "raw" for a mono frame). */
+  preview?: Preview;
+  /** The same frame sent again with new levels (the preview changed): not a new frame. */
+  redisplay?: boolean;
   timing: RenderTiming;
 }

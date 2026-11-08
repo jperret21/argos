@@ -16,11 +16,25 @@
   `fitMode` says how "fit" frames the image: the whole frame ("fit"), or the
   viewer filled with the frame's long sides cropped ("fill"). Until the
   observer zooms or pans, the view re-frames itself on every resize.
+
+  Wave 4 (web/spec/04-viewer-and-image-tools.md 2.2-2.5): the CFA preview
+  (`preview`: Colour, Raw, R, G, B on a colour sensor's mosaic; the automatic
+  levels follow the view, as in Qt), the palettes (`palette`; Night Red draws
+  Neutral whatever is asked, D30), the saturation highlight on raw samples
+  (`saturation`), the crosshair through the pointer (`crosshairMode`), the
+  loupe inset (`loupe`, tools/Loupe.svelte), and `ongeometry` for the
+  screen-space tools over the viewer (tools/geometry.ts). `snapshot()` draws
+  now and returns a copy of the picture (Save view as PNG).
 -->
 <script lang="ts">
-  import { onMount, type Snippet } from 'svelte';
+  import { onMount, untrack, type Snippet } from 'svelte';
   import type { DecodedFrame } from '../api/frames';
-  import { ImageRenderer } from './renderer';
+  import { cfaPlanes, cfaSites, frameKind, previewStats, rgbPlanes, type Preview, type PreviewStats } from './palettes/cfa';
+  import { effectivePalette, type Palette } from './palettes/lut';
+  import { ImageRenderer, type DrawOptions } from './renderer';
+  import type { ViewerGeometry } from './tools/geometry';
+  import Loupe from './tools/Loupe.svelte';
+  import type { Histogram16 } from './stretch';
   import {
     displaySize,
     displayToFrame,
@@ -31,6 +45,7 @@
   } from './rotation';
   import { autoStf, histogram16, NEUTRAL_STRETCH, type StretchParams } from './stretch';
   import type { DisplayInfo, OverlayContext, PointerInfo } from './types';
+  import type { FrameHeaderV3 } from './hud';
   import {
     clampPan,
     oneToOneView,
@@ -59,8 +74,22 @@
     rotation?: RotationMode;
     /** How fit() frames the image: whole frame, or the viewer filled (cropped). */
     fitMode?: FitMode;
-    /** Show a crosshair at the image centre. */
+    /** Show a crosshair (at the image centre, or through the pointer: `crosshairMode`). */
     crosshair?: boolean;
+    /** Crosshair through the image centre (default) or lines through the pointer (Q-O16). */
+    crosshairMode?: 'centre' | 'cursor';
+    /** Display palette (palettes/lut.ts); Night Red draws Neutral whatever is asked (D30). */
+    palette?: Palette;
+    /** CFA preview (palettes/cfa.ts): ignored for a mono frame. */
+    preview?: Preview;
+    /** CFA pattern when the frame header carries none (the camera profile's). */
+    bayer?: string | null;
+    /** Paint pixels whose RAW samples reach `threshold` ADU in `colour` (0..1 RGB; black in Night Red). */
+    saturation?: { threshold: number; colour: readonly [number, number, number] } | null;
+    /** Loupe inset at the top right: magnification (CSS px per frame px) and its top offset. */
+    loupe?: { mag: number; top?: number } | null;
+    /** Where the image is (pan, zoom, rotation, sizes), for screen-space tools; null without a frame. */
+    ongeometry?: (g: ViewerGeometry | null) => void;
     /** Fence the GPU when timing uploads/draws (measurements only: it stalls). */
     syncTiming?: boolean;
     /** Accessible name of the viewer region. */
@@ -90,6 +119,13 @@
     rotation = 'auto',
     fitMode = 'fit',
     crosshair = false,
+    crosshairMode = 'centre',
+    palette = 'neutral',
+    preview = 'colour',
+    bayer = null,
+    saturation = null,
+    loupe = null,
+    ongeometry,
     syncTiming = false,
     label = 'Image viewer',
     onpointer,
@@ -116,15 +152,25 @@
   let turns: Turns = $state(0);
   let error: string | null = $state(null);
   let dragging = $state(false);
+  /** The pointer over the viewer (CSS px), for the cursor crosshair and the loupe. */
+  let hover: { x: number; y: number } | null = $state.raw(null);
+  /** What the current preview draws (gains, plane) and the frame it was computed for. */
+  let pstats: PreviewStats | null = $state.raw(null);
+  /** Bumped when the frame on screen changes (the loupe re-uploads). */
+  let shownVersion = $state(0);
 
   /** Re-fit on resize until the user pans or zooms. */
   let fitted = true;
   /** Last frame drawn (CPU copy for pixel readout; same buffer as the texture source). */
-  let shown: DecodedFrame | null = null;
+  let shown: DecodedFrame | null = $state.raw(null);
   let pending: DecodedFrame | null = null;
   let autoParams: StretchParams = { ...NEUTRAL_STRETCH };
   let raf = 0;
   let lastPointer: { x: number; y: number } | null = null;
+  /** The last DisplayInfo sent, re-sent with new levels when the preview changes. */
+  let lastInfo: DisplayInfo | null = null;
+  /** CFA / RGB planes of the frame on screen, computed on demand (a non-raw preview). */
+  let planes: { frame: DecodedFrame; value: ReturnType<typeof rgbPlanes> | null } | null = null;
 
   // -- Public API -------------------------------------------------------------
 
@@ -153,6 +199,24 @@
     return view.scale * dpr;
   }
 
+  /**
+   * Draw now and return a copy of the picture (device px), or null without a
+   * frame: the drawing buffer is only readable in the task that drew it.
+   */
+  export function snapshot(): HTMLCanvasElement | null {
+    if (!renderer || !shown) return null;
+    renderer.draw(drawOptions());
+    const out = document.createElement('canvas');
+    out.width = canvas.width;
+    out.height = canvas.height;
+    const ctx = out.getContext('2d');
+    if (!ctx) return null;
+    ctx.fillStyle = getComputedStyle(container).getPropertyValue('--viewer-bg').trim() || '#000000';
+    ctx.fillRect(0, 0, out.width, out.height);
+    ctx.drawImage(canvas, 0, 0);
+    return out;
+  }
+
   // -- Internals --------------------------------------------------------------
 
   function setView(next: ViewState, isFit: boolean): void {
@@ -172,6 +236,49 @@
   function effectiveStretch(): StretchParams {
     if (!autoStretch && stretch) return stretch;
     return autoParams;
+  }
+
+  function bayerOf(f: DecodedFrame): string | null {
+    const h = f.header as FrameHeaderV3;
+    return h.bayer !== undefined ? (h.bayer ?? null) : bayer;
+  }
+
+  /** The preview of the frame on screen: gains, plane, and the samples its auto levels use. */
+  function computePreview(f: DecodedFrame): PreviewStats {
+    const h = f.header;
+    const kind = frameKind(h.channels, bayerOf(f));
+    const first = previewStats(preview, kind, null);
+    if (first.code === 0) return first;
+    if (!planes || planes.frame !== f) {
+      const sites = cfaSites(bayerOf(f));
+      planes = { frame: f, value: kind === 'cfa' && sites ? cfaPlanes(f.pixels, h.width, h.height, sites) : kind === 'rgb' ? rgbPlanes(f.pixels) : null };
+    }
+    return previewStats(preview, kind, planes.value);
+  }
+
+  function autoFor(histogram: Histogram16, p: PreviewStats): StretchParams {
+    return autoStf(p.view ?? histogram);
+  }
+
+  /** Everything the renderer needs for the frame on screen (the loupe draws with the same). */
+  function drawOptions(): DrawOptions {
+    const f = shown;
+    const sites = f ? cfaSites(bayerOf(f)) : null;
+    const p = pstats;
+    return {
+      view,
+      stretch: effectiveStretch(),
+      nightTint,
+      tint,
+      rotation: turns,
+      dpr,
+      palette: effectivePalette(palette, nightTint),
+      preview:
+        p && p.code !== 0
+          ? { code: p.code, r: sites?.r ?? [0, 0], b: sites?.b ?? [0, 0], g1: sites?.g1 ?? [0, 0], g2: sites?.g2 ?? [0, 0], gains: p.gains }
+          : undefined,
+      saturation,
+    };
   }
 
   function schedule(): void {
@@ -205,21 +312,21 @@
       }
       const t0 = performance.now();
       const histogram = histogram16(next.pixels);
-      autoParams = autoStf(histogram);
+      const p = computePreview(next);
+      autoParams = autoFor(histogram, p);
       statsMs = performance.now() - t0;
       shown = next;
-      info = { frame: next, histogram, auto: autoParams };
+      pstats = p;
+      shownVersion++;
+      info = { frame: next, histogram, auto: autoParams, preview: p.preview };
       applyGeometry(h.width, h.height);
       error = null;
       if (lastPointer) emitPointer(lastPointer.x, lastPointer.y);
     }
 
-    const drawMs = renderer.draw(
-      { view, stretch: effectiveStretch(), nightTint, tint, rotation: turns, dpr },
-      syncTiming,
-    );
+    const drawMs = renderer.draw(drawOptions(), syncTiming);
     if (info) {
-      ondisplay?.({
+      lastInfo = {
         ...info,
         timing: {
           seq: info.frame.header.seq,
@@ -228,7 +335,8 @@
           statsMs,
           drawMs,
         },
-      });
+      };
+      ondisplay?.(lastInfo);
     }
   }
 
@@ -352,7 +460,37 @@
     void nightTint;
     void [tint[0], tint[1], tint[2]];
     if (stretch) void [stretch.black, stretch.white, stretch.midtones, stretch.mode];
+    void palette;
+    if (saturation) void [saturation.threshold, saturation.colour[0], saturation.colour[1], saturation.colour[2]];
+    else void saturation;
     schedule();
+  });
+
+  $effect(() => {
+    // The preview (or the fallback CFA pattern) changed: new gains and automatic levels for
+    // the frame on screen, sent again (redisplay) so the levels shown follow.
+    void preview;
+    void bayer;
+    untrack(() => {
+      const f = shown;
+      const info = lastInfo;
+      if (!f || !info || info.frame !== f) return;
+      const p = computePreview(f);
+      if (pstats && p.code === pstats.code && p.gains.every((g, i) => g === pstats!.gains[i])) return;
+      pstats = p;
+      autoParams = autoFor(info.histogram, p);
+      lastInfo = { ...info, auto: autoParams, preview: p.preview, redisplay: true };
+      ondisplay?.(lastInfo);
+      schedule();
+    });
+  });
+
+  $effect(() => {
+    // Screen-space tools follow the view (pan, zoom, resize, rotation, frame size).
+    if (!ongeometry) return;
+    const f = frameSize;
+    const g: ViewerGeometry | null = f && imageSize ? { view, frame: f, turns, viewport, dpr } : null;
+    untrack(() => ongeometry?.(g));
   });
 
   // -- Lifecycle ----------------------------------------------------------------
@@ -422,6 +560,7 @@
     const onPointerMove = (e: PointerEvent) => {
       const p = localPoint(e);
       lastPointer = p;
+      hover = p;
       if (drag && e.pointerId === drag.id && imageSize) {
         const next = { scale: view.scale, tx: drag.tx + p.x - drag.x, ty: drag.ty + p.y - drag.y };
         setView(clampPan(next, imageSize, viewport), false);
@@ -435,6 +574,7 @@
       if (container.hasPointerCapture(e.pointerId)) container.releasePointerCapture(e.pointerId);
     };
     const onPointerLeave = () => {
+      hover = null;
       if (drag) return;
       lastPointer = null;
       onpointer?.(null);
@@ -507,9 +647,35 @@
     const y0 = view.ty;
     const x1 = view.tx + imageSize.width * view.scale;
     const y1 = view.ty + imageSize.height * view.scale;
+    if (crosshairMode === 'cursor') {
+      // Lines through the pointer while it is over the image (Qt's cursor lines, Q-O16).
+      const p = hover;
+      if (!p || p.x < x0 || p.x >= x1 || p.y < y0 || p.y >= y1) return null;
+      return { x0, y0, x1, y1, cx: p.x, cy: p.y };
+    }
     const cx = view.tx + (imageSize.width / 2) * view.scale;
     const cy = view.ty + (imageSize.height / 2) * view.scale;
     return { x0, y0, x1, y1, cx, cy };
+  });
+
+  // -- Loupe: the display pixel under the pointer, magnified (tools/Loupe.svelte) ---------
+  const LOUPE_SIZE = 168;
+  const loupeAt = $derived.by(() => {
+    const p = hover;
+    if (!loupe || !p || !imageSize || dragging) return null;
+    const u = Math.floor((p.x - view.tx) / view.scale);
+    const v = Math.floor((p.y - view.ty) / view.scale);
+    if (u < 0 || v < 0 || u >= imageSize.width || v >= imageSize.height) return null;
+    return { u, v };
+  });
+  /** Top right; it steps to the top left when the pointer comes under it. */
+  const loupeBox = $derived.by(() => {
+    if (!loupe) return null;
+    const top = loupe.top ?? 8;
+    const right = { left: viewport.width - LOUPE_SIZE - 8, top };
+    const p = hover;
+    const under = p && p.x >= right.left - 16 && p.y <= top + LOUPE_SIZE + 16;
+    return under ? { left: 8, top: Math.max(top, 40) } : right;
   });
 </script>
 
@@ -553,6 +719,20 @@
       {/if}
     {/if}
   </svg>
+
+  <!-- Mounted while the tool is on (one WebGL context, kept), shown while the pointer is on the image. -->
+  {#if loupe && loupeBox && shown}
+    <Loupe
+      frame={shown}
+      version={shownVersion}
+      at={loupeAt}
+      mag={loupe.mag}
+      size={LOUPE_SIZE}
+      left={loupeBox.left}
+      top={loupeBox.top}
+      options={drawOptions()}
+    />
+  {/if}
 
   {#if error}
     <div class="message error" role="alert">{error}</div>

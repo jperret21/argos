@@ -152,6 +152,19 @@ describe('undo queue', () => {
     expect(q.entries).toHaveLength(0);
   });
 
+  it('merges the changes of one group into one toast, undone newest first', async () => {
+    const q = new UndoQueue(clock);
+    const order: string[] = [];
+    q.push({ title: 'Comparison: A', group: 'roles', undo: () => order.push('A') });
+    q.push({ title: 'Removed Paris', undo: vi.fn() });
+    const id = q.push({ title: 'Check star: B', group: 'roles', undo: () => order.push('B') });
+    expect(q.entries.map((e) => e.title)).toEqual(['Removed Paris', '2 changes']);
+    expect(q.entries[1]).toMatchObject({ detail: 'Check star: B', count: 2 });
+    expect(q.secondsLeft(id)).toBe(6);
+    expect(await q.undo(id)).toBe(true);
+    expect(order).toEqual(['B', 'A']);
+  });
+
   it(`keeps at most ${MAX_UNDO} open`, () => {
     const q = new UndoQueue(clock);
     for (let i = 0; i < MAX_UNDO + 2; i++) q.push({ title: `change ${i}`, undo: vi.fn() });

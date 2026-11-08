@@ -1,9 +1,10 @@
 <!--
   Image HUD (promoted from the HUD of src/lab/workspace/observe/Viewer.svelte, web/lab/
-  PROPOSAL.md 3.1 and 6, W3: chips and cursor; the compass and the arcminute scale bar
-  wait for field identification, W4). Screen space over the viewer: the image rotation
-  stays a display choice, the chips never turn with it. Opaque chips (--elev-hud) so they
-  read over any star field; nothing here takes the pointer except where noted.
+  PROPOSAL.md 3.1 and 6, W3: chips and cursor; W4: the compass and the arcminute scale
+  bar, hud/SkyHud.svelte, once the field is identified). Screen space over the viewer: the
+  image rotation stays a display choice, the chips never turn with it. Opaque chips
+  (--elev-hud) so they read over any star field; nothing here takes the pointer except
+  where noted.
 
   - Top left, over the image: what the frame ON SCREEN is (viewer/hud.ts frameChips).
   - Bottom right: the cursor readout X, Y (frame px, un-rotated), value (raw ADU), and
@@ -12,12 +13,16 @@
     the band does not show the levels (Focus mode, or the band hidden).
   - Top centre, while a separator is dragged: what the layout costs (band, image size,
     black margins), so the space rule stays visible (PROPOSAL 2.5).
+  - Top right of the image: the N / E compass; bottom left: the scale bar (`sky`, W4).
 -->
 <script lang="ts">
   import { untrack } from 'svelte';
   import Icon from '../components/Icon.svelte';
   import { readInks, type ChartInks } from '../charts/ink';
   import type { CursorReadout, HudChip, MiniHistogram } from './hud';
+  import SkyHud from './hud/SkyHud.svelte';
+  import { COMPASS_SIZE, type TanWcs } from './hud/wcs';
+  import type { Turns } from './rotation';
 
   interface Props {
     chips: readonly HudChip[];
@@ -33,9 +38,11 @@
     theme?: unknown;
     /** The frame has a WCS (field identified, W4): RA / Dec are part of the readout. */
     solved?: boolean;
+    /** The field's WCS for the frame on screen (tracked), with the view: compass and scale bar. */
+    sky?: { wcs: TanWcs; frame: { width: number; height: number }; turns: Turns; scale: number } | null;
   }
 
-  let { chips, cursor, mini, rect, stage, dragReadout = null, theme, solved = false }: Props = $props();
+  let { chips, cursor, mini, rect, stage, dragReadout = null, theme, solved = false, sky = null }: Props = $props();
 
   // The instruction shows only until the first pointing; afterwards the last values stay,
   // muted, so no permanent text sits over the image (design review W3).
@@ -48,6 +55,8 @@
   const left = $derived(Math.max(0, rect?.left ?? 0) + 8);
   const top = $derived(Math.max(0, rect?.top ?? 0) + 8);
   const right = $derived(Math.max(8, stage.width - Math.min(stage.width, (rect?.left ?? 0) + (rect?.width ?? stage.width)) + 8));
+  /** The chip row wraps before the compass (top right of the image) when there is one. */
+  const chipsMax = $derived(Math.max(120, sky ? stage.width - left - right - COMPASS_SIZE - 8 : stage.width - left - 8));
   const bottom = $derived(Math.max(8, stage.height - Math.min(stage.height, (rect?.top ?? 0) + (rect?.height ?? stage.height)) + 8));
 
   // -- Mini histogram (canvas, neutral bars, the levels in brass: they are the levels) --
@@ -107,7 +116,7 @@
 </script>
 
 {#if chips.length}
-  <div class="hud tl" style:left="{left}px" style:top="{top}px" data-hud="chips">
+  <div class="hud tl" style:left="{left}px" style:top="{top}px" style:max-width="{chipsMax}px" data-hud="chips">
     {#each chips as c (c.id)}
       <span class="chip" class:state={c.kind === 'state'} class:num={c.kind === 'num' || c.kind === 'state'} class:muted={c.muted} title={c.title}>
         {#if c.dot}<span class="dot {c.dot}" aria-hidden="true"></span>{/if}
@@ -116,6 +125,10 @@
       </span>
     {/each}
   </div>
+{/if}
+
+{#if sky}
+  <SkyHud wcs={sky.wcs} frame={sky.frame} turns={sky.turns} scale={sky.scale} compassTop={top} compassRight={right} barLeft={left} barBottom={bottom} />
 {/if}
 
 {#if dragReadout}

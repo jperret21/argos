@@ -2,8 +2,8 @@
  * What the image HUD says (Hud.svelte), as pure functions: the frame chips,
  * the cursor readout and the 64-bin mini histogram. Promoted from the HUD of
  * src/lab/workspace/observe/Viewer.svelte (web/lab/PROPOSAL.md section 6, W3:
- * chips and cursor; the compass and the arcminute scale bar wait for field
- * identification, W4).
+ * chips and cursor; W4: the compass and the arcminute scale bar, viewer/hud/,
+ * and the cursor RA / Dec from the field's WCS, hud/wcs.ts).
  *
  * - The HUD lives in SCREEN space over the viewer: the image rotation stays
  *   a display choice, the chips never turn with it.
