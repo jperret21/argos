@@ -73,7 +73,9 @@ def _to_frame_shape(data: np.ndarray) -> np.ndarray:
 
 def _timestamp(header, path: Path) -> str:
     date_obs = header.get("DATE-OBS")
-    if date_obs:
+    # A DATE-OBS without a time part is not read as midnight (the epoch rule
+    # of acquisition_engine.py:87-100): the file's time stands instead.
+    if date_obs and "T" in str(date_obs):
         try:
             from astropy.time import Time
 
@@ -138,3 +140,93 @@ def load_fits_frame(path: Path) -> tuple[np.ndarray, float, str]:
     except (TypeError, ValueError):
         exposure_s = 0.0
     return np.ascontiguousarray(pixels), exposure_s, timestamp
+
+
+# ---------------------------------------------------------------------------
+# Wave 3 (A27, S4): Open FITS feeds the live pipeline — raw frames only
+# ---------------------------------------------------------------------------
+
+
+class OpenedFrame:
+    """A raw frame opened from a file, with what its header says about time."""
+
+    def __init__(
+        self,
+        pixels: np.ndarray,
+        exposure_s: float,
+        timestamp: str,
+        date_obs: str | None,
+        epoch_utc: str | None,
+        bayer: str | None,
+    ) -> None:
+        self.pixels = pixels
+        self.exposure_s = exposure_s
+        self.timestamp = timestamp
+        self.date_obs = date_obs
+        self.epoch_utc = epoch_utc
+        self.bayer = bayer
+
+
+def load_raw_fits_frame(path: Path) -> OpenedFrame:
+    """The first image HDU of *path* as raw 16-bit counts, dated from its header.
+
+    Port of ``AcquisitionEngine.open_fits_frame`` (``acquisition_engine.py:
+    741-767``) with ``_raw_adu`` and ``fits_exposure_mid``
+    (``:103-151``): one 2-D image of integer values 0…65535 whatever the
+    stored type, else :class:`FitsReadError` with the reason; the epoch is
+    ``DATE-AVG``, else ``DATE-OBS`` + ``EXPTIME``/2, else ``None``.
+    """
+    from astropy.io import fits
+
+    from argos.server.capture import fits_exposure_mid, raw_adu
+
+    try:
+        with fits.open(path, memmap=False) as hdul:
+            hdu = next(
+                (
+                    h
+                    for h in hdul
+                    if getattr(h, "is_image", False) and int(h.header.get("NAXIS", 0) or 0) > 0
+                ),
+                None,
+            )
+            if hdu is None:
+                raise FitsReadError("no image data in the file")
+            _check_size(hdu.header)
+            if hdu.data is None:
+                raise FitsReadError("no image data in the file")
+            data = np.asarray(hdu.data)
+            header = hdu.header.copy()
+    except FitsReadError:
+        raise
+    except Exception as exc:
+        raise FitsReadError(f"not a readable FITS file ({exc})") from exc
+
+    if data.ndim == 3 and data.shape[0] == 1:
+        data = data[0]
+    if data.ndim != 2:
+        raise FitsReadError(
+            f"expected a single 2-D raw image, got shape {data.shape} — open the raw .fit "
+            "frame instead"
+        )
+    try:
+        pixels = raw_adu(data)
+    except ValueError as exc:
+        raise FitsReadError(str(exc)) from exc
+
+    exposure = header.get("EXPTIME", header.get("EXPOSURE", 0.0))
+    try:
+        exposure_s = max(0.0, float(exposure))
+    except (TypeError, ValueError):
+        exposure_s = 0.0
+    date_obs = header.get("DATE-OBS")
+    mid = fits_exposure_mid(header)
+    bayer = header.get("BAYERPAT")
+    return OpenedFrame(
+        pixels=np.ascontiguousarray(pixels),
+        exposure_s=exposure_s,
+        timestamp=_timestamp(header, path),
+        date_obs=str(date_obs).strip() if date_obs else None,
+        epoch_utc=utc_iso(mid) if mid is not None else None,
+        bayer=str(bayer).strip() or None if bayer else None,
+    )

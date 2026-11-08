@@ -160,14 +160,24 @@ def test_disconnect_during_live_view(connected):
         {"exposure_s": "1", "gain": 80},
         {"exposure_s": 1, "gain": 80.5},
         {"exposure_s": 1, "gain": -1},
-        {"exposure_s": 1},
         {"exposure_s": 1, "gain": 80, "binning": 2},
+        {"exposure_s": 1, "frame_type": "science"},
+        {"save": "yes"},
     ],
 )
 def test_exposure_validation(connected, body):
     response = connected.post("/api/camera/capture", json=body, headers=AUTH)
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "invalid_argument"
+
+
+def test_capture_fields_default_to_the_settings(connected):
+    """Wave 3 (A23): a v1 body stays valid, and every field is now optional."""
+    response = connected.post("/api/camera/capture", json={"exposure_s": 0.02}, headers=AUTH)
+    assert response.status_code == 200, response.text
+    assert response.json()["gain"] == 80  # the settings' gain
+    wait_for(lambda: _camera(connected)["state"] == "idle")
+    assert connected.post("/api/camera/capture", headers=AUTH).status_code == 200
 
 
 def test_reconnect_same_mode_is_idempotent_and_alpaca_while_connected_is_busy(connected):

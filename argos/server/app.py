@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import platform
+import re
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -81,6 +82,90 @@ class ConnectBody(_Body):
 class ExposureBody(_Body):
     exposure_s: float = Field(gt=0.0, le=MAX_EXPOSURE_S)
     gain: int = Field(ge=0, le=1000)
+
+
+FrameTypeName = Literal["light", "dark", "flat", "bias"]
+
+
+class CaptureBody(_Body):
+    """A23: v1's ``{exposure_s, gain}`` stays valid; both now default to the settings."""
+
+    exposure_s: float | None = Field(default=None, gt=0.0, le=MAX_EXPOSURE_S)
+    gain: int | None = Field(default=None, ge=0, le=1000)
+    frame_type: FrameTypeName | None = None
+    save: bool = False
+
+
+class LiveBody(_Body):
+    exposure_s: float | None = Field(default=None, gt=0.0, le=MAX_EXPOSURE_S)
+    gain: int | None = Field(default=None, ge=0, le=1000)
+    frame_type: FrameTypeName | None = None
+
+
+class CaptureSettingsBody(_Body):
+    """A22: one commit; the camera's own limits are checked by the hub (never clamped)."""
+
+    exposure_s: float | None = Field(default=None, gt=0.0, le=MAX_EXPOSURE_S)
+    gain: int | None = Field(default=None, ge=0, le=1000)
+    frame_type: FrameTypeName | None = None
+    filter: str | None = Field(default=None, min_length=1, max_length=32)
+    offset: int | None = Field(default=None, ge=0, le=100_000)
+    binning: int | None = Field(default=None, ge=1, le=16)
+
+
+class FilterSelectBody(_Body):
+    name: str = Field(min_length=1, max_length=32)
+
+
+JogAxis = Literal["primary", "secondary"]
+_CLIENT_ID = r"^[A-Za-z0-9_-]{1,64}$"
+
+
+class JogBody(_Body):
+    axis: JogAxis
+    rate_deg_s: float = Field(ge=-5.0, le=5.0)
+    client: str | None = Field(default=None, pattern=_CLIENT_ID)
+    seq: int | None = Field(default=None, ge=0)
+    #: A periodic renewal: it never restarts an axis the server stopped.
+    renew: bool = False
+
+
+class JogStopBody(_Body):
+    axis: JogAxis | None = None
+    client: str | None = Field(default=None, pattern=_CLIENT_ID)
+    seq: int | None = Field(default=None, ge=0)
+
+
+class TrackingRateBody(_Body):
+    rate: Literal["sidereal", "lunar", "solar", "king"]
+
+
+class FocuserMoveBody(_Body):
+    position: int = Field(ge=-1_000_000, le=10_000_000)
+
+
+class FocuserStepBody(_Body):
+    delta: int = Field(ge=-1_000_000, le=1_000_000)
+
+
+class AutofocusBody(_Body):
+    exposure_s: float | None = Field(default=None, gt=0.0, le=MAX_EXPOSURE_S)
+    gain: int | None = Field(default=None, ge=0, le=1000)
+    half_range: int | None = Field(default=None, ge=10, le=100_000)
+    num_steps: int | None = Field(default=None, ge=3, le=41)
+
+
+class ObservationBody(_Body):
+    object_name: str = Field(max_length=68)
+
+
+class ObservationTargetBody(_Body):
+    name: str = Field(min_length=1, max_length=68)
+    ra_hours: float = Field(ge=0.0, le=24.0)
+    dec_deg: float = Field(ge=-90.0, le=90.0)
+    object_type: str = Field(default="", max_length=32)
+    source: str = Field(default="", max_length=64)
+    programme: Literal["variable", "exoplanet", "other"] | None = None
 
 
 class OpenFitsBody(_Body):
@@ -290,7 +375,11 @@ async def _admit(
     return True
 
 
-async def _pump(websocket: WebSocket, send_next: Callable[[], Awaitable[bool]]) -> None:
+async def _pump(
+    websocket: WebSocket,
+    send_next: Callable[[], Awaitable[bool]],
+    on_text: Callable[[str], Awaitable[None]] | None = None,
+) -> None:
     """Run *send_next* until it returns False or the client goes away.
 
     A second task drains the client side, which is how a disconnect is
@@ -314,8 +403,13 @@ async def _pump(websocket: WebSocket, send_next: Callable[[], Awaitable[bool]]) 
 
         async def receiver() -> None:
             try:
-                while (await websocket.receive())["type"] != "websocket.disconnect":
-                    pass
+                while True:
+                    message = await websocket.receive()
+                    if message["type"] == "websocket.disconnect":
+                        break
+                    text = message.get("text")
+                    if on_text is not None and text is not None and len(text) <= 4096:
+                        await on_text(text)
             except (WebSocketDisconnect, anyio.ClosedResourceError, RuntimeError, OSError):
                 pass
             group.cancel_scope.cancel()
@@ -442,12 +536,14 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
         return hub.disconnect()
 
     @api.post("/camera/capture")
-    def capture(body: ExposureBody) -> dict[str, Any]:
-        return hub.capture(body.exposure_s, body.gain)
+    def capture(body: CaptureBody | None = None) -> dict[str, Any]:
+        body = body or CaptureBody()
+        return hub.capture(body.exposure_s, body.gain, body.frame_type, save=body.save)
 
     @api.post("/camera/live")
-    def live(body: ExposureBody) -> dict[str, Any]:
-        return hub.live(body.exposure_s, body.gain)
+    def live(body: LiveBody | None = None) -> dict[str, Any]:
+        body = body or LiveBody()
+        return hub.live(body.exposure_s, body.gain, body.frame_type)
 
     @api.patch("/camera/live")
     def live_update(body: ExposureBody) -> dict[str, Any]:
@@ -648,10 +744,137 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
 
         return dict(essential_catalogue_info())
 
+    # -- API 2 (wave 3: Observe acquisition) ------------------------------------
+
+    @api.get("/camera/settings")
+    def get_camera_settings() -> dict[str, Any]:
+        return hub.camera_settings()
+
+    @api.put("/camera/settings")
+    def put_camera_settings(body: CaptureSettingsBody) -> dict[str, Any]:
+        return hub.set_camera_settings(body.model_dump(exclude_none=True))
+
+    @api.get("/camera/saved")
+    def camera_saved(
+        after: int = Query(default=0, ge=0), limit: int = Query(default=200, ge=1, le=200)
+    ) -> dict[str, Any]:
+        return hub.saved(after=after, limit=limit)
+
+    @api.get("/filterwheel")
+    def get_filterwheel() -> dict[str, Any]:
+        with hub._lock:
+            return hub.wheel.record()
+
+    @api.post("/filterwheel/select")
+    def filterwheel_select(body: FilterSelectBody) -> dict[str, Any]:
+        with hub._lock:
+            hub._refuse_if_owned()
+        return hub.wheel.select(body.name)
+
+    @api.post("/mount/jog")
+    def mount_jog(body: JogBody) -> dict[str, Any]:
+        return hub.mount_jog(
+            body.axis, body.rate_deg_s, client=body.client, seq=body.seq, renew=body.renew
+        )
+
+    @api.post("/mount/jog/stop")
+    def mount_jog_stop(body: JogStopBody | None = None) -> dict[str, Any]:
+        body = body or JogStopBody()
+        return hub.mount_jog_stop(body.axis, client=body.client, seq=body.seq)
+
+    @api.post("/mount/tracking-rate")
+    def mount_tracking_rate(body: TrackingRateBody) -> dict[str, Any]:
+        return hub.mount_tracking_rate(body.rate)
+
+    @api.get("/focuser")
+    def get_focuser() -> dict[str, Any]:
+        with hub._lock:
+            return hub.focuser.record()
+
+    @api.post("/focuser/move")
+    def focuser_move(body: FocuserMoveBody) -> dict[str, Any]:
+        return hub.focuser.move(body.position)
+
+    @api.post("/focuser/step")
+    def focuser_step(body: FocuserStepBody) -> dict[str, Any]:
+        return hub.focuser.step(body.delta)
+
+    @api.post("/focuser/halt")
+    def focuser_halt() -> dict[str, Any]:
+        return hub.focuser.halt()
+
+    @api.get("/autofocus")
+    def get_autofocus() -> dict[str, Any]:
+        return hub.autofocus_state()
+
+    @api.post("/autofocus/start")
+    def autofocus_start(body: AutofocusBody | None = None) -> dict[str, Any]:
+        body = body or AutofocusBody()
+        return hub.start_autofocus(body.exposure_s, body.gain, body.half_range, body.num_steps)
+
+    @api.post("/autofocus/stop")
+    def autofocus_stop() -> dict[str, Any]:
+        return hub.stop_autofocus()
+
+    @api.get("/session/conditions")
+    def session_conditions(
+        since_seq: int = Query(default=0, ge=0), limit: int = Query(default=5000, ge=1, le=20000)
+    ) -> dict[str, Any]:
+        return hub.conditions_page(since_seq=since_seq, limit=limit)
+
+    @api.get("/observation")
+    def get_observation() -> dict[str, Any]:
+        with hub._lock:
+            return hub.observation.record()
+
+    @api.put("/observation")
+    def put_observation(body: ObservationBody) -> dict[str, Any]:
+        return hub.observation.set_name(body.object_name)
+
+    @api.post("/observation/target")
+    def post_observation_target(body: ObservationTargetBody) -> dict[str, Any]:
+        return hub.observation.set_target(
+            body.name,
+            body.ra_hours,
+            body.dec_deg,
+            object_type=body.object_type,
+            source=body.source,
+            programme=body.programme,
+        )
+
+    @api.delete("/observation/target")
+    def delete_observation_target() -> dict[str, Any]:
+        return hub.observation.clear_target()
+
+    @api.get("/catalog/resolve")
+    def catalog_resolve(q: str = Query(default="", max_length=200)) -> dict[str, Any]:
+        return hub.observation.resolve(q)
+
+    @api.get("/catalog/suggest")
+    def catalog_suggest(
+        q: str = Query(default="", max_length=200), limit: int = Query(default=8, ge=1, le=50)
+    ) -> dict[str, Any]:
+        return hub.observation.suggest(q, limit=limit)
+
+    @api.get("/catalog/nearby")
+    def catalog_nearby(
+        ra_hours: float = Query(ge=0.0, le=24.0),
+        dec_deg: float = Query(ge=-90.0, le=90.0),
+        network: bool = False,
+        radius_arcsec: float = Query(default=90.0, ge=1.0, le=3600.0),
+    ) -> dict[str, Any]:
+        return hub.observation.nearby(
+            ra_hours, dec_deg, network=network, radius_arcsec=radius_arcsec
+        )
+
     @app.websocket("/ws/events")
     async def ws_events(websocket: WebSocket) -> None:
         if not await _admit(websocket, auth, hosts):
             return
+        # Wave 3: ``?client=<id>`` names this socket for the jog dead-man.
+        client_id = websocket.query_params.get("client")
+        if client_id is not None and not re.fullmatch(_CLIENT_ID, client_id):
+            client_id = None
         # The status first (contract), then the other snapshots and the recent
         # log lines, so a page opened mid-session still shows what happened.
         sub = hub.bus.subscribe_events(
@@ -664,10 +887,23 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
                 await websocket.send_text(json.dumps(message, separators=(",", ":")))
             return bool(batch)
 
+        async def on_text(text: str) -> None:
+            try:
+                message = json.loads(text)
+            except ValueError:
+                return  # anything else is ignored
+            await run_in_threadpool(hub.client_message, client_id, message)
+
         try:
-            await _pump(websocket, send_next)
+            await _pump(websocket, send_next, on_text)
         finally:
             hub.bus.unsubscribe_events(sub)
+            if client_id is not None:
+                # Off the loop (a MoveAxis(…, 0) is an HTTP call to the mount) and not
+                # awaited: a cancelled endpoint must still stop the jog (dead-man).
+                threading.Thread(
+                    target=hub.client_gone, args=(client_id,), name="argos-jog-gone", daemon=True
+                ).start()
 
     @app.websocket("/ws/frames")
     async def ws_frames(websocket: WebSocket) -> None:

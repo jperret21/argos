@@ -226,8 +226,9 @@ def test_mount_connect_reports_clock_and_coordinate_warnings(client):
     mount = _devices(client)["mount"]
     assert mount["state"] == "connected" and mount["name"] == "Seestar S30 Pro"
     assert mount["warnings"] == [
-        "Mount clock is 2.0 h off — correct date/time in the Seestar app; "
-        "GoTo and Sync are disabled."
+        # H4 (0.5.0): the message says what is refused (device_session.py:377-382).
+        "Mount clock is 2.0 h off — correct the date/time in the Seestar app, then "
+        "reconnect. GoTo, Sync and Center will be refused until then."
     ]
     messages = [e["message"] for e in client.get("/api/logs", headers=AUTH).json()["entries"]]
     assert "Mount connected: Seestar S30 Pro" in messages
@@ -314,7 +315,8 @@ def test_one_link_at_a_time(client):
 def test_simulator_has_four_devices_and_v1_view_of_them(client):
     response = client.post("/api/devices/connect-all", json={"mode": "simulator"}, headers=AUTH)
     devices = response.json()
-    assert devices["filterwheel"]["info"] == "Dark"  # first slot of the S30 Pro profile
+    # Wave 3: the simulated wheel starts on the first light slot (the Qt form's IR).
+    assert devices["filterwheel"]["info"] == "IR"
     assert devices["focuser"]["name"] == "ARGOS Simulator focuser"
     connection = client.get("/api/status", headers=AUTH).json()["connection"]
     assert connection["device_name"] == "ARGOS Simulator (Seestar S50)"

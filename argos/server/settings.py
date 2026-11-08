@@ -27,6 +27,12 @@ class SimOptions:
     slew_rate_deg_s: float = 4.0
     #: Mount telemetry period (s). 0.25 s is the contract's 4 Hz ceiling.
     mount_poll_s: float = 0.25
+    #: Wave 3. Focuser position of the sharpest stars (the V-curve minimum).
+    focus_best: int = 5_300
+    #: Wave 3. Time the simulated filter wheel takes per slot (s).
+    wheel_slot_s: float = 0.6
+    #: Wave 3. Speed of the simulated focuser (steps/s).
+    focuser_speed_steps_s: float = 2_000.0
 
 
 @dataclass(frozen=True)
@@ -62,6 +68,12 @@ class Settings:
             the mount is connected (wave 2, ``site_check.py``: 300 s).
         site_check_settle_s: After a site change, wait until the site has
             stayed unchanged this long before checking (``site_check.py``: 2 s).
+        jog_deadman_s: A jogging axis not renewed within this time is stopped
+            by the server (wave 3, ``jog.py``: 1 s).
+        autofocus_settle_s: Settle after each autofocus move
+            (``autofocus_worker.py:44``: 1 s; tests shorten it).
+        autofocus_poll_s: ``IsMoving`` poll period during autofocus
+            (``autofocus_worker.py:45``: 0.3 s).
     """
 
     token: str
@@ -80,3 +92,6 @@ class Settings:
     mount_retry_s: float = 10.0
     site_check_period_s: float = 300.0
     site_check_settle_s: float = 2.0
+    jog_deadman_s: float = 1.0
+    autofocus_settle_s: float = 1.0
+    autofocus_poll_s: float = 0.3

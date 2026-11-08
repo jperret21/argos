@@ -44,6 +44,15 @@ and crash reports (``support.py``), the Settings helpers
 (``settings_helpers.py``: ASTAP, caches, place search) and the site check
 (``site_check.py``), fed by the mount poller.
 
+Wave 3 (Observe: acquisition) drives the devices: capture settings and the
+Take shot with its FITS save (``capture.py``, on the **save** thread), the
+filter wheel (``wheel.py``, a thread per move), the focuser (``focuser.py``,
+its **poll** thread), autofocus (``autofocus.py``, its own thread), the jog
+dead-man (``jog.py``, a **watcher** thread), the observation identity and
+catalogue lookups (``observation.py``) and the **metrics** thread with the
+conditions rows (``conditions.py``). Every one keeps its records under
+``_lock`` and never holds it across device I/O.
+
 A command or connect that was already talking to a device when the observer
 disconnected it must not write its answer into the state afterwards: every
 connect and teardown bumps that slot's ``generation``, and a result read
@@ -60,34 +69,66 @@ import socket
 import tempfile
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+
+from argos.core.config import observing_site
 from argos.core.hardware import active, catalog
+from argos.core.imaging.sky_geometry import compute_airmass
+from argos.core.photometry.airmass import airmass_at, julian_date
 from argos.server import API_VERSION
 from argos.server import profiles as profile_records
 from argos.server import runtime
 from argos.server import settings_helpers, support
+from argos.server.autofocus import (
+    MAX_DEFAULT_EXPOSURE_S,
+    AutofocusParams,
+    AutofocusRun,
+    idle_record,
+)
+from argos.server.capture import (
+    FALLBACK_EXPOSURE_MAX_S,
+    FALLBACK_GAIN_MAX,
+    FRAME_TYPES,
+    CaptureSettings,
+    FrameSettings,
+    Pointing,
+    SaveJob,
+    SaveRequest,
+    image_type,
+    is_dark_slot,
+    is_light_frame,
+    save_frame,
+)
+from argos.server.conditions import ConditionsLog, MetricsJob, MetricsWorker
 from argos.server.config_meta import DATA_PATH_KEYS
 from argos.server.config_store import ConfigStore
 from argos.server.devices.base import (
     CameraDevice,
+    CameraLimits,
     DeviceError,
     ExposureCancelled,
     MountDevice,
     MountParked,
     MountReading,
 )
+from argos.server.devices.sim_aux import SimOptics
 from argos.server.discovery import DEFAULT_LAYERS, DiscoveryLayers, run_discovery
 from argos.server.errors import ApiError
 from argos.server.events import EventBus
-from argos.server.fits_source import FITS_SUFFIXES, FitsReadError, load_fits_frame
+from argos.server.fits_source import FITS_SUFFIXES, FitsReadError, load_raw_fits_frame
+from argos.server.focuser import FocuserService
 from argos.server.frames import FrameSource, encode_frame
 from argos.server.fs import AllowedRoots, list_folder, parse_exts
 from argos.server.jobs import JobCancelled, JobContext, JobManager
+from argos.server.jog import JogService
 from argos.server.logbook import LOG_HISTORY, LogBook
 from argos.server.network import NetworkMonitor
+from argos.server.observation import ObservationService
 from argos.server.sessions import SessionIndex, is_session
 from argos.server.settings import Settings, SimOptions
 from argos.server.site_check import SITE_KEYS, SiteCheck
@@ -100,6 +141,7 @@ from argos.server.state import (
     Target,
     utc_iso,
 )
+from argos.server.wheel import FilterWheelService
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +151,15 @@ _STOP_JOIN_S = 2.0
 _SHUTDOWN_JOIN_S = 5.0
 #: How long a request waits for a connect already running for the same device.
 _CONNECT_WAIT_S = 60.0
+#: Camera sensor temperature poll while connected (A21).
+_CAMERA_TEMPERATURE_S = 10.0
+#: A single Take shot re-exposes at most this many times when its frames
+#: cannot be saved (the wheel moved during them), then gives up with a WARN.
+_SINGLE_ATTEMPTS = 5
+#: ``GET /api/camera/saved`` keeps the last saves.
+_SAVES_KEPT = 200
+#: The mount clock is too far off for GoTo / Sync / Center (telescope.py:283-294).
+_CLOCK_LIMIT_S = 60.0
 
 __all__ = ["Hub", "LOG_HISTORY", "DEVICE_IDS"]
 
@@ -267,6 +318,46 @@ class Hub:
             period_s=self._settings.site_check_period_s,
             settle_s=self._settings.site_check_settle_s,
         )
+        # -- wave 3 (Observe: acquisition) -------------------------------------
+        self._capture_settings = CaptureSettings()
+        self._camera_state = dataclasses.replace(
+            self._camera_state, settings=self._capture_settings.to_dict()
+        )
+        #: The pending Take shot (``_capture_pending`` of the Qt engine).
+        self._save: SaveRequest | None = None
+        #: Logged once per pending save: why a frame was not the one saved.
+        self._save_notes: set[str] = set()
+        self._camera_limits: CameraLimits | None = None
+        self._camera_temp_stop: threading.Event | None = None
+        #: The newest mount reading of the current connection (X1), else None.
+        self._last_reading: MountReading | None = None
+        #: The last GoTo target of this process (the Qt ``target_radec``, kept
+        #: across park and reconnects; FITS TARGRA / TARGDEC).
+        self._goto_target: tuple[float, float] | None = None
+        self._sim_optics = SimOptics(best_focus=self._sim.focus_best)
+        self.wheel = FilterWheelService(self)
+        self.wheel.on_settled = self._on_wheel_settled
+        self.focuser = FocuserService(self)
+        self.focuser.on_halt_during_autofocus = self._halt_autofocus
+        self.jog = JogService(self, deadman_s=self._settings.jog_deadman_s)
+        self.observation = ObservationService(self)
+        self.conditions = ConditionsLog()
+        self.conditions.boot_id = self.boot_id
+        self.metrics = MetricsWorker(self._on_metrics)
+        self._saver = ThreadPoolExecutor(max_workers=1, thread_name_prefix="argos-save")
+        self._saves: deque[dict[str, Any]] = deque(maxlen=_SAVES_KEPT)
+        self._save_seq = 0
+        #: Take-shot frames handed to the save thread and not yet written.
+        self._saves_in_flight = 0
+        #: Offset / binning sent to the driver: in progress (count) and when the
+        #: last one ended. A frame exposed across such a change is never saved:
+        #: FITS OFFSET is read from the camera at save time (S2 review).
+        self._readout_changing = 0
+        self._readout_changed_at: datetime | None = None
+        self._autofocus: AutofocusRun | None = None
+        self._af_record: dict[str, Any] = idle_record()
+        self._af_runs = 0
+
         self.config.add_listener(self._on_config_changed)
         if self.config.load_error:
             self.log(
@@ -291,8 +382,15 @@ class Hub:
         self.jobs.shutdown()
         self.network.stop()
         self.stellarium.stop(announce=False)
+        run = self._autofocus
+        if run is not None:
+            run.stop()  # return the focuser to its start, bounded by the join below
+            run.thread.join(_SHUTDOWN_JOIN_S)
         for dev in DISCONNECT_ORDER:
             self._disconnect_device(dev, quiet=True)
+        self.jog.close()
+        self.metrics.close()
+        self._saver.shutdown(wait=True)  # a FITS being written is finished, never cut
         with self._lock:
             self._publish_status()
         with self._downloads_lock:
@@ -360,6 +458,11 @@ class Hub:
             "devices": self._devices_payload(),
             "profile": profile_records.summary(active.profile()),
             "site_check": self.site_check.record(),
+            # wave 3: so a client opened later has every record at once
+            "filterwheel": self.wheel.record(),
+            "focuser": self.focuser.record(),
+            "autofocus": self._autofocus_record(),
+            "observation": self.observation.record(),
         }
 
     def status(self) -> dict[str, Any]:
@@ -443,18 +546,22 @@ class Hub:
             return new
 
     def _mount_from_reading(self, reading: MountReading) -> MountState:
+        """The current record with a new reading (target, geometry, jog kept)."""
         with self._lock:
-            target = self._mount_state.target
-        return MountState(
-            state=reading.state,
-            ra_hours=reading.ra_hours,
-            dec_deg=reading.dec_deg,
-            alt_deg=reading.alt_deg,
-            az_deg=reading.az_deg,
-            tracking=reading.tracking,
-            pier_side=reading.pier_side,
-            target=target,
-        )
+            return dataclasses.replace(
+                self._mount_state,
+                state=reading.state,
+                ra_hours=reading.ra_hours,
+                dec_deg=reading.dec_deg,
+                alt_deg=reading.alt_deg,
+                az_deg=reading.az_deg,
+                tracking=reading.tracking,
+                pier_side=reading.pier_side,
+            )
+
+    def _set_mount_extras(self, **changes: Any) -> None:
+        """Lock held: change wave 3 mount fields (jog, rate…) and announce them."""
+        self._apply_mount(dataclasses.replace(self._mount_state, **changes), telemetry=True)
 
     # -- log and activity ------------------------------------------------------
 
@@ -631,7 +738,13 @@ class Hub:
             if device_id == "camera":
                 from argos.server.devices.sim_camera import SimCamera
 
-                return SimCamera(sim.width, sim.height, seed=sim.seed, n_stars=sim.n_stars)
+                return SimCamera(
+                    sim.width,
+                    sim.height,
+                    seed=sim.seed,
+                    n_stars=sim.n_stars,
+                    optics=self._sim_optics,
+                )
             if device_id == "mount":
                 from argos.server.devices.sim_mount import SimMount
 
@@ -640,7 +753,9 @@ class Hub:
                 )
             from argos.server.devices.sim_aux import SimFilterWheel, SimFocuser
 
-            return SimFilterWheel() if device_id == "filterwheel" else SimFocuser()
+            if device_id == "filterwheel":
+                return SimFilterWheel(self._sim_optics, slot_s=sim.wheel_slot_s)
+            return SimFocuser(self._sim_optics, speed_steps_s=sim.focuser_speed_steps_s)
         if link.mode == "alpaca":
             self._precheck(str(link.host), int(link.port or 0))
             from argos.server.devices import alpaca as adapter
@@ -767,12 +882,16 @@ class Hub:
             raise ApiError(502, "connection_failed", text) from exc
 
         report = self._connect_report(handle)
+        extras: dict[str, Any] = {}
         if device_id == "mount":
             try:
                 reading = handle.read()
             except Exception as exc:
                 logger.warning("First mount read failed: %s", exc)
-        if not self._install(device_id, generation, handle, report, reading):
+            extras = _mount_extras(handle)
+        elif device_id == "camera":
+            extras = _camera_extras(handle)
+        if not self._install(device_id, generation, handle, report, reading, extras):
             _close_quietly(handle)
             raise ApiError(409, "not_connected", f"{label} was disconnected while connecting")
 
@@ -816,8 +935,10 @@ class Hub:
         handle: Any,
         report: list[tuple[str, str]],
         reading: MountReading | None,
+        extras: dict[str, Any] | None = None,
     ) -> bool:
         """Store a freshly connected handle unless the attempt was superseded."""
+        extras = extras or {}
         with self._lock:
             slot = self._slots[device_id]
             if slot.generation != generation or slot.state != "connecting":
@@ -830,14 +951,43 @@ class Hub:
             slot.error = None
             slot.warnings = tuple(m for level, m in report if level in ("warning", "error"))
             if device_id == "camera":
-                self._camera_state = dataclasses.replace(
-                    self._camera_state, state="idle", sensor=handle.sensor()
+                limits: CameraLimits | None = extras.get("limits")
+                self._camera_limits = limits
+                offset = extras.get("offset")
+                self._capture_settings = dataclasses.replace(
+                    self._capture_settings,
+                    offset=offset,
+                    binning=1,
                 )
+                self._camera_state = dataclasses.replace(
+                    self._camera_state,
+                    state="idle",
+                    sensor=handle.sensor(),
+                    owner="idle",
+                    current=None,
+                    save_pending=0,
+                    waiting_for=None,
+                    limits=_limits_record(limits),
+                    offset=(
+                        {"min": limits.offset_range[0], "max": limits.offset_range[1]}
+                        if limits is not None and limits.offset_range is not None
+                        else None
+                    ),
+                    binning=(
+                        {"max": limits.max_bin}
+                        if limits is not None and limits.max_bin > 1
+                        else None
+                    ),
+                    temperature_c=extras.get("temperature_c"),
+                )
+                self._refresh_camera()
                 self._publish("camera", {"camera": self._camera_state.to_dict()})
+                self._start_camera_temperature(handle, generation)
             elif device_id == "mount":
                 self._mount_failing = False
+                self._last_reading = reading
                 # A fresh record: nothing (a target…) carries over from a previous session.
-                self._mount_state = MountState()
+                self._mount_state = MountState(jog=self.jog.record(), **extras)
                 if reading is not None:
                     self._mount_state = self._mount_from_reading(reading)
                 self._start_poller(handle, generation)
@@ -846,6 +996,10 @@ class Hub:
             settled.set()
         if device_id == "mount":
             self.site_check.mount_connected(generation, _driver_site(handle))
+        elif device_id == "filterwheel":
+            self.wheel.attach(handle, generation)
+        elif device_id == "focuser":
+            self.focuser.attach(handle, generation)
         return True
 
     def _remember_address(self, link: Link) -> None:
@@ -872,6 +1026,9 @@ class Hub:
         """Stop the device's threads, close it; idempotent (stops the auto-retry too)."""
         label = LABELS[device_id]
         job = cancel = poller = stop = None
+        if device_id == "mount":
+            # H3: a jogging axis is stopped while the handle can still reach the mount.
+            self.jog.stop_all_before("Mount disconnected")
         with self._lock:
             slot = self._slot(device_id)
             was, was_retrying = slot.state, slot.retrying
@@ -885,14 +1042,29 @@ class Hub:
             if device_id == "camera":
                 job, cancel = self._job, self._job_cancel
                 self._job = self._job_cancel = None
-                self._live_settings = None
+                self._save = None
+                if self._camera_temp_stop is not None:
+                    self._camera_temp_stop.set()
+                    self._camera_temp_stop = None
             elif device_id == "mount":
                 poller, stop = self._poller, self._poller_stop
                 self._poller = self._poller_stop = None
+                self._last_reading = None  # X1: no pointing from a gone mount
             slot.reset()
             self._publish_status()
+            run = self._autofocus
         if settled is not None:
             settled.set()
+        if run is not None and device_id == "camera":
+            run.stop()  # the focuser goes back to its start; the camera is gone
+        elif run is not None and device_id == "focuser":
+            run.halt()  # nothing can move a focuser being disconnected
+        if device_id == "mount":
+            self.jog.mount_gone()
+        elif device_id == "filterwheel":
+            self.wheel.detach()
+        elif device_id == "focuser":
+            self.focuser.detach()
         if cancel is not None:
             cancel.set()
         if job is not None and handle is not None:
@@ -912,7 +1084,19 @@ class Hub:
             current = slot.generation == generation  # no new connect started meanwhile
             if current:
                 if device_id == "camera":
-                    self._set_camera(state="idle", sensor=None)
+                    self._camera_limits = None
+                    self._set_camera(
+                        state="idle",
+                        sensor=None,
+                        owner="autofocus" if self._autofocus is not None else "idle",
+                        current=None,
+                        save_pending=0,
+                        waiting_for=None,
+                        limits=None,
+                        offset=None,
+                        binning=None,
+                        temperature_c=None,
+                    )
                 elif device_id == "mount" and self._mount_state != MountState():
                     self._mount_state = MountState()
                     self._publish_status()
@@ -1423,7 +1607,12 @@ class Hub:
 
     def _stellarium_state(self) -> dict[str, Any]:
         """The ``stellarium`` record (lock held or not: the bridge has its own)."""
-        return {**self.stellarium.snapshot(), "last_goto": self._last_goto}
+        return {
+            **self.stellarium.snapshot(),
+            "last_goto": self._last_goto,
+            # wave 3 (A20): the newest target-name suggestion
+            "suggestions": self.observation.suggestions(),
+        }
 
     def _publish_stellarium(self) -> None:
         with self._lock:
@@ -1520,20 +1709,375 @@ class Hub:
                 source="stellarium",
                 topic="planetarium",
             )
+        # A20: offer names near the GoTo coordinates (never sets one).
+        self.observation.suggest_after_goto(ra_hours, dec_deg)
 
     # ------------------------------------------------------------------
-    # Camera
+    # Camera (v1 routes, wave 3 rows A21-A27)
     # ------------------------------------------------------------------
 
-    def capture(self, exposure_s: float, gain: int) -> dict:
-        return self._start_job(live=False, exposure_s=exposure_s, gain=gain)
+    def _refresh_camera(self, **changes: Any) -> CameraState:
+        """Lock held: the camera record with its derived v1 fields, published on change.
 
-    def live(self, exposure_s: float, gain: int) -> dict:
-        return self._start_job(live=True, exposure_s=exposure_s, gain=gain)
+        ``exposure_s`` / ``gain`` keep their v1 meaning: the frame being
+        exposed while one is, else the settings.
+        """
+        settings = self._capture_settings
+        current = changes.get("current", self._camera_state.current)
+        source = current if current is not None else settings.to_dict()
+        return self._set_camera(
+            settings=settings.to_dict(),
+            exposure_s=float(source["exposure_s"]),
+            gain=int(source["gain"]),
+            **changes,
+        )
 
-    def _start_job(self, live: bool, exposure_s: float, gain: int) -> dict:
+    def camera_owner(self) -> str:
+        return self._camera_state.owner
+
+    def _refuse_if_owned(self) -> None:
+        """Lock held: 409 busy while autofocus or a sequence owns the camera."""
+        owner = self._camera_state.owner
+        if owner == "autofocus":
+            raise ApiError(
+                409, "busy", "Autofocus owns the camera — stop it first.", details={"owner": owner}
+            )
+        if owner == "sequence":
+            raise ApiError(409, "busy", "A sequence owns the camera.", details={"owner": owner})
+
+    def _validated_settings(self, changes: dict[str, Any]) -> CaptureSettings:
+        """Lock held: the settings with *changes*, every field checked, never clamped (§3.4)."""
+        settings = self._capture_settings
+        limits = self._camera_limits
+        if "exposure_s" in changes:
+            exposure = float(changes["exposure_s"])
+            low, high = (
+                (limits.exposure_min_s, limits.exposure_max_s)
+                if limits is not None
+                else (0.0, FALLBACK_EXPOSURE_MAX_S)
+            )
+            if not (exposure > 0 and low <= exposure <= high):
+                raise ApiError(
+                    400,
+                    "invalid_argument",
+                    f"Exposure {exposure:g} s is outside {low:g}–{high:g} s"
+                    + (" (the camera's range)." if limits is not None else "."),
+                )
+            settings = dataclasses.replace(settings, exposure_s=exposure)
+        if "gain" in changes:
+            gain = int(changes["gain"])
+            low, high = (
+                (limits.gain_min, limits.gain_max) if limits is not None else (0, FALLBACK_GAIN_MAX)
+            )
+            if not low <= gain <= high:
+                raise ApiError(
+                    400,
+                    "invalid_argument",
+                    f"Gain {gain} is outside {low}–{high}"
+                    + (" (the camera's range)." if limits is not None else "."),
+                )
+            settings = dataclasses.replace(settings, gain=gain)
+        if "frame_type" in changes:
+            frame_type = str(changes["frame_type"])
+            if frame_type not in FRAME_TYPES:
+                raise ApiError(400, "invalid_argument", f"Unknown frame type {frame_type!r}")
+            settings = dataclasses.replace(settings, frame_type=frame_type)
+        if "filter" in changes:
+            name = " ".join(str(changes["filter"]).split())
+            if not name or len(name) > 32:
+                raise ApiError(400, "invalid_argument", "A filter name has 1 to 32 characters")
+            if self.wheel.connected:
+                slot = self.wheel.canonical(name)
+                if slot is None:
+                    slots = ", ".join(self.wheel.record()["slots"]) or "none"
+                    raise ApiError(
+                        400, "invalid_argument", f"No wheel slot named '{name}' (slots: {slots})"
+                    )
+                name = slot
+            settings = dataclasses.replace(settings, filter=name)
+        if "offset" in changes:
+            if self._slots["camera"].state != "connected":
+                raise ApiError(409, "not_connected", "No camera connected")
+            if limits is None or limits.offset_range is None:
+                raise ApiError(400, "invalid_argument", "This camera has no offset setting")
+            offset = int(changes["offset"])
+            low, high = limits.offset_range
+            if not low <= offset <= high:
+                raise ApiError(400, "invalid_argument", f"Offset {offset} is outside {low}–{high}.")
+            settings = dataclasses.replace(settings, offset=offset)
+        if "binning" in changes:
+            if self._slots["camera"].state != "connected":
+                raise ApiError(409, "not_connected", "No camera connected")
+            binning = int(changes["binning"])
+            top = limits.max_bin if limits is not None else 1
+            if not 1 <= binning <= top:
+                raise ApiError(
+                    400,
+                    "invalid_argument",
+                    f"Binning {binning} is outside 1–{top}"
+                    + (" (this camera does not bin)." if top == 1 else "."),
+                )
+            settings = dataclasses.replace(settings, binning=binning)
+        return settings
+
+    def camera_settings(self) -> dict[str, Any]:
+        with self._lock:
+            return self._capture_settings.to_dict()
+
+    def set_camera_settings(self, changes: dict[str, Any]) -> dict[str, Any]:
+        """``PUT /api/camera/settings`` (A22): one commit, applied from the next frame."""
+        with self._lock:
+            self._refuse_if_owned()
+            new = self._validated_settings(changes)
+            old = self._capture_settings
+            camera = self._slots["camera"].handle
+            offset_change = "offset" in changes and new.offset != old.offset
+            binning_change = "binning" in changes and new.binning != old.binning
+            move_to = None
+            if "filter" in changes and self.wheel.connected:
+                if new.filter != self.wheel.slot or self.wheel.moving:
+                    move_to = new.filter
+            # Every refusal before any device call: the PUT is one commit (A22).
+            if move_to is not None and self.wheel.moving:
+                raise ApiError(
+                    409,
+                    "busy",
+                    f"The filter wheel is moving to '{self.wheel.target}' — wait for it.",
+                    details={"owner": "filterwheel"},
+                )
+            if (offset_change or binning_change) and (
+                self._save is not None or self._saves_in_flight
+            ):
+                what = "offset" if offset_change else "binning"
+                raise ApiError(
+                    409,
+                    "busy",
+                    f"A Take shot is waiting for its frame or being saved — change the {what} "
+                    "after it (FITS OFFSET and binning describe the frame).",
+                    details={"owner": self._camera_state.owner},
+                )
+            if offset_change or binning_change:
+                self._readout_changing += 1
+        # Offset and binning go to the driver at once (off the event loop) and are read back.
+        try:
+            if offset_change:
+                try:
+                    camera.set_offset(int(new.offset))
+                    read = camera.get_offset() if hasattr(camera, "get_offset") else new.offset
+                except Exception as exc:
+                    self.log("error", f"Offset: {exc}", source="camera", topic="camera")
+                    raise ApiError(502, "device_error", f"Offset: {exc}") from exc
+                new = dataclasses.replace(new, offset=read)
+                self.log("cmd", f"Offset → {read}", source="camera", topic="camera")
+            if binning_change:
+                try:
+                    camera.set_binning(int(new.binning))
+                except Exception as exc:
+                    self.log("error", f"Binning: {exc}", source="camera", topic="camera")
+                    raise ApiError(502, "device_error", f"Binning: {exc}") from exc
+                self.log(
+                    "cmd",
+                    f"Binning → {new.binning}×{new.binning}",
+                    source="camera",
+                    topic="camera",
+                )
+        finally:
+            if offset_change or binning_change:
+                with self._lock:
+                    self._readout_changing -= 1
+                    self._readout_changed_at = datetime.now(timezone.utc)
+        if move_to is not None:
+            self.wheel.select(move_to)  # 409 while it moves; settings follow the wheel
+        elif "filter" in changes and not self.wheel.connected and new.filter != old.filter:
+            self.log(
+                "info",
+                f"No filter wheel: '{new.filter}' is written to FITS FILTER only.",
+                source="camera",
+                topic="camera",
+            )
+        with self._lock:
+            self._refuse_if_owned()
+            self._capture_settings = new
+            state = self._refresh_camera()
+        return state.to_dict()
+
+    def _on_wheel_settled(self, slot: str | None) -> None:
+        """Every wheel move ended: the settings follow the slot it reports (S3)."""
+        with self._lock:
+            changes: dict[str, Any] = {}
+            if slot and slot != self._capture_settings.filter:
+                self._capture_settings = dataclasses.replace(self._capture_settings, filter=slot)
+            if self._camera_state.waiting_for and not self.wheel.moving:
+                changes["waiting_for"] = None
+            self._refresh_camera(**changes)
+
+    def capture(
+        self,
+        exposure_s: float | None = None,
+        gain: int | None = None,
+        frame_type: str | None = None,
+        save: bool = False,
+    ) -> dict:
+        """``POST /api/camera/capture``: one frame, or a Take shot with ``save``."""
+        changes = _given(exposure_s=exposure_s, gain=gain, frame_type=frame_type)
+        with self._lock:
+            self._require("camera")
+            self._refuse_if_owned()
+            settings = self._validated_settings(changes)
+            if save and settings.binning != 1:
+                # fits_writer.py writes XBINNING = YBINNING = 1 and unbinned pixel
+                # sizes: a binned frame would be saved with false metadata.
+                raise ApiError(
+                    409,
+                    "unsupported",
+                    "Take shot saves unbinned frames only (FITS XBINNING and pixel size "
+                    "assume 1×1): set Binning to 1.",
+                )
+            live = self._camera_state.owner == "live"
+            if live and not save:
+                raise ApiError(409, "busy", "Camera is busy (live) — stop it first")
+            if live and self._save is not None:
+                raise ApiError(409, "busy", "A Take shot is already waiting for its frame")
+            if not live and (self._camera_state.state in CAMERA_BUSY or self._job is not None):
+                if self._job is not None and self._camera_state.state not in CAMERA_BUSY:
+                    raise ApiError(409, "busy", "Camera is still stopping — try again in a moment")
+                raise ApiError(
+                    409, "busy", f"Camera is busy ({self._camera_state.state}) — stop it first"
+                )
+            # Published with the state change below (one camera event, as in v1).
+            self._capture_settings = settings
+        if not save:
+            return self._start_job(live=False)
+        self._refuse_light_through_dark(settings.frame_type)
+        waiting = self._prepare_dark(settings.frame_type)
+        with self._lock:
+            self._require("camera")
+            self._refuse_if_owned()
+            request = SaveRequest(
+                settings.frame_type,
+                live=live,
+                accepted_utc=utc_iso(),
+                exposure_s=settings.exposure_s,
+                gain=settings.gain,
+            )
+            if live:
+                if self._camera_state.owner != "live" or self._save is not None:
+                    raise ApiError(409, "busy", "Live view stopped meanwhile — take the shot again")
+                self._save = request
+                self._save_notes = set()
+                state = self._refresh_camera(
+                    save_pending=1, waiting_for="filterwheel" if waiting else None
+                )
+            else:
+                state = None
+        self.log("cmd", "Take shot — saving next frame…", source="camera", topic="camera")
+        if live:
+            return state.to_dict()
+        return self._start_job(live=False, save=request, waiting=waiting)
+
+    def _refuse_light_through_dark(self, frame_type: str) -> None:
+        """A Light or Flat Take shot behind the opaque slot is refused (S1 counterpart).
+
+        The web path turns the wheel to Dark by itself for a Dark/Bias shot
+        (``_prepare_dark``) and nothing turns it back, so the usual "darks,
+        then a light" would save a pure-pedestal frame as a Light Frame
+        (science review of wave 3). Sequences refuse it already (S7).
+        """
+        if not is_light_frame(frame_type):
+            return
+        with self._lock:
+            if not self.wheel.has_dark_slot:
+                return
+            moving, target, slot = self.wheel.moving, self.wheel.target, self.wheel.slot
+        label = image_type(frame_type)
+        if moving and is_dark_slot(target):
+            raise ApiError(
+                409,
+                "dark_slot",
+                f"The filter wheel is turning to '{target}', which blocks the light — "
+                f"select a filter for the {label}.",
+                details={"slot": target},
+            )
+        if not moving and is_dark_slot(slot):
+            raise ApiError(
+                409,
+                "dark_slot",
+                f"The filter wheel is on '{slot}', which blocks the light — select a filter "
+                f"for the {label}.",
+                details={"slot": slot},
+            )
+
+    def _prepare_dark(self, frame_type: str) -> bool:
+        """A Dark/Bias Take shot needs the wheel settled on its Dark slot (S1).
+
+        Port of ``_dark_shot_allowed`` (``acquisition_engine.py:437-470``)
+        plus the move-then-expose chain 0.5.0 left to the web UI: the wheel
+        is sent to Dark here. Returns True when the shot waits for that move.
+        """
+        if is_light_frame(frame_type):
+            return False
+        label = image_type(frame_type)
+        with self._lock:
+            has_dark = self.wheel.has_dark_slot
+            moving = self.wheel.moving
+            target = self.wheel.target
+            slot = self.wheel.slot
+        if not has_dark:
+            self.log(
+                "warning",
+                f"{label}: no filter wheel to block the light — the frame is only dark if "
+                "the telescope is covered.",
+                source="camera",
+                topic="camera",
+            )
+            return False
+        if moving:
+            if is_dark_slot(target):
+                return True
+            raise ApiError(
+                409,
+                "busy",
+                f"The filter wheel is moving to '{target}' — wait for it, then take the {label}.",
+                details={"owner": "filterwheel"},
+            )
+        if is_dark_slot(slot):
+            return False
+        dark = self.wheel.canonical("Dark") or "Dark"
+        self.wheel.select(
+            dark, reason=f"Filter → {dark} for the {label} (the Seestar has no shutter)."
+        )
+        with self._lock:
+            settings = dataclasses.replace(self._capture_settings, filter=dark)
+            self._capture_settings = settings
+            self._refresh_camera()
+        return True
+
+    def live(
+        self,
+        exposure_s: float | None = None,
+        gain: int | None = None,
+        frame_type: str | None = None,
+    ) -> dict:
+        changes = _given(exposure_s=exposure_s, gain=gain, frame_type=frame_type)
+        with self._lock:
+            self._require("camera")
+            self._refuse_if_owned()
+            if self._camera_state.state in CAMERA_BUSY:
+                raise ApiError(
+                    409, "busy", f"Camera is busy ({self._camera_state.state}) — stop it first"
+                )
+            if self._job is not None:
+                raise ApiError(409, "busy", "Camera is still stopping — try again in a moment")
+            # Published with the state change of _start_job (one camera event).
+            self._capture_settings = self._validated_settings(changes)
+        return self._start_job(live=True)
+
+    def _start_job(
+        self, live: bool, save: SaveRequest | None = None, waiting: bool = False
+    ) -> dict:
         with self._lock:
             camera = self._require("camera")
+            self._refuse_if_owned()
             if self._camera_state.state in CAMERA_BUSY:
                 raise ApiError(
                     409, "busy", f"Camera is busy ({self._camera_state.state}) — stop it first"
@@ -1541,19 +2085,32 @@ class Hub:
             if self._job is not None:
                 # A stopped job still finishing its download: one exposure at a time.
                 raise ApiError(409, "busy", "Camera is still stopping — try again in a moment")
-            self._live_settings = (float(exposure_s), int(gain)) if live else None
+            settings = self._capture_settings
             cancel = threading.Event()
+            # The first frame's snapshot (S2) goes with the state change, so a
+            # single capture still announces exposing → downloading → idle.
+            first = self._frame_settings("live" if live else "single")
+            # A single shot that waits for a turning wheel takes its snapshot
+            # once the wheel has settled: its filter is the new slot (review).
+            snapshot_later = waiting or (not live and self.wheel.moving)
             job = threading.Thread(
                 target=self._run_job,
-                args=(camera, live, float(exposure_s), int(gain), cancel),
+                args=(camera, live, cancel, None if snapshot_later else first),
                 name="argos-live" if live else "argos-capture",
                 daemon=True,
             )
             self._job, self._job_cancel = job, cancel
-            state = self._set_camera(
-                state="live" if live else "exposing", exposure_s=float(exposure_s), gain=int(gain)
+            self._save = save
+            self._save_notes = set()
+            state = self._refresh_camera(
+                state="live" if live else "exposing",
+                owner="live" if live else "single",
+                current=first.to_dict(),
+                save_pending=1 if save is not None else 0,
+                waiting_for="filterwheel" if waiting else None,
             )
             job.start()
+        exposure_s, gain = settings.exposure_s, settings.gain
         what = "Live view" if live else "Capture"
         self.log("info", f"{what}: {exposure_s:g} s, gain {gain}", source="camera", topic="camera")
         self.set_activity(
@@ -1564,19 +2121,107 @@ class Hub:
         )
         return state.to_dict()
 
+    def _frame_settings(self, origin: str) -> FrameSettings:
+        """Lock held: the snapshot of the frame about to start (S2)."""
+        s = self._capture_settings
+        return FrameSettings(
+            exposure_s=s.exposure_s,
+            gain=s.gain,
+            frame_type=s.frame_type,
+            filter=s.filter,
+            object_name=self.observation.object_name,
+            light=is_light_frame(s.frame_type),
+            origin=origin,  # type: ignore[arg-type]
+        )
+
+    def _save_decision(self, frame: FrameSettings, start: datetime | None) -> tuple[str, str, str]:
+        """Lock held: is this frame the one the pending Take shot saves?
+
+        Port of ``_on_frame`` (``acquisition_engine.py:600-631``): never a
+        frame exposed while the wheel turned (S3 review); never a frame of
+        another type (wave 3); never a dark whose wheel left the Dark slot
+        (S1). Returns ``(decision, level, message)``.
+        """
+        request = self._save
+        if request is None:
+            return "none", "", ""
+        if self.wheel.moved_since(start):
+            return (
+                "skip",
+                "info",
+                "Take shot: the filter wheel moved during this exposure — saving the next "
+                "frame instead.",
+            )
+        changed = self._readout_changed_at
+        if self._readout_changing or (changed is not None and (start is None or changed > start)):
+            # FITS OFFSET is read from the camera at save time: a frame exposed
+            # across an offset or binning change would record the new value.
+            return (
+                "skip",
+                "info",
+                "Take shot: the offset or binning changed during this exposure — saving the "
+                "next frame instead.",
+            )
+        if self._capture_settings.binning != 1:
+            return (
+                "drop",
+                "warning",
+                f"Take shot not saved: binning is {self._capture_settings.binning}×"
+                f"{self._capture_settings.binning} and FITS XBINNING assumes 1×1.",
+            )
+        if frame.frame_type != request.frame_type:
+            return (
+                "skip",
+                "info",
+                f"Take shot: this frame is a {image_type(frame.frame_type)}; saving the next "
+                f"{image_type(request.frame_type)} instead.",
+            )
+        if not is_light_frame(frame.frame_type) and self.wheel.has_dark_slot:
+            problem = self.wheel.not_on_dark()
+            if problem:
+                return (
+                    "drop",
+                    "warning",
+                    f"{image_type(frame.frame_type)} shot not saved: {problem}",
+                )
+        return "save", "", ""
+
+    def _wait_for_wheel(self, cancel: threading.Event) -> str | None:
+        """Single Take shot: wait for a turning wheel; a Dark/Bias one then needs Dark.
+
+        Returns why the shot cannot be taken, or ``None``.
+        """
+        with self._lock:
+            request = self._save
+            moving = self.wheel.moving
+        if request is None:
+            return None
+        if moving:
+            if not self.wheel.wait_settled(cancel):
+                return None if cancel.is_set() else "the filter wheel did not settle"
+        with self._lock:
+            if self._camera_state.waiting_for:
+                self._refresh_camera(waiting_for=None)
+            if is_light_frame(request.frame_type) or not self.wheel.has_dark_slot:
+                return None
+            return self.wheel.not_on_dark()
+
     def _run_job(
         self,
         camera: CameraDevice,
         live: bool,
-        exposure_s: float,
-        gain: int,
         cancel: threading.Event,
+        first: FrameSettings | None = None,
     ) -> None:
-        # Frames are stamped when the shutter closes, not after the download.
-        readout_at: list[str] = []
+        origin = "live" if live else "single"
+        attempts = 0
+        times: dict[str, datetime] = {}
+
+        def on_start() -> None:
+            times["start"] = datetime.now(timezone.utc)
 
         def on_readout() -> None:
-            readout_at.append(utc_iso())
+            times["end"] = datetime.now(timezone.utc)
             if not live:
                 with self._lock:
                     if self._job_cancel is cancel and not cancel.is_set():
@@ -1584,48 +2229,133 @@ class Hub:
 
         try:
             while not cancel.is_set():
-                if live:
-                    # Settings changed with PATCH /api/camera/live apply from
-                    # this exposure on, announced as it starts.
-                    with self._lock:
-                        if self._job_cancel is not cancel:
-                            break
-                        wanted = self._live_settings
-                        if wanted is not None and wanted != (exposure_s, gain):
-                            exposure_s, gain = wanted
-                            self._set_camera(exposure_s=exposure_s, gain=gain)
-                readout_at.clear()
-                pixels = camera.expose(exposure_s, gain, cancel, on_readout)
+                if not live:
+                    # A single Take shot waits for a turning wheel before each
+                    # exposure; a Dark/Bias one then needs it on Dark (S1).
+                    problem = self._wait_for_wheel(cancel)
+                    if cancel.is_set():
+                        raise ExposureCancelled()
+                    if problem:
+                        with self._lock:
+                            label = (
+                                image_type(self._save.frame_type) if self._save else "Dark Frame"
+                            )
+                        self.log(
+                            "warning",
+                            f"{label} shot not taken: {problem}",
+                            source="camera",
+                            topic="camera",
+                        )
+                        self._end_single(cancel, None)
+                        return
+                with self._lock:
+                    if self._job_cancel is not cancel:
+                        break
+                    frame = first if first is not None else self._frame_settings(origin)
+                    first = None
+                    changes = {"current": frame.to_dict()}
+                    if not live:
+                        changes["state"] = "exposing"
+                    self._refresh_camera(**changes)
+                times.clear()
+                pixels = camera.expose(
+                    frame.exposure_s,
+                    frame.gain,
+                    cancel,
+                    on_readout,
+                    light=frame.light,
+                    on_start=on_start,
+                )
                 if cancel.is_set():
                     break
+                start = times.get("start")
+                end = times.get("end") or datetime.now(timezone.utc)
+                if start is None:  # a device that does not report its start
+                    start = end - timedelta(seconds=frame.exposure_s)
+                frame = dataclasses.replace(frame, started_utc=utc_iso(start))
                 with self._lock:
+                    decision, level, message = self._save_decision(frame, start)
+                    request_seen = self._save if decision == "save" else None
                     self._frame_seq += 1
                     seq = self._frame_seq
-                frame = encode_frame(
+                    if decision == "save":
+                        frame = dataclasses.replace(frame, save=True)
+                    job = self._metrics_job(seq, pixels, frame, start, end)
+                    save_job = (
+                        self._save_job(pixels, start, end, frame, seq)
+                        if decision == "save"
+                        else None
+                    )
+                    bayer = self._camera_state.sensor.bayer if self._camera_state.sensor else None
+                header = {
+                    "bayer": bayer,
+                    "origin": origin,
+                    "frame_type": frame.frame_type,
+                    "gain": frame.gain,
+                    "filter": frame.filter,
+                    "started_utc": frame.started_utc,
+                    "save": frame.save,
+                }
+                encoded = encode_frame(
                     pixels,
                     seq=seq,
-                    exposure_s=exposure_s,
-                    timestamp=readout_at[0] if readout_at else utc_iso(),
+                    exposure_s=frame.exposure_s,
+                    timestamp=utc_iso(end),
                     source=camera.source,
+                    extra=header,
                 )
+                changes: dict[str, Any]
                 with self._lock:
                     if cancel.is_set() or self._job_cancel is not cancel:
                         break  # stopped while encoding: drop the frame
-                    self.bus.publish_frame(frame)
+                    self.bus.publish_frame(encoded)
+                    if decision in ("save", "drop"):
+                        self._save = None
+                    if save_job is not None:
+                        self._saves_in_flight += 1  # until _save_task has written it
+                    notes = self._save_notes
+                    log_note = decision in ("skip", "drop") and message not in notes
+                    if log_note:
+                        notes.add(message)
+                    changes = {"last_frame_seq": seq}
+                    if decision in ("save", "drop"):
+                        changes.update(save_pending=0, waiting_for=None)
                     if live:
-                        self._set_camera(last_frame_seq=seq)
-                        continue
-                    # Release the job *with* the idle transition, so a client
-                    # reacting to "idle" can start the next capture at once.
-                    self._job = self._job_cancel = None
-                    self._set_camera(state="idle", last_frame_seq=seq)
-                    self.set_activity(
-                        f"Frame #{seq} received ({exposure_s:g} s)",
+                        self._refresh_camera(**changes)
+                self.metrics.submit(job)
+                if log_note:
+                    self.log(level, message, source="camera", topic="camera")  # type: ignore[arg-type]
+                if save_job is not None:
+                    if request_seen is not None and (
+                        request_seen.exposure_s != frame.exposure_s
+                        or request_seen.gain != frame.gain
+                    ):
+                        # S2 keeps the frame in progress (Qt parity): say so.
+                        self.log(
+                            "info",
+                            f"Take shot: saving the frame in progress, exposed "
+                            f"{frame.exposure_s:g} s at gain {frame.gain} (the shot asked "
+                            f"{request_seen.exposure_s:g} s at gain {request_seen.gain}).",
+                            source="camera",
+                            topic="camera",
+                        )
+                    self._saver.submit(self._save_task, save_job)
+                if live:
+                    continue
+                attempts += 1
+                if decision == "skip" and attempts < _SINGLE_ATTEMPTS:
+                    with self._lock:
+                        self._refresh_camera(last_frame_seq=seq)
+                    continue
+                if decision == "skip":
+                    self.log(
+                        "warning",
+                        f"Take shot not saved after {attempts} frames: {message}",
                         source="camera",
                         topic="camera",
-                        log=False,
                     )
-                    return
+                self._end_single(cancel, seq, frame.exposure_s)
+                return
         except ExposureCancelled:
             pass
         except Exception as exc:
@@ -1633,7 +2363,10 @@ class Hub:
                 current = self._job_cancel is cancel
                 if current:
                     self._job = self._job_cancel = None
-                    self._set_camera(state="error")
+                    self._save = None
+                    self._set_camera(
+                        state="error", owner="idle", current=None, save_pending=0, waiting_for=None
+                    )
             if current:
                 self.log("error", f"Camera: {exc}", source="camera", topic="camera")
                 self.set_activity(f"Camera: {exc}", source="camera", topic="camera", log=False)
@@ -1644,8 +2377,205 @@ class Hub:
         with self._lock:
             if self._job_cancel is cancel:
                 self._job = self._job_cancel = None
+                self._save = None
+                changes = {"current": None, "save_pending": 0, "waiting_for": None}
+                if self._camera_state.owner in ("live", "single"):
+                    changes["owner"] = "idle"
                 if self._camera_state.state in CAMERA_BUSY:
-                    self._set_camera(state="idle")
+                    changes["state"] = "idle"
+                self._refresh_camera(**changes)
+
+    def _end_single(
+        self, cancel: threading.Event, seq: int | None, exposure_s: float = 0.0
+    ) -> None:
+        """A single capture is over: release the job *with* the idle transition."""
+        with self._lock:
+            if self._job_cancel is not cancel:
+                return
+            # Release the job with the idle transition, so a client reacting
+            # to "idle" can start the next capture at once.
+            self._job = self._job_cancel = None
+            self._save = None
+            changes: dict[str, Any] = {
+                "state": "idle",
+                "owner": "idle",
+                "current": None,
+                "save_pending": 0,
+                "waiting_for": None,
+            }
+            if seq is not None:
+                changes["last_frame_seq"] = seq
+            self._refresh_camera(**changes)
+            if seq is not None:
+                self.set_activity(
+                    f"Frame #{seq} received ({exposure_s:g} s)",
+                    source="camera",
+                    topic="camera",
+                    log=False,
+                )
+
+    # -- per-frame context: metrics, conditions, save (lock held) -------------------
+
+    def _pointing(self) -> Pointing | None:
+        """X1: the newest reading of a connected mount, else None."""
+        reading = self._last_reading
+        if reading is None or self._slots["mount"].state != "connected":
+            return None
+        return Pointing(reading.ra_hours, reading.dec_deg, reading.alt_deg, reading.az_deg)
+
+    def _star_radius(self) -> int:
+        try:
+            return max(2, int(self.config.get("imaging.star_radius_px", 5) or 5))
+        except (TypeError, ValueError):
+            return 5
+
+    def _metrics_job(
+        self,
+        seq: int,
+        pixels: Any,
+        frame: FrameSettings,
+        start: datetime,
+        end: datetime,
+    ) -> MetricsJob:
+        mid = start + (end - start) / 2
+        pointing = self._pointing()
+        airmass_mount = (
+            compute_airmass(pointing.alt_deg)
+            if pointing is not None and pointing.alt_deg is not None
+            else None
+        )
+        airmass_target = None
+        target = self.observation.target
+        site = observing_site(self.config)
+        if target is not None and site is not None:
+            airmass_target = airmass_at(
+                julian_date(mid), target["ra_hours"] * 15.0, target["dec_deg"], site[0], site[1]
+            )
+        focuser = self.focuser.record()
+        row = {
+            "frame_seq": seq,
+            "t": utc_iso(mid),
+            "origin": frame.origin,
+            "exposure_s": frame.exposure_s,
+            "gain": frame.gain,
+            "frame_type": frame.frame_type,
+            "filter": frame.filter,
+            "airmass_mount": airmass_mount,
+            "airmass_target": airmass_target,
+            "sensor_temp_c": self._camera_state.temperature_c,
+            "focuser_temp_c": focuser["temperature_c"],
+            "focuser_position": focuser["position"],
+        }
+        return MetricsJob(
+            seq=seq, arr=pixels, origin=frame.origin, radius=self._star_radius(), row=row
+        )
+
+    def _save_job(
+        self, pixels: Any, start: datetime, end: datetime, frame: FrameSettings, seq: int
+    ) -> SaveJob:
+        return SaveJob(
+            arr=pixels,
+            start=start,
+            end=end,
+            frame=frame,
+            frame_seq=seq,
+            sessions_path=self._sessions_root(),
+            pointing=self._pointing(),
+            target=self._goto_target,
+            site=observing_site(self.config),
+            observer=str(self.config.get("observer.name", "") or "").strip(),
+            camera=self._slots["camera"].handle,
+            wheel=self.wheel.handle if self.wheel.connected else None,
+        )
+
+    def _save_task(self, job: SaveJob) -> None:
+        """The save thread: write the FITS, then ``frame_saved`` (A24)."""
+
+        def log(level: str, message: str) -> None:
+            self.log(level, message, source="camera", topic="camera")  # type: ignore[arg-type]
+
+        try:
+            result = save_frame(job, log)
+        except Exception as exc:
+            logger.exception("FITS save failed")
+            self.log("error", f"FITS save failed: {exc}", source="camera", topic="camera")
+            return
+        finally:
+            with self._lock:
+                self._saves_in_flight = max(0, self._saves_in_flight - 1)
+        frame = job.frame
+        with self._lock:
+            self._save_seq += 1
+            record = {
+                "type": "frame_saved",
+                "seq": self._save_seq,
+                "frame_seq": job.frame_seq,
+                "path": str(result.path),
+                "name": result.path.name,
+                "source": "single",
+                "object": frame.object_name.strip() or "Unknown",
+                "filter": result.filter_name,
+                "frame_type": frame.frame_type,
+                "image_type": image_type(frame.frame_type),
+                "exposure_s": frame.exposure_s,
+                "gain": frame.gain,
+                "date_obs": frame.started_utc,
+                "t": utc_iso(),
+                "record": result.record,
+            }
+            self._saves.append(record)
+            self.bus.publish("frame_saved", None, dict(record))
+        self.log("ok", f"Saved {result.path.name}", source="camera", topic="camera")
+
+    def saved(self, after: int = 0, limit: int = 200) -> dict[str, Any]:
+        """``GET /api/camera/saved`` (A24): the saves after *after*."""
+        with self._lock:
+            saves = [dict(r) for r in self._saves if r["seq"] > after][:limit]
+            last = self._save_seq or None
+        return {"saves": saves, "last_seq": last}
+
+    def _on_metrics(self, job: MetricsJob, result: dict[str, Any]) -> None:
+        """The metrics thread measured a frame: ``frame_metrics`` and a conditions row."""
+        with self._lock:
+            self._publish("frame_metrics", {"seq": job.seq, **result, "t": utc_iso()})
+        if job.row is None:
+            return
+        row = self.conditions.append(
+            {
+                **job.row,
+                "hfd_px": result["hfd_px"],
+                "fwhm_px": result["fwhm_px"],
+                "star_count": result["star_count"],
+                "sky_adu": result["sky_adu"],
+                "peak_adu": result["peak_adu"],
+            }
+        )
+        self.bus.publish("conditions", None, row)
+
+    def conditions_page(self, since_seq: int = 0, limit: int = 5000) -> dict[str, Any]:
+        return self.conditions.page(since_seq=since_seq, limit=limit)
+
+    def _start_camera_temperature(self, camera: Any, generation: int) -> None:
+        """Lock held: read the sensor temperature every 10 s while connected (A21)."""
+        reader = getattr(camera, "temperature", None)
+        if reader is None:
+            return
+        stop = threading.Event()
+        self._camera_temp_stop = stop
+
+        def poll() -> None:
+            while not stop.wait(_CAMERA_TEMPERATURE_S):
+                try:
+                    value = reader()
+                except Exception:
+                    value = None
+                with self._lock:
+                    if stop.is_set() or self._slots["camera"].generation != generation:
+                        return
+                    if value != self._camera_state.temperature_c:
+                        self._set_camera(temperature_c=value)
+
+        threading.Thread(target=poll, name="argos-camera-temp", daemon=True).start()
 
     def _stop_job(self, join_s: float) -> None:
         with self._lock:
@@ -1665,14 +2595,17 @@ class Hub:
 
         The exposure in progress finishes with the old settings; the camera
         record (``exposure_s``, ``gain``) changes when the next one starts,
-        so it always describes the frame being taken.
+        so it always describes the frame being taken. Wave 3: an alias of
+        ``PUT /api/camera/settings`` limited to these two fields.
         """
         with self._lock:
             self._require("camera")
             if self._camera_state.state != "live" or self._job is None:
                 raise ApiError(409, "not_live", "Live view is not running")
-            self._live_settings = (float(exposure_s), int(gain))
-            state = self._camera_state
+            self._capture_settings = self._validated_settings(
+                {"exposure_s": exposure_s, "gain": gain}
+            )
+            state = self._refresh_camera()
         self.log(
             "info",
             f"Live view: next frame {exposure_s:g} s, gain {gain}",
@@ -1685,21 +2618,26 @@ class Hub:
         """Stop a capture or live view; also clears a camera error."""
         with self._lock:
             self._require("camera")
+            self._refuse_if_owned()
             running = self._job is not None
         self._stop_job(join_s=_STOP_JOIN_S)
         with self._lock:
             # Idle now even if an Alpaca download is still draining: the job
             # drops its frame, and _start_job refuses until it has exited.
+            self._save = None
+            changes: dict[str, Any] = {"current": None, "save_pending": 0, "waiting_for": None}
+            if self._camera_state.owner in ("live", "single"):
+                changes["owner"] = "idle"
             if self._camera_state.state != "idle":
-                self._set_camera(state="idle")
-            state = self._camera_state
+                changes["state"] = "idle"
+            state = self._refresh_camera(**changes)
         if running:
             self.log("info", "Camera stopped", source="camera", topic="camera")
             self.set_activity("Camera idle", source="camera", topic="camera", log=False)
         return state.to_dict()
 
     def open_fits(self, path: str) -> dict:
-        """Publish a FITS file as the current frame (works without a connection)."""
+        """Open a raw FITS frame as the current frame (A27; works without a connection)."""
         p = Path(path)
         if not p.is_absolute():
             raise ApiError(400, "invalid_argument", "path must be absolute")
@@ -1712,27 +2650,301 @@ class Hub:
         if not exists:
             raise ApiError(404, "not_found", f"No such file: {p}")
         with self._lock:
-            if self._camera_state.state in CAMERA_BUSY:
-                raise ApiError(409, "busy", "Camera is busy — stop it before opening a file")
+            owner = self._camera_state.owner
+            if owner in ("single", "autofocus", "sequence"):
+                raise ApiError(
+                    409,
+                    "busy",
+                    "Camera is busy — wait for it before opening a file",
+                    details={"owner": owner},
+                )
         try:
-            pixels, exposure_s, timestamp = load_fits_frame(p)
+            opened = load_raw_fits_frame(p)
         except FitsReadError as exc:
             raise ApiError(400, "invalid_fits", f"{p.name}: {exc}") from exc
+        with self._lock:
+            live = self._camera_state.owner == "live"
+        if live:
+            # Q-O11: the opened frame must not be replaced by the next live frame.
+            self._stop_job(join_s=_STOP_JOIN_S)
+            with self._lock:
+                self._save = None
+                self._refresh_camera(
+                    state="idle", owner="idle", current=None, save_pending=0, waiting_for=None
+                )
+            self.log(
+                "info", f"Live view stopped to open {p.name}.", source="camera", topic="camera"
+            )
         source: FrameSource = "file"
         with self._lock:
-            if self._camera_state.state in CAMERA_BUSY:  # a capture started meanwhile
+            if self._camera_state.state in CAMERA_BUSY or self._job is not None:
                 raise ApiError(409, "busy", "Camera is busy — stop it before opening a file")
             self._frame_seq += 1
             seq = self._frame_seq
+            bayer = opened.bayer or active.profile().bayer_pattern
+        header = {
+            "bayer": bayer,
+            "origin": "file",
+            "path": str(p),
+            "file_name": p.name,
+            "date_obs": opened.date_obs,
+            "epoch_utc": opened.epoch_utc,
+        }
         frame = encode_frame(
-            pixels, seq=seq, exposure_s=exposure_s, timestamp=timestamp, source=source
+            opened.pixels,
+            seq=seq,
+            exposure_s=opened.exposure_s,
+            timestamp=opened.timestamp,
+            source=source,
+            extra=header,
         )
         with self._lock:
             self.bus.publish_frame(frame)
             state = self._set_camera(last_frame_seq=seq)
-        shape = "×".join(str(n) for n in (pixels.shape[1], pixels.shape[0]))
+        self.metrics.submit(
+            MetricsJob(seq=seq, arr=opened.pixels, origin="file", radius=self._star_radius())
+        )
+        shape = "×".join(str(n) for n in (opened.pixels.shape[1], opened.pixels.shape[0]))
         self.log("info", f"Opened {p.name} ({shape})", source="camera", topic="camera")
+        if opened.epoch_utc is None:
+            self.log(
+                "warning",
+                f"{p.name} has no usable DATE-OBS time (or EXPTIME) — no photometry point can "
+                "be dated, so none will be measured on it.",
+                source="camera",
+                topic="camera",
+            )
         return state.to_dict()
+
+    # ------------------------------------------------------------------
+    # Autofocus (row A36)
+    # ------------------------------------------------------------------
+
+    def _autofocus_record(self) -> dict[str, Any]:
+        run = self._autofocus
+        return dict(run.record) if run is not None else dict(self._af_record)
+
+    def autofocus_state(self) -> dict[str, Any]:
+        with self._lock:
+            return self._autofocus_record()
+
+    def start_autofocus(
+        self,
+        exposure_s: float | None = None,
+        gain: int | None = None,
+        half_range: int | None = None,
+        num_steps: int | None = None,
+    ) -> dict[str, Any]:
+        """``POST /api/autofocus/start`` (``acquisition_engine.py:923-961``)."""
+        with self._lock:
+            if self._slots["camera"].state != "connected" or self._camera is None:
+                raise ApiError(409, "not_connected", "Autofocus needs the camera connected")
+            focuser = self.focuser.handle
+            if focuser is None:
+                raise ApiError(409, "not_connected", "Autofocus needs the focuser connected")
+            run = self._autofocus
+            if run is not None:
+                message = (
+                    "Autofocus is stopping — the focuser is still returning to its start."
+                    if run.returning or run.mode is not None
+                    else "Autofocus is already running."
+                )
+                raise ApiError(409, "busy", message, details={"owner": "autofocus"})
+            if self._camera_state.owner == "sequence":
+                raise ApiError(
+                    409, "busy", "A sequence owns the camera.", details={"owner": "sequence"}
+                )
+            if self.wheel.has_dark_slot:
+                # A sweep behind the opaque slot only measures hot pixels and
+                # ends "flat HFD curve" without naming the cause (review).
+                if self.wheel.moving:
+                    raise ApiError(
+                        409,
+                        "busy",
+                        f"The filter wheel is moving to '{self.wheel.target}' — wait for it.",
+                        details={"owner": "filterwheel"},
+                    )
+                if is_dark_slot(self.wheel.slot):
+                    raise ApiError(
+                        409,
+                        "dark_slot",
+                        f"The filter wheel is on '{self.wheel.slot}', which blocks the light — "
+                        "select a filter before autofocus.",
+                        details={"slot": self.wheel.slot},
+                    )
+            settings = self._capture_settings
+            checks: dict[str, Any] = {
+                "exposure_s": (
+                    float(exposure_s)
+                    if exposure_s is not None
+                    else min(settings.exposure_s, MAX_DEFAULT_EXPOSURE_S)
+                ),
+                "gain": int(gain) if gain is not None else settings.gain,
+            }
+            checked = self._validated_settings(checks)  # 400 outside the camera's limits
+            params = AutofocusParams(
+                exposure_s=checked.exposure_s,
+                gain=checked.gain,
+                half_range=int(half_range) if half_range is not None else 2000,
+                num_steps=int(num_steps) if num_steps is not None else 9,
+            )
+            preempt = self._camera_state.owner in ("live", "single")
+        if preempt:
+            self._stop_job(join_s=_STOP_JOIN_S)
+            with self._lock:
+                self._save = None
+            self.log(
+                "info",
+                "Live view stopped: autofocus owns the camera.",
+                source="camera",
+                topic="camera",
+            )
+        with self._lock:
+            camera = self._camera
+            if camera is None or self.focuser.handle is not focuser:
+                raise ApiError(409, "not_connected", "Autofocus needs camera and focuser connected")
+            if self._job is not None or self._autofocus is not None:
+                raise ApiError(409, "busy", "Camera is still stopping — try again in a moment")
+            self._af_runs += 1
+            run = AutofocusRun(
+                self,
+                camera,
+                focuser,
+                params,
+                self._af_runs,
+                settle_s=self._settings.autofocus_settle_s,
+                poll_s=self._settings.autofocus_poll_s,
+                publish_frame=self._publish_autofocus_frame,
+                on_end=self._on_autofocus_end,
+            )
+            run.record = {
+                **idle_record(run.run),
+                "state": "running",
+                "stage": "coarse",
+                "params": params.to_dict(),
+                "started_utc": utc_iso(),
+            }
+            self._autofocus = run
+            self._publish("autofocus", dict(run.record))
+            self._refresh_camera(
+                state="exposing",
+                owner="autofocus",
+                current=None,
+                save_pending=0,
+                waiting_for=None,
+            )
+        self.focuser.lock("autofocus")
+        run.thread.start()
+        self.log(
+            "cmd",
+            f"Autofocus started… ({params.exposure_s:g} s, gain {params.gain}, "
+            f"±{params.half_range} steps, {params.num_steps} positions)",
+            source="autofocus",
+            topic="focuser",
+        )
+        self.set_activity("Autofocus…", source="autofocus", topic="focuser", log=False)
+        with self._lock:
+            return dict(run.record)
+
+    def stop_autofocus(self) -> dict[str, Any]:
+        """``POST /api/autofocus/stop``: cancel and return to the start (S23)."""
+        with self._lock:
+            run = self._autofocus
+        if run is None:
+            return self.autofocus_state()
+        if run.stop():
+            run._update(state="stopping")
+            self.log(
+                "info",
+                "Autofocus stopping — the focuser returns to its start; the camera is released "
+                "when it is back.",
+                source="autofocus",
+                topic="focuser",
+            )
+        return self.autofocus_state()
+
+    def _halt_autofocus(self) -> dict[str, Any] | None:
+        """``POST /api/focuser/halt`` during autofocus: stop where it is (Q-O6)."""
+        with self._lock:
+            run = self._autofocus
+        if run is None:
+            return None
+        if run.halt():
+            run._update(state="stopping")
+            self.log(
+                "cmd",
+                "Focuser halted — autofocus stops where it is.",
+                source="focuser",
+                topic="focuser",
+            )
+        else:
+            self.log(
+                "info",
+                "Halt ignored: autofocus is returning the focuser to its start.",
+                source="focuser",
+                topic="focuser",
+            )
+        return self.autofocus_state()
+
+    def _publish_autofocus_frame(
+        self, pixels: Any, exposure_s: float, gain: int, timestamp: str, started: str
+    ) -> int:
+        with self._lock:
+            self._frame_seq += 1
+            seq = self._frame_seq
+            camera = self._camera
+            bayer = self._camera_state.sensor.bayer if self._camera_state.sensor else None
+        encoded = encode_frame(
+            pixels,
+            seq=seq,
+            exposure_s=exposure_s,
+            timestamp=timestamp,
+            source=getattr(camera, "source", "simulator"),
+            extra={
+                "bayer": bayer,
+                "origin": "autofocus",
+                "frame_type": "light",
+                "gain": gain,
+                "filter": self._capture_settings.filter,
+                "started_utc": started or None,
+                "save": False,
+            },
+        )
+        with self._lock:
+            self.bus.publish_frame(encoded)
+            self._set_camera(last_frame_seq=seq)
+        self.metrics.submit(
+            MetricsJob(seq=seq, arr=pixels, origin="autofocus", radius=self._star_radius())
+        )
+        return seq
+
+    def _on_autofocus_end(self, run: AutofocusRun) -> None:
+        """The sweep thread ended: release the focuser and the camera, log the outcome."""
+        with self._lock:
+            if self._autofocus is run:
+                self._autofocus = None
+                self._af_record = dict(run.record)
+            if self._camera_state.owner == "autofocus":
+                changes: dict[str, Any] = {"owner": "idle"}
+                if self._camera_state.state in CAMERA_BUSY:
+                    changes["state"] = "idle"
+                self._refresh_camera(**changes)
+            self._publish_status()
+        self.focuser.lock(None)
+        self.focuser.wake()
+        record = run.record
+        message = record.get("message") or ""
+        level = {"done": "ok", "rejected": "warning", "cancelled": "info", "failed": "error"}
+        state = record.get("state")
+        text = message if state != "failed" else f"Autofocus: {message}"
+        self.log(level.get(state, "info"), text, source="autofocus", topic="focuser")  # type: ignore[arg-type]
+        activity = {
+            "done": f"Focused  pos={record.get('position')}",
+            "rejected": "Autofocus rejected",
+            "cancelled": "Autofocus stopped",
+            "failed": "Autofocus failed",
+        }.get(state, "Autofocus ended")
+        self.set_activity(activity, source="autofocus", topic="focuser", log=False)
 
     # ------------------------------------------------------------------
     # Mount
@@ -1777,6 +2989,8 @@ class Hub:
         with self._lock:
             if generation != self._slots["mount"].generation:
                 return None
+            if reading is not None:
+                self._last_reading = reading
             new = self._mount_from_reading(reading) if reading else self._mount_state
             if target is not ...:
                 new = dataclasses.replace(new, target=target)
@@ -1784,7 +2998,16 @@ class Hub:
 
     def mount_goto(self, ra_hours: float, dec_deg: float) -> dict:
         ra = float(ra_hours) % 24.0
+        with self._lock:
+            self._require("mount")
+            blocked = self._mount_state.goto_blocked
+        if blocked is not None:
+            # H4: refused before any call, with the connect message.
+            raise ApiError(409, "clock_error", blocked["message"])
+        self.jog.stop_all_before("GoTo")
         result = self._mount_command("goto", ra, float(dec_deg), target=Target(ra, float(dec_deg)))
+        with self._lock:
+            self._goto_target = (ra, float(dec_deg))
         self.log("info", f"GoTo RA {ra:.4f} h, Dec {dec_deg:+.4f}°", source="mount", topic="mount")
         with self._lock:
             # Under the lock that also announces "Slew finished": a slew that
@@ -1795,10 +3018,17 @@ class Hub:
 
     def mount_stop(self) -> dict:
         with self._lock:
-            self._slew_stop_requested = self._mount_state.state == "slewing"
+            self._require("mount")
+            self._slew_stop_requested = (
+                self._mount_state.state == "slewing" and not self.jog.active()
+            )
+        self.jog.stop_all_before("Abort")
         return self._mount_command("stop")
 
     def mount_park(self) -> dict:
+        with self._lock:
+            self._require("mount")
+        self.jog.stop_all_before("Park")
         result = self._mount_command("park", target=None)
         self.log("info", "Parking", source="mount", topic="mount")
         return result
@@ -1808,6 +3038,64 @@ class Hub:
 
     def mount_tracking(self, enabled: bool) -> dict:
         return self._mount_command("set_tracking", bool(enabled))
+
+    # -- wave 3: jog and tracking rate (A29-A31) ---------------------------------
+
+    def mount_jog(
+        self,
+        axis: str,
+        rate_deg_s: float,
+        client: str | None = None,
+        seq: int | None = None,
+        renew: bool = False,
+    ) -> dict:
+        """``POST /api/mount/jog``: start or renew one axis (dead-man in ``jog.py``)."""
+        return self.jog.jog(axis, rate_deg_s, client=client, seq=seq, renew=renew)
+
+    def mount_jog_stop(
+        self, axis: str | None = None, client: str | None = None, seq: int | None = None
+    ) -> dict:
+        """``POST /api/mount/jog/stop``: one axis, or both whatever the server believes."""
+        return self.jog.stop(axis, client=client, seq=seq)
+
+    def client_gone(self, client: str | None) -> None:
+        """A ``/ws/events`` socket opened with ``?client=`` closed: stop its jog."""
+        self.jog.client_gone(client, "the client's event socket closed")
+
+    def client_message(self, client: str | None, message: Any) -> None:
+        """A text message from a ``/ws/events`` client; only ``jog_stop`` is known."""
+        if isinstance(message, dict) and message.get("type") == "jog_stop":
+            self.jog.client_gone(client, "the client left the window")
+
+    def mount_tracking_rate(self, rate: str) -> dict:
+        """``POST /api/mount/tracking-rate`` (``telescope.py:610-634``), read back (H6)."""
+        with self._lock:
+            mount = self._require("mount")
+            generation = self._slots["mount"].generation
+            listed = self._mount_state.tracking_rates
+        if listed and rate not in listed:
+            raise ApiError(
+                400,
+                "invalid_argument",
+                f"The mount does not offer the {rate} rate (it lists: {', '.join(listed)})",
+            )
+        setter = getattr(mount, "set_tracking_rate", None)
+        if setter is None:
+            raise ApiError(400, "invalid_argument", "This mount has no tracking-rate setting")
+        try:
+            setter(rate)
+            reader = getattr(mount, "tracking_rate", None)
+            read = reader() if reader is not None else rate
+        except Exception as exc:
+            self.log("error", f"Tracking rate: {exc}", source="mount", topic="mount")
+            raise ApiError(502, "device_error", str(exc) or "tracking rate") from exc
+        with self._lock:
+            if generation != self._slots["mount"].generation:
+                raise ApiError(409, "not_connected", "Disconnected during the command")
+            self._set_mount_extras(tracking_rate=read)
+            state = self._mount_state
+        self.log("cmd", f"Tracking rate → {read or rate}", source="mount", topic="mount")
+        return state.to_dict()
 
     # -- poller, lost connection and auto-retry ------------------------------------
 
@@ -1851,6 +3139,7 @@ class Hub:
                     return  # disconnected while reading: do not resurrect state
                 recovered = self._mount_failing
                 self._mount_failing = False
+                self._last_reading = reading
                 self._apply_mount(self._mount_from_reading(reading), telemetry=True)
             self.site_check.on_reading(reading, generation)
             if recovered:
@@ -1867,6 +3156,7 @@ class Hub:
             retry_generation = slot.generation
             slot.handle = None
             self._poller = self._poller_stop = None  # this thread, about to return
+            self._last_reading = None  # X1: frames saved while retrying carry no pointing
             link = slot.link
             slot.state, slot.since = "error", utc_iso()
             slot.error = "Connection lost"
@@ -1876,6 +3166,7 @@ class Hub:
             slot.retry_stop = stop
             self._publish_status()
         _close_quietly(mount)
+        self.jog.mount_gone()
         self.site_check.mount_disconnected(before=retry_generation)
         self.set_activity(
             f"Mount connection lost · retrying every {interval:g} s",
@@ -1913,6 +3204,7 @@ class Hub:
                 reading: MountReading | None = handle.read()
             except Exception:
                 reading = None
+            extras = _mount_extras(handle)
             with self._lock:
                 slot = self._slots["mount"]
                 stale = slot.generation != generation or stop.is_set()
@@ -1925,7 +3217,8 @@ class Hub:
                     slot.name = slot.info = getattr(handle, "name", None)
                     slot.warnings = tuple(m for lvl, m in report if lvl in ("warning", "error"))
                     self._mount_failing = False
-                    self._mount_state = MountState()
+                    self._last_reading = reading
+                    self._mount_state = MountState(jog=self.jog.record(), **extras)
                     if reading is not None:
                         self._mount_state = self._mount_from_reading(reading)
                     self._start_poller(handle, generation)
@@ -1966,6 +3259,82 @@ def _driver_site(handle: Any) -> tuple[float, float, float | None] | None:
     if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
         return None
     return lat, lon, elev
+
+
+def _given(**values: Any) -> dict[str, Any]:
+    """The keyword arguments that were given (not None)."""
+    return {key: value for key, value in values.items() if value is not None}
+
+
+def _limits_record(limits: CameraLimits | None) -> dict[str, Any] | None:
+    if limits is None:
+        return None
+    return {
+        "gain_min": limits.gain_min,
+        "gain_max": limits.gain_max,
+        "exposure_min_s": limits.exposure_min_s,
+        "exposure_max_s": limits.exposure_max_s,
+    }
+
+
+def _camera_extras(handle: Any) -> dict[str, Any]:
+    """Limits, offset and temperature of a new camera (connect thread, A21)."""
+    extras: dict[str, Any] = {}
+    reader = getattr(handle, "limits", None)
+    if reader is not None:
+        try:
+            extras["limits"] = reader()
+        except Exception as exc:
+            logger.warning("Camera limits unavailable: %s", exc)
+    offset = getattr(handle, "get_offset", None)
+    if offset is not None:
+        try:
+            extras["offset"] = offset()
+        except Exception:
+            extras["offset"] = None
+    temperature = getattr(handle, "temperature", None)
+    if temperature is not None:
+        try:
+            extras["temperature_c"] = temperature()
+        except Exception:
+            extras["temperature_c"] = None
+    return extras
+
+
+def _mount_extras(handle: Any) -> dict[str, Any]:
+    """Geometry, tracking rates and the clock guard of a new mount (A29, H4)."""
+    alignment = getattr(handle, "alignment", None)
+    rates: list[str] = []
+    rate: str | None = None
+    lister = getattr(handle, "tracking_rates", None)
+    if lister is not None:
+        try:
+            rates = [str(r) for r in lister()]
+        except Exception as exc:
+            logger.info("Tracking rates unavailable: %s", exc)
+    reader = getattr(handle, "tracking_rate", None)
+    if reader is not None:
+        try:
+            rate = reader()
+        except Exception as exc:
+            logger.info("Tracking rate unavailable: %s", exc)
+    blocked = None
+    clock = getattr(handle, "clock_error_s", None)
+    if isinstance(clock, (int, float)) and clock > _CLOCK_LIMIT_S:
+        blocked = {
+            "reason": "clock",
+            "clock_error_s": float(clock),
+            "message": (
+                f"Mount clock is {clock / 3600.0:.1f} h off — correct the date/time in the "
+                "Seestar app, then reconnect. GoTo, Sync and Center will be refused until then."
+            ),
+        }
+    return {
+        "alignment": alignment if alignment in ("altaz", "eq", "eq_gem") else None,
+        "tracking_rates": tuple(rates),
+        "tracking_rate": rate,
+        "goto_blocked": blocked,
+    }
 
 
 def _close_quietly(device: Any) -> None:

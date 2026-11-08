@@ -48,14 +48,32 @@ class ConnectionState:
         return asdict(self)
 
 
+CameraOwner = Literal["idle", "live", "single", "autofocus", "sequence"]
+
+
 @dataclass(frozen=True)
 class CameraState:
     state: CameraStateName = "idle"
-    #: Settings of the current (or last) exposure request.
+    #: v1: the frame being exposed (``current``) while one is, else the settings.
     exposure_s: float = 2.0
     gain: int = 80
     last_frame_seq: int | None = None
     sensor: SensorInfo | None = None
+    # -- wave 3 (A21), additive ------------------------------------------------
+    #: Who drives the camera (``camera_service.py:60-77``).
+    owner: CameraOwner = "idle"
+    #: ``CaptureSettings`` as a dict: what the NEXT frame uses.
+    settings: dict[str, Any] | None = None
+    #: ``FrameSettings`` of the frame being exposed now, or ``None``.
+    current: dict[str, Any] | None = None
+    #: Take shots still waiting for their frame (0 or 1).
+    save_pending: int = 0
+    #: A Dark/Bias Take shot waiting for the wheel to reach Dark.
+    waiting_for: Literal["filterwheel"] | None = None
+    limits: dict[str, Any] | None = None
+    offset: dict[str, int] | None = None
+    binning: dict[str, int] | None = None
+    temperature_c: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -77,9 +95,18 @@ class MountState:
     tracking: bool = False
     pier_side: Literal["east", "west"] | None = None
     target: Target | None = None
+    # -- wave 3 (A29), additive ------------------------------------------------
+    alignment: Literal["altaz", "eq", "eq_gem"] | None = None
+    tracking_rate: str | None = None
+    tracking_rates: tuple[str, ...] = ()
+    goto_blocked: dict[str, Any] | None = None
+    center_available: bool = False
+    jog: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        record = asdict(self)
+        record["tracking_rates"] = list(self.tracking_rates)
+        return record
 
     def discrete(self) -> tuple:
         """Everything but the continuously moving coordinates.
@@ -88,4 +115,14 @@ class MountState:
         ``status`` event; coordinate changes alone only feed the 4 Hz
         ``mount`` telemetry.
         """
-        return (self.state, self.tracking, self.pier_side, self.target)
+        return (
+            self.state,
+            self.tracking,
+            self.pier_side,
+            self.target,
+            self.alignment,
+            self.tracking_rate,
+            self.tracking_rates,
+            self.goto_blocked,
+            self.jog,
+        )

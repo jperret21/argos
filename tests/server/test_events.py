@@ -18,8 +18,21 @@ def test_status_is_sent_immediately_on_connect(client):
         "device_name": None,
         "message": None,
     }
-    assert set(message["camera"]) == {"state", "exposure_s", "gain", "last_frame_seq", "sensor"}
-    assert set(message["mount"]) == {
+    # Records only gain fields (API 2 is additive): v1's are all there, plus wave 3's.
+    v1_camera = {"state", "exposure_s", "gain", "last_frame_seq", "sensor"}
+    wave3_camera = {
+        "owner",
+        "settings",
+        "current",
+        "save_pending",
+        "waiting_for",
+        "limits",
+        "offset",
+        "binning",
+        "temperature_c",
+    }
+    assert set(message["camera"]) == v1_camera | wave3_camera
+    v1_mount = {
         "state",
         "ra_hours",
         "dec_deg",
@@ -29,6 +42,17 @@ def test_status_is_sent_immediately_on_connect(client):
         "pier_side",
         "target",
     }
+    wave3_mount = {
+        "alignment",
+        "tracking_rate",
+        "tracking_rates",
+        "goto_blocked",
+        "center_available",
+        "jog",
+    }
+    assert set(message["mount"]) == v1_mount | wave3_mount
+    for record in ("filterwheel", "focuser", "autofocus", "observation"):
+        assert record in message  # wave 3: every snapshot a new client needs
 
 
 def test_connect_emits_connecting_then_connected_and_a_log(client):

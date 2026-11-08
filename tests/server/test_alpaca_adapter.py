@@ -187,7 +187,8 @@ def test_driver_error_is_502_device_error(client, monkeypatch):
     }
 
 
-def test_gain_is_sent_once_per_change_not_per_frame(client):
+def test_gain_is_sent_before_every_frame_as_qt_does(client):
+    """exposure_worker.py:145-149 sends the gain before each frame (science review W3)."""
     client.post("/api/connection", json=ALPACA, headers=AUTH)
     camera = client.app.state.hub._camera._cam
     client.post("/api/camera/live", json={"exposure_s": 0.01, "gain": 42}, headers=AUTH)
@@ -196,4 +197,31 @@ def test_gain_is_sent_once_per_change_not_per_frame(client):
         >= 3
     )
     client.post("/api/camera/stop", headers=AUTH)
-    assert camera.gains == [42]
+    assert len(camera.gains) >= 3 and set(camera.gains) == {42}
+
+
+def test_a_refused_gain_is_sent_again_on_the_next_frame():
+    """One failed set_gain must not leave every later frame at the old gain (FITS GAIN)."""
+    import threading
+
+    cam = adapter.AlpacaCamera.__new__(adapter.AlpacaCamera)
+    fake = FakeCamera("10.0.0.1", 32323)
+    calls: list[int] = []
+
+    def set_gain(gain, _left=[1]):
+        calls.append(gain)
+        if _left[0]:
+            _left[0] -= 1
+            raise AlpacaError(0, "timeout")
+        fake.gains.append(gain)
+
+    fake.set_gain = set_gain  # type: ignore[method-assign]
+    cam._cam = fake
+    cam._gain_error = None
+    for _ in range(3):
+        cam.expose(0.0, 120, threading.Event(), lambda: None)
+    assert calls == [120, 120, 120] and fake.gains == [120, 120]
+    # A gain changed by another client is restored before the next frame.
+    fake.gains.clear()
+    cam.expose(0.0, 120, threading.Event(), lambda: None)
+    assert fake.gains == [120]

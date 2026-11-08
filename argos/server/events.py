@@ -52,6 +52,12 @@ _COVERED_BY = {
 #: Pending messages per client before the backlog is compacted.
 EVENT_BACKLOG = 256
 
+#: Stream kinds: every message counts (no snapshot floor, never replaced by a
+#: newer one). Under backpressure ``log`` lines are dropped first, then the
+#: oldest of the wave 3 streams; each stream carries its own ``seq`` so a
+#: client that sees a gap re-reads the REST page (protocol.md "Backpressure").
+STREAM_KINDS = frozenset({"log", "frame_saved", "conditions"})
+
 
 class EventSubscriber:
     """One ``/ws/events`` client's pending messages (loop thread only)."""
@@ -66,7 +72,7 @@ class EventSubscriber:
         self.dropped = 0
 
     def offer(self, kind: str, seq: int | None, payload: dict[str, Any]) -> None:
-        if kind != "log" and seq is not None:
+        if kind not in STREAM_KINDS and seq is not None:
             if seq <= self._floor.get(kind, -1):
                 return  # older than a snapshot this client already holds
             for covered in _COVERED_BY.get(kind, (kind,)):
@@ -77,15 +83,19 @@ class EventSubscriber:
         self._wake.set()
 
     def _compact(self) -> None:
-        """Keep the newest snapshot of each type and as many recent logs as fit."""
-        newest = {kind: i for i, (kind, _) in enumerate(self._queue) if kind != "log"}
+        """Keep the newest snapshot of each type and as many recent stream items as fit."""
+        newest = {kind: i for i, (kind, _) in enumerate(self._queue) if kind not in STREAM_KINDS}
         kept = [
-            item for i, item in enumerate(self._queue) if item[0] == "log" or newest[item[0]] == i
+            item
+            for i, item in enumerate(self._queue)
+            if item[0] in STREAM_KINDS or newest[item[0]] == i
         ]
         excess = len(kept) - self._capacity
         if excess > 0:
-            logs = [i for i, item in enumerate(kept) if item[0] == "log"][:excess]
-            drop = set(logs)
+            # The oldest log lines go first, then the oldest wave 3 stream items.
+            logs = [i for i, item in enumerate(kept) if item[0] == "log"]
+            others = [i for i, item in enumerate(kept) if item[0] in STREAM_KINDS - {"log"}]
+            drop = set((logs + others)[:excess])
             kept = [item for i, item in enumerate(kept) if i not in drop]
         self.dropped += len(self._queue) - len(kept)
         self._queue = deque(kept)

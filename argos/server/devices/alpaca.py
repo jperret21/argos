@@ -29,6 +29,7 @@ from argos.core.alpaca.telescope import Telescope
 from argos.core.hardware import active as hardware
 from argos.core.hardware import detect
 from argos.server.devices.base import (
+    CameraLimits,
     ConnectReport,
     DeviceError,
     ExposureCancelled,
@@ -63,9 +64,9 @@ class AlpacaCamera:
         sensor_type = self._cam.get_sensor_metadata().get("sensor_type")
         mono = sensor_type is not None and int(sensor_type) == 0
         self._bayer = None if mono else hardware.profile().bayer_pattern
-        #: Gain last sent to the driver: set once per change, not on every
-        #: live frame (a driver without Gain would warn on each one).
-        self._gain_sent: int | None = None
+        #: The last gain refusal, logged once per streak (the gain itself is
+        #: sent before every exposure, as LivePreviewWorker does).
+        self._gain_error: str | None = None
 
     def sensor(self) -> SensorInfo:
         return SensorInfo(
@@ -111,15 +112,30 @@ class AlpacaCamera:
         gain: int,
         cancel: threading.Event,
         on_readout: Callable[[], None],
+        *,
+        light: bool = True,
+        on_start: Callable[[], None] | None = None,
     ) -> np.ndarray:
         try:
-            if int(gain) != self._gain_sent:
-                self._gain_sent = int(gain)  # tried once, even if refused
-                try:
-                    self._cam.set_gain(int(gain))
-                except AlpacaError as exc:
-                    logger.warning("Could not set gain: %s", exc)
-            self._cam.start_exposure(float(exposure_s), light=True)
+            # Sent before EVERY exposure (exposure_worker.py:145-149): a refused
+            # or lost set is retried on the next frame, and a gain changed by
+            # another client (the Seestar app, a driver restart) is restored, so
+            # FITS GAIN / EGAIN describe the frame (science review of wave 3).
+            try:
+                self._cam.set_gain(int(gain))
+                self._gain_error = None
+            except AlpacaError as exc:
+                text = str(exc)
+                if text != self._gain_error:
+                    logger.warning(
+                        "Could not set gain %d: %s — this frame's gain is not confirmed",
+                        int(gain),
+                        text,
+                    )
+                self._gain_error = text
+            if on_start is not None:
+                on_start()  # DATE-OBS: just before StartExposure (exposure_worker.py:160)
+            self._cam.start_exposure(float(exposure_s), light=bool(light))
             deadline = time.monotonic() + float(exposure_s) + _READY_GRACE_S
             while not self._cam.is_image_ready():
                 if cancel.wait(_READY_POLL_S):
@@ -140,6 +156,75 @@ class AlpacaCamera:
     def close(self) -> None:
         self._cam.disconnect()
 
+    # -- wave 3 camera extras (camera.py:70-133, 205-306) ---------------------
+
+    def limits(self) -> CameraLimits:
+        cam = self._cam
+        low = getattr(cam, "offset_min", None)
+        high = getattr(cam, "offset_max", None)
+        offset_range: tuple[int, int] | None = None
+        if self.get_offset() is not None:
+            offset_range = (
+                int(low) if low is not None else 0,
+                int(high) if high is not None else 255,
+            )
+        return CameraLimits(
+            gain_min=int(getattr(cam, "gain_min", 0)),
+            gain_max=int(getattr(cam, "gain_max", 600)),
+            exposure_min_s=float(getattr(cam, "exposure_min", 0.001)),
+            exposure_max_s=float(getattr(cam, "exposure_max", 3600.0)),
+            offset_range=offset_range,
+            max_bin=max(1, int(getattr(cam, "max_bin", 1) or 1)),
+        )
+
+    def get_offset(self) -> int | None:
+        reader = getattr(self._cam, "get_offset", None)
+        if reader is None:
+            return None
+        try:
+            return reader()
+        except Exception as exc:
+            logger.debug("Offset read failed: %s", exc)
+            return None
+
+    def set_offset(self, value: int) -> None:
+        try:
+            self._cam.set_offset(int(value))
+        except AlpacaError as exc:
+            raise DeviceError(str(exc)) from exc
+
+    def set_binning(self, value: int) -> None:
+        try:
+            self._cam.set_binning(int(value))
+        except AlpacaError as exc:
+            raise DeviceError(str(exc)) from exc
+
+    def temperature(self) -> float | None:
+        reader = getattr(self._cam, "get_ccd_temperature", None)
+        if reader is None:
+            return None
+        try:
+            return reader()
+        except Exception:
+            return None
+
+    def fits_readings(self) -> dict[str, object]:
+        """The four camera reads of a Take-shot save (acquisition_engine.py:1856-1859)."""
+        out: dict[str, object] = {}
+        for key, method in (
+            ("ccd_temp", "get_ccd_temperature"),
+            ("egain_driver", "get_electrons_per_adu"),
+            ("offset", "get_offset"),
+            ("readout_mode", "get_readout_mode_name"),
+        ):
+            reader = getattr(self._cam, method, None)
+            try:
+                out[key] = reader() if reader is not None else None
+            except Exception as exc:  # the core readers are tolerant; a fake may not be
+                logger.debug("%s failed: %s", method, exc)
+                out[key] = None
+        return out
+
 
 class AlpacaMount:
     """Implements :class:`~argos.server.devices.base.MountDevice`."""
@@ -156,6 +241,11 @@ class AlpacaMount:
         #: does not expose one; read once here, at connect time, on the
         #: connecting thread (the site check compares it, wave 2).
         self.driver_site = self._read_driver_site()
+        #: AlignmentMode at connect (telescope.py:266-271), as the API names it.
+        mode = getattr(self._scope, "alignment_mode", None)
+        self.alignment = _ALIGNMENTS.get(mode) if isinstance(mode, str) else None
+        clock = getattr(self._scope, "clock_error_seconds", None)
+        self.clock_error_s = float(clock) if isinstance(clock, (int, float)) else None
 
     def _read_driver_site(self) -> tuple[float, float, float | None] | None:
         """``SiteLatitude`` / ``SiteLongitude`` (``telescope.py:193-215``).
@@ -207,8 +297,10 @@ class AlpacaMount:
             report.append(
                 (
                     "error",
-                    "Mount clock is %.1f h off — correct date/time in the Seestar app; "
-                    "GoTo and Sync are disabled." % (clock / 3600.0),
+                    # H4 (device_session.py:377-382): what is really refused.
+                    "Mount clock is %.1f h off — correct the date/time in the Seestar app, then "
+                    "reconnect. GoTo, Sync and Center will be refused until then."
+                    % (clock / 3600.0),
                 )
             )
         return report
@@ -274,9 +366,50 @@ class AlpacaMount:
     def close(self) -> None:
         self._scope.disconnect()
 
+    # -- wave 3: jog and tracking rate (telescope.py:564-634) ----------------
+
+    def move_axis(self, axis: int, rate_deg_s: float) -> None:
+        self._call(self._scope.move_axis, int(axis), float(rate_deg_s))
+
+    def tracking_rates(self) -> list[str]:
+        """``TrackingRates`` as the driver lists them (Q-O15); [] when unknown."""
+        device = getattr(self._scope, "_scope", None)
+        try:
+            rates = list(device.TrackingRates) if device is not None else []
+        except Exception as exc:
+            logger.info("TrackingRates unavailable: %s", exc)
+            return []
+        names = []
+        for rate in rates:
+            try:
+                name = _DRIVE_RATES.get(int(rate))
+            except (TypeError, ValueError):
+                name = None
+            if name is not None and name not in names:
+                names.append(name)
+        return names
+
+    def tracking_rate(self) -> str | None:
+        reader = getattr(self._scope, "get_tracking_rate", None)
+        value = reader() if reader is not None else None
+        return _DRIVE_RATES.get(value) if value is not None else None
+
+    def set_tracking_rate(self, rate: str) -> None:
+        index = {name: i for i, name in _DRIVE_RATES.items()}.get(rate)
+        if index is None:
+            raise DeviceError(f"Unknown tracking rate {rate!r}")
+        self._call(self._scope.set_tracking_rate, index)
+
+
+#: ASCOM DriveRates (telescope.py:610-622).
+_DRIVE_RATES = {0: "sidereal", 1: "lunar", 2: "solar", 3: "king"}
+#: Telescope.alignment_mode → MountState.alignment.
+_ALIGNMENTS = {"Alt-Az": "altaz", "EQ": "eq", "EQ (GEM)": "eq_gem"}
+
 
 class AlpacaFilterWheel:
-    """Implements :class:`~argos.server.devices.base.AuxDevice` (``device_session.py:430-448``)."""
+    """Implements :class:`~argos.server.devices.base.FilterWheelDevice`
+    (``device_session.py:430-448``; moves ``:85-122, 681-701``)."""
 
     name = "Filter wheel"
 
@@ -287,16 +420,39 @@ class AlpacaFilterWheel:
             self._position_name = self._fw.position_name()
         except AlpacaError as exc:
             raise DeviceError(f"Filter wheel: {exc}") from exc
+        #: Slot names from the active profile (``filterwheel.py:24-31``).
+        self.slots: tuple[str, ...] = tuple(hardware.profile().filter_names)
 
     def info(self) -> str:
         return self._position_name
+
+    def get_position(self) -> int:
+        try:
+            return int(self._fw.get_position())
+        except AlpacaError as exc:
+            raise DeviceError(str(exc)) from exc
+
+    def set_position(self, index: int) -> None:
+        try:
+            self._fw.set_position(int(index))
+        except AlpacaError as exc:
+            raise DeviceError(str(exc)) from exc
+
+    def position_name(self) -> str:
+        try:
+            name = str(self._fw.position_name())
+        except AlpacaError as exc:
+            raise DeviceError(str(exc)) from exc
+        self._position_name = name
+        return name
 
     def close(self) -> None:
         self._fw.disconnect()
 
 
 class AlpacaFocuser:
-    """Implements :class:`~argos.server.devices.base.AuxDevice` (``device_session.py:460-488``)."""
+    """Implements :class:`~argos.server.devices.base.FocuserDevice`
+    (``device_session.py:460-488``; moves ``:705-739``)."""
 
     def __init__(self, host: str, port: int) -> None:
         self._focuser = Focuser(host, port)
@@ -305,9 +461,43 @@ class AlpacaFocuser:
             self.position = self._focuser.get_position()
         except AlpacaError as exc:
             raise DeviceError(f"Focuser: {exc}") from exc
+        # Capability flags cached by Focuser.connect (focuser.py:52-83).
+        self.max_step = int(getattr(self._focuser, "max_step", 100_000) or 100_000)
+        self.max_increment = int(getattr(self._focuser, "max_increment", 1_000) or 1_000)
+        self.absolute = bool(getattr(self._focuser, "absolute", True))
+        size = getattr(self._focuser, "step_size_um", None)
+        self.step_size_um = float(size) if isinstance(size, (int, float)) else None
 
     def info(self) -> str:
         return self.name
+
+    def get_position(self) -> int:
+        try:
+            return int(self._focuser.get_position())
+        except AlpacaError as exc:
+            raise DeviceError(str(exc)) from exc
+
+    def is_moving(self) -> bool:
+        try:
+            return bool(self._focuser.is_moving())
+        except AlpacaError as exc:
+            raise DeviceError(str(exc)) from exc
+
+    def move_to(self, position: int) -> None:
+        try:
+            self._focuser.move_to(int(position))
+        except AlpacaError as exc:
+            raise DeviceError(str(exc)) from exc
+
+    def halt(self) -> None:
+        self._focuser.halt()  # logs and swallows its own errors (focuser.py:151-156)
+
+    def get_temperature(self) -> float | None:
+        reader = getattr(self._focuser, "get_temperature", None)
+        try:
+            return reader() if reader is not None else None
+        except Exception:
+            return None
 
     def close(self) -> None:
         self._focuser.disconnect()

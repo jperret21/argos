@@ -176,3 +176,65 @@ def connected(client) -> TestClient:
     response = client.post("/api/connection", json={"mode": "simulator"}, headers=AUTH)
     assert response.status_code == 200, response.text
     return client
+
+
+# ---------------------------------------------------------------------------
+# Wave 3: a client with every simulated device, its files in temporary folders
+# ---------------------------------------------------------------------------
+
+#: A fast wheel and focuser, so moves, sweeps and settles take milliseconds.
+WAVE3_SIM = SimOptions(
+    width=160,
+    height=120,
+    n_stars=40,
+    slew_rate_deg_s=400.0,
+    wheel_slot_s=0.05,
+    focuser_speed_steps_s=200_000.0,
+)
+
+
+def science_client(make_client, tmp_path, *, connect: tuple[str, ...] = (), **overrides: Any):
+    """A started client whose sessions, targets and resolver cache live in *tmp_path*.
+
+    Nothing may reach ``~/Argos``: the sessions folder (Take shots, targets)
+    and the object-resolver cache are set to temporary folders before any
+    device is connected. *connect* names the simulated devices to connect.
+    """
+    overrides.setdefault("sim", WAVE3_SIM)
+    overrides.setdefault("autofocus_settle_s", 0.0)
+    overrides.setdefault("autofocus_poll_s", 0.01)
+    overrides.setdefault("jog_deadman_s", 0.3)
+    client = make_client(**overrides)
+    sessions = tmp_path / "sessions"
+    response = client.patch(
+        "/api/config",
+        json={
+            "sessions_path": str(sessions),
+            "data_paths.object_catalogue_cache": str(tmp_path / "cache" / "objects.json"),
+        },
+        headers=AUTH,
+    )
+    assert response.status_code == 200, response.text
+    for device in connect:
+        answer = client.post(
+            f"/api/devices/{device}/connect", json={"mode": "simulator"}, headers=AUTH
+        )
+        assert answer.status_code == 200, answer.text
+    client.sessions_path = sessions  # type: ignore[attr-defined]
+    return client
+
+
+@pytest.fixture
+def science(make_client, tmp_path):
+    """All four simulated devices, temporary sessions folder (wave 3 tests)."""
+    return science_client(
+        make_client, tmp_path, connect=("mount", "camera", "filterwheel", "focuser")
+    )
+
+
+def status(client) -> dict:
+    return client.get("/api/status", headers=AUTH).json()
+
+
+def log_messages(client) -> list[str]:
+    return [e["message"] for e in client.get("/api/logs", headers=AUTH).json()["entries"]]

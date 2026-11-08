@@ -52,6 +52,7 @@ def test_start_reports_the_listening_bridge_and_saves_the_port(bridge):
         "clients": 0,
         "error": None,
         "last_goto": None,
+        "suggestions": None,  # wave 3 (A20): no GoTo yet, so no target-name suggestion
     }
     values = client.get("/api/config", headers=AUTH).json()["values"]
     assert values["stellarium.port"] == port

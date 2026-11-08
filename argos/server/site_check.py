@@ -9,18 +9,18 @@ telescope was in France, the mount put RR Lyr at altitude 75.4°, azimuth
 258.9°, the Settings site at 13.8°, 45.9° (88.5° apart), and that run's
 photometry airmass and AAVSO AMASS are wrong.
 
-This is a Qt-free port of the reference implementation on the Qt release
-branch, commit ``de5732f`` ("fix(mount): warn when the Settings site is not
-where the telescope is"):
+This is a Qt-free port of the reference implementation of release 0.5.0
+(X3, merged into this branch):
 
 - :func:`horizontal_at` and :func:`angle_between_directions` are
-  ``argos/core/imaging/sky_geometry.py`` of ``de5732f`` (lines 60-90 there;
-  this tree's ``sky_geometry`` only has ``altitude_at``);
-- :func:`observing_site` is ``argos.core.config.observing_site`` of the same
-  branch (``config.py:277-297`` there);
+  ``argos.core.imaging.sky_geometry``'s (``sky_geometry.py:60-90``),
+  imported since the 0.5.0 merge (wave 3; the wave 2 copies were identical);
+- :func:`observing_site` is ``argos.core.config.observing_site``
+  (``config.py:277-297``, X2) behind a getter adapter (the store passes
+  ``get``);
 - :class:`SiteCheck` follows ``DeviceSession._check_site_against_mount``
-  (``device_session.py`` of ``de5732f``): the whole direction is compared,
-  never the altitude alone, with the same 5° tolerance and the same texts.
+  (``device_session.py:646-676``): the whole direction is compared, never
+  the altitude alone, with the same 5° tolerance and the same texts.
 
 The server adds what the Qt release does not do: a periodic re-check every
 :data:`SITE_CHECK_PERIOD_S` while the mount is connected, a re-check after a
@@ -37,6 +37,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from argos.core.config import observing_site as core_observing_site
+from argos.core.imaging.sky_geometry import angle_between_directions, horizontal_at
 from argos.core.photometry.airmass import julian_date
 from argos.server.devices.base import MountReading
 
@@ -77,42 +79,16 @@ _UNKNOWN_TEXT = {
 
 
 # ---------------------------------------------------------------------------
-# Geometry (de5732f, argos/core/imaging/sky_geometry.py)
+# Geometry: argos.core.imaging.sky_geometry (0.5.0), re-exported for the tests
 # ---------------------------------------------------------------------------
 
-
-def horizontal_at(
-    jd_utc: float, ra_hours: float, dec_deg: float, lat_deg: float, lon_deg: float
-) -> tuple[float, float]:
-    """Altitude and azimuth (degrees, azimuth north through east) at a JD.
-
-    The fast spherical trig of ``sky_geometry.altitude_at``: GMST from the JD
-    (IAU 1982 linear term), LST from the longitude, then the hour angle. No
-    precession, nutation or refraction. Given coordinates of date (what the
-    mount reports) it agrees with astropy (FK5 of date, no refraction) within
-    0.01°; given J2000 coordinates it can be off by up to about 0.4° in 2026,
-    the precession since 2000 (``tests/server/test_site_check.py`` sweeps both).
-    Either way far inside the 5° tolerance it serves.
-    """
-    gmst_h = (18.697374558 + 24.06570982441908 * (jd_utc - 2451545.0)) % 24.0
-    lst_h = (gmst_h + lon_deg / 15.0) % 24.0
-    ha = math.radians((lst_h - ra_hours) * 15.0)
-    lat = math.radians(lat_deg)
-    dec = math.radians(dec_deg)
-    sin_alt = math.sin(lat) * math.sin(dec) + math.cos(lat) * math.cos(dec) * math.cos(ha)
-    alt = math.asin(max(-1.0, min(1.0, sin_alt)))
-    az = math.atan2(
-        -math.cos(dec) * math.sin(ha),
-        math.sin(dec) * math.cos(lat) - math.cos(dec) * math.cos(ha) * math.sin(lat),
-    )
-    return math.degrees(alt), math.degrees(az) % 360.0
-
-
-def angle_between_directions(alt1: float, az1: float, alt2: float, az2: float) -> float:
-    """Angle (degrees) between two horizontal directions given in degrees."""
-    a1, z1, a2, z2 = (math.radians(v) for v in (alt1, az1, alt2, az2))
-    cos_d = math.sin(a1) * math.sin(a2) + math.cos(a1) * math.cos(a2) * math.cos(z1 - z2)
-    return math.degrees(math.acos(max(-1.0, min(1.0, cos_d))))
+__all__ = [
+    "SiteCheck",
+    "angle_between_directions",
+    "ground_distance_km",
+    "horizontal_at",
+    "observing_site",
+]
 
 
 def ground_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -123,24 +99,21 @@ def ground_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     return 2.0 * _EARTH_RADIUS_KM * math.asin(min(1.0, math.sqrt(h)))
 
 
-def observing_site(get: Callable[[str, Any], Any]) -> tuple[float, float, float] | None:
-    """The site the observer set, ``(lat, lon, elev)``, or ``None``.
+class _Getter:
+    """``config.get`` for a bare getter, so ``argos.core.config.observing_site`` reads it."""
 
-    Port of ``argos.core.config.observing_site`` (``de5732f``). The defaults
-    are 0/0, which must never be used as a site (a point in the Gulf of
-    Guinea): a site counts as set when it has a name, or when its coordinates
-    are not the 0/0 default.
+    def __init__(self, get: Callable[[str, Any], Any]) -> None:
+        self.get = get
+
+
+def observing_site(get: Callable[[str, Any], Any]) -> tuple[float, float, float] | None:
+    """The site the observer set, ``(lat, lon, elev)``, or ``None`` (X2).
+
+    ``argos.core.config.observing_site`` on a getter: the 0/0 default is never
+    a site; a site counts as set when it has a name, or coordinates other
+    than 0/0.
     """
-    try:
-        lat = float(get("site.latitude", 0.0) or 0.0)
-        lon = float(get("site.longitude", 0.0) or 0.0)
-        elev = float(get("site.elevation", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        return None
-    named = bool(str(get("site.name", "") or "").strip())
-    if not named and lat == 0.0 and lon == 0.0:
-        return None
-    return lat, lon, elev
+    return core_observing_site(_Getter(get))
 
 
 def _utcnow() -> datetime:

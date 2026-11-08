@@ -82,6 +82,7 @@ def encode_frame(
     timestamp: str,
     source: FrameSource,
     stats: dict[str, Any] | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> bytes:
     """Encode one frame as a ``/ws/frames`` binary message.
 
@@ -93,6 +94,9 @@ def encode_frame(
         timestamp: ISO 8601 UTC time of the frame.
         source: ``"simulator"``, ``"alpaca"`` or ``"file"``.
         stats: Precomputed :func:`frame_stats`, computed here when omitted.
+        extra: Additive header fields (wave 3: ``bayer``, ``origin``, the
+            frame's settings, an opened file's ``path`` / ``date_obs`` /
+            ``epoch_utc``); they never replace a v1 field.
 
     Raises:
         ValueError: Unsupported dtype or shape.
@@ -120,6 +124,8 @@ def encode_frame(
         "source": source,
         "stats": stats if stats is not None else frame_stats(arr),
     }
+    for key, value in (extra or {}).items():
+        header.setdefault(key, value)
     # pixel_offset is part of the header it positions: iterate until the
     # aligned offset is stable (at most two passes — it only grows).
     offset = 0

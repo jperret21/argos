@@ -10,6 +10,13 @@ Frame *n* is a pure function of ``(seed, n, exposure, gain)``: the star field
 comes from the seed, the noise and the jitter from ``(seed, n)``. Units are
 16-bit ADU throughout; the "reference" settings are a 2 s exposure at the
 Seestar's default gain of 80.
+
+Wave 3: with a :class:`~argos.server.devices.sim_aux.SimOptics` the frame
+also follows the simulated focuser (the stars blur away from best focus,
+their flux conserved, so ``compute_hfd`` traces a V-curve) and the filter
+wheel (the Dark slot blocks the light: sky and stars vanish, the pedestal,
+read noise and hot pixels stay). The ``light`` flag of an exposure closes
+nothing, as on a Seestar. Offset shifts the pedestal by 2 ADU per unit.
 """
 
 from __future__ import annotations
@@ -20,7 +27,7 @@ from typing import Callable
 
 import numpy as np
 
-from argos.server.devices.base import ExposureCancelled
+from argos.server.devices.base import CameraLimits, ExposureCancelled
 from argos.server.state import SensorInfo
 
 #: Zero-exposure level (ADU), as a bias frame would read.
@@ -36,6 +43,20 @@ FWHM_PX = 2.8
 SATURATION_ADU = 65535
 #: Stars are generated over a slightly larger field so drift reveals new ones.
 _MARGIN_PX = 16
+#: Offset (ASCOM ``Offset``) at which the pedestal is PEDESTAL_ADU, and its slope.
+REFERENCE_OFFSET = 10
+ADU_PER_OFFSET = 2.0
+#: Driver ranges the simulator advertises (wave 3, ``CameraLimits``).
+SIM_LIMITS = CameraLimits(
+    gain_min=0,
+    gain_max=600,
+    exposure_min_s=0.001,
+    exposure_max_s=3600.0,
+    offset_range=(0, 255),
+    max_bin=1,
+)
+#: Sensor temperature the simulator reports (°C).
+SENSOR_TEMPERATURE_C = 21.0
 
 
 class SimCamera:
@@ -45,7 +66,12 @@ class SimCamera:
     name = "ARGOS camera simulator"
 
     def __init__(
-        self, width: int = 1080, height: int = 1920, seed: int = 20261101, n_stars: int = 240
+        self,
+        width: int = 1080,
+        height: int = 1920,
+        seed: int = 20261101,
+        n_stars: int = 240,
+        optics=None,
     ) -> None:
         if width < 8 or height < 8:
             raise ValueError("simulated sensor must be at least 8×8")
@@ -54,6 +80,11 @@ class SimCamera:
         self._seed = int(seed)
         self._lock = threading.Lock()
         self._index = 0
+        #: ``SimOptics`` shared with the simulated focuser and wheel (or None).
+        self._optics = optics
+        self._offset = REFERENCE_OFFSET
+        #: Light flags of the exposures, newest last (tests read them).
+        self.light_flags: list[bool] = []
 
         rng = np.random.default_rng([self._seed, 0])
         self._star_x = rng.uniform(-_MARGIN_PX, self.width + _MARGIN_PX, n_stars)
@@ -89,15 +120,34 @@ class SimCamera:
         gain: int,
         cancel: threading.Event,
         on_readout: Callable[[], None],
+        *,
+        light: bool = True,
+        on_start: Callable[[], None] | None = None,
     ) -> np.ndarray:
         with self._lock:
             self._index += 1
             index = self._index
+            offset = self._offset
+            self.light_flags = (self.light_flags + [bool(light)])[-64:]
+        if on_start is not None:
+            on_start()
+        optics = self._optics
+        # Focus and filter at the start and the end of the exposure: a wheel
+        # that turns during it, or a focuser that moves, shows in the frame.
+        start = (optics.fwhm_factor(), optics.transmission()) if optics is not None else (1, 1)
         # The exposure time is really waited, and stop interrupts it at once.
         if cancel.wait(max(0.0, float(exposure_s))):
             raise ExposureCancelled()
         on_readout()
-        frame = self.render(index, exposure_s, gain)
+        end = (optics.fwhm_factor(), optics.transmission()) if optics is not None else (1, 1)
+        frame = self.render(
+            index,
+            exposure_s,
+            gain,
+            fwhm_factor=max(start[0], end[0]),
+            transmission=min(start[1], end[1]),
+            offset=offset,
+        )
         if cancel.is_set():
             raise ExposureCancelled()
         return frame
@@ -108,6 +158,37 @@ class SimCamera:
     def close(self) -> None:
         pass
 
+    # -- wave 3 camera extras ------------------------------------------------
+
+    def limits(self) -> CameraLimits:
+        return SIM_LIMITS
+
+    def get_offset(self) -> int | None:
+        with self._lock:
+            return self._offset
+
+    def set_offset(self, value: int) -> None:
+        low, high = SIM_LIMITS.offset_range or (0, 0)
+        with self._lock:
+            self._offset = max(low, min(high, int(value)))
+
+    def set_binning(self, value: int) -> None:
+        if int(value) != 1:
+            from argos.server.devices.base import DeviceError
+
+            raise DeviceError("The simulated camera does not bin")
+
+    def temperature(self) -> float | None:
+        return SENSOR_TEMPERATURE_C
+
+    def fits_readings(self) -> dict[str, object]:
+        return {
+            "ccd_temp": SENSOR_TEMPERATURE_C,
+            "egain_driver": None,  # FITS EGAIN from the sensor reference
+            "offset": self.get_offset(),
+            "readout_mode": None,
+        }
+
     # -- synthesis ---------------------------------------------------------
 
     def drift(self, index: int) -> tuple[float, float]:
@@ -117,23 +198,39 @@ class SimCamera:
         dy = 4.0 * math.sin(2.0 * math.pi * index / 500.0 + 1.0) + rng.normal(0.0, 0.25)
         return float(dx), float(dy)
 
-    def render(self, index: int, exposure_s: float, gain: int) -> np.ndarray:
-        """Synthesize frame *index* — deterministic, ~25 ms at 1080×1920."""
+    def render(
+        self,
+        index: int,
+        exposure_s: float,
+        gain: int,
+        *,
+        fwhm_factor: float = 1.0,
+        transmission: float = 1.0,
+        offset: int = REFERENCE_OFFSET,
+    ) -> np.ndarray:
+        """Synthesize frame *index* — deterministic, ~25 ms at 1080×1920.
+
+        *fwhm_factor* widens every star (defocus) with its flux conserved;
+        *transmission* scales sky and stars (0 = the wheel's Dark slot).
+        """
         h, w = self.height, self.width
         t = max(0.0, float(exposure_s))
         # ZWO gain is in 0.1 dB steps: ×10^(Δgain/200) on every ADU figure.
         g = 10.0 ** ((int(gain) - REFERENCE_GAIN) / 200.0)
         rng = np.random.default_rng([self._seed, index])
+        light = max(0.0, float(transmission))
+        blur = max(1.0, float(fwhm_factor))
 
-        sky = np.float32(SKY_RATE_ADU_S * t * g)
+        sky = np.float32(SKY_RATE_ADU_S * t * g * light)
         img = np.empty((h, w), dtype=np.float32)
         img[:] = sky * self._gradient
 
         dx, dy = self.drift(index)
         # Seeing varies a few percent from frame to frame.
-        sigma = max(0.5, FWHM_PX * (1.0 + 0.04 * rng.standard_normal()) / 2.3548)
+        sigma = blur * max(0.5, FWHM_PX * (1.0 + 0.04 * rng.standard_normal()) / 2.3548)
         for x0, y0, rate in zip(self._star_x, self._star_y, self._peak_rate):
-            peak = rate * t * g
+            # Defocus spreads the same flux over blur² more area.
+            peak = rate * t * g * light / (blur * blur)
             if peak < 1.0:
                 continue
             x, y = x0 + dx, y0 + dy
@@ -148,7 +245,8 @@ class SimCamera:
         noise = rng.standard_normal((h, w), dtype=np.float32)
         noise *= np.sqrt(variance)
         img += noise
-        img += np.float32(PEDESTAL_ADU + 0.5)  # +0.5: round, not truncate, below
+        pedestal = PEDESTAL_ADU + ADU_PER_OFFSET * (int(offset) - REFERENCE_OFFSET)
+        img += np.float32(pedestal + 0.5)  # +0.5: round, not truncate, below
         img[self._hot_y, self._hot_x] += (self._hot_rate * t).astype(np.float32)
         np.clip(img, 0.0, SATURATION_ADU, out=img)
         return img.astype(np.uint16)

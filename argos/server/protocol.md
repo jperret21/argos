@@ -12,7 +12,12 @@ Stellarium bridge A19 brought forward from wave 3 so that every Qt
 Connection control has its web control) is what ships in API 2. Wave 2
 (Settings: rows A5, A6, A11, A67 list only, A81-A84, plus the site check of
 `web/lab/PROPOSAL.md` §7) adds the routes of
-[API 2 routes, wave 2](#api-2-routes-wave-2), still additive: `"api"` stays 2.
+[API 2 routes, wave 2](#api-2-routes-wave-2), still additive: `"api"` stays 2. Wave 3
+(Observe: acquisition, rows A19-A31 and A34-A41) adds the routes of
+[API 2 routes, wave 3](#api-2-routes-wave-3-observe-acquisition): Take
+shot with FITS save, capture settings, filter wheel, focuser, autofocus,
+jog with a server dead-man, conditions, observation identity and catalogue
+lookup; still `"api": 2`.
 
 ## Launching
 
@@ -131,7 +136,7 @@ start).
 | HTTP | code | When |
 |---|---|---|
 | 400 | `invalid_argument` | Body fails validation: wrong type, out of range, unknown field, relative path, wrong file suffix. Request bodies are strict, so `"2"` is not a number, `80.0` is not an integer gain and `1` is not a boolean. `PATCH /api/config` adds `fields`. |
-| 400 | `invalid_fits` | The file exists but is not a displayable FITS image. |
+| 400 | `invalid_fits` | The file exists but is not a displayable FITS image; since wave 3 also an image that is not raw 16-bit camera counts (see Opening FITS files). |
 | 400 | `invalid_argument` | Also `open-fits` on a path the OS refuses to examine (name too long, unreadable directory). |
 | 400 | `session_invalid` | (wave 2) A support bundle's `session_dir` holds no `session.json`. |
 | 401 | `unauthorized` | Bad or missing token. |
@@ -140,8 +145,10 @@ start).
 | 404 | `not_found` | Unknown route, unknown device id, unknown (or expired) job id, or `open-fits` on a missing file. Wave 2: a missing folder in `GET /api/fs/list`, an unknown cache kind, a job with nothing to download. |
 | 405 | `method_not_allowed` | Wrong HTTP method on a known route. |
 | 409 | `not_connected` | Camera or mount command with that device not connected. Also a mount command whose device was disconnected while it ran: its result is discarded. |
-| 409 | `busy` | Exposure requested while the camera exposes, downloads, is live, or is still stopping. `POST /api/connection` or a device connect while devices are connected to **another** address or mode. `PUT /api/profile` while a device is connected (message says why). A job start while a job of the same kind runs (`owner` = its id). |
-| 409 | `parked` | `goto` or `tracking` on a parked mount. |
+| 409 | `busy` | Exposure requested while the camera exposes, downloads, is live (without `save`), or is still stopping. (Wave 3) any camera, wheel, focuser or autofocus command refused because another owner holds the device: the error carries `owner` (`"single"`, `"live"`, `"autofocus"`, `"filterwheel"`, `"sequence"`, `"jog"`); a jog during a GoTo slew, or on an axis another client is jogging (`owner: "jog"`); an offset or binning change while a Take shot waits for its frame or is being saved. `POST /api/connection` or a device connect while devices are connected to **another** address or mode. `PUT /api/profile` while a device is connected (message says why). A job start while a job of the same kind runs (`owner` = its id). |
+| 409 | `parked` | `goto` or `tracking` on a parked mount; (wave 3) a jog on a parked mount. |
+| 409 | `dark_slot` | (wave 3 review) a Light or Flat Take shot, or an autofocus start, while the filter wheel is settled on (or turning to) its opaque `Dark` slot; `details.slot` names it. |
+| 409 | `clock_error` | (wave 3) `goto` while the mount clock is more than 60 s off (`MountState.goto_blocked`); the message is the connect message (H4). |
 | 409 | `not_live` | `PATCH /api/camera/live` while live view is not running. |
 | 409 | `unsupported` | `DELETE /api/jobs/{id}` on a job kind that cannot be cancelled. |
 | 409 | `file_exists` | (wave 2) A support bundle destination that exists, without `"overwrite": true`. |
@@ -150,6 +157,8 @@ start).
 | 500 | `internal_error` | Any unexpected failure; the traceback is in the server log. The answer keeps the CORS headers, so the browser can read it. |
 | 502 | `connection_failed` | The device could not be reached or refused to connect. Its device state becomes `error` with the full text. |
 | 502 | `device_error` | A connected device refused a command or stopped answering. |
+| 404 | `not_found` | (wave 3) `GET /api/catalog/resolve` for a designation the catalogues do not know (the resolver's text). |
+| 502 | `lookup_failed` | (wave 3) `GET /api/catalog/resolve` or `/api/catalog/nearby` with no network answer (the resolver's text). |
 
 Codes reserved by `web/spec/README.md` §4.1 for later waves: `not_solved`,
 `no_target`, `no_comparison`, `no_frames`, `site_missing`.
@@ -973,6 +982,654 @@ SiteCheck = {"state": "ok"|"mismatch"|"unknown",
   every state change, and inside the status record (`status.site_check`),
   so a client opened later has it at once.
 
+## API 2 routes, wave 3 (Observe: acquisition)
+
+Wave 3 (`web/spec/README.md` §7 "Observe: acquisition": rows A19-A31 and
+A34-A41) adds the routes, records and events below, still under `"api": 2`
+(additive: every v1 and wave 1-2 route keeps its shape; records only gain
+fields). Every device call runs on a worker thread or in FastAPI's
+threadpool, never on the event loop.
+
+The science rules are those of the fixed Qt engine (release 0.5.0,
+`notes/release_0_5_0.md`), ported Qt-free into `argos/server/capture.py`
+(Take shot and FITS), `wheel.py`, `focuser.py`, `autofocus.py`, `jog.py`,
+`observation.py` and `conditions.py`; each module cites the Qt lines it
+ports.
+
+| Method | Path | Body | Returns | Row |
+|---|---|---|---|---|
+| GET | `/api/camera/settings` | — | CaptureSettings | A22 |
+| PUT | `/api/camera/settings` | CaptureSettingsBody | CameraState | A22 |
+| POST | `/api/camera/capture` | CaptureBody (extends v1) | CameraState | A23 |
+| POST | `/api/camera/live` | CaptureBody without `save` (v1 shape still valid) | CameraState | A22 |
+| GET | `/api/camera/saved?after=<seq>&limit=<n>` | — | `{"saves": [FrameSaved, …], "last_seq": int\|null}` | A24 |
+| POST | `/api/camera/open-fits` | `{"path"}` (v1) | CameraState; raw frames only (see below) | A25, A27 |
+| GET | `/api/filterwheel` | — | FilterWheelState | A28 |
+| POST | `/api/filterwheel/select` | `{"name": string}` | FilterWheelState (`moving`) | A28 |
+| POST | `/api/mount/jog` | JogBody | MountState | A30 |
+| POST | `/api/mount/jog/stop` | `{"axis"?: "primary"\|"secondary", "client"?: string, "seq"?: int}` | MountState | A30 |
+| POST | `/api/mount/tracking-rate` | `{"rate": "sidereal"\|"lunar"\|"solar"\|"king"}` | MountState (rate read back) | A31 |
+| GET | `/api/focuser` | — | FocuserState | A34 |
+| POST | `/api/focuser/move` | `{"position": int}` | FocuserCommand | A35 |
+| POST | `/api/focuser/step` | `{"delta": int}` | FocuserCommand | A35 |
+| POST | `/api/focuser/halt` | — | FocuserCommand | A35 |
+| GET | `/api/autofocus` | — | AutofocusState | A36 |
+| POST | `/api/autofocus/start` | AutofocusBody (optional) | AutofocusState (`running`) | A36 |
+| POST | `/api/autofocus/stop` | — | AutofocusState (`stopping`, or the final state) | A36 |
+| GET | `/api/session/conditions?since_seq=<n>&limit=<n>` | — | ConditionsPage | A37 |
+| GET | `/api/observation` | — | Observation | A38 |
+| PUT | `/api/observation` | `{"object_name": string}` | Observation | A38 |
+| POST | `/api/observation/target` | ObservationTargetBody | Observation | A39 |
+| DELETE | `/api/observation/target` | — | Observation (target cleared, name kept) | A39 |
+| GET | `/api/catalog/resolve?q=<name>` | — | Resolved | A40 |
+| GET | `/api/catalog/suggest?q=<text>&limit=8` | — | `{"query": string, "names": [string]}` | A41 |
+| GET | `/api/catalog/nearby?ra_hours=&dec_deg=&network=false&radius_arcsec=90` | — | `{"candidates": [Candidate, …], "network": bool}` | A20 |
+
+New WebSocket events (`/ws/events`): `filterwheel`, `focuser`,
+`autofocus`, `observation`, `target_suggestions` and `frame_metrics` are
+snapshots (the newest one is complete); `frame_saved` and `conditions` are
+streams with an increasing `seq` (see "Backpressure" below). The status
+record gains `filterwheel`, `focuser`, `autofocus` and `observation`, so a
+client opened later has every one of them at once.
+
+### Camera: capture settings, owner, Take shot (A21-A24)
+
+```
+CameraState += {
+  "owner": "idle"|"live"|"single"|"autofocus"|"sequence",  // who drives the camera ("sequence": wave 6)
+  "settings": CaptureSettings,        // what the NEXT frame uses; server state shared by every client
+  "current": FrameSettings|null,      // the frame being exposed now (null when nothing exposes)
+  "save_pending": int,                // Take shots still waiting for their frame (0 or 1)
+  "waiting_for": "filterwheel"|null,  // a Dark/Bias Take shot waiting for the wheel to reach Dark
+  "limits": {"gain_min": int, "gain_max": int,
+             "exposure_min_s": float, "exposure_max_s": float}|null,  // the driver's; null when disconnected
+  "offset": {"min": int, "max": int}|null,   // null: the driver has no Offset (field hidden)
+  "binning": {"max": int}|null,              // null: MaxBin 1 (field hidden)
+  "temperature_c": float|null}               // sensor °C, read every 10 s while connected
+
+CaptureSettings = {"exposure_s": float, "gain": int,
+                   "frame_type": "light"|"dark"|"flat"|"bias",
+                   "filter": string,          // slot for Light/Flat (metadata only without a wheel, Q-O5)
+                   "offset": int|null,        // read back from the driver; null when unsupported
+                   "binning": int}            // 1 unless the driver bins
+FrameSettings   = {"exposure_s": float, "gain": int, "frame_type": …, "filter": string,
+                   "object_name": string, "light": bool,   // shutter semantics sent with StartExposure
+                   "origin": "single"|"live"|"autofocus",
+                   "save": bool,                            // this frame is the one a Take shot saves
+                   "started_utc": ISO}                      // DATE-OBS of the frame
+```
+
+- **Defaults**: exposure 2 s, gain 80, frame type light, filter `IR` (the
+  Qt Camera form's first light slot, `camera_dock.py:59`), offset and
+  binning from the driver at connect. Settings survive a page reload and
+  are the same for every client (decision Q-O13). When a filter wheel
+  connects, or any move ends (a Camera-card select, a Dark shot, later a
+  sequence), `settings.filter` follows the slot the wheel reports (S3).
+- **v1 fields.** `exposure_s` and `gain` keep their v1 meaning: the frame
+  being exposed (`current`) while one is, else the settings. So `PATCH
+  /api/camera/live` still changes them only when the next frame starts.
+- **`owner`** (port of `camera_service.py:60-77`, priority SEQUENCE >
+  AUTOFOCUS > LIVE / SINGLE): `single` while a single capture runs
+  (including the wait for the wheel), `live` during live view, `autofocus`
+  while an autofocus sweep holds the camera (and until its focuser is back
+  at the start position, S23). Starting autofocus preempts live view and a
+  single capture (INFO "Live view stopped: autofocus owns the camera.").
+
+```
+CaptureSettingsBody = {"exposure_s"?: float, "gain"?: int, "frame_type"?: "light"|"dark"|"flat"|"bias",
+                       "filter"?: string, "offset"?: int, "binning"?: int}       // strict, all optional
+CaptureBody         = {"exposure_s"?: float, "gain"?: int,
+                       "frame_type"?: "light"|"dark"|"flat"|"bias", "save"?: bool}   // strict
+```
+
+A v1 body (`{"exposure_s", "gain"}`) stays valid; both fields are now
+optional and default to the settings. Unknown fields (`binning`, …) are
+still `400`.
+
+- `PUT /api/camera/settings` is one commit: every field is checked first
+  (types strict; exposure and gain against `limits` when a camera is
+  connected, else 0 < exposure ≤ 3600 s and 0 ≤ gain ≤ 1000; offset in
+  `offset.min…max`; binning 1…`binning.max`); a value out of range is
+  `400 invalid_argument` with the reason, **never clamped** (README §3.4,
+  05 P6). Exposure, gain and frame type apply from the next frame in any
+  mode (live view included: the frame in progress keeps its own). Offset
+  and binning are sent to the driver at once (off the event loop) and read
+  back. `filter` with a wheel connected moves the wheel (exactly as `POST
+  /api/filterwheel/select`); without a wheel it is FITS metadata only (INFO
+  "No filter wheel: 'LP' is written to FITS FILTER only."). `409 busy`
+  (`owner` = `autofocus` or `sequence`) while autofocus or a sequence owns
+  the camera; `409 not_connected` for offset / binning without a camera;
+  `400` for offset / binning the driver does not support. Every refusal
+  is checked **before any device call** (review of wave 3): a `filter`
+  while the wheel moves is `409 busy` (`owner: "filterwheel"`) with nothing
+  sent to the driver, so a refused PUT never leaves a new offset behind.
+  Offset and binning are `409 busy` while a Take shot waits for its frame
+  or is being written ("A Take shot is waiting for its frame or being
+  saved — change the offset after it …"): FITS OFFSET is read from the
+  camera at save time.
+- `POST /api/camera/capture` writes the body's `exposure_s` / `gain` /
+  `frame_type` into the settings first (same checks), then:
+  - idle camera: one exposure (`owner: single`), published on `/ws/frames`;
+    with `"save": true` it is also written as a FITS file (below);
+  - live view and `"save": true`: no new exposure; the live loop's next
+    frame is saved (Take shot during live, A23); without `save` it is
+    `409 busy` as in v1;
+  - `409 busy` while a single capture runs, and (with `owner`) while
+    autofocus or a sequence owns the camera.
+- `save` defaults to `false`, so a v1 client's capture is unchanged
+  (displayed, not saved).
+- A Take shot with `settings.binning` > 1 is `409 unsupported`:
+  `fits_writer.py` writes `XBINNING = YBINNING = 1` and the unbinned pixel
+  size, so a binned frame would carry false metadata (a frame that arrives
+  binned anyway is dropped: WARN "Take shot not saved: binning is 2×2 …").
+- **A Light or Flat Take shot behind the opaque slot is `409 dark_slot`**
+  (science review of wave 3, the S1 counterpart; sequences already refuse
+  it, S7): the server turns the wheel to Dark by itself for a Dark or Bias
+  shot and nothing turns it back, so "darks, then a light" would save a
+  pure-pedestal frame as a Light Frame. Message: "The filter wheel is on
+  'Dark', which blocks the light — select a filter for the Light Frame."
+  (0.5.0 only warned, the observer having chosen Dark by hand.)
+
+**What a Take shot writes** (port of `AcquisitionEngine.take_shot`,
+`_dark_shot_allowed`, `_on_frame` and `_save_fits_async`,
+`acquisition_engine.py:420-510, 573-636, 1796-1910`, with every 0.5.0 fix):
+
+1. **Settings snapshotted per frame (S2).** The exposure loop takes one
+   snapshot of the settings when a frame starts; the FITS header uses that
+   snapshot, never the settings at the time the frame arrives. A single
+   Take shot that waits for a turning wheel (any frame type) takes its
+   snapshot once the wheel has settled, so the frame header, the HUD and
+   the conditions row name the new slot. During live view the frame in
+   progress is saved with its own exposure and gain (Qt parity); when they
+   differ from the shot's request INFO says so ("Take shot: saving the
+   frame in progress, exposed 1 s at gain 80 (the shot asked 3 s at gain
+   150).").
+   **Offset and binning** are read from the camera when the file is
+   written, so a frame exposed across an offset or binning change is never
+   saved: INFO "Take shot: the offset or binning changed during this
+   exposure — saving the next frame instead." (review of wave 3; with the
+   409 above, OFFSET always describes the frame).
+   **The gain is sent before every exposure** (`exposure_worker.py:145-149`):
+   a refused or lost `set_gain` is retried on the next frame, and a gain
+   changed by another client is restored (0.4.2's web adapter sent it once
+   per change; the science review of wave 3 found every later frame could
+   then be exposed at the old gain while GAIN recorded the new one).
+2. **Dark / Bias need the opaque slot (S1).** The Seestar has no shutter.
+   With a filter wheel whose profile has a `Dark` slot, a Dark or Bias Take
+   shot is exposed only once the wheel has **settled** on Dark: if it is
+   elsewhere (or its position is unknown) the server moves it to Dark first
+   (CMD "Filter → Dark for the Dark Frame (the Seestar has no shutter)."),
+   `waiting_for: "filterwheel"` meanwhile, then exposes. A wheel already
+   moving to another slot is `409 busy`. A move that fails or does not end
+   on Dark cancels the shot (WARN "Dark Frame shot not taken: …"). Without
+   a wheel the shot is taken with WARN "Dark Frame: no filter wheel to
+   block the light — the frame is only dark if the telescope is covered."
+   Dark and Bias frames are exposed with `light: false`.
+3. **A frame exposed while the wheel turned is never saved (S3 review).**
+   A frame whose exposure started before the last wheel move ended (or
+   while one is in flight) is not saved; the loop exposes another one,
+   which is (INFO "Take shot: the filter wheel moved during this exposure
+   — saving the next frame instead."). During live view the same applies.
+   A single Take shot waits for a turning wheel before each exposure, and
+   gives up after five unsaved frames (WARN "Take shot not saved after 5
+   frames: …").
+4. **A frame of another type is not saved in its place.** During live view
+   the frame in progress is saved when it has the requested frame type;
+   otherwise the next one is (INFO "Take shot: this frame is a Light Frame;
+   saving the next Dark Frame instead."; 0.5.0 saved the in-flight frame
+   with its own type, `notes/release_0_5_0.md` "Deferred"). A pending Dark /
+   Bias whose frame
+   arrives with the wheel no longer on Dark is dropped (WARN "Dark Frame
+   shot not saved: the filter wheel reports 'IR', not 'Dark'.").
+5. **FILTER is read back from the wheel (S3)** when the file is written,
+   with the sequence's rules (`_wheel_filter_name`,
+   `acquisition_engine.py:154-180`): a readable wheel that differs from the
+   frame's filter wins (WARN); an unreadable or turning wheel keeps the
+   frame's filter (WARN).
+6. **QA headers measured on the saved array (S20)**: `HFD`, `NSTARS`,
+   `SKYLEVEL`, `FWHM`, `ECCENTR` from `frame_metrics` and `detect_stars` of
+   that very array (default aperture, as the Qt save).
+7. **Pointing only from a live mount (X1)**: `RA`, `DEC`, `OBJCTRA`,
+   `OBJCTDEC`, `ALTITUDE`, `AZIMUTH` (and so `AIRMASS`) come from the
+   newest mount reading of the current connection when the frame arrives,
+   and are absent when the mount is disconnected, lost or being retried.
+   `TARGRA` / `TARGDEC` are the last GoTo target of this server process
+   (the Qt `target_radec`, kept across park and reconnects). Two Qt-parity
+   rules kept for the owner to decide (science review of wave 3): `OBJECT`
+   is the observation name while `TARGRA` / `TARGDEC` are the last GoTo, so
+   naming another object without a GoTo pairs one object's name with the
+   other's coordinates (the conditions row's `airmass_target` uses the
+   observation target); and the pointing is the reading when the frame
+   **arrives**, while the `AIRMASS` comment says "at exposure start"
+   (≈ 0.8° of altitude over a 300 s frame at 0.0026 °/s).
+8. **The site only when set (X2)**: `SITELAT`, `SITELONG`, `SITEELEV` (and
+   `MOONALT`) only when `argos.core.config.observing_site` says a site is
+   set; never 0/0.
+9. Everything else is `argos.core.imaging.fits_writer.FITSWriter.write`
+   unchanged: `DATE-OBS` = the frame's start (taken just before
+   `StartExposure`), `DATE-AVG` / `MJD-AVG` = the midpoint between that and
+   `ImageReady` (before the download), `EXPTIME`, `GAIN`, `IMAGETYP`
+   (`Light Frame`, `Dark Frame`, `Flat Frame`, `Bias Frame`), `OBJECT` (the
+   observation's object name, `Unknown` when empty, as the Qt form),
+   `OBSERVER`, `OFFSET`, `CCD-TEMP`, `EGAIN` (driver, else the sensor
+   reference), `READOUTM` read from the camera at save time, `SOFTWARE`
+   `Argos v<version>`. Folder and name as the Qt Take shot:
+   `<sessions_path>/<start UTC>_<OBJECT>/<lights|darks|flats|biases>/<OBJECT>_<filter>_<type>_e<ms>ms_g<gain>_<n>.fit`,
+   never overwriting (the index grows).
+
+The file is written on the server's save thread (the live loop keeps
+running). Logs (topic `camera`): CMD "Take shot — saving next frame…", OK
+"Saved <name>", ERROR "FITS save failed: <reason>".
+
+```
+FrameSaved = {"type": "frame_saved", "seq": int,      // save counter, increasing
+              "frame_seq": int,                       // the /ws/frames seq of that frame
+              "path": path, "name": string, "source": "single"|"sequence",
+              "object": string, "filter": string, "frame_type": "light"|…,
+              "image_type": "Light Frame"|…, "exposure_s": float, "gain": int,
+              "date_obs": ISO, "t": ISO,
+              "record": {"hfd": float|null, "fwhm": float|null, "star_count": int|null,
+                         "sky_adu": float|null, "peak_adu": int|null,
+                         "eccentricity": float|null}}
+```
+
+`GET /api/camera/saved?after=<seq>` returns the saves after `seq` (the
+last 200 are kept), so a client that missed some (a gap in `seq`) reads
+them back.
+
+### Frames: header fields and metrics (A25, A26)
+
+The `/ws/frames` header gains (additive):
+
+```
+{… v1 fields …,
+ "bayer": string|null,          // CFA layout of the raw mosaic (null for mono data)
+ "origin": "single"|"live"|"autofocus"|"file",
+ // camera frames:
+ "frame_type": "light"|…, "gain": int, "filter": string, "started_utc": ISO, "save": bool,
+ // opened files (origin "file"):
+ "path": path, "file_name": string,
+ "date_obs": string|null,       // the header's DATE-OBS as written
+ "epoch_utc": ISO|null}         // exposure midpoint: DATE-AVG, else DATE-OBS + EXPTIME/2, else null
+```
+
+`bayer` is the profile's pattern for a colour camera (`CameraState.sensor.
+bayer`), and for a file its `BAYERPAT` keyword, else the active profile's.
+
+```
+FrameMetrics = {"type": "frame_metrics", "seq": int,   // the frame's /ws/frames seq
+                "hfd_px": float|null,                  // half-flux diameter of the brightest star
+                "fwhm_px": float|null,                 // mean FWHM of the detected stars
+                "eccentricity": float|null,
+                "star_count": int,                     // local maxima above 5 σ (frame_metrics)
+                "n_detected": int,                     // stars measured by detect_stars
+                "sky_adu": float, "peak_adu": int,
+                "star_radius_px": int,                 // imaging.star_radius_px used by detect_stars
+                "plane": "green",                      // sizes in green-plane px (raw/2 on a CFA)
+                "t": ISO}
+```
+
+Computed on the **full-resolution** frame (S20, Q-O14) by a metrics thread,
+latest frame wins (a frame still waiting when a newer one arrives is
+skipped), for every camera frame and every opened file. Autofocus sample
+frames are metered too (their HFD is also in the `autofocus` record).
+
+### Filter wheel (A28)
+
+```
+FilterWheelState = {"state": "disconnected"|"idle"|"moving"|"error",
+                    "name": string|null,
+                    "slots": [string],            // the active profile's slot names, in wheel order
+                    "dark_slot": bool,            // a "Dark" slot exists (it blocks the light)
+                    "position": int|null,         // settled slot index; null while moving or unknown
+                    "slot": string|null,          // settled slot name
+                    "target": string|null,        // slot a move goes to
+                    "message": string|null,       // why the position is unknown, the driver's refusal
+                    "settled_utc": ISO|null}      // when the last move ended (settled or failed)
+```
+
+Port of `DeviceSession.move_filter` and `_FilterMoveRunnable`
+(`device_session.py:85-122, 818-889`) with H9: `POST /api/filterwheel/select
+{"name"}` (case-insensitive slot name) starts the move on a worker thread
+and answers at once (`moving`, `target`); the thread waits for the wheel to
+leave position −1 (every 0.15 s, 20 s at most) and publishes the result.
+Every mover publishes: a Camera-card select, a Dark Take shot, later a
+sequence. Errors always end `moving` (H9): a refused move reads the wheel
+back and reports the slot it is really on (`idle`, `message` = the
+refusal), or `error` "position unknown" when it cannot be read; a wheel
+still turning after 20 s is `error` with `message` "Still turning after
+20 s: position unknown". Refusals: `409 not_connected`; `400
+invalid_argument` "No wheel slot named 'X' (slots: Dark, IR, LP)"; `409
+busy` while a move runs or autofocus owns the camera. Logs (topic
+`camera`, source `filterwheel`): CMD "Filter → IR", ERROR "Filter move:
+<driver text>".
+
+### Mount: geometry, jog with a dead-man, tracking rate (A29-A31)
+
+```
+MountState += {"alignment": "altaz"|"eq"|"eq_gem"|null,    // AlignmentMode at connect
+               "tracking_rate": "sidereal"|"lunar"|"solar"|"king"|null,   // read back
+               "tracking_rates": [string],                // what the driver lists (Q-O15); [] unknown
+               "goto_blocked": {"reason": "clock", "clock_error_s": float,
+                                "message": string}|null,  // GoTo/Sync/Center are refused (H4)
+               "center_available": false,                 // wave 4 (plate solution)
+               "jog": {"primary": float, "secondary": float,   // deg/s now commanded, 0 = stopped
+                       "stop_pending": ["primary"|"secondary"],  // a stop failed; retried
+                       "max_rate_deg_s": float, "deadman_s": float,
+                       "last_stop": {"axis": string, "reason": string, "t": ISO}|null}|null}
+                                                  // jog: null while no mount is connected
+JogBody = {"axis": "primary"|"secondary",
+           "rate_deg_s": float,        // signed, 0 < |rate| ≤ max_rate_deg_s (5)
+           "client"?: string,          // the id this client passed to /ws/events?client=
+           "seq"?: int,                // increasing per client (one counter per page): see below
+           "renew"?: bool}             // a periodic renewal: never restarts an axis the server stopped
+// The answer is the MountState plus "jog_command": {"outcome": "started"|"renewed"|"pending"|"ignored",
+//   "why": "stale"|"stopped"|"late"|null}. MountState.jog also has "stop_failed": [axis].
+```
+
+- **Axes** (`telescope.py:564-592`, `manual_control_dialog.py:49-58`):
+  `primary` is azimuth on an alt-az mount and right ascension / hour angle
+  on an equatorial one, `secondary` altitude or declination; a positive
+  rate is north / east (Q-O4: the client labels them from `alignment`).
+  The Qt speeds were 0.5, 2 and 5 °/s.
+- **Start and renew.** `POST /api/mount/jog` starts the axis
+  (`MoveAxis(axis, rate)`) or, with the same rate, only renews it (no
+  device call). The client renews each moving axis every 250 ms, with
+  `renew: true`, and never while its previous request for that axis is
+  unanswered. **A renewal never waits on device I/O** (review of wave 3):
+  it is answered under the server's state lock, `renewed`, or `pending`
+  while that axis's start is still inside a slow `MoveAxis`; so a slow
+  driver cannot pile renewals up in the request threads (a 10 s `MoveAxis`
+  used to stall every route, Abort included, for 44 s). A renewal of an
+  axis the server stopped (dead-man, socket, Abort, Park, GoTo) is
+  `ignored` / `stopped`: the observer presses again. A start that waited
+  longer than `deadman_s` for the device lock, or that was sent before its
+  client's socket closed or blurred, is dropped (`ignored` / `late`; the
+  client sends it again once). A start on an axis another client is
+  jogging is `409 busy` (`owner: "jog"`): two windows on one axis would
+  reverse the motor at every renewal.
+- **Dead-man.** An axis not renewed within `deadman_s` (1.0 s) is stopped
+  by the server (WARN "Jog stopped by the server: no renewal for 1.0 s
+  (primary axis)."). It is also stopped when the client's `/ws/events`
+  socket opened with that `client` id closes, and when that socket sends
+  `{"type": "jog_stop"}` (send it on window blur, a hidden tab, pointer
+  loss). `POST /api/mount/jog/stop` stops one axis, or with no `axis` both
+  axes whatever the server believes (the Qt ■ button).
+- **Every axis it moved, retried.** Axes are tracked separately (H3): a
+  diagonal jog moves both, each stops on its own. A `MoveAxis(…, 0)` that
+  fails keeps its axis in `stop_pending` (WARN "Stop failed (primary axis):
+  … — retrying.") and is retried every 0.5 s, five times, then ERROR "Stop
+  failed again (primary axis): … — the mount may still be moving; use Abort
+  on the Mount card." The axis then **stays** in `stop_pending` and is
+  listed in `stop_failed`, retried every 5 s until a stop or Abort
+  succeeds (OK "Stop confirmed (primary axis)."); it never re-enters
+  through the dead-man, and the record never shows a failed stop as
+  resolved (review of wave 3). A start that raised is kept in
+  `stop_pending` too (it may have reached the mount, H3). The server-side stops log WARN "Jog
+  stopped by the server: <why> (primary axis)." Abort
+  (`POST /api/mount/stop`), Park, a GoTo and a mount disconnect first stop
+  any jogging axis.
+- Device calls are serialised in order on one jog lock, so a stop can never
+  overtake its start. Command numbers are compared **per client and per
+  axis**: a start or renewal not above the client's last number for that
+  axis is `ignored` / `stale`. **A stop is never dropped** (it is
+  idempotent and safe): its number only invalidates that client's older
+  starts of the axis, so a key-up overtaken by a renewal of the other axis
+  still stops its axis (review of wave 3). The client keeps one counter per
+  page, so a remounted jog pad never starts again below what the server
+  saw.
+- Refusals: `409 not_connected`, `409 parked`, `409 busy` while a GoTo slew
+  runs ("Abort the slew before jogging").
+- `POST /api/mount/tracking-rate` sets the ASCOM `TrackingRate`
+  (`telescope.py:610-634`) and reads it back (H6): `tracking_rate` is what
+  the driver then reports; a rate the driver does not list is `400`.
+- `goto_blocked` is set when the mount clock is more than 60 s off
+  (`telescope.py:283-294`): the message is the one the connect logs (H4),
+  and `POST /api/mount/goto` answers `409 clock_error` with it before any call.
+
+### Focuser (A34, A35)
+
+```
+FocuserState = {"state": "disconnected"|"idle"|"moving"|"error",
+                "name": string|null, "position": int|null,   // polled
+                "target": int|null,                          // last move sent
+                "queued": int|null,                          // target waiting for the move in progress (D9)
+                "temperature_c": float|null,                 // polled every 10 s
+                "max_step": int|null, "max_increment": int|null,
+                "absolute": bool|null, "step_size_um": float|null,
+                "locked_by": "autofocus"|null,               // manual moves refused
+                "message": string|null, "t": ISO}
+FocuserCommand = {"focuser": FocuserState,
+                  "requested": int|null,     // the position asked for (step: position + delta)
+                  "sent": int|null,          // what was sent to the driver now (null: queued or halt)
+                  "clamped": bool,           // a step was clamped to 0…max_step (reported, H10)
+                  "queued": bool}
+```
+
+- **Polling** (new, absent in Qt, fixes 05 P4): position and `IsMoving`
+  every 0.5 s while moving, every 5 s when idle; temperature every 10 s.
+  A `focuser` event follows every change.
+- `POST /api/focuser/move {"position"}` (Go to): outside `0…max_step` is
+  `400 invalid_argument` ("Position 120000 is outside 0–100000 (the
+  focuser's MaxStep).", never clamped, H10). `POST /api/focuser/step
+  {"delta"}` (Out = negative, In = positive): from the queued or current
+  target, clamped to `0…max_step` and reported (`clamped: true`).
+- **No Move while moving (D9).** A move or a step that arrives while the
+  focuser moves is queued (`queued`, steps add up) and sent as one move
+  when the current one ends.
+- `POST /api/focuser/halt` halts at once and clears the queue; it is
+  accepted while autofocus runs and then also ends the autofocus **where
+  the focuser is** (no return to the start; Q-O6). Moves and steps are
+  `409 busy` ("Autofocus owns the focuser.") while autofocus runs or
+  returns (H10). Logs (source `focuser`, topic `focuser`): CMD "Focuser
+  move → 5200", "Focuser step +100 → 5300", "Focuser halted".
+
+### Autofocus (A36)
+
+```
+AutofocusBody  = {"exposure_s"?: float, "gain"?: int, "half_range"?: int (10…), "num_steps"?: int (3…41)}
+AutofocusState = {"state": "idle"|"running"|"stopping"|"done"|"rejected"|"cancelled"|"failed",
+                  "stage": "coarse"|"fine"|"verify"|"returning"|null,
+                  "step": int, "total": int,                  // samples taken / announced
+                  "params": {"exposure_s", "gain", "half_range", "num_steps"}|null,
+                  "start_position": int|null, "position": int|null,   // focuser at the end
+                  "samples": [{"position": int, "hfd_px": float|null,
+                               "stage": "coarse"|"fine"|"verify", "t": ISO}],
+                  "best": {"position": int, "hfd_px": float|null,      // measured at the end (verify)
+                           "fitted_hfd_px": float|null,
+                           "method": "parabola"|"raw"|"none"}|null,
+                  "fit": {"coeffs": [a, b, c]|null,         // HFD = a·p² + b·p + c, the worker's own fit
+                          "window": [lo, hi],               // positions the fit was allowed in
+                          "samples": [[position, hfd_px], …]}|null,   // the samples it used
+                  "message": string|null, "run": int,
+                  "started_utc": ISO|null, "ended_utc": ISO|null}
+```
+
+A port of `AutofocusWorker` (`autofocus_worker.py:48-232`) with
+`argos.core.imaging.focus` unchanged, on a server thread:
+
+- **Refused behind the Dark slot** (review of wave 3): with a filter wheel
+  that has a `Dark` slot, autofocus is `409 dark_slot` while the wheel is
+  settled on Dark ("The filter wheel is on 'Dark', which blocks the light —
+  select a filter before autofocus.") and `409 busy` (`owner:
+  "filterwheel"`) while it turns. A Dark Take shot leaves the wheel on Dark;
+  a sweep there only measured hot pixels and ended "flat HFD curve" without
+  naming the cause.
+- Parameters default as the fixed Qt engine does
+  (`acquisition_engine.py:936-958`, `autofocus_worker.py:63-82`): exposure =
+  the capture exposure, at most 10 s; gain = the capture gain; `half_range`
+  2000 steps; `num_steps` 9. Exposure and gain are checked against the
+  camera limits (`400`), `half_range` 10…100 000, `num_steps` 3…41. The
+  Settings keys of Q-O9 (`autofocus.*`) need defaults in
+  `argos/core/config.py`, which this wave leaves unchanged: they come with
+  the wave that changes the core config. The gain **is applied** (S22): it
+  is sent with every sample exposure.
+- Stages: coarse sweep of `num_steps` positions across ±`half_range`; the
+  degenerate-sweep guard (flat curve, minimum on an edge, fewer than three
+  samples) restores the start and ends `rejected` with the reason ("focus
+  unchanged"); four fine samples around the raw minimum; the parabola fit
+  on the fine samples + the coarse minimum (`fit`); a move to the best
+  position and one verification exposure (`best.hfd_px` is that measured
+  value). Every sample is one `autofocus` event; sample frames are also
+  published on `/ws/frames` (`origin: "autofocus"`).
+- `POST /api/autofocus/stop` = cancel and **return to the start** (S23):
+  the sweep move is halted, then the focuser is driven back to the start
+  position and waited for (30 s at most) before the camera is released;
+  meanwhile the state is `stopping` / `returning`, and a second stop is
+  harmless. It ends `cancelled` with "Returned to 5000." only when the
+  focuser was **read back** at the start and idle (review of wave 3). A
+  focuser lost during the return, an unreadable position, or a return
+  slower than the 30 s wait ends `failed` with what is known, and an ERROR
+  line: "Stopped — could not read the focuser back: it may not be at its
+  start (5000).", "Stopped — focuser at 4972 and still moving, not yet back
+  at its start (5000).", "Stopped — focuser at 4980, not back at its start
+  (5000)." The degenerate sweeps and the failure path follow the same rule. `POST /api/focuser/halt` during autofocus = stop **where it is**:
+  `cancelled`, "Halted at 4875: focus left there." Halt and stop are
+  ordered on the server: a halt never freezes the return move, and no
+  sweep move is sent after a stop or a halt.
+- Ends `done` when the sweep produced an HFD at the best position: the
+  verification's, else the fit's, as the Qt engine reports it
+  (`autofocus_worker.py:185`; OK "Autofocus complete — best pos=5420
+  HFD=2.1"; `best.hfd_px` is null when the verification frame had no
+  measurable star); `rejected` (WARN with the reason; the degenerate sweeps
+  return to the start, a best position without any HFD leaves the focuser
+  there); `cancelled`; or `failed` (ERROR with the exception text, and the
+  focuser is driven back to the start, which the Qt worker did not do). The
+  camera is released only when the worker has ended. Disconnecting the
+  camera during a sweep is a Stop (return to the start); disconnecting the
+  focuser is a Halt.
+- Refusals: `409 not_connected` (camera or focuser), `409 busy` while an
+  autofocus runs or a stopped one is still returning, or a sequence owns
+  the camera. Starting it stops live view (INFO).
+- The focuser moves are those of the worker: absolute moves, `IsMoving`
+  polled every 0.3 s, 1 s settle after each move (`autofocus_worker.py:
+  44, 214-231`).
+
+### Conditions (A37)
+
+```
+ConditionsRow  = {"type": "conditions", "seq": int,          // row counter, increasing
+                  "frame_seq": int, "t": ISO,                // exposure midpoint
+                  "origin": "single"|"live", "exposure_s": float, "gain": int,
+                  "frame_type": string, "filter": string,
+                  "hfd_px": float|null, "fwhm_px": float|null, "star_count": int,
+                  "sky_adu": float, "peak_adu": int,
+                  "airmass_mount": float|null,     // Pickering, from the mount altitude (as FITS AIRMASS)
+                  "airmass_target": float|null,    // the observation target from the Settings site (X2)
+                  "sensor_temp_c": float|null, "focuser_temp_c": float|null,
+                  "focuser_position": int|null}
+ConditionsPage = {"rows": [ConditionsRow, …], "first_seq": int|null, "last_seq": int|null,
+                  "truncated": bool, "boot_id": string}
+```
+
+One row per metered camera frame (live and single; not autofocus samples
+nor opened files), the last 20 000 kept in memory for the session of the
+server process (`GET` with `since_seq` returns rows with `seq` greater,
+oldest first, `limit` 1…20 000, default 5 000). Recording the rows with a
+session folder comes with sequences (wave 6); a Take shot's own values are
+in its FITS header.
+
+### Observation, catalogue lookup and suggestions (A20, A38-A41)
+
+```
+Observation = {"object_name": string,                // "" = not set ("Unknown" in FITS OBJECT)
+               "target": {"name": string, "ra_hours": float, "dec_deg": float,
+                          "object_type": string, "type_label": string,
+                          "is_variable": bool, "source": string,
+                          "programme": "variable"|"exoplanet"|"other"}|null,
+               "photometry_target": {"key": string, "name": string, "path": path}|null,
+               "locked": bool, "locked_reason": string|null,   // a sequence runs (wave 6)
+               "revision": int}
+ObservationTargetBody = {"name": string, "ra_hours": float (0…24), "dec_deg": float (−90…90),
+                         "object_type"?: string, "source"?: string,
+                         "programme"?: "variable"|"exoplanet"|"other"}
+Resolved  = {"name", "ra_hours", "dec_deg", "object_type", "type_label", "is_variable", "source"}
+Candidate = {"name", "ra_hours", "dec_deg", "object_type", "type_label", "is_variable",
+             "source", "separation_arcsec"}
+```
+
+- One observation identity (D11): the object name every Take shot writes
+  to `OBJECT` and its folder. `PUT /api/observation` sets the name and
+  drops a target whose name differs; `POST /api/observation/target` sets
+  both (port of `set_catalogue_target`, `imaging_page.py:2734-2756`): the
+  name, the target coordinates (the Mount card's Slew uses them; the server
+  never slews by itself), and **only for a variable-star type** (`V*`,
+  `RR*`, … `is_variable_object_type`, Q-P8) or `programme: "exoplanet"`,
+  the photometry target: a `target` role written to
+  `<sessions_path>/targets/<object>.json` (`argos.core.catalog.targets`;
+  comparisons are chosen in wave 5). Logs: INFO "Catalogue target: SS Cyg —
+  RA 21.71268h Dec +43.58612°". `409 busy` with `locked_reason` while a
+  sequence runs (wave 6). A change of object re-keys the target set and
+  resets the live curves when those exist (waves 4-5).
+- `GET /api/catalog/resolve?q=` (`object_resolver.resolve_object`, the
+  bundled catalogue first, then the cache, then CDS Sesame online, 8 s):
+  `400 invalid_argument` "Enter an object designation first.", `404
+  not_found` "No ICRS coordinates found for ‘…’.", `502 lookup_failed`
+  "Catalogue unavailable. Connect to the internet or use a previously
+  searched target." (the resolver's own texts). Works without equipment.
+- `GET /api/catalog/suggest?q=` (`cached_object_suggestions`): names from
+  the bundled catalogue and earlier lookups, offline, at most `limit`
+  (1…50, default 8): the name itself first, then the names that start with
+  the text, each in natural order (numbers by value: "M 1, M 10, M 11 …",
+  never "M 1, M 100, M 104", review of wave 3).
+- `GET /api/catalog/nearby` (`resolve_nearby_objects`): candidates within
+  `radius_arcsec` (1…3600, default 90), nearest first: the cache, then the
+  bundled catalogue, then SIMBAD online **only** with `network=true`.
+- **`target_suggestions` (A20).** After every Stellarium GoTo the server
+  looks up names near the GoTo coordinates (port of
+  `suggest_target_from_coordinates`, `imaging_page.py:2809-2841`), online
+  only when `stellarium.online_target_lookup` is on, and publishes
+  `{"type": "target_suggestions", "ra_hours", "dec_deg",
+  "state": "checking"|"ready"|"failed", "candidates": [Candidate, …],
+  "message": string|null, "t": ISO}` (INFO "Stellarium target-name
+  suggestion: 2 nearby catalogue candidate(s)."; WARN "Target-name
+  suggestion: …"). It only offers names: accepting one is the client's
+  `POST /api/observation/target`. The newest record is also in
+  `GET /api/stellarium` (`suggestions`).
+- The resolver cache is `data_paths.object_catalogue_cache`.
+
+### Opened files (A27)
+
+`POST /api/camera/open-fits` now feeds the frame to the live pipeline as
+the Qt Observe page does (`AcquisitionEngine.open_fits_frame`,
+`acquisition_engine.py:741-767`, with S4):
+
+- **Raw 16-bit data only.** The first image HDU must be one 2-D image of
+  integer values 0…65535, whatever the stored type (`_raw_adu`,
+  `acquisition_engine.py:125-151`): float data that is not integral (a
+  calibrated or stacked frame), negative values or values above 65535 are
+  `400 invalid_fits` ("… are not raw 16-bit camera counts — open the raw
+  .fit frame instead"), leaving the current frame, its time and its
+  metrics untouched (Review's frame inspector, wave 7, displays any FITS).
+  RGB cubes are refused the same way. The size limits are unchanged.
+- **Dated from its header.** `epoch_utc` is `DATE-AVG`, else `DATE-OBS` +
+  `EXPTIME`/2 (`fits_exposure_mid`, `acquisition_engine.py:103-122`), else
+  `null` with WARN "<name> has no usable DATE-OBS time (or EXPTIME) — no
+  photometry point can be dated, so none will be measured on it." The frame
+  `timestamp` is `DATE-OBS` (else the file time) as in v1; a `DATE-OBS`
+  without a time part is not read as midnight: the file time stands.
+- **Live view is stopped first** (Q-O11, INFO "Live view stopped to open
+  <name>."); a single capture or autofocus in progress is `409 busy`.
+- The frame is metered (`frame_metrics`), adds no `conditions` row, and
+  becomes the frame the field identification of wave 4 will solve.
+
+### Backpressure (wave 3)
+
+Under backpressure (256 pending messages) the snapshot kinds of wave 3
+(`filterwheel`, `focuser`, `autofocus`, `observation`,
+`target_suggestions`, `frame_metrics`) are compacted to the newest of each,
+like the others. The streams `frame_saved` and `conditions` are kept like
+log lines (dropped oldest first only once the logs are gone); each carries
+`seq`, and a client that sees a gap reads `GET /api/camera/saved` or
+`GET /api/session/conditions`.
+
+### Client messages on `/ws/events` (wave 3)
+
+`/ws/events?token=…&client=<id>`: `client` (optional, 1-64 characters
+`[A-Za-z0-9_-]`) names this connection for the jog dead-man. The socket
+accepts one text message from the client: `{"type": "jog_stop"}` stops
+every axis this client is jogging. Anything else is ignored.
+
 ## State records
 
 ```
@@ -1051,6 +1708,14 @@ DeviceState     = {"state": "disconnected"|"connecting"|"connected"|"busy"|"erro
 | `{"type": "job", "job": Job}` | API 2. Job progress (≤ 4 Hz per job) and the final state. |
 | `{"type": "site_check", …SiteCheck}` | API 2, wave 2. After every site check and every change of its state (mount connected or gone, site changed); the same record is in `status.site_check`. |
 | `{"type": "stellarium", …StellariumState}` | API 2. The Stellarium bridge's record after every change; once right after the first `status` (after `network`). |
+| `{"type": "filterwheel", …FilterWheelState}` | Wave 3. Every wheel change (move started, settled, failed, connected, disconnected); also in `status.filterwheel`. |
+| `{"type": "focuser", …FocuserState}` | Wave 3. Every focuser change (polled position, move, queue, halt); also in `status.focuser`. |
+| `{"type": "autofocus", …AutofocusState}` | Wave 3. Every sample, stage and end of an autofocus; also in `status.autofocus`. |
+| `{"type": "observation", …Observation}` | Wave 3. Every change of the object name or target; also in `status.observation`. |
+| `{"type": "target_suggestions", …}` | Wave 3. After each Stellarium GoTo: names near its coordinates (A20). |
+| `{"type": "frame_metrics", …FrameMetrics}` | Wave 3. Once per metered frame (latest frame wins). |
+| `{"type": "frame_saved", …FrameSaved}` | Wave 3. Every FITS a Take shot wrote; a stream with `seq`. |
+| `{"type": "conditions", …ConditionsRow}` | Wave 3. One row per metered camera frame; a stream with `seq`. |
 | `{"type": "log", …LogEntry}` | Server events, plus WARNING-and-above records from `argos.core`, such as Alpaca driver warnings (core INFO, logged on every exposure, stays in the server log; a core message repeated within 60 s is sent once). Right after the first `status` (and `network`, `stellarium`, `activity`, in that order), a new client receives the last 200 log lines, oldest first, so a page opened mid-session shows what happened before; older lines come from `GET /api/logs`. A client that reconnects drops the lines whose `seq` it already holds. |
 
 A camera change therefore sends both a `camera` message and a `status`
@@ -1131,18 +1796,23 @@ const pixels = new Uint16Array(buf, header.pixel_offset,
 ## Opening FITS files
 
 `POST /api/camera/open-fits` accepts `.fit`, `.fits` and `.fts`, in any
-letter case. It reads the first image HDU and converts it for display only;
-the file is never modified:
+letter case. It reads the first image HDU; the file is never modified.
+Since wave 3 (A27, S4) the frame enters the live pipeline, so it must be
+what a camera delivers:
 
-- Integer data, after astropy applies BZERO/BSCALE, is clipped to 0…65535.
-- Float data in [0, 1], Siril's 32-bit default, is scaled by 65535. Other
-  float data is clipped. NaN and −inf become 0, +inf (a saturated pixel)
-  becomes 65535. The conversion works on one float32 copy.
-- The size is read from the header first: more than 16384 px on a side
-  (the viewer's GPU texture limit) or more than 100 M samples is refused
-  with `400 invalid_fits` before any pixel is loaded.
-- A `(3, H, W)` cube becomes `(H, W, 3)` with `channels: 3`. A `(1, H, W)`
-  cube becomes 2-D.
+- **Raw 16-bit counts only.** One 2-D image whose values are integers from
+  0 to 65535, whatever the stored type (integer after BZERO/BSCALE, or
+  float holding whole numbers). Float data that is not integral (Siril's
+  32-bit [0, 1] output, a calibrated or stacked frame), NaN or infinite
+  values, negative values, values above 65535 and `(3, H, W)` colour cubes
+  are refused with `400 invalid_fits`, the reason in the message, and the
+  current frame is left as it was. A `(1, H, W)` cube is a 2-D image.
+- **Size.** Read from the header first: more than 16384 px on a side (the
+  viewer's GPU texture limit) or more than 100 M samples is refused with
+  `400 invalid_fits` before any pixel is loaded.
+- **Time.** `timestamp` is `DATE-OBS` (else the file's modification time);
+  the header's `date_obs` and the exposure midpoint `epoch_utc` are in the
+  frame header (see [Opened files](#opened-files-a27)).
 
 ## Simulator
 
@@ -1170,9 +1840,34 @@ wide by 1920 px high, 16-bit, mono.
     2026, which the tests check against astropy.
   - `pier_side` follows the German-equatorial convention from the hour
     angle. A real Seestar is alt-az and reports `null`.
-- **Filter wheel and focuser** (API 2). Connect-only stand-ins so the four
-  device rows can be exercised: the wheel reports the active profile's
-  slots at slot 0, the focuser "ARGOS Simulator focuser" at position 5 000.
+- **Filter wheel** (wave 3). The active profile's slots (Dark, IR, LP on a
+  Seestar), starting on the first light slot (IR, the Qt form's default;
+  wave 1 started on slot 0). A move takes
+  `SimOptions.wheel_slot_s` (0.6 s) per slot, during which the position
+  reads −1, as the Alpaca wheel does. With the wheel on **Dark** the camera
+  receives no light: frames hold the pedestal, read noise, the hot pixels
+  and their dark current only, so the Dark guard can be checked on the
+  pixels. A frame exposed while the wheel turns is dimmed.
+- **Focuser** (wave 3). MaxStep 10 000, starting at 5 000, moving at
+  `SimOptions.focuser_speed_steps_s` (2 000 steps/s); Halt stops it where
+  it is; a move is clamped to 0…MaxStep as `Focuser.move_to` does. Its
+  temperature is a constant 12.5 °C. The optics keep its position across
+  disconnects, as on a telescope.
+- **Focus.** The star FWHM depends on the focuser position:
+  FWHM(p) = 2.8 px · √(1 + ((p − best) / 450)²) with best focus at
+  `SimOptions.focus_best` (5 300), flux conserved, so the HFD of
+  `compute_hfd` traces a V with its minimum at best focus and the
+  autofocus of A36 converges there (the start position, 5 000, is slightly
+  out of focus: FWHM × 1.2). A frame exposed while the focuser moves takes
+  the worse focus of its start and end.
+- **Camera extras** (wave 3). Gain 0-600, exposure 0.001-3600 s, offset
+  0-255 (default 10, it adds 2 ADU per unit to the pedestal of 1600 at
+  offset 10), MaxBin 1, sensor temperature 21.0 °C, no driver ElectronsPerADU
+  (FITS `EGAIN` comes from the sensor reference) and no readout mode.
+- **Mount extras** (wave 3). Alignment `eq_gem`; `MoveAxis` jogs at up to
+  5 °/s per axis (primary = RA, positive east; secondary = Dec, positive
+  north); tracking rates sidereal, lunar, solar and king (read back, not
+  modelled); no clock error.
 
 ## What API 2 adds
 
@@ -1197,3 +1892,11 @@ wide by 1920 px high, 16-bit, mono.
 | A67 | Wave 2: `GET /api/sessions` (list only) |
 | A81-A84 | Wave 2: `GET /api/astrometry/astap`, `POST /api/site/search` (job `site_search`), `GET` / `DELETE /api/caches[/{kind}]`, `GET /api/catalogues/essential` |
 | §7 | Wave 2: site check: `site_check` in the status record and as an event, `GET` / `POST /api/site/check` |
+| A19-A20 | Wave 3: `target_suggestions` after a Stellarium GoTo, `GET /api/catalog/nearby`, `suggestions` in the Stellarium record |
+| A21-A24 | Wave 3: `CameraState` owner / settings / current / limits / offset / binning / temperature, `PUT /api/camera/settings`, Take shot with FITS save (`save: true`, every 0.5.0 science fix), `frame_saved`, `GET /api/camera/saved` |
+| A25-A27 | Wave 3: frame header fields (`bayer`, `origin`, frame settings, file `path` / `date_obs` / `epoch_utc`), `frame_metrics` on the full frame, Open FITS raw-only and dated from its header |
+| A28 | Wave 3: filter wheel record and event, `GET /api/filterwheel`, `POST /api/filterwheel/select` |
+| A29-A31 | Wave 3: `MountState` alignment / tracking rate / goto_blocked / jog, `POST /api/mount/jog` with a server dead-man, `/jog/stop`, `/tracking-rate`; `?client=` and `jog_stop` on `/ws/events` |
+| A34-A36 | Wave 3: focuser record and polling, `POST /api/focuser/move` / `step` / `halt` (D9 queue), autofocus `start` / `stop` with V-curve samples and fit |
+| A37 | Wave 3: `conditions` rows, `GET /api/session/conditions` |
+| A38-A41 | Wave 3: observation identity (`GET` / `PUT /api/observation`, `POST` / `DELETE /api/observation/target`), `GET /api/catalog/resolve`, `GET /api/catalog/suggest` |
