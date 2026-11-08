@@ -30,12 +30,19 @@
   wave-1 API: `bind:value`, `onchange`, `settleMs`, `bind:invalid`, `lazy`
   still work; `lazy` is now the default behaviour).
 
+  `action` (W3, the focuser's Go to; PROPOSAL 3.3 "action mode"): an ACTION
+  field. Nothing is sent on blur, on a released drag or after arrow steps;
+  only Enter or the action button (its icon at the field's right end) send.
+  While the field has focus a value from outside never rewrites it (Qt P5:
+  autofocus steps overwrote a typed Go to).
+
   `reserve` keeps a status line of fixed height under the field (forms: the
   layout never jumps); without it the line appears only for an error, a
   refusal, a reason or a hint, and "not sent" / "applied" live in the edge,
   the unit slot and the accessible description (compact rows).
 -->
 <script lang="ts" generics="T extends number | null = number">
+  import NumText from './NumText.svelte';
   import { untrack } from 'svelte';
   import {
     ambiguousComma,
@@ -49,6 +56,7 @@
     signed as signedText,
   } from '../format/number';
   import { CommitModel, type CommitPhase } from './commit.svelte';
+  import Icon from './Icon.svelte';
   import { reducedMotion } from './motion.svelte';
   import { tooltip } from './tooltip';
   import { clamp, ladderStep, precisionOf, scrubValue, stepValue, type Precision } from './values';
@@ -117,6 +125,8 @@
     /** Specimen only: freeze a state. */
     pin?: { phase?: PinPhase; text?: string; message?: string } | null;
     id?: string;
+    /** An action field: only Enter or this button send (focuser Go to). */
+    action?: { icon: string; label: string } | null;
   }
 
   let {
@@ -155,6 +165,7 @@
     width,
     pin = null,
     id = `nf-${Math.random().toString(36).slice(2, 9)}`,
+    action = null,
   }: Props = $props();
 
 
@@ -288,6 +299,7 @@
   $effect(() => {
     const v = model.value;
     untrack(() => {
+      if (action) return; // an action field is never rewritten while it has focus
       if (editing && !model.hasDraft && !invalidMsg && model.phase !== 'refused') text = fmt(v);
     });
   });
@@ -322,7 +334,8 @@
     precision = p;
     invalidMsg = null;
     text = fmt(v);
-    model.offer(v as T, stepSettleMs);
+    if (action) model.edit(v as T);
+    else model.offer(v as T, stepSettleMs);
   }
 
   function onKey(e: KeyboardEvent): void {
@@ -372,7 +385,7 @@
 
   function onBlur(): void {
     editing = false;
-    if (locked || invalidMsg) return; // invalid text stays, with its message
+    if (locked || invalidMsg || action) return; // invalid text stays; an action field waits for Enter
     const r = validate(text);
     if (r.ok && model.phase === 'dirty') void commit(r.v);
   }
@@ -410,9 +423,20 @@
   }
 
   function scrubUp(): void {
-    if (scrubStart && scrubbing && model.hasDraft) void commit(model.current);
+    if (scrubStart && scrubbing && model.hasDraft && !action) void commit(model.current);
     scrubStart = null;
     scrubbing = false;
+  }
+
+  /** The action button: send what the field holds (typed text or a stepped draft). */
+  function runAction(): void {
+    if (locked || pin) return;
+    const r = validate(editing || invalidMsg ? text : fmt(model.current));
+    if (!r.ok) {
+      invalidMsg = r.msg;
+      return;
+    }
+    void commit(r.v);
   }
 
   const fieldTip = $derived({
@@ -431,6 +455,7 @@
   class:hard-disabled={disabled}
   class:is-scrub={scrubbing}
   class:tight-unit={tightUnit}
+  class:has-action={!!action}
   style:--nf-w={width}
   style:--nf-unit={tightUnit ? `${(unit ?? '').length}ch` : `${Math.max(2, (unit ?? '').length) + 1.2}ch`}
 >
@@ -481,12 +506,26 @@
         </svg>
       {:else if unit && shownText !== ''}{unit}{/if}
     </span>
+    {#if action}
+      <button
+        type="button"
+        class="act"
+        class:ready={dirty && !invalidMsg}
+        aria-label={action.label}
+        aria-disabled={soft || undefined}
+        {disabled}
+        onclick={runAction}
+        use:tooltip={{ text: action.label, reason: soft ? disabledReason : null, shortcut: locked ? undefined : 'Enter' }}
+      >
+        <Icon name={action.icon} size={16} />
+      </button>
+    {/if}
   </div>
   <span id="{id}-state" class="visually-hidden">{srState}</span>
   {#if lineShown}
     <div class="help" class:reserve id="{id}-help">
       {#if message}
-        <span class="msg {message.kind}">{message.text}</span>
+        <span class="msg {message.kind}"><NumText text={message.text} /></span>
         {#if message.kind === 'bad' && phase === 'refused'}
           <span class="aside"><kbd class="cap">Esc</kbd> reverts</span>
         {:else if message.kind === 'elsewhere'}
@@ -612,7 +651,7 @@
 
   .unit {
     position: absolute;
-    right: var(--space-2);
+    right: var(--nf-unit-right, var(--space-2));
     display: inline-flex;
     align-items: center;
     justify-content: flex-end;
@@ -629,6 +668,55 @@
   .tight-unit .unit {
     min-width: 0;
     justify-content: flex-start;
+  }
+
+  /* Action field: the button sits at the right end of the box; the unit moves left of it. */
+  .has-action {
+    --nf-unit-right: calc(var(--input-h) + var(--space-1));
+  }
+  .has-action input {
+    padding-right: calc(var(--input-h) + var(--space-2) + var(--nf-unit, 3.2ch));
+  }
+  .act {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: calc(var(--input-h) - 4px);
+    height: calc(var(--input-h) - 4px);
+    padding: 0;
+    border: var(--border-w) solid transparent;
+    border-radius: var(--radius-s);
+    background: transparent;
+    color: var(--fg-muted);
+    cursor: pointer;
+    transition:
+      background-color var(--duration-instant) var(--ease-standard),
+      color var(--duration-fast) var(--ease-standard);
+  }
+  .act:hover:not([aria-disabled='true']):not(:disabled) {
+    background: var(--hover-bg);
+    color: var(--fg);
+  }
+  .act:active:not([aria-disabled='true']):not(:disabled) {
+    background: var(--pressed-bg);
+    box-shadow: var(--pressed-inset);
+  }
+  /* A value waits to be sent: the button that sends it reads as the next step (no brass: a field state). */
+  .act.ready {
+    border-color: var(--border);
+    color: var(--fg);
+  }
+  .act:focus-visible {
+    outline: var(--focus-ring-w) solid var(--focus-ring);
+    outline-offset: 1px;
+  }
+  .act[aria-disabled='true'],
+  .act:disabled {
+    color: var(--fg-disabled);
+    cursor: not-allowed;
   }
 
   .help {

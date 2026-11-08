@@ -406,6 +406,11 @@
     --glyph-c: var(--fg);
     --text-c: var(--fg);
   }
+  /* "Without brass" holds for an outlined layout toggle too (W3: the jog pad's
+     "Arrow keys", whose armed state is the pad's one brass edge). */
+  .layout-toggle[aria-pressed='true']:not(.v-ghost) {
+    --edge: var(--border);
+  }
   .ctl[aria-pressed='true']:is(:hover, [data-force~='hover']):not(.is-inert) {
     --bg-c: var(--hover-bg);
   }

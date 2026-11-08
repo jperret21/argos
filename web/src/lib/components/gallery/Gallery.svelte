@@ -16,6 +16,7 @@
   import { ShortcutRegistry } from '../../app/shortcuts';
   import { type StartupStage } from '../../app/startup';
   import { isTheme, saveTheme, THEME_LABELS, THEMES, type Theme } from '../../app/theme';
+  import WorkspaceGallery from '../../imaging/modes/gallery/WorkspaceGallery.svelte';
   import RailFooter from '../../shell/RailFooter.svelte';
   import ShortcutSheet from '../../shell/ShortcutSheet.svelte';
   import StartupScreen from '../../shell/StartupScreen.svelte';
@@ -43,6 +44,7 @@
   import TextField from '../TextField.svelte';
   import { DEVICES, type DeviceRow, NOW, SAMPLE_JOBS, sampleLogLines, VARIABLES, type VariableRow } from './fixtures';
   import Wave2 from './Wave2.svelte';
+  import Wave3 from './Wave3.svelte';
 
   // -- Theme --------------------------------------------------------------------------
   const params = new URLSearchParams(location.search);
@@ -241,7 +243,7 @@
   <header class="top">
     <span class="mark"><Icon name="about" size="l" /></span>
     <h1>ARGOS · component gallery</h1>
-    <span class="note">development only · shared components of waves 1 and 2 · reference 1440 × 900</span>
+    <span class="note">development only · shared components of waves 1 to 3 · reference 1440 × 900</span>
     <span class="spacer"></span>
     <Segmented
       label="Theme"
@@ -250,6 +252,11 @@
       onchange={(t: Theme) => saveTheme(t)}
     />
   </header>
+
+  <!-- Wave 3: the controls and instruments of Observe: acquisition. -->
+  <Wave3 />
+  <!-- Wave 3, workspace / viewer / charts: task modes, HUD, histogram, exposure check, V-curve, conditions. -->
+  <WorkspaceGallery />
 
   <!-- Wave 2: the components promoted from the design lab and the Settings components. -->
   <Wave2 />

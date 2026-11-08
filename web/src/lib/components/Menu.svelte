@@ -15,6 +15,7 @@
   - `preview` draws it in place with `previewActive` highlighted (gallery).
 -->
 <script lang="ts">
+  import NumText from './NumText.svelte';
   import type { Snippet } from 'svelte';
   import { formatShortcut } from '../app/shortcuts';
   import { FocusReturn, focusTargetOf } from './focus';
@@ -213,7 +214,7 @@
             {/if}
           </span>
           <span class="text">
-            <span class="label">{e.label}</span>
+            <span class="label"><NumText text={e.label} /></span>
             {#if e.disabledReason || e.detail}
               <span class="detail">{e.disabledReason ?? e.detail}</span>
             {/if}

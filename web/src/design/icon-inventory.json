@@ -1665,5 +1665,57 @@
     "display": "icon+label",
     "shortcut": "Ctrl+Q",
     "shortcut_origin": "qt"
+  },
+  {
+    "id": "watch",
+    "labels": [
+      "Watch view"
+    ],
+    "sources": [
+      "web/src/lab/workspace/ui/LabIcon.svelte (lab-watch)",
+      "web/src/lab/workspace/overlays/WatchView.svelte",
+      "web/lab/PROPOSAL.md §3.1, §6 (owner D3)"
+    ],
+    "group": "B",
+    "concept": "Watch view: the run read at a glance from a distance (last-frame age, n / N, target and check curves in large type), entered and left with W.",
+    "metaphor": "A display on a stand: landscape screen 2.25-21.75 x 3.75-15.75 (radius 2.25), a post from the screen's centre to a base line 8.25-15.75 at y=20.25, and on the screen a transit light curve drawn as one line (flat, a 45-degree fall, a flat bottom, a 45-degree rise, flat). Redrawn from the lab's three dots, which read as a face at 16 px.",
+    "display": "icon",
+    "shortcut": "W",
+    "shortcut_origin": "proposed",
+    "note": "Web UI only (wave 6). Not an eye: the eye is reserved for nav-imaging."
+  },
+  {
+    "id": "attention",
+    "labels": [
+      "Attention",
+      "Needs attention"
+    ],
+    "sources": [
+      "web/src/lab/workspace/ui/LabIcon.svelte (lab-attention)",
+      "web/src/lab/workspace/overlays/AttentionPopover.svelte",
+      "web/lab/PROPOSAL.md §3.1, §6 (owner D3)"
+    ],
+    "group": "B",
+    "concept": "The attention list of a run: frames or conditions that need the observer (the server's per-frame rules); the status-bar chip that opens it.",
+    "metaphor": "The ring r=9 with an upright mark on the centre axis: a bar 6.75-12.75 over a short bar 15.75-16.5 (a stroked point, 1.5 clear of the bar). The same shape as StatusBadge's attention level; never a triangle (the triangle is the check-star role).",
+    "display": "icon",
+    "note": "Web UI only (wave 6); shown with a count. Distinct from abort (ring + solid square) at 16 px."
+  },
+  {
+    "id": "inspector",
+    "labels": [
+      "Inspector",
+      "Star details"
+    ],
+    "sources": [
+      "web/src/lab/workspace/ui/LabIcon.svelte (lab-inspector)",
+      "web/src/lab/workspace/observe/cards/InspectorCard.svelte",
+      "web/lab/PROPOSAL.md §6"
+    ],
+    "group": "B",
+    "concept": "Show the details of the selected star (identity, catalogue values, measurement, role) in the Inspector card.",
+    "metaphor": "A callout: a card 9.75-20.25 x 3.75-12.75 (radius 1.5, its lower-left corner square) with two value rows, and a 45-degree leader from that corner to a bright star (r=2.25) at (4.5, 18). Redrawn from the lab's sheet with a star, which was a near-twin of log and metadata at 16 px.",
+    "display": "icon",
+    "note": "Web UI only (wave 4)."
   }
 ]

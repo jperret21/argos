@@ -62,7 +62,12 @@
     defaultName?: string;
     /** Count FITS files in folders (choosing a frames folder). */
     countFits?: boolean;
-    onchoose?: (path: string) => void;
+    /**
+     * The chosen path. A promise keeps the dialog open while it runs (the
+     * primary button busy); resolving to a string shows that refusal in the
+     * dialog (the server's words) and keeps it open, anything else closes it.
+     */
+    onchoose?: (path: string) => unknown;
     onclose?: () => void;
     preview?: boolean;
     previewListing?: FsListing | null;
@@ -97,6 +102,8 @@
   let typed = $state(untrack(() => previewListing?.path ?? ''));
   let saveName = $state(untrack(() => defaultName));
   let confirmReplace = $state(false);
+  /** onchoose returned a promise that has not settled yet. */
+  let choosing = $state(false);
   let listEl: HTMLElement | undefined = $state();
   const typeahead = new Typeahead();
   let controller: AbortController | null = null;
@@ -105,6 +112,14 @@
   const places = $derived(normalizePlaces(listing?.places));
   const home = $derived(places.find((p) => p.id === 'home' || p.label.toLowerCase() === 'home')?.path ?? null);
   const crumbs = $derived(listing ? breadcrumbs(listing.path, home) : []);
+  /**
+   * Middle-truncated (design review W3): the root and the last three folders,
+   * the meaningful tail always visible; the skipped part is one "…" whose
+   * tooltip is the full path.
+   */
+  const shownCrumbs = $derived(
+    crumbs.length > 5 ? [crumbs[0], { label: '…', path: '' }, ...crumbs.slice(-3)] : crumbs,
+  );
   const rows = $derived(listing ? visibleEntries(listing.entries, mode, filter, showHidden) : []);
   const selected = $derived(active >= 0 ? (rows[active] ?? null) : null);
   const choice = $derived(pickerChoice(mode, listing, selected, saveName, filter));
@@ -190,8 +205,24 @@
       return;
     }
     const path = mode === 'save-file' && listing ? joinPath(listing.path, withSuffix(saveName, filter)) : choice.path;
-    open = false;
-    onchoose?.(path);
+    const result = onchoose?.(path);
+    if (!result || typeof (result as Promise<unknown>).then !== 'function') {
+      open = false;
+      return;
+    }
+    choosing = true;
+    error = null;
+    (result as Promise<string | null | void>).then(
+      (refusal) => {
+        choosing = false;
+        if (typeof refusal === 'string' && refusal) error = refusal;
+        else open = false;
+      },
+      (err: unknown) => {
+        choosing = false;
+        error = refusalText(err);
+      },
+    );
   }
 
   function onListKey(e: KeyboardEvent): void {
@@ -250,10 +281,13 @@
   <div class="picker">
     <div class="crumbs" aria-label="Folder">
       <nav class="trail" aria-label="Path">
-        {#each crumbs as c, i (c.path)}
-          {#if i > 0}<span class="sep" aria-hidden="true">/</span>{/if}
-          {#if i === crumbs.length - 1}
+        {#each shownCrumbs as c, i (c.path || 'skipped')}
+          <!-- The root "/" is its own separator: never "/ /". -->
+          {#if i > 0 && shownCrumbs[i - 1].label !== '/'}<span class="sep" aria-hidden="true">/</span>{/if}
+          {#if i === shownCrumbs.length - 1}
             <span class="crumb current" aria-current="location">{c.label}</span>
+          {:else if !c.path}
+            <span class="crumb skipped" title={listing?.path ?? ''}>…</span>
           {:else}
             <button type="button" class="crumb" onclick={() => void go(c.path)}>{c.label}</button>
           {/if}
@@ -418,6 +452,7 @@
       label={confirmReplace ? 'Replace' : PRIMARY_LABEL[mode]}
       variant={confirmReplace ? 'danger' : 'primary'}
       size="s"
+      busy={choosing}
       disabledReason={primaryReason}
       onclick={choose}
     />
@@ -469,6 +504,9 @@
   .type:focus-visible {
     outline: var(--focus-ring-w) solid var(--focus-ring);
     outline-offset: 1px;
+  }
+  .crumb.skipped {
+    cursor: default;
   }
   .crumb.current {
     flex: 0 1 auto;

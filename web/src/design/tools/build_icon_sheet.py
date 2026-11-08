@@ -62,7 +62,7 @@ CATEGORIES: list[tuple[str, list[str]]] = [
         "Photometry and analysis",
         "photometry target-star comparison-star check-star recommend-comparisons "
         "comparison-quality light-curve error-bars relative-flux session-metrics "
-        "rerun-photometry frames metadata",
+        "rerun-photometry frames metadata inspector",
     ),
     (
         "Files and data",
@@ -74,7 +74,7 @@ CATEGORIES: list[tuple[str, list[str]]] = [
         "Layout and panels",
         "add-plot panels arrange layout-tile layout-reset panel-float panel-dock disclosure",
     ),
-    ("Application", "log settings theme help about support-bundle quit"),
+    ("Application", "log watch attention settings theme help about support-bundle quit"),
 ]
 CATEGORIES = [(name, ids.split()) for name, ids in CATEGORIES]
 
