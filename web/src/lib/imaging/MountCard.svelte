@@ -24,6 +24,14 @@
   - Jog section (disclosure, per viewer): the pad with the server dead-man
     (A30). J arms the arrow keys from anywhere in Observe (D23); folding the
     section disarms and stops every axis.
+  - Solved field (W4, A32-A33; 05 1.2 #13 and #20, Q-O3): shown under the GoTo form.
+    Centre target (sync on the tracked solution, then slew; no confirmation, Esc aborts)
+    and Sync (the mount takes the solved centre of the frame on screen; it does not move;
+    inline confirmation, focus on Cancel). Without a solution, one muted line says what
+    to do first. In Field mode (`fieldMode`) the Solved field row comes right under the
+    readouts and the target entry (Object, Target RA / Dec, Slew) folds behind a "GoTo…"
+    disclosure (BRAND 11.1: rarely used fields below or in a disclosure), so Centre target
+    and Sync are never at the fold.
   With the server link down the readouts are the last known ones, greyed,
   and every command is refused.
 -->
@@ -51,9 +59,13 @@
   interface Props {
     /** Folded or open: the Observe mode owns it (imaging/modes); without a binding the card remembers its own. */
     open?: boolean;
+    /** Field mode: the Solved field row first, the target entry behind "GoTo…". */
+    fieldMode?: boolean;
   }
 
-  let { open = $bindable() }: Props = $props();
+  let { open = $bindable(), fieldMode = false }: Props = $props();
+  /** The GoTo disclosure of Field mode (folded by default). */
+  let gotoOpen = $state(false);
   const app = useApp();
 
   // The mount's own device record decides: with the camera alone the v1
@@ -70,6 +82,21 @@
   const rates = $derived((m?.tracking_rates ?? []).filter((r) => r in RATE_LABEL));
   const rateOptions = $derived(rates.map((r) => ({ value: r, label: RATE_LABEL[r] })));
   const rateReason = $derived(offline ?? (parked ? 'unpark the mount first' : null));
+
+  // -- Solved field (W4: A32 Centre target, A33 Sync) ---------------------------------------
+  const solved = $derived(app.field.solved);
+  const centerReason = $derived(app.centerProblem());
+  const syncReason = $derived(app.syncProblem());
+  const centerName = $derived(app.centerTargetName());
+  let syncAsk = $state(false);
+  let syncCancel: HTMLElement | undefined = $state();
+  $effect(() => {
+    if (syncAsk && syncCancel) syncCancel.focus();
+  });
+  // A reason that appears while the question is open closes it (the sync can no longer run).
+  $effect(() => {
+    if (syncReason) untrack(() => (syncAsk = false));
+  });
 
   // -- Target block --------------------------------------------------------------------------
   let raText = $state('');
@@ -217,94 +244,7 @@
   const jogReason = $derived(app.jogProblem());
 </script>
 
-<Card title="Mount" icon="mount" collapsible bind:open={() => open ?? true, (v) => (open = v)} persist={open === undefined ? 'mount' : undefined}>
-  {#snippet status()}
-    <StatusBadge tone={badge.tone} label={badge.label} />
-  {/snippet}
-  {#snippet summary()}
-    {#if m}Alt {formatDegrees(m.alt_deg)} · Az {formatDegrees(m.az_deg)}{#if objectName} · {objectName}{/if}{/if}
-  {/snippet}
-
-  <div class="readouts" class:offline={!m || app.stale}>
-    <div class="readout">
-      <span class="micro">RA</span>
-      <span class="value num">{m ? formatRA(m.ra_hours) : '—'}</span>
-    </div>
-    <div class="readout">
-      <span class="micro">Dec</span>
-      <span class="value num">{m ? formatDec(m.dec_deg) : '—'}</span>
-    </div>
-    <div class="readout">
-      <span class="micro">Alt</span>
-      <span class="value num">{m ? formatDegrees(m.alt_deg) : '—'}</span>
-    </div>
-    <div class="readout">
-      <span class="micro">Az</span>
-      <span class="value num">{m ? formatDegrees(m.az_deg) : '—'}</span>
-    </div>
-  </div>
-
-  <p class="target" class:none={!m?.target}>
-    <span class="micro">Target</span>
-    {#if m?.target}
-      <span class="num">{formatRA(m.target.ra_hours)}</span>
-      <span class="num">{formatDec(m.target.dec_deg)}</span>
-      {#if toTarget !== null}
-        <span class="away num">{toTarget < 0.01 ? 'on target' : `${formatDegrees(toTarget)} away`}</span>
-      {/if}
-    {:else}
-      <span class="num">—</span>
-    {/if}
-  </p>
-
-  <div class="row">
-    <IconButton
-      icon="tracking"
-      label="Tracking"
-      showLabel
-      size="s"
-      pressed={!!m?.tracking}
-      layoutToggle
-      busy={!!app.busy.tracking}
-      disabledReason={offline ?? (parked ? 'the mount is parked' : null)}
-      tooltipText={m?.tracking ? `Stop ${(m.tracking_rate ?? 'sidereal')} tracking` : `Start ${(m?.tracking_rate ?? 'sidereal')} tracking`}
-      tooltip="top"
-      onclick={() => app.setTracking(!m?.tracking)}
-    />
-    {#if rateOptions.length > 1}
-      <Segmented
-        label="Tracking rate"
-        size="s"
-        options={rateOptions}
-        value={m?.tracking_rate ?? 'sidereal'}
-        deferred
-        busyValue={app.busy.trackingRate ? (m?.tracking_rate ?? null) : null}
-        disabledReason={rateReason}
-        onchange={(r) => app.setTrackingRate(r as TrackingRate)}
-      />
-    {/if}
-  </div>
-  {#if parked}
-    <div class="park">
-      <IconButton icon="unpark" label="Unpark" showLabel size="s" busy={!!app.busy.unpark} disabledReason={offline} onclick={() => app.unpark()} />
-    </div>
-  {:else}
-    <div class="park">
-      <HoldButton
-        icon="park"
-        label="Park"
-        size="m"
-        verb="park"
-        confirmTitle="Park the mount?"
-        confirmBody="Parking physically closes the Seestar arm and stops tracking."
-        busyLabel="Parking…"
-        doneLabel="Parked"
-        disabledReason={offline ?? (app.slewing ? 'the mount is slewing (Esc aborts)' : null)}
-        onconfirm={() => app.park()}
-      />
-    </div>
-  {/if}
-
+  {#snippet gotoForm()}
   <form class="goto" onsubmit={submit} novalidate>
     <ObjectSearch
       bind:this={search}
@@ -407,6 +347,171 @@
       <p class="error"><Icon name="attention" size={14} />{m.goto_blocked.message}</p>
     {/if}
   </form>
+  {/snippet}
+
+  {#snippet solvedBlock()}
+  <div class="solved" role="group" aria-label="Solved field">
+    {#if solved}
+      <div class="row">
+        <span class="micro">Solved field</span>
+        <span class="spacer"></span>
+        <IconButton
+          icon="center-target"
+          label="Centre target"
+          showLabel
+          size="s"
+          variant="secondary"
+          busy={!!app.busy.center}
+          disabledReason={centerReason}
+          tooltipText={centerName ? `Sync on the identified field, then slew to ${centerName} (Esc aborts)` : 'Sync on the identified field, then slew to the target (Esc aborts)'}
+          tooltip="top"
+          onclick={() => void app.centerTarget()}
+        />
+        <IconButton
+          icon="sync"
+          label="Sync"
+          showLabel
+          size="s"
+          variant="ghost"
+          busy={!!app.busy.sync}
+          disabledReason={syncReason}
+          tooltipText="Sync the mount to the plate solution (no slew)"
+          tooltip="top"
+          pressed={syncAsk}
+          onclick={() => (syncAsk = !syncAsk)}
+        />
+      </div>
+      {#if syncAsk}
+        <div class="ask" role="alertdialog" aria-label="Sync the mount to the plate solution?" aria-describedby="sync-ask-text">
+          <p id="sync-ask-text">The mount takes the identified centre of the frame on screen as its position. It does not move.</p>
+          <div class="row">
+            <span class="spacer"></span>
+            <button type="button" class="text-btn" bind:this={syncCancel} onclick={() => (syncAsk = false)}>Cancel</button>
+            <IconButton
+              icon="sync"
+              label="Sync"
+              showLabel
+              size="s"
+              variant="primary"
+              busy={!!app.busy.sync}
+              tooltip="none"
+              onclick={async () => {
+                await app.syncToSolution();
+                syncAsk = false;
+              }}
+            />
+          </div>
+        </div>
+      {/if}
+    {:else}
+      <p class="muted solved-none">Identify the field (S) to centre the target or sync the mount.</p>
+    {/if}
+  </div>
+
+  {/snippet}
+
+<Card title="Mount" icon="mount" collapsible bind:open={() => open ?? true, (v) => (open = v)} persist={open === undefined ? 'mount' : undefined}>
+  {#snippet status()}
+    <StatusBadge tone={badge.tone} label={badge.label} />
+  {/snippet}
+  {#snippet summary()}
+    {#if m}Alt {formatDegrees(m.alt_deg)} · Az {formatDegrees(m.az_deg)}{#if objectName} · {objectName}{/if}{/if}
+  {/snippet}
+
+  <div class="readouts" class:offline={!m || app.stale}>
+    <div class="readout">
+      <span class="micro">RA</span>
+      <span class="value num">{m ? formatRA(m.ra_hours) : '—'}</span>
+    </div>
+    <div class="readout">
+      <span class="micro">Dec</span>
+      <span class="value num">{m ? formatDec(m.dec_deg) : '—'}</span>
+    </div>
+    <div class="readout">
+      <span class="micro">Alt</span>
+      <span class="value num">{m ? formatDegrees(m.alt_deg) : '—'}</span>
+    </div>
+    <div class="readout">
+      <span class="micro">Az</span>
+      <span class="value num">{m ? formatDegrees(m.az_deg) : '—'}</span>
+    </div>
+  </div>
+
+  <p class="target" class:none={!m?.target}>
+    <span class="micro">Target</span>
+    {#if m?.target}
+      <span class="num">{formatRA(m.target.ra_hours)}</span>
+      <span class="num">{formatDec(m.target.dec_deg)}</span>
+      {#if toTarget !== null}
+        <span class="away num">{toTarget < 0.01 ? 'on target' : `${formatDegrees(toTarget)} away`}</span>
+      {/if}
+    {:else}
+      <span class="num">—</span>
+    {/if}
+  </p>
+  {#if fieldMode}{@render solvedBlock()}{/if}
+
+  <div class="row">
+    <IconButton
+      icon="tracking"
+      label="Tracking"
+      showLabel
+      size="s"
+      pressed={!!m?.tracking}
+      layoutToggle
+      busy={!!app.busy.tracking}
+      disabledReason={offline ?? (parked ? 'the mount is parked' : null)}
+      tooltipText={m?.tracking ? `Stop ${(m.tracking_rate ?? 'sidereal')} tracking` : `Start ${(m?.tracking_rate ?? 'sidereal')} tracking`}
+      tooltip="top"
+      onclick={() => app.setTracking(!m?.tracking)}
+    />
+    {#if rateOptions.length > 1}
+      <Segmented
+        label="Tracking rate"
+        size="s"
+        options={rateOptions}
+        value={m?.tracking_rate ?? 'sidereal'}
+        deferred
+        busyValue={app.busy.trackingRate ? (m?.tracking_rate ?? null) : null}
+        disabledReason={rateReason}
+        onchange={(r) => app.setTrackingRate(r as TrackingRate)}
+      />
+    {/if}
+  </div>
+  {#if parked}
+    <div class="park">
+      <IconButton icon="unpark" label="Unpark" showLabel size="s" busy={!!app.busy.unpark} disabledReason={offline} onclick={() => app.unpark()} />
+    </div>
+  {:else}
+    <div class="park">
+      <HoldButton
+        icon="park"
+        label="Park"
+        size="m"
+        verb="park"
+        confirmTitle="Park the mount?"
+        confirmBody="Parking physically closes the Seestar arm and stops tracking."
+        busyLabel="Parking…"
+        doneLabel="Parked"
+        disabledReason={offline ?? (app.slewing ? 'the mount is slewing (Esc aborts)' : null)}
+        onconfirm={() => app.park()}
+      />
+    </div>
+  {/if}
+
+  {#if fieldMode}
+    <div class="jog">
+      <button type="button" class="disclosure" aria-expanded={gotoOpen} onclick={() => (gotoOpen = !gotoOpen)}>
+        <span class="chev" class:open={gotoOpen}><Icon name="disclosure" size="s" /></span>
+        <span class="micro">GoTo…</span>
+        <span class="sum">{gotoOpen ? '' : objectName ? `object ${objectName}` : 'object, coordinates, Slew'}</span>
+      </button>
+      {#if gotoOpen}{@render gotoForm()}{/if}
+    </div>
+  {:else}
+    {@render gotoForm()}
+    {@render solvedBlock()}
+  {/if}
 
   <div class="jog">
     <button type="button" class="disclosure" aria-expanded={app.jogOpen} onclick={() => app.setJogOpen(!app.jogOpen)}>
@@ -547,6 +652,33 @@
   .error :global(svg) {
     flex: none;
     color: var(--warning);
+  }
+
+  .solved {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: var(--border-w) solid var(--border-soft);
+  }
+  .solved-none {
+    margin: 0;
+    font-size: var(--text-xs);
+  }
+  .ask {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: var(--border-w) solid var(--border);
+    border-radius: var(--radius-s);
+    background: var(--bg);
+  }
+  .ask p {
+    margin: 0;
+    color: var(--fg);
+    font-size: var(--text-s);
+    line-height: var(--leading-relaxed);
   }
 
   .jog {

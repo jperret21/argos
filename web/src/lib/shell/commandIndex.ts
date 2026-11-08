@@ -80,6 +80,24 @@ export interface IndexSource {
   setFrameType?(t: FrameType): Promise<unknown>;
   setTrackingRate?(r: TrackingRate): Promise<unknown>;
   darkGuard?(t?: FrameType): string | null;
+  // -- Wave 4 (optional, as above): field identification, Centre target, Sync --
+  fieldCommands?(): FieldCommands | null;
+}
+
+/** What the palette needs from the field (W4, A32-A33, A43-A44). */
+export interface FieldCommands {
+  /** A solve runs (manual or automatic). */
+  solving: boolean;
+  auto: boolean;
+  /** Why Centre target cannot run (null: it can). */
+  centerReason: string | null;
+  /** Who Centre target aims at, in words ("RR Lyr"). */
+  centerTarget: string | null;
+  syncReason: string | null;
+  cancelSolve(): Promise<unknown>;
+  setAuto(on: boolean): Promise<unknown>;
+  center(): Promise<unknown>;
+  sync(): Promise<unknown>;
 }
 
 /** After a section change, the screen binds its keys once it is mounted. */
@@ -111,6 +129,15 @@ const ICON: Record<string, string> = {
   'view.stretch-reset': 'stretch-reset',
   'view.levels': 'histogram',
   'view.crosshair': 'crosshair',
+  'view.loupe': 'loupe',
+  'view.saturation': 'saturation',
+  'view.region': 'region-stats',
+  'view.statistics': 'statistics',
+  'field.solve': 'plate-solve',
+  'field.grid': 'sky-grid',
+  'field.labels': 'labels',
+  'field.catalogue': 'catalogue',
+  'observe.mode.field': 'plate-solve',
   'log.toggle': 'log',
   'observe.live': 'live',
   'observe.capture': 'capture',
@@ -294,6 +321,54 @@ export function buildIndex(app: IndexSource, afterMount: AfterMount): Command[] 
         disabled: mountReason ?? (parked ? 'unpark the mount first' : null),
         run: () => app.setTrackingRate!(r),
       });
+    }
+  }
+
+  // -- Field (W4): Centre target and Sync move or re-point the mount, so they confirm ----------
+  const field = app.fieldCommands?.() ?? null;
+  if (field) {
+    out.push({
+      id: 'hw.center',
+      title: field.centerTarget ? `Centre ${field.centerTarget} (sync, then slew)` : 'Centre the target (sync, then slew)',
+      group: 'Hardware',
+      icon: 'center-target',
+      keywords: 'center centre target plate solve recenter goto',
+      hint: 'Mount',
+      hardware: {
+        question: field.centerTarget ? `Centre ${field.centerTarget}?` : 'Centre the target?',
+        consequence: 'Syncs the mount on the identified field, then slews to the target; the field must be identified again.',
+        confirm: 'Centre target',
+      },
+      disabled: serverDown ?? field.centerReason,
+      run: () => field.center(),
+    });
+    out.push({
+      id: 'hw.sync',
+      title: 'Sync the mount to the plate solution',
+      group: 'Hardware',
+      icon: 'sync',
+      keywords: 'sync plate solution pointing model align',
+      hint: 'Mount',
+      hardware: {
+        question: 'Sync the mount to the plate solution?',
+        consequence: 'The mount takes the identified centre of the frame on screen as its position; it does not move.',
+        confirm: 'Sync',
+      },
+      disabled: serverDown ?? field.syncReason,
+      run: () => field.sync(),
+    });
+    out.push({
+      id: 'act.field-auto',
+      title: field.auto ? 'Stop keeping the field identified automatically' : 'Keep the field identified automatically',
+      group: 'Actions',
+      icon: 'plate-solve-auto',
+      keywords: 'plate solve auto astap automatic identify',
+      hint: 'Observe',
+      disabled: serverDown,
+      run: () => field.setAuto(!field.auto),
+    });
+    if (field.solving) {
+      out.push({ id: 'act.field-cancel', title: 'Cancel the field identification', group: 'Actions', icon: 'stop', keywords: 'astap plate solve stop', hint: 'Observe', disabled: serverDown, run: () => field.cancelSolve() });
     }
   }
 

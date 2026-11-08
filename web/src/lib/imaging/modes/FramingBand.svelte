@@ -18,6 +18,7 @@
 -->
 <script lang="ts">
   import type { Theme } from '../../app/theme';
+  import type { Palette } from '../../viewer/palettes/lut';
   import NumberField from '../../components/NumberField.svelte';
   import StatusBadge from '../../components/StatusBadge.svelte';
   import { fixed, int } from '../../format/number';
@@ -40,6 +41,10 @@
     fullWellAdu?: number | null;
     peaksUnsupported?: boolean;
     onlevel: (patch: Partial<StretchParams>) => void;
+    /** The palette the viewer draws (the ramp under the histogram shows it). */
+    palette?: Palette;
+    /** An exposure-check row is hovered: its stars, frame px (null: none), to mark on the image. */
+    onhoverstars?: (points: { x: number; y: number }[] | null) => void;
   }
 
   let {
@@ -55,6 +60,8 @@
     fullWellAdu = null,
     peaksUnsupported = false,
     onlevel,
+    onhoverstars,
+    palette = 'neutral',
   }: Props = $props();
 
   const disabled = $derived(!levels);
@@ -110,6 +117,7 @@
         ramp
         handleValues={false}
         {tint}
+        {palette}
         onlevel={(patch) => onlevel(patch)}
       />
     </div>
@@ -133,7 +141,7 @@
     </div>
     <div class="exposure">
       <div class="head"><span class="micro">Exposure check · peak, not picture</span></div>
-      <ExposureCheck {check} linearityAdu={linearityAdu} fullWellAdu={fullWellAdu} unsupported={peaksUnsupported} />
+      <ExposureCheck {check} linearityAdu={linearityAdu} fullWellAdu={fullWellAdu} unsupported={peaksUnsupported} onhover={onhoverstars} />
     </div>
   </div>
 {/if}

@@ -281,7 +281,7 @@
   --overlay-field-star: var(--fg-muted);
   --overlay-variable: var(--variable);
   --overlay-galaxy: var(--cyan);
-  --overlay-nebula: var(--warning);
+  --overlay-nebula: var(--cyan); /* amber stays for attention; the ticked circle carries identity */
   --overlay-exoplanet: var(--success);
   --overlay-other: var(--fg-muted);
   --overlay-grid: var(--cyan);
@@ -301,6 +301,9 @@
   /* Image viewer: a stretched pixel value v in [0, 1] is drawn as v x tint. */
   --viewer-bg: #000000;
   --viewer-tint: #ffffff;
+  /* Pixels whose raw samples reach the full well (saturation highlight, C): a loud hue no
+     role, palette or state uses (README section 5 token request, Q-O25). */
+  --viewer-saturated: #ff3d7f;
 }
 
 /* --------------------------------------------------------------------------
@@ -370,7 +373,7 @@
   --overlay-field-star: var(--fg-muted);
   --overlay-variable: var(--variable);
   --overlay-galaxy: var(--cyan);
-  --overlay-nebula: var(--warning);
+  --overlay-nebula: var(--cyan); /* amber stays for attention; the ticked circle carries identity */
   --overlay-exoplanet: var(--success);
   --overlay-other: var(--fg-muted);
   --overlay-grid: var(--cyan);
@@ -388,6 +391,9 @@
 
   --viewer-bg: #000000;
   --viewer-tint: #ffffff;
+  /* Pixels whose raw samples reach the full well (saturation highlight, C): a loud hue no
+     role, palette or state uses (README section 5 token request, Q-O25). */
+  --viewer-saturated: #ff3d7f;
 }
 
 /* --------------------------------------------------------------------------
@@ -475,7 +481,7 @@
   --overlay-field-star: var(--fg-muted);
   --overlay-variable: var(--variable);
   --overlay-galaxy: var(--cyan);
-  --overlay-nebula: var(--warning);
+  --overlay-nebula: var(--cyan); /* amber stays for attention; the ticked circle carries identity */
   /* --success is 2.44:1 on the black canvas; markers are shape-coded, so the
      exoplanet layer borrows the variable-star red (3.62:1). */
   --overlay-exoplanet: var(--variable);
@@ -503,6 +509,8 @@
      --fg (0xd8), so the brightest star never outshines the interface text. */
   --viewer-bg: #000000;
   --viewer-tint: #d80000;
+  /* Night Red: a clipped core is drawn black, a hole in a red star (no other colour, BRAND 4.3). */
+  --viewer-saturated: #000000;
 }
 
 /* --------------------------------------------------------------------------

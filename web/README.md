@@ -223,9 +223,10 @@ fields in place.
 └──────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Task modes** (owner D1): Framing (Alt+1) and Focus (Alt+2); Field and Run are listed,
-  unavailable, and say which wave brings them. Each mode remembers its rail width, card
-  states, band and drawer (Arrange, `arrange`, with Reset and Undo).
+- **Task modes** (owner D1): Framing (Alt+1), Focus (Alt+2) and Field (Alt+3, wave 4); Run
+  is listed, unavailable, and says which wave brings it. Each mode remembers its rail
+  width, card states, band, drawer and catalogue layers (Framing and Focus default to the
+  grid and the target set only) (Arrange, `arrange`, with Reset and Undo).
 - **Toolbar**, built from data (`components/Toolbar`): the equipment button and the modes,
   then Open FITS (⌘O), **Take shot** (E; a split button whose face says the frame type and
   exposure it will use; its menu sets them, never shoots; the face reserves the width of
@@ -291,6 +292,27 @@ fields in place.
   interval with no frame breaks every line and is a hatched period named by its cause
   ("autofocus 13:36–13:38", else "no frame"). The history survives a reload while frames
   arrive (live rows are held during the read and merged after it).
+- **Field mode** (wave 4, `spec/progress.md` Wave 4): **Identify field** (S; ASTAP as a
+  cancellable job, the same button cancels it) and **Keep identified automatically**; the
+  HUD chip says the state in words ("Identified · 3.67″/px · PA −177.0° · Δtarget …",
+  "tracking lost"), with the frame-centre RA / Dec, a N / E compass and an arcminute scale
+  bar. The **overlay** (screen-space SVG) draws the catalogue layers (Gaia, VSX, SIMBAD,
+  VSP, exoplanet hosts; one shape per layer, the Catalogue layers popover O is their
+  legend), the RA / Dec grid (G) and the target set (circle target, square comparison,
+  triangle check), moved frame by frame by the server's tracking; labels (N) avoid each
+  other and the HUD. A **click** identifies the star (A49): the star card (identity, facts,
+  role buttons) writes `targets/<object>.json` in the Qt format with one grouped Undo toast
+  at the bottom left of the image; the selection is four brass corner brackets. The
+  **Field band** lists the VSP comparison candidates (V, B−V, Δ(B−V), separation against
+  the observer's limit, peak and SNR on the solved frame, Gaia sources in the aperture
+  when the Gaia list can tell, VSX entries; the target and the rules in words on one note
+  line), the ensemble, and virtual tables of the VSX variables and Gaia stars; a row picks
+  the star on the image. The **Inspector** card shows the picked candidate with an
+  aperture thumbnail. The Mount card's **Solved field** row offers Centre target and Sync
+  (inline confirmation), refused for the solution of an opened file. Image tools: loupe
+  (Z), region statistics (R) and the Statistics card (I), the context menu, CFA preview
+  (Raw, R, G, B) and Fire / Ice palettes (OKLab lightness linear in the stretch; neutral
+  only in Night Red).
 - **Open FITS image** (⌘O from any section): the in-app file picker; raw 16-bit frames
   only, a calibrated or stacked file is refused in the server's words and the dialog
   stays open; live view stops first.
@@ -315,6 +337,10 @@ Keyboard (single keys never fire in a text field; a press on the image ends typi
 | 1 | actual pixels (1:1) | J | arm / disarm keyboard jogging |
 | Alt+1 / Alt+2 | Framing / Focus | arrows | jog while armed or the pad has focus; else pan the viewer |
 | ⌘O | Open FITS image | L | log drawer (any section) |
+| Alt+3 | Field mode | S | identify the field (again: cancel) |
+| G | coordinate grid | N | catalogue labels |
+| O | Catalogue layers popover | Z | loupe |
+| R | region statistics | I | Statistics card |
 
 Tracking, autofocus and focuser steps keep no single key: they move hardware (BRAND 7);
 the command palette (⌘K) has them, with a confirmation in place.
@@ -428,10 +454,9 @@ npm run capture:lab -- controls --out /tmp/lab --only buttons-night-red
 
 ## Known limits
 
-- Connection, Observe (Framing, Focus) and Settings exist; Plan and Review are
-  placeholders (waves 6 and 7). No plate solving, catalogue overlays, star selection,
-  photometry or sequences yet (waves 4 to 6). What is done and what is missing, row by
-  row: `spec/progress.md`.
+- Connection, Observe (Framing, Focus, Field) and Settings exist; Plan and Review are
+  placeholders (waves 6 and 7). No live photometry or sequences yet (waves 5 and 6). What
+  is done and what is missing, row by row: `spec/progress.md`.
 - Alpaca mode is wired but has only been exercised against a closed port (the error
   path); the server side was tested against fake devices, not a Seestar.
 - Seestar frames are raw colour mosaics (`channels: 1`, `sensor.bayer` set): they are
@@ -442,8 +467,9 @@ npm run capture:lab -- controls --out /tmp/lab --only buttons-night-red
 - Settings › Observer & site fits 1 440 × 900 but scrolls about 90 px at 1 280 × 800 with
   a site mismatch shown; Catalogues and Photometry scroll at both sizes (allowed by 02
   section 2.4).
-- Not ported from the Qt viewer: saturation overlay, loupe, false-colour palettes,
-  region statistics, WCS grid.
+- Simulator frames cannot be plate-solved: the field and its tracking were exercised on
+  copies of real Seestar raw frames opened through Open FITS (the server's tests drive
+  the frame-to-frame tracking).
 - Statistics for the stretch run on the main thread (about 2 ms for 2 Mpx); 4K frames
   may want a Web Worker.
 - The status bar latency compares the frame's server timestamp (end of exposure) with

@@ -103,6 +103,37 @@ describe('command palette index', () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it('offers Centre target and Sync as hardware with their reasons, and the field actions (W4)', async () => {
+    const calls: string[] = [];
+    const field = {
+      solving: true,
+      auto: false,
+      centerReason: 'identify the field first (S)',
+      centerTarget: 'RR Lyr',
+      syncReason: null,
+      cancelSolve: async () => calls.push('cancel'),
+      setAuto: async (on: boolean) => calls.push(`auto:${on}`),
+      center: async () => calls.push('center'),
+      sync: async () => calls.push('sync'),
+    };
+    const idx = buildIndex(source({ fieldCommands: () => field }), none);
+    const center = idx.find((c) => c.id === 'hw.center')!;
+    expect(center).toMatchObject({ title: 'Centre RR Lyr (sync, then slew)', group: 'Hardware', disabled: 'identify the field first (S)' });
+    expect(center.hardware?.confirm).toBe('Centre target');
+    const sync = idx.find((c) => c.id === 'hw.sync')!;
+    expect(sync.hardware?.question).toBe('Sync the mount to the plate solution?');
+    expect(sync.disabled).toBeNull();
+    await sync.run();
+    await idx.find((c) => c.id === 'act.field-auto')!.run();
+    await idx.find((c) => c.id === 'act.field-cancel')!.run();
+    expect(calls).toEqual(['sync', 'auto:true', 'cancel']);
+    // The Field keys are built now: listed with their keys, never as hardware.
+    expect(idx.find((c) => c.id === 'km.field.solve')).toMatchObject({ keys: 'S', group: 'Actions' });
+    expect(idx.find((c) => c.id === 'km.field.labels')).toMatchObject({ keys: 'N' });
+    // No field record (the tests' fake app of earlier waves): no field commands.
+    expect(buildIndex(source(), none).some((c) => c.id === 'hw.center')).toBe(false);
+  });
+
   it('ranks "park" to the Park command and "latitude" to the field', () => {
     const idx = buildIndex(source(), none);
     expect(rank('park', idx)[0].cmd.id).toBe('hw.park');

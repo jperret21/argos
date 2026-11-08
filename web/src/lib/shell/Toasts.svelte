@@ -7,7 +7,9 @@
   On Settings the column moves to the bottom left of the form column
   (design review): the right-hand side holds the actions of the rows and
   tables (Save current site, Reset, Clear…), which a toast must not cover
-  right after the change it offers to undo.
+  right after the change it offers to undo. On Observe the column sits at the
+  bottom left of the viewer stage, above the scale bar (`app.toastAnchor`), never
+  over the rail's lowest controls (Slew, Abort, the Sync confirmation).
 -->
 <script lang="ts">
   import { useApp } from '../app/state.svelte';
@@ -17,7 +19,14 @@
   const app = useApp();
 </script>
 
-<div class="toasts" class:in-settings={app.section === 'configuration'} aria-live="polite">
+<div
+  class="toasts"
+  class:in-settings={app.section === 'configuration'}
+  class:on-stage={app.section === 'imaging' && !!app.toastAnchor}
+  style:left={app.section === 'imaging' && app.toastAnchor ? `${app.toastAnchor.left}px` : undefined}
+  style:bottom={app.section === 'imaging' && app.toastAnchor ? `${app.toastAnchor.bottom}px` : undefined}
+  aria-live="polite"
+>
   {#each app.undo.entries as entry (entry.id)}
     <UndoToast queue={app.undo} {entry} />
   {/each}
@@ -59,6 +68,12 @@
   .toasts.in-settings {
     right: auto;
     left: calc(var(--sidebar-w) + 208px + var(--space-5));
+    align-items: flex-start;
+  }
+  /* Observe: the bottom left of the viewer stage (left / bottom set inline). */
+  .toasts.on-stage {
+    right: auto;
+    flex-direction: column-reverse;
     align-items: flex-start;
   }
 

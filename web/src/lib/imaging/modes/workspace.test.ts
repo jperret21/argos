@@ -33,9 +33,11 @@ describe('Observe workspace (D1)', () => {
 
   it('refuses the modes this version does not have, with the reason', () => {
     const ws = new ObserveWorkspace({ store: memory() });
-    expect(ws.setMode('field')).toMatch(/field identification \(wave 4\)/);
     expect(ws.setMode('run')).toMatch(/waves 5 and 6/);
     expect(ws.mode).toBe('framing');
+    // Field arrived with wave 4.
+    expect(ws.setMode('field')).toBeNull();
+    expect(ws.mode).toBe('field');
     // A stored unavailable mode is not restored.
     expect(new ObserveWorkspace({ store: memory({ [MODE_KEY]: '"run"' }) }).mode).toBe('framing');
   });

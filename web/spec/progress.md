@@ -903,3 +903,327 @@ the few left are listed with the reason. Science first.
   toolbar, the rail and J show their caps.
 - The Focus band's one-row summary when the drawer is open at 1 280 (design, low): the
   size rule allows it; left for the owner's layout review.
+
+## Wave 4: Field identification and image tools (2026-11-08)
+
+Scope (README section 7, row W4): API rows A32-A33, A43-A49 and A51-A53 (server,
+`argos/server/protocol.md` "API 2 routes, wave 4"); the overlay layer, star card, viewer
+context menu, loupe, region tool, CFA preview and palettes, Statistics card, Catalogue
+layers popover and the Settings sheet reuse; the Observe Field group, popover, star card,
+Statistics card and View options; mapping rows M7, M44-M47, M50 (pre-checks only),
+M51-M58; the W4 rows of `web/lab/PROPOSAL.md` section 6 and the candidate fields of its
+section 7; the wave 3 leftover "hovering an exposure-check row marks its star".
+Built by four roles (server, field and overlay front end, viewer tools, integration).
+Screenshots: `web/screenshots/2026-11-08_wave4-field/` (13 scenes at 1 440 x 900 in the
+three themes and at 1 280 x 800 Observatory, plus the Settings sheet, the command palette's
+Centre target, Sync and Labels on in Observatory and Labels on in Night Red: 57 shots at
+device scale 2, re-captured after the reviews, with a manifest).
+
+**Status: done, reviews applied (section 6); the owner's commit pending.** The exit
+criterion is met: roles and Night Red through the UI; "overlays follow the tracked field"
+through the UI on an opened real frame and, frame to frame, by the server on 195
+consecutive real frames of the RR Lyr session against star-matching truth (0.2-0.9 frame px
+median, no loss; section 6). Rows left partial are listed in sections 5 and 6.
+
+Verification (2026-11-08, server on port 8743 and vite on 5143 with a temporary
+`--config-dir`, `--log-dir`, sessions folder, `HOME` and `TMPDIR`, simulator, ASTAP as
+installed; the catalogue cache was copied read-only into the temporary HOME, the network
+was used for VizieR / AAVSO, where Gaia, SIMBAD and NASA did not answer; copies of real raw
+frames of the RR Lyr field opened through the Open FITS dialog; `~/.argos/config.json`
+untouched, nothing written to `~/Argos/sessions`; `argos/ui`, `argos/workers`,
+`argos/core` unchanged):
+
+- End-to-end through the UI (`verify.mjs`, real keyboard and pointer input in headless
+  Chrome, run twice): Open FITS, S, the field chip, the overlay against the viewer's own
+  frame-to-screen map, a click on RR Lyr, Target / Comparison / Check from the card, the
+  file on disk, Undo, Escape, Centre target, a GoTo: all pass, no page error (section 2).
+  Sync through its inline confirmation passed in a separate run (the mount read 19.0000 h
+  +40.00° before, the solved centre 19.4384 h +41.506° after, field still valid); in the
+  second `verify.mjs` run the confirm click landed on the stacked Undo toasts, which cover
+  the bottom of the rail for 6 s (section 5).
+- `.venv/bin/python -m pytest -q` (temporary HOME and TMPDIR): **1 215 passed, 72 skipped**
+  (1 171 / 71 before the wave); ruff and black clean on `argos/server` and `tests/server`.
+- `npm run check` 0 errors, 0 warnings (621 files, `src/lab` included); `npm test` **754
+  passed** (66 files); `npm run build` OK (JS 891 kB, 292 kB gzip; was 750 / 244);
+  `src/lib` imports nothing from `src/lab`.
+- Screenshots: 55 in the gallery folder, all read. `npm run audit:night-red`: the 13 Night
+  Red originals pass (rule A 0 px, rule B 0-17 px raw, 0 with rounding). `npm run
+  audit:brass` at DPR 1 on the 13 Observatory 1 440 shots: 431 to 1 484 accent-family px
+  per scene, 2 289 for the invalidated field (the Slew button turns primary once the GoTo
+  fields differ from the mount's target, wave 3 behaviour).
+
+### 1. Mapping rows closed by the wave
+
+| Row | Qt element | Web | Status |
+|---|---|---|---|
+| M7 | Field menu: Identify field, Keep field identified automatically, Configure field identification…, Configure catalogues… | Toolbar Field group: `plate-solve` (S; while ASTAP runs the same place cancels it), `plate-solve-auto` (no key); the Catalogue layers popover footer opens Settings › Catalogues or › Plate solving in a Sheet over Observe (D12) | Done |
+| M44 | `OverlayBar` (10 chips, Gaia G slider) | Toolbar `sky-grid` (G), `target-star`, `labels` (N: L is the activity log), `catalogue` (O) + Catalogue layers popover (layer rows with counts, unavailable before a solve with the reason, Gaia G depth saved once on release) | Done; at 1 440 the Selected stars and Labels tools sit in the overflow menu outside Field mode (section 5) |
+| M45 | "Catalogues / depth…" | Popover footer → Settings › Catalogues sheet; a `catalog.*` change refetches (server, debounced) | Done |
+| M46 | Viewer click / marker hover | FieldOverlay: a click (≤ 4 px travel) sends A49 with 10 screen px of tolerance; a newer click supersedes the lookup; hover thickens the marker and shows its identity after 500 ms | Done |
+| M47 | `StarInfoCard` | Star card beside the star (drag docks it in a corner), role shapes as buttons, Remove, Details in the Inspector, Escape / × close it; the card follows the set after any role change (P20) | Done; Dismiss and the resize grip dropped as specified |
+| M50 | Batch re-run pre-checks (boxes 2262, 2268, 2273) | `photometryProblem()` (`imaging/field/present.ts`, tested): "identify the field first", "assign a target star first", "the target set has no comparison stars: …", in the Qt order | Pre-checks only, as planned; the Re-run button itself is W5 / W7 |
+| M51 | Marker tooltips | Overlay hover popover (tokens, mono, the Qt texts sent by the server) | Done |
+| M52 | `FitsViewer` | Shared `FitsViewer.svelte` extended (palette, preview, saturation, loupe, geometry, snapshot) | Done for Observe; R2 `mode="inspect"` is W7 |
+| M53 | pyqtgraph context menu + Export | ARGOS viewer context menu: Fit, 1:1, Measure / identify here, Copy pixel position, Copy RA / Dec, Region statistics here, Clear selection, Save view as PNG | Done |
+| M54 | In-image readouts, loupe, selection label | Cursor readout with RA / Dec once solved; HUD frame-centre chip shown with the grid; loupe (Z) top right under the compass; selection label dropped (the card carries it) | Done |
+| M55 | Region `RectROI` | Region tool (R): box with handles, Shift+drag draws, arrows move it; chip on the image and the Statistics card's Region block | Done |
+| M56 | `HistogramDock` | Band View options (Preview, Palette, Rotation, Crosshair, Loupe, Clipping); Inspect toolbar group (crosshair, loupe, region, saturation, statistics); WCS checkbox merged into `sky-grid`; star aperture in the Statistics card | Done |
+| M57 | Histogram pyqtgraph menu | Dropped as specified | Done |
+| M58 | `StatisticsDock` | Statistics rail card, hidden by default, I shows it (D9) | Done |
+
+API rows A32-A33, A43-A49 and A51-A53 are all used by the UI. A33 (Sync) is kept as "Sync to
+plate solution" without slewing, with an inline confirmation (Q-O3).
+
+### 2. Exit criterion and its evidence
+
+**Clicking a star assigns a role and writes `targets/<object>.json`.** Through the UI
+(`verify.mjs`): the frame opened through the Open FITS dialog, S, a click on RR Lyr on
+the image (card "Target · RR Lyr", A49 `resolved`), Set as target, then two detected VSP
+candidates clicked and given Comparison and Check from their cards. The server's set
+(A51) and the file both read `target RR Lyr (vsx), comparison 000-BCG-653 (vsp_auto: the
+automatic VSP choice of a new target), comparison 000-BJW-666 (vsp), check 000-BCG-523
+(vsp)`, written by core `TargetSet.save` in the Qt format (`schema 1`, RA / Dec in degrees,
+AUID, VSP magnitudes, chart id). The Undo toast names the file; Undo puts the set back and the server rewrites the file
+(first run: the comparison's Undo took it out; second run: the target's Undo took the
+target out, and the file read back equals the set). The empty object name took the star's
+name (D11).
+
+**Overlays follow the tracked field.** On the solved real frame:
+- the target's marker drawn by the overlay sits **0.05 px** from where the viewer's own
+  frame-to-screen transform (the frame outline's SVG matrix) puts the same frame pixel;
+- the overlay positions sit on the stars of the frame: background-subtracted centroids at
+  15 markers on detected stars (target set and detected VSP candidates) are **0.57 px**
+  from the marker positions (median; 90th percentile 0.81 px, max 2.1 px on the bright
+  target), at 3.67″ per frame px (`align.py`);
+- frame-to-frame motion: the overlay applies the A48 transform exactly as core
+  `RigidTransform` (unit tests in `viewer/overlay/overlay.test.ts`; the gallery's live
+  section draws a synthetic field through a non-identity transform and lines up only when
+  it is applied), and the server's per-frame fit is covered by `tests/server/test_field.py`
+  with shifted synthetic frames. **Not shown live**: simulator frames cannot be solved and
+  every Open FITS invalidates the field, so no run here moved a solved field.
+
+**Night Red shows no non-red pixel.** `npm run audit:night-red` on the 13 Night Red
+originals of the gallery: **13 of 13 pass** (rule A 0 px; rule B 0 px with rounding):
+overlays, grid, compass, scale bar, star card, popover, context menu, loupe, Statistics
+card, region chip and View options included. Fire and Ice are unavailable in Night Red with
+the reason "false colour is off in Night Red"; the image stays neutral red.
+
+Other flows checked through the UI: Escape closes the star card and clears the server
+selection (a slew is still aborted by the same key); Sync asks inline with the focus on
+Cancel, then the mount reads the solved centre and the field stays valid; Centre target
+syncs, slews to RR Lyr and invalidates the field (reason `center`, chip "Field moved:
+identify again"); a GoTo invalidates it (reason `slew`); Cancel on a running solve stops
+ASTAP at once ("Field identification cancelled."); the command palette offers Identify
+field (S), Coordinate grid (G), Object labels (N), Catalogue layers (O), Keep the field
+identified automatically, Cancel the field identification, and Centre target / Sync as
+Hardware commands with their confirmation and the buttons' reasons (unit-tested).
+
+### 3. PROPOSAL section 6, W4 promotions
+
+| Lab source | In `web/src/lib` | Status |
+|---|---|---|
+| Observe Field mode (`layout.ts`, `ModeBar`) | `imaging/modes/*` | Done: Field enabled (Alt+3); its preset opens the Inspector and the Mount card |
+| `bands/FieldBand.svelte` | `imaging/field/FieldBand.svelte` | Done: Candidates, Ensemble, Variables, Stars; rows linked to the image both ways; a Variables / Stars row picked selects its star (A49) |
+| `cards/InspectorCard.svelte` | `imaging/field/InspectorCard.svelte`, in a new `inspector` rail card | Done (shows VSP candidates and set members; see section 5) |
+| `StarCard.svelte` | `imaging/field/StarCard.svelte` | Done |
+| Viewer HUD compass and arcminute scale bar | `viewer/hud/SkyHud.svelte`, `wcs.ts` | Done (tracked WCS, display rotation respected) |
+| `research/frame/gl.ts` OKLCH palettes | `viewer/palettes/lut.ts`, shaders | Done: Neutral, Negative, Fire, Ice; Night Red draws Neutral only |
+| `research/table/*` (row window) | `components/VirtualTable.svelte`, `virtual.ts` | Done for the Variables and Stars lists |
+| Section 7 candidate fields | server `b_minus_v`, `neighbours_in_aperture` | Done (null without Gaia, as here) |
+
+### 4. Fixed during the integration (found in the running UI)
+
+- The star card kept its old role after a role change (the server does not re-send the
+  selection): the card now reads its role and Remove from the target set (by key, else
+  within 2″ of its catalogue position), so it follows changes made here or elsewhere (P20).
+- The exposure check of a frame shown in another mode (an opened file solved in Field mode)
+  stayed at "Measuring the star peaks…": the frame on screen is measured when the Framing
+  band comes back.
+- RA / Dec grid labels at the image edge were cut in half (centred on the edge): anchored
+  inward.
+- The Undo toast named the file from the object name ("targets/RR Lyr.json"); it now shows
+  the server's path (`targets/RR_Lyr.json`).
+- The Catalogue layers popover gave L for Labels (L is the activity log): it shows the
+  registry's keys (G, N).
+- HUD chips could run under the compass: the chip row wraps before it. The frame-centre
+  chip (04 2.1 E3) was missing: added, shown with the grid.
+
+### 5. Known gaps and issues (before the reviews)
+
+- **Toolbar width**: 25 tools; at 1 440 and 1 280 the counted overflow holds 13. Field mode
+  keeps Identify, Automatic, Grid and Catalogue layers in the row (Inspect tools leave
+  first); Framing keeps the zoom and display tools (Field tools leave first). Selected
+  stars and Labels are also in the popover. A design-review decision.
+- **Δtarget and the reticle** follow the last GoTo target (Qt `target_radec`), also for an
+  opened file (the solution of the RR Lyr frame reads Δtarget 77.3′ against RR Lyr, the
+  Seestar pointing being 1.3° off); for the science review.
+- **Inspector** shows VSP candidates and set members; a clicked VSX variable or Gaia star
+  opens the card but not the Inspector.
+- **Gaia / SIMBAD / NASA** did not answer from this network: the Stars layer and list were
+  empty, `neighbours_in_aperture` null; covered by server tests with injected catalogues.
+- **`frame_metrics` is not replayed** to a client that connects after a frame: the
+  Statistics card and status bar show "—" until the next frame (wave 3 behaviour).
+- **Open FITS by typed path**: the FilePicker first lists the file as a folder (a 400 in the
+  console) before opening it (wave 2 component).
+- **Engines**: headless Chrome with SwiftShader only; the WebGL2 R16UI check on WebKitGTK
+  (PROPOSAL 9) and the second WebGL context of the loupe on WebKit are untested.
+- **Sequences**: `arm_for_sequence()` is not wired (W6); `409 decimated` is never sent
+  (Q-O14).
+- **Undo toasts** stack at the bottom right over the rail for 6 s and cover the Mount card's
+  lowest controls (Sync confirmation, Slew) at 1 440 x 900 (toast placement of wave 2).
+- **Undo of a new target** removes the target only; the VSP comparisons the server chose
+  for it stay in the set.
+- **Hit order**: a VSP star that VSX also lists (000-BJW-666 = KIC 7201168) opens the
+  variable's card first (Qt order), so a role given there is stored with the VSX identity.
+- The selection lives on the server: a reloaded page shows the last star card again.
+
+### 6. Review round (2026-11-08): what was fixed
+
+Three reviews (design, technical, science) ran on the integrated wave; every high and
+medium finding was fixed except where noted, and most low ones. Evidence: server 8748 and
+vite 5148 with temporary folders, `HOME` and `TMPDIR`, the catalogue cache copied
+read-only, copies of the real RR Lyr frames; the reviews' scripts re-run against the fixed
+code.
+
+**Science (tracking, A48; candidates, PROPOSAL 7)**
+- **A role change kept the identity transform** (overlays 90-120 px off, Centre / Sync 7′
+  off): the constellation is now rebuilt from the current pose, anchors and baselines are
+  chosen on the solved frame. Re-run of the review's `s14_role_reset.py` (the field
+  drifting ~10 frame px per frame, RR Lyr made the target on frame 8): 0.1-0.2 px before
+  the role change, 0.5 px after it (was 90-120 px).
+- **A lost lock was permanent and silent, single-anchor re-locks false**: new
+  `argos/server/field_track.py` (`FieldTracker` on core's `ApertureTracker`, core
+  untouched): an update needs two anchors whose separations agree with the reference
+  (three or more anchors), a lost lock is re-acquired by a translation vote between the
+  frame's detected stars and the solved frame's, `field_transform.tracking` says
+  `ok | degraded | lost`, WARN once per loss, INFO when found again; the HUD chip says
+  "Identified · tracking lost" and the overlay dims what the reference solve places. Whole
+  session (`s7_track_full.py`, 195 frames, detected and roles anchors): median error
+  0.22-0.87 px (detected), 0.48-0.95 px (roles), no loss (was lost from frame 53 for
+  good); every tenth frame only (jumps of ~45 green px, beyond the windows): re-acquired
+  each time, 0.19-0.86 px.
+- **The saturation test read the moving frame**: it reads the solved frame (3×3 peak).
+  Each anchor is centroided twice (the second window centred on the first): the ~1 px lag
+  of a window centred on the prediction goes, 0.13-0.28 px against 0.85-1.36 px on frames
+  2-12 with the owner's 15 green px search radius. This second pass is the web tracker's
+  (it places overlays and Centre / Sync); W5 decides whether live photometry uses it
+  (owner, it is not Qt's).
+- **`neighbours_in_aperture`** is null unless the held Gaia list is complete to `m + 3`
+  (`limits.gaia_depth_g`: the query's limit, or its faintest source when the budget cut
+  it); the counterpart is matched within max(3″, FWHM/2) and 1.5 mag of V; a source within
+  1 frame px is the star itself (000-BJW-666 no longer a false "blend risk").
+- **"far" used a client constant of 25′**: the server sends the observer's photometry
+  limits with `field_layers` (`limits`); the band flags with them.
+- Low: the detected-only rules use up to 2 000 solved-frame sources (Qt's 120 hid
+  measurable comparisons); `Solution.mirrored` is the wire's parity (det CD < 0), not
+  ASTAP's FITS flag (the RR Lyr frame now reads `false`, as the compass); candidates carry
+  `vsx` (a VSX entry within 3″: the band says "variable?", e.g. 000-BCG-953 = NSV 24798);
+  Fire and Ice start at the darkest 8-bit grey and stay monotone after rounding (256
+  distinct entries, was 242 / 247).
+
+**Technical**
+- **NaN in `target_reticle`** dropped every `field` event in the browser: the reticle is
+  null when the target has no TAN projection, and `/ws/events` frames are strict JSON
+  (non-finite numbers → null, as REST).
+- **Sync / Centre on an opened file's solution** synced the real mount to another night's
+  pointing: `409 file_solution`, `center_available: false`, and the UI says why.
+- **A stuck `solving`** after an exception past ASTAP: the attempt ends `failed`
+  (`not_solved`), an invalidation releases a running solve, a late end never takes a newer
+  claim.
+- **Superseded selection ids across a server restart**: forgotten when `boot_id` changes.
+- **Overlay cost while panning**: the catalogue layers are drawn on a canvas under the SVG
+  (roles, grid, labels and marks stay SVG); a pan moves both with a CSS translate and
+  rebuilds them once it settles (250 ms); the grid's round caps are gone; catalogue labels
+  are capped at fit zoom. The review's `perf3.mjs` re-run (headless Chrome, SwiftShader,
+  1 440 x 900, live frames every 0.5 s, 543 Gaia stars and 241 variables on screen):
+  120 pointer moves of panning 8.3 s, frame p50 67 ms (18.4 s / 167 ms with the SVG
+  layers in the same harness, 22.0 s / 200 ms in the review; 3.5 s / 33 ms with every
+  layer hidden); at rest with live frames 59 fps, worst frame 67 ms (52 fps, 150 ms
+  before). `will-change: transform` on the SVG was tried and made it worse under
+  SwiftShader (34 s).
+- Low: the virtual table re-reads `--row-h` when the density changes (checked: 28 px rows,
+  End reaches row 5 001); failed Gaia / SIMBAD / NASA queries are `catalog.warnings`
+  (shown in the popover, two lines, full text in the tooltip); README 4.2 lists
+  `field_solve`; protocol.md documents `404` for an unknown `variable_index` and the
+  `queued` stage.
+
+**Design**
+- Overlay hierarchy: role floors 17 px (target) and 15 px (comparison, check) at 2.5 px;
+  catalogue layers 1 px at fit zoom, 1.5 px from 50 %; variables r 9 when more than 60
+  are on screen; a set star is drawn only as its role mark (same key or within 2″).
+- Star card: the identity as the title (252-340 px, never cut), facts from the fields
+  ("V 7.90 · B−V 0.69 · 27.4′ from target · VSP comparison", VSX types in words), a star in
+  two catalogues named twice ("KIC 7201168 · VSP 000-BJW-666").
+- Candidates band: the target, its B−V, the aperture and the rules in words on a note
+  line; a flag shared by more than a third of the rows is stated there once instead of
+  underlined on every row; sorted by Sep when the target's B−V is unknown; a row click or
+  Enter selects the star on the image (card, brackets, Inspector agree); a set member
+  stored under another identity shows its role on its VSP row (same position).
+- Symbols: the selection is four brass corner brackets; every list hover (candidates,
+  exposure check) is foreground brackets over a black halo; nebulae and clusters are a
+  circle with four ticks in `--overlay-nebula` = `--cyan` (no more amber).
+- Labels: Qt's 18-character rule, the HUD boxes are obstacles, the set's labels in --fg and
+  the catalogue's in --text-muted, at most 40 at fit zoom. Grid labels in the UI format
+  ("19h 28m", "+42° 30′"), 11 px, the dotted line broken under them, dropped where the HUD
+  is.
+- Settings sheet: the Gaia depth preset stacks below 640 px. Undo toasts: one grouped toast
+  ("2 changes") at the bottom left of the image. Field mode: the Solved field row under
+  the readouts, the target entry behind "GoTo…". Framing and Focus remember their own
+  layers (the grid and the set by default).
+- Low: the chip says "Identified" and "PA" with what the angle is measured from; the
+  Inspector's separation reads "3.6′" under "From target", its history chips "BJW-673" with
+  the role glyph; the popover's swatches are the overlay's marks in their tokens; the
+  marker popover has the name as title and a key / value grid; Fire / Ice over the colour
+  preview say "Colour (luminance)"; Selected stars and Labels left the toolbar (the
+  popover and N keep them: 23 tools).
+- The gallery was re-captured at device scale 2.
+
+**Verification after the fixes** (server 8748 and vite 5148, temporary folders, `HOME` and
+`TMPDIR`; both stopped, ports free; `~/.argos/config.json` untouched, Qt untouched):
+- `.venv/bin/python -m pytest -q`: **1 228 passed, 71 skipped** (the real-frame ASTAP test
+  ran on a copy); ruff and black (100) clean. New tests: Sync / Centre refused for a
+  file's solution, the NaN reticle and strict socket JSON, an error after ASTAP, an
+  invalidation releasing a solve, a role change keeping the pose, a loss reported once and
+  re-acquired past the windows, the tracker's consistency rule and vote, the neighbour
+  count's completeness and counterpart, the VSX cross-match.
+- `npm run check` 0 / 0 (621 files, lab included); `npm test` **768 passed**; `npm run
+  build` OK (JS 909 kB, 299 kB gzip); no `src/lab` import in `src/lib`.
+- `npm run audit:night-red` on the 17 Night Red originals: 16 pass; **06-context-menu
+  fails rule B by one pixel**, rgb(13, 10, 10) at (1 870, 771): the anti-aliased edge of
+  the "0" of the set label "000-BCG-653" (--fg over its black halo) at device scale 2. The
+  same glyph pixel is (14, 10, 10) in the other scenes and passes by 0.4 level; rule A (no
+  G or B above R) holds in every file. Open for the design team (section 7).
+- `npm run audit:brass` (Observatory 1 440, device scale 2, so about 4x the 1x counts):
+  field solved 3 938 px, of which warning 279 (about 70 at 1x, was 565: the "far"
+  underlines are gone).
+- Read: every re-captured scene of the four sets and the extras.
+
+**Skipped, with the reason**
+- A stronger Automatic glyph (design low): BRAND 6 lists `plate-solve` /
+  `plate-solve-auto` as intentional near-twins with a label or tooltip; a redraw goes
+  through the icon process (BRAND 6, `icon-sheet.html`), not a fixer's edit.
+- Excluding VSX-listed comparisons from the automatic ensemble (science low): it changes
+  Qt's rule; the band flags them ("variable?"); owner decision.
+- A deep Gaia cone per candidate for a definite neighbour count (science medium, second
+  half): it is a network lookup per star; `null` ("—") is shown instead of a wrong 0.
+
+### 7. Known gaps and issues (before wave 5)
+
+- **WebKitGTK** untested (R16UI, the loupe's second WebGL context, overlay rasterising
+  cost); all measurements are headless Chrome with SwiftShader.
+- **Night Red audit, one pixel**: the --fg set labels' anti-aliased glyph edges sit at the
+  rule B bound at device scale 2 (Skia's per-channel text pre-blend); one pixel of
+  06-context-menu crosses it (section 6). A label ink with less green in Night Red, or the
+  audit's tolerance for text edges, is a design-team decision.
+- **The second centroid pass** of the web tracker is not Qt's: W5 must decide whether live
+  photometry places apertures with it (owner).
+- **Simulator frames cannot be solved**: the UI evidence of frame-to-frame tracking is the
+  server's run on real frames; a live solved field in the browser waits for a real night.
+- **Gaia, SIMBAD and NASA** did not answer from this network during the captures (Stars 0;
+  the popover says why); the review's run used a cached Gaia list.
+- Still open from section 5: `frame_metrics` not replayed to a new client, the FilePicker's
+  400 on a typed file path, `arm_for_sequence()` not wired (W6), the selection kept by the
+  server across a page reload, Undo of a new target leaving its automatic comparisons, the
+  Qt hit order (a VSX variable before the VSP star at the same place; the card now names
+  both and the table shows the role, the stored identity stays the VSX one).
+

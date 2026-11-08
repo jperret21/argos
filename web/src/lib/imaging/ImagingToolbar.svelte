@@ -13,6 +13,12 @@
     narrow the view tools go first into the counted overflow menu.
   - Right, fixed: [arrange] (Arrange: this mode's cards, band, drawer, rail,
     Reset) and [panels] (P).
+  - Field group (W4, 03 2.2, M7, M44): Identify field (S; while ASTAP runs the
+    same place cancels it), Keep the field identified automatically (no key),
+    Coordinate grid (G) and the Catalogue layers (Selected stars and Labels, N, live in it)
+    popover (O), whose footer opens Settings › Catalogues or › Plate solving in
+    a sheet over Observe (D12). In Field mode these stay in the row longest; in
+    the other modes they leave first.
   Routine tools are icon-only with a tooltip (label + key); actions that
   move hardware or stop a run carry their label (BRAND 7). The theme switch
   is in the rail footer (D15). The registry binds the keys (ImagingScreen);
@@ -28,16 +34,24 @@
   import type { ToolDef } from '../components/toolbar';
   import { disconnectRisk } from '../connection/model';
   import { int, percent, seconds } from '../format/number';
+  import Sheet from '../components/Sheet.svelte';
+  import Catalogues from '../settings/pages/Catalogues.svelte';
+  import PlateSolving from '../settings/pages/PlateSolving.svelte';
+  import { LAYER_IDS, type LayerId } from '../viewer/overlay/layers';
+  import CatalogPopover from './field/CatalogPopover.svelte';
   import ArrangePopover from './modes/ArrangePopover.svelte';
+  import { profileLimits } from './modes/exposure';
   import { modeDef } from './modes/layout';
   import ModeBar from './modes/ModeBar.svelte';
 
   interface Props {
     hasFrame: boolean;
     onzoom: (action: 'in' | 'out' | 'fit' | 'fill' | '1to1') => void;
+    /** The Catalogue layers popover (O toggles it from the screen's key registry). */
+    catalogueOpen?: boolean;
   }
 
-  let { hasFrame, onzoom }: Props = $props();
+  let { hasFrame, onzoom, catalogueOpen = $bindable(false) }: Props = $props();
   const app = useApp();
   const ws = app.observe;
   const key = (id: string) => app.shortcuts.keyFor(id);
@@ -67,6 +81,10 @@
   });
   const liveReason = $derived(app.live ? (app.stale ? 'the ARGOS server is not reachable' : null) : (exposureReason ?? ownerReason ?? (owner === 'single' ? 'wait for the exposure in progress' : null)));
   const viewReason = $derived(hasFrame ? null : 'no frame yet');
+  /** The frame on screen (the region box is placed on it). */
+  const frameSize = $derived(app.shown ? { width: app.shown.frame.header.width, height: app.shown.frame.header.height } : null);
+  /** Saturation threshold: the active profile's full well (its override first). */
+  const fullWell = $derived(profileLimits(app.profiles?.profiles.find((p) => p.key === app.profiles?.active) ?? null).fullWell);
   const stopRunning = $derived(app.cameraBusy || app.slewing);
   // While autofocus owns the camera, plain Stop would end the sweep without returning the
   // focuser: it is unavailable, and says which control does what (design review W3).
@@ -115,6 +133,42 @@
   const afRunning = $derived(app.autofocusRunning);
   const afProgress = $derived(af?.state === 'running' && (af.total ?? 0) > 0 ? Math.min(1, (af.step ?? 0) / (af.total ?? 1)) : null);
   const afReason = $derived(afRunning ? (app.stale ? 'the ARGOS server is not reachable' : af?.state === 'stopping' ? 'returning to the start position' : null) : app.autofocusProblem());
+
+  // -- Field (W4: A43-A47) ---------------------------------------------------------------------
+  const field = app.field;
+  const solving = $derived(field.solving);
+  const solveJob = $derived(solving ? app.jobs.latest('field_solve') : null);
+  const solveStage = $derived(solveJob && (solveJob.state === 'running' || solveJob.state === 'queued') ? solveJob.stage : null);
+  const fieldMode = $derived(ws.mode === 'field');
+  /** Field tools stay longest in Field mode, leave first elsewhere. */
+  const fp = (inField: number, other: number) => (fieldMode ? inField : other);
+  const layerReason = $derived(field.solved ? null : 'identify the field first (S)');
+  const autoOn = $derived(!!field.field?.auto);
+  const autoBySequence = $derived(field.field?.auto_source === 'sequence');
+
+  let bar: HTMLDivElement | undefined = $state();
+  let catalogueAnchor: HTMLElement | null = $state(null);
+  // The popover hangs under its tool, or under the overflow trigger when the row is too narrow.
+  $effect(() => {
+    if (!catalogueOpen || !bar) return;
+    catalogueAnchor = bar.querySelector<HTMLElement>('[data-tool="catalogue"]') ?? bar.querySelector<HTMLElement>('.toolbar .more') ?? bar;
+  });
+  const counts = $derived(Object.fromEntries(LAYER_IDS.map((id) => [id, field.count(id)])) as Partial<Record<LayerId, number | null>>);
+  const cfgNum = (k: string): number | null => {
+    const v = app.configValues?.[k];
+    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+  };
+  const gMax = $derived(cfgNum('catalog.field_stars_mag_limit') ?? 18);
+  const gLimit = $derived(field.depth ?? cfgNum('catalog.display_mag_limit') ?? gMax);
+
+  /** Settings at the point of use (D12): the same category form, in a sheet over Observe. */
+  let sheetOpen = $state(false);
+  let sheetKind: 'catalogues' | 'plate_solving' = $state('catalogues');
+  function openSheet(kind: 'catalogues' | 'plate_solving'): void {
+    sheetKind = kind;
+    catalogueOpen = false;
+    sheetOpen = true;
+  }
 
   // -- Menus -----------------------------------------------------------------------------------
   const shotItems = $derived<MenuEntry[]>([
@@ -230,6 +284,33 @@
       case 'crosshair':
         app.crosshair = !app.crosshair;
         break;
+      case 'loupe':
+        app.viewTools.toggleLoupe();
+        break;
+      case 'region':
+        app.viewTools.toggleRegion(frameSize);
+        break;
+      case 'saturation':
+        app.viewTools.toggleSaturation();
+        break;
+      case 'statistics': {
+        const show = ws.layout.cards.statistics === 'hidden';
+        ws.setCard('statistics', show ? 'open' : 'hidden');
+        if (show && !ws.layout.railOpen) ws.toggleRail();
+        break;
+      }
+      case 'solve':
+        void (solving ? app.cancelIdentify() : app.identifyField());
+        break;
+      case 'solve-auto':
+        void app.setFieldAuto(!autoOn);
+        break;
+      case 'grid':
+        if (field.solved) field.toggle('grid');
+        break;
+      case 'catalogue':
+        catalogueOpen = !catalogueOpen;
+        break;
     }
   }
 
@@ -326,7 +407,59 @@
       layoutToggle: true,
       priority: 5,
     },
-    { id: 'crosshair', group: 'display', kind: 'toggle', icon: 'crosshair', label: 'Crosshair on image', shortcut: key('view.crosshair'), pressed: app.crosshair, priority: 2 },
+    // Inspect (W4, 04 2.2): frequent, reversible, icon-only toggles; display only.
+    { id: 'crosshair', group: 'inspect', kind: 'toggle', icon: 'crosshair', label: 'Crosshair on image', shortcut: key('view.crosshair'), pressed: app.crosshair, priority: 2 },
+    { id: 'loupe', group: 'inspect', kind: 'toggle', icon: 'loupe', label: `Loupe (${app.viewTools.loupeMag}×, top right)`, shortcut: key('view.loupe'), pressed: app.viewTools.loupe, priority: 3, disabledReason: viewReason },
+    { id: 'region', group: 'inspect', kind: 'toggle', icon: 'region-stats', label: 'Region statistics (Shift+drag draws a box)', shortcut: key('view.region'), pressed: app.viewTools.region, priority: 3, disabledReason: viewReason },
+    {
+      id: 'saturation',
+      group: 'inspect',
+      kind: 'toggle',
+      icon: 'saturation',
+      label: fullWell !== null ? `Highlight clipped pixels (≥ ${int(fullWell)} ADU)` : 'Highlight clipped pixels',
+      shortcut: key('view.saturation'),
+      pressed: app.viewTools.saturation,
+      priority: 2,
+      disabledReason: viewReason ?? (fullWell === null && !app.viewTools.saturation ? 'the telescope profile has no full well' : null),
+    },
+    {
+      id: 'statistics',
+      group: 'inspect',
+      kind: 'toggle',
+      icon: 'statistics',
+      label: 'Statistics card',
+      shortcut: key('view.statistics'),
+      pressed: ws.layout.cards.statistics !== 'hidden',
+      layoutToggle: true,
+      priority: fp(1, 2),
+    },
+    // Field (W4, 03 2.2): identify, keep identified, then the display of what was identified.
+    {
+      id: 'solve',
+      group: 'field',
+      kind: 'button',
+      icon: solving ? 'stop' : 'plate-solve',
+      label: solving ? `Cancel the field identification${solveStage ? ` (${solveStage})` : ''}` : 'Identify field: coordinates and scale of the frame on screen (ASTAP)',
+      shortcut: solving ? undefined : key('field.solve'),
+      glyphTone: solving ? 'danger' : undefined,
+      busy: !!app.busy.fieldSolve || !!app.busy.fieldCancel,
+      disabledReason: solving ? (app.stale ? 'the ARGOS server is not reachable' : null) : app.identifyProblem(),
+      priority: fp(9, 5),
+    },
+    {
+      id: 'solve-auto',
+      group: 'field',
+      kind: 'toggle',
+      icon: 'plate-solve-auto',
+      label: autoBySequence ? 'Keep the field identified automatically (armed by the sequence)' : 'Keep the field identified automatically',
+      pressed: autoOn,
+      busy: !!app.busy.fieldAuto,
+      disabledReason: app.stale ? 'the ARGOS server is not reachable' : null,
+      priority: fp(7, 2),
+    },
+    { id: 'grid', group: 'field', kind: 'toggle', icon: 'sky-grid', label: 'Coordinate grid', shortcut: key('field.grid'), pressed: field.solved && field.visibility.grid, disabledReason: layerReason, priority: fp(8, 3) },
+    // Selected stars and Labels live in the Catalogue layers popover (and N): one home each.
+    { id: 'catalogue', group: 'field', kind: 'toggle', icon: 'catalogue', label: 'Catalogue layers', shortcut: key('field.catalogue'), pressed: catalogueOpen, layoutToggle: true, priority: fp(8, 4) },
   ]);
 
   // -- Equipment (D10) -------------------------------------------------------------------------
@@ -351,7 +484,7 @@
   }
 </script>
 
-<div class="bar" aria-label="Observe toolbar" role="group">
+<div class="bar" aria-label="Observe toolbar" role="group" bind:this={bar}>
   <IconButton
     icon={linked ? 'disconnect' : app.connectMode === 'simulator' ? 'simulator' : 'connect'}
     label={linked ? 'Disconnect all' : 'Connect all'}
@@ -388,6 +521,45 @@
   </div>
 </div>
 
+<CatalogPopover
+  external
+  anchor={catalogueAnchor}
+  bind:open={catalogueOpen}
+  visibility={field.visibility}
+  {counts}
+  solved={field.solved}
+  {solving}
+  catalog={field.catalog}
+  {gLimit}
+  {gMax}
+  gridKey={key('field.grid')}
+  labelsKey={key('field.labels')}
+  onvisible={(id, on) => field.setVisible(id, on)}
+  onglimit={(v) => (field.gLimit = v)}
+  onglimitcommit={(v) => void app.patchConfig({ 'catalog.display_mag_limit': Math.round(v * 10) / 10 })}
+  onidentify={() => void app.identifyField()}
+  oncatalogsettings={() => openSheet('catalogues')}
+  onsolvesettings={() => openSheet('plate_solving')}
+/>
+
+<Sheet
+  bind:open={sheetOpen}
+  title={sheetKind === 'catalogues' ? 'Catalogue settings' : 'Field identification settings'}
+  subtitle="Saved as you change them; the catalogues are fetched again after a catalogue change"
+>
+  {#if sheetKind === 'catalogues'}<Catalogues />{:else}<PlateSolving />{/if}
+  {#snippet footer()}
+    <button
+      type="button"
+      class="all"
+      onclick={() => {
+        sheetOpen = false;
+        app.openSettings(sheetKind);
+      }}>All settings</button
+    >
+  {/snippet}
+</Sheet>
+
 <ConfirmDialog
   bind:open={confirmOpen}
   title="Disconnect the equipment?"
@@ -423,5 +595,23 @@
     width: 1px;
     height: 20px;
     background: var(--border-soft);
+  }
+  /* A text link in the sheet footer (BRAND 7: minor helpers are text). */
+  .all {
+    padding: var(--space-1) 0;
+    border: none;
+    background: none;
+    color: var(--fg-muted);
+    font: inherit;
+    font-size: var(--text-s);
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  .all:hover {
+    color: var(--fg);
+  }
+  .all:focus-visible {
+    outline: var(--focus-ring-w) solid var(--focus-ring);
+    outline-offset: var(--focus-ring-offset);
   }
 </style>

@@ -44,14 +44,16 @@ const VIEWER: ShortcutDef[] = [
   { id: 'view.stretch-reset', keys: ['Shift+A'], label: 'Reset stretch (linear)', scope: OBSERVE },
   { id: 'view.levels', keys: ['H'], label: 'Task band under the image (levels, V-curve)', scope: OBSERVE },
   { id: 'view.crosshair', keys: ['X'], label: 'Crosshair', scope: OBSERVE },
-  { id: 'view.loupe', keys: ['Z'], label: 'Loupe', scope: OBSERVE, planned: true },
-  { id: 'view.saturation', keys: ['C'], label: 'Saturation highlight', scope: OBSERVE, planned: true },
-  { id: 'view.region', keys: ['R'], label: 'Region statistics', scope: OBSERVE, planned: true },
-  { id: 'view.statistics', keys: ['I'], label: 'Statistics card', scope: OBSERVE, planned: true },
-  { id: 'field.solve', keys: ['S'], label: 'Identify field', scope: OBSERVE, planned: true },
-  { id: 'field.grid', keys: ['G'], label: 'Coordinate grid', scope: OBSERVE, planned: true },
-  { id: 'field.labels', keys: ['N'], label: 'Object labels', scope: OBSERVE, planned: true },
-  { id: 'field.catalogue', keys: ['O'], label: 'Catalogue layers', scope: OBSERVE, planned: true },
+  { id: 'view.loupe', keys: ['Z'], label: 'Loupe', scope: OBSERVE },
+  { id: 'view.saturation', keys: ['C'], label: 'Saturation highlight (clipped pixels)', scope: OBSERVE },
+  { id: 'view.region', keys: ['R'], label: 'Region statistics', scope: OBSERVE },
+  { id: 'view.statistics', keys: ['I'], label: 'Statistics card', scope: OBSERVE },
+  // Field (W4): S identifies the frame on screen (no hardware moves); no single key for the
+  // automatic mode or the roles (they write the target set, 03 2.4).
+  { id: 'field.solve', keys: ['S'], label: 'Identify field', scope: OBSERVE },
+  { id: 'field.grid', keys: ['G'], label: 'Coordinate grid', scope: OBSERVE },
+  { id: 'field.labels', keys: ['N'], label: 'Object labels', scope: OBSERVE },
+  { id: 'field.catalogue', keys: ['O'], label: 'Catalogue layers', scope: OBSERVE },
 ];
 
 export const KEYMAP: readonly ShortcutDef[] = [
@@ -106,8 +108,8 @@ export const KEYMAP: readonly ShortcutDef[] = [
   // physical key (macOS Option+1 types "¡"). The observer chooses; never automatic.
   { id: 'observe.mode.framing', keys: ['Alt+1'], label: 'Framing mode', scope: OBSERVE },
   { id: 'observe.mode.focus', keys: ['Alt+2'], label: 'Focus mode', scope: OBSERVE },
-  // Field (wave 4) and Run (waves 5 and 6): listed in the mode bar, unavailable in this build.
-  { id: 'observe.mode.field', keys: ['Alt+3'], label: 'Field mode', scope: OBSERVE, planned: true },
+  // Run (waves 5 and 6): listed in the mode bar, unavailable in this build.
+  { id: 'observe.mode.field', keys: ['Alt+3'], label: 'Field mode', scope: OBSERVE },
   { id: 'observe.mode.run', keys: ['Alt+4'], label: 'Run mode', scope: OBSERVE, planned: true },
   // Watch view (owner D3): while it is open only W, Esc, ? and Mod+K act.
   { id: 'observe.watch', keys: ['W'], label: 'Watch view on / off', scope: OBSERVE, planned: true },

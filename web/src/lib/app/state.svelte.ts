@@ -96,6 +96,9 @@ import { isRotationMode, type RotationMode } from '../viewer/rotation';
 import type { StretchMode, StretchParams } from '../viewer/stretch';
 import type { DisplayInfo, PointerInfo } from '../viewer/types';
 import { type FitMode, isFitMode } from '../viewer/view';
+import { ViewerTools } from '../viewer/tools/tools.svelte';
+import { FieldStore } from '../imaging/field/field.svelte';
+import type { FieldCommands } from '../shell/commandIndex';
 import { openLayers, setReservedKeys, topModalIndex } from '../components/layers';
 import type { FsLister } from '../components/filepicker';
 import type { BundleRequest, BundleResult } from '../components/supportbundle';
@@ -146,7 +149,12 @@ export type ActionKey =
   | 'filter'
   | 'autofocus'
   | 'openFits'
-  | 'target';
+  | 'target'
+  | 'fieldSolve'
+  | 'fieldCancel'
+  | 'fieldAuto'
+  | 'center'
+  | 'sync';
 
 /** Outcome of a config commit: the server's per-key messages when it refused. */
 export interface CommitResult {
@@ -204,6 +212,10 @@ const MAX_TOASTS = 3;
 
 export const EXPOSURE_LIMITS = { min: 0.001, max: 3600 } as const;
 export const GAIN_LIMITS = { min: 0, max: 1000 } as const;
+
+
+/** A33/A32: an opened file's solution says nothing about where the mount points. */
+const FILE_SOLUTION_REASON = 'this solution is for an opened file, not where the mount points: identify a camera frame';
 
 export class ArgosApp {
   readonly config: ArgosConfig;
@@ -274,6 +286,16 @@ export class ArgosApp {
   // -- Display ----------------------------------------------------------------
   theme: Theme = $state(loadTheme());
   viewerTint: [number, number, number] = $state.raw([1, 1, 1]);
+  /** --viewer-saturated (clipped pixels; black in Night Red). */
+  viewerSaturated: [number, number, number] = $state.raw([1, 0.2, 0.33]);
+  /** The viewer tools of this browser (W4: preview, palette, loupe, region, saturation…). */
+  readonly viewTools = new ViewerTools();
+  /**
+   * Field identification (W4, imaging/field): field, catalogue, layers, tracking, selection
+   * and target set, fed by /ws/events (each record is replayed after `status`). The viewer
+   * reads its WCS (compass, scale bar, cursor RA / Dec); the Field band its candidates.
+   */
+  readonly field = new FieldStore();
   autoStretch = $state(true);
   /** Manual levels; used while autoStretch is off. */
   manual: StretchParams | null = $state.raw(null);
@@ -318,6 +340,12 @@ export class ArgosApp {
   density: Density = $state(loadDensity());
   /** Undo after an immediate change (remove a saved site, reset a setting): one queue, bottom right. */
   readonly undo = new UndoQueue();
+  /**
+   * Where Observe wants the toast column (CSS px from the window's left and bottom): the
+   * bottom left of the viewer stage, above the scale bar, so a toast never covers the rail's
+   * controls (Slew, Sync) right after a role change. Null elsewhere.
+   */
+  toastAnchor: { left: number; bottom: number } | null = $state(null);
   /** Support bundle dialog (Help menu, Settings › Privacy & diagnostics; D14). */
   supportBundleOpen = $state(false);
   /** Command palette (Mod+K). */
@@ -387,6 +415,7 @@ export class ArgosApp {
       ),
     );
     this.events.on('conditions', (m) => this.conditions.ingest(m));
+    this.field.attach(this.events);
     this.events.on('frame_metrics', (m) => {
       if (typeof m.seq === 'number') this.frameMetrics = m as unknown as FrameMetricsRecord;
     });
@@ -701,6 +730,8 @@ export class ArgosApp {
     // A new server process (boot_id changed): its log seq starts again at 1.
     // Mark it before its replayed lines arrive, then read its whole ring.
     if (restarted) this.log.restart();
+    // Its selection ids start at 1 again: forget the old process's superseded clicks.
+    if (restarted) this.field.restart();
     const quiet = (what: string) => (err: unknown) => {
       // An API 1 server has none of these routes: keep the v1 behaviour.
       if (err instanceof ApiError && err.status === 404) return;
@@ -1228,12 +1259,15 @@ export class ArgosApp {
     root.dataset.theme = theme;
     const token = getComputedStyle(root).getPropertyValue('--viewer-tint');
     this.viewerTint = parseCssColor(token) ?? [1, 1, 1];
+    this.viewerSaturated = parseCssColor(getComputedStyle(root).getPropertyValue('--viewer-saturated')) ?? (theme === 'night-red' ? [0, 0, 0] : [1, 0.2, 0.33]);
   }
 
   // -- Display ------------------------------------------------------------------------
 
   onDisplay(info: DisplayInfo): void {
     this.shown = info;
+    // The same frame with the levels of another CFA preview: nothing new to measure.
+    if (info.redisplay) return;
     const ws = this.observe;
     if (this.section === 'imaging' && ws.mode === 'framing' && ws.layout.bandOpen) {
       const h = info.frame.header as { bayer?: string | null };
@@ -1726,6 +1760,100 @@ export class ArgosApp {
       const mount = await this.client.setTracking(enabled);
       this.events.applyStatus({ mount });
     });
+  }
+
+  // -- Wave 4: field identification, Centre target, Sync (A32, A33, A43, A44) ---------------
+
+  /** Why Identify field cannot run now (03 2.4), or null; a running solve is busy, not a reason. */
+  identifyProblem(): string | null {
+    if (this.stale) return 'the ARGOS server is not reachable';
+    if (!this.shown) return 'no frame yet: take a frame or open a FITS image first';
+    return null;
+  }
+
+  /** A43: identify the frame on screen; the outcome arrives as `field` events (and a job). */
+  identifyField(): Promise<unknown> {
+    if (this.field.solving || this.identifyProblem()) return Promise.resolve(undefined);
+    return this.run('fieldSolve', 'Identify field', () => this.field.solve(this.client));
+  }
+
+  /** A43: cancel the running solve, manual or automatic; the previous solution stays. */
+  cancelIdentify(): Promise<unknown> {
+    return this.run('fieldCancel', 'Cancel field identification', () => this.field.cancelSolve(this.client));
+  }
+
+  /** A44: keep the field identified automatically (no single key: 03 2.4). */
+  setFieldAuto(enabled: boolean): Promise<unknown> {
+    return this.run('fieldAuto', 'Automatic field identification', () => this.field.setAuto(this.client, enabled));
+  }
+
+  /** The star Centre target aims at, in words: the set's target, else the observation's. */
+  centerTargetName(): string | null {
+    const t = this.field.targets?.stars.find((s) => s.role === 'target');
+    return t?.display_name || t?.name || this.observation?.target?.name || null;
+  }
+
+  private mountMoveProblem(): string | null {
+    if (this.stale) return 'the ARGOS server is not reachable';
+    if (!this.canMount) return 'connect the mount first';
+    const m = this.mount;
+    if (m?.state === 'parked') return 'unpark the mount first';
+    if (this.slewing) return 'the mount is slewing (Esc aborts)';
+    if (m?.goto_blocked) return m.goto_blocked.message;
+    return null;
+  }
+
+  /** Why Centre target cannot run now (A32: a solution, a mount and a target), or null. */
+  centerProblem(): string | null {
+    const p = this.mountMoveProblem();
+    if (p) return p;
+    if (!this.field.solved) return 'identify the field first (S)';
+    if (this.field.fileSolution) return FILE_SOLUTION_REASON;
+    const available = this.mount?.center_available ?? this.field.field?.center_available;
+    if (available === false) return 'no target: give a star the Target role, or set the observation target';
+    return null;
+  }
+
+  /** Why Sync to the plate solution cannot run now (A33, Q-O3), or null. */
+  syncProblem(): string | null {
+    const p = this.mountMoveProblem();
+    if (p) return p;
+    if (!this.field.solved) return 'identify the field first (S)';
+    if (this.field.fileSolution) return FILE_SOLUTION_REASON;
+    if (this.mount && !this.mount.tracking) return 'start tracking first: the mount refuses a sync while tracking is off';
+    return null;
+  }
+
+  /** A32: sync on the tracked solution, then slew to the target; the field is invalidated. */
+  centerTarget(): Promise<unknown> {
+    return this.run('center', 'Centre target', async () => {
+      const mount = (await this.field.center(this.client)) as MountState;
+      if (mount && typeof mount === 'object' && 'state' in mount) this.events.applyStatus({ mount });
+    });
+  }
+
+  /** A33 (Q-O3): sync the mount to the current frame's solved centre, without slewing. */
+  syncToSolution(): Promise<unknown> {
+    return this.run('sync', 'Sync', async () => {
+      const mount = (await this.field.sync(this.client)) as MountState;
+      if (mount && typeof mount === 'object' && 'state' in mount) this.events.applyStatus({ mount });
+      this.toast('info', 'Mount synced', 'The mount now reads the identified centre of the frame on screen');
+    });
+  }
+
+  /** The command palette's field entries (shell/commandIndex.ts). */
+  fieldCommands(): FieldCommands {
+    return {
+      solving: this.field.solving,
+      auto: !!this.field.field?.auto,
+      centerReason: this.centerProblem(),
+      centerTarget: this.centerTargetName(),
+      syncReason: this.syncProblem(),
+      cancelSolve: () => this.cancelIdentify(),
+      setAuto: (on) => this.setFieldAuto(on),
+      center: () => this.centerTarget(),
+      sync: () => this.syncToSolution(),
+    };
   }
 
   /** Toolbar Stop: stop whatever is running (exposure or live view, and a slew). */

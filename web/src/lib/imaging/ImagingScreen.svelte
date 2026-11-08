@@ -14,6 +14,22 @@
   connects or disconnects everything, the details live on the Connection
   screen (F1).
 
+  Wave 4 viewer tools (web/spec/04-viewer-and-image-tools.md; viewer/tools,
+  viewer/palettes, viewer/hud): View options in the band header of every mode
+  (CFA preview, palette, rotation, crosshair, loupe, clipping), the loupe (Z),
+  the saturation highlight (C), the region box (R) and the Statistics card (I,
+  hidden by default, D9), the context menu, the N / E compass and the scale bar
+  once the field has a WCS, and the Field mode.
+
+  Wave 4 field (web/spec/03-observe-page.md 2.2-2.4; imaging/field, viewer/overlay): the
+  catalogue layers, grid, target reticle and roles drawn over the image in screen space
+  (FieldOverlay), moved by the per-frame tracking transform (A48); a click identifies or
+  measures what is under it (A49) and opens the star card, whose role buttons write the
+  target set (A52, Undo toast); the HUD field chip says the field state in words; the Field
+  band holds the candidates table, the Inspector card the picked star. S identifies the
+  field, G the grid, N the labels, O the Catalogue layers popover; Escape also closes the
+  star card (and still aborts a slew).
+
   Single-key shortcuts (icon-inventory.json, BRAND section 7) are bound in
   the one registry (scope "imaging", active while this screen is shown):
   they only fire when focus is not in a text field and never move hardware;
@@ -27,6 +43,7 @@
   connect sits at the bottom of the image, never over its centre.
 -->
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { splitter } from '../app/attachments/splitter';
   import { useApp } from '../app/state.svelte';
   import ConditionsTimeline from '../charts/ConditionsTimeline.svelte';
@@ -40,12 +57,36 @@
   import Hud from '../viewer/Hud.svelte';
   import { cursorReadout, frameChips, miniHistogram, showMiniHistogram, type FrameHeaderV3 } from '../viewer/hud';
   import { displaySize, effectiveTurns } from '../viewer/rotation';
+  import { formatDec, formatRA } from '../format/astro';
+  import { frameKind } from '../viewer/palettes/cfa';
+  import { effectivePalette } from '../viewer/palettes/lut';
+  import { fromFrameWcs, pixelToSky, trackedWcs, COMPASS_SIZE, type FieldMotion, type TanWcs } from '../viewer/hud/wcs';
+  import type { ViewerGeometry } from '../viewer/tools/geometry';
+  import { composeView, download, viewFileName } from '../viewer/tools/exportview';
+  import Marks from '../viewer/tools/Marks.svelte';
+  import RegionTool from '../viewer/tools/RegionTool.svelte';
+  import StatisticsCard from '../viewer/tools/StatisticsCard.svelte';
+  import ViewerMenu from '../viewer/tools/ViewerMenu.svelte';
+  import type { ViewerMenuAction } from '../viewer/tools/viewermenu';
+  import ViewOptions from '../viewer/tools/ViewOptions.svelte';
+  import Card from '../components/Card.svelte';
+  import { openLayers, ownsEscape } from '../components/layers';
+  import type { HudChip } from '../viewer/hud';
+  import FieldOverlay, { type SelectAt } from '../viewer/overlay/FieldOverlay.svelte';
+  import type { LayerId, Marker, Role } from '../viewer/overlay/layers';
+  import { applyTransform, placeRing, type ScreenMap } from '../viewer/overlay/project';
+  import { candidateRows, type CandidateRow } from './field/candidates';
+  import InspectorCard from './field/InspectorCard.svelte';
+  import { cardText, fieldChip } from './field/present';
+  import StarCard from './field/StarCard.svelte';
+  import type { Selection } from './field/types';
   import CameraCard from './CameraCard.svelte';
   import FocuserCard from './FocuserCard.svelte';
   import ImagingToolbar from './ImagingToolbar.svelte';
   import Band from './modes/Band.svelte';
   import DisplayTools from './modes/DisplayTools.svelte';
   import { exposureCheck, profileLimits, recent } from './modes/exposure';
+  import FieldBand from './field/FieldBand.svelte';
   import FocusBand from './modes/FocusBand.svelte';
   import FramingBand from './modes/FramingBand.svelte';
   import { BAND, bandLayout, bandMax, DRAWER_TABS, drawerHeight, layoutCost, RAIL, type CardId } from './modes/layout';
@@ -56,8 +97,12 @@
   }
 
   let { perf = false }: Props = $props();
+  /** Stars an exposure-check row hovers (frame px), ringed on the image (W3 leftover). */
+  let exposureMark = $state.raw<{ x: number; y: number }[] | null>(null);
   const app = useApp();
   let viewer: FitsViewer | undefined = $state();
+  /** The Catalogue layers popover of the toolbar (O). */
+  let catalogueOpen = $state(false);
 
   const ZOOM_STEP = 1.5;
   const ws = app.observe;
@@ -138,7 +183,7 @@
     } else viewer.oneToOne();
   }
 
-  const chips = $derived(
+  const frameChipList = $derived(
     frameChips(
       {
         header,
@@ -154,7 +199,36 @@
       seconds,
     ),
   );
-  const cursor = $derived(cursorReadout(app.pointer));
+  // The field chip (03 2.4): after the frame chips, in words (never colour alone). Shown in
+  // Field mode, and in the other modes once something happened (solving, solved, failed, moved).
+  const solveJob = $derived(app.field.solving ? app.jobs.latest('field_solve') : null);
+  const fieldHud = $derived.by((): HudChip | null => {
+    const f = app.field;
+    const state = f.field?.state ?? 'none';
+    if (!hasFrame || (state === 'none' && ws.mode !== 'field' && !f.field?.auto)) return null;
+    const c = fieldChip(f.field, f.catalog, f.activeTransform);
+    const stage = solveJob && (solveJob.state === 'running' || solveJob.state === 'queued') ? solveJob.stage : null;
+    return {
+      id: 'field',
+      text: stage ? `${c.text} · ${stage}` : c.text,
+      title: c.tone === 'busy' && f.solving ? `${c.title}. The toolbar's Identify field button cancels it.` : c.title,
+      kind: 'text',
+      dot: c.tone === 'busy' ? 'busy' : null,
+      icon: c.tone === 'warn' ? 'attention' : state === 'solved' || (f.solved && state !== 'failed') ? 'plate-solve' : undefined,
+    };
+  });
+  /** The frame centre in RA / Dec, shown with the grid (04 2.1 E3 "centre label"; tracked WCS). */
+  const centreHud = $derived.by((): HudChip | null => {
+    if (!fieldWcs || !header || !app.field.visibility.grid) return null;
+    const c = pixelToSky(fieldWcs, (header.width - 1) / 2, (header.height - 1) / 2);
+    return c ? { id: 'centre', text: `Centre ${formatRA(c.raHours)} ${formatDec(c.decDeg)}`, kind: 'num', title: 'Centre of the frame on screen (plate solution, J2000)' } : null;
+  });
+  const chips = $derived([...frameChipList, ...(fieldHud ? [fieldHud] : []), ...(centreHud ? [centreHud] : [])]);
+  const cursor = $derived.by(() => {
+    const p = app.pointer;
+    const s = p && fieldWcs ? pixelToSky(fieldWcs, p.x, p.y) : null;
+    return cursorReadout(p, s ? { ra: formatRA(s.raHours), dec: formatDec(s.decDeg, 1) } : null);
+  });
   const mini = $derived(
     showMiniHistogram(ws.mode, layout.bandOpen) ? miniHistogram(app.shown?.histogram ?? null, app.levels) : null,
   );
@@ -162,6 +236,234 @@
   // -- Band content ---------------------------------------------------------------
   const activeProfile = $derived(app.profiles?.profiles.find((p) => p.key === app.profiles?.active) ?? null);
   const limits = $derived(profileLimits(activeProfile));
+
+  // -- Viewer tools (W4: viewer/tools, viewer/palettes) ---------------------------------
+  const tools = app.viewTools;
+  let geometry = $state.raw<ViewerGeometry | null>(null);
+  /** The CFA pattern of the frame on screen (its header, else the camera profile's). */
+  const bayer = $derived(header?.bayer !== undefined ? (header?.bayer ?? null) : (app.camera?.sensor?.bayer ?? null));
+  const kind = $derived(frameKind(header?.channels ?? 1, bayer));
+  const nightRed = $derived(app.theme === 'night-red');
+  const saturation = $derived(tools.saturation && limits.fullWell !== null ? { threshold: limits.fullWell, colour: app.viewerSaturated } : null);
+
+  // The region box is measured on the frame on screen (raw samples), at each frame and move.
+  $effect(() => {
+    void tools.region;
+    void tools.regionRect;
+    const f = app.shown?.frame ?? null;
+    const b = bayer;
+    const t = limits.fullWell;
+    untrack(() => tools.measure(f, { bayer: b, threshold: t }));
+  });
+
+  /** I: the Statistics card shown (and the rail with it) or hidden again (D9). */
+  function toggleStatistics(): void {
+    const show = layout.cards.statistics === 'hidden';
+    ws.setCard('statistics', show ? 'open' : 'hidden');
+    if (show && !layout.railOpen) ws.toggleRail();
+  }
+
+  function toggleRegion(): void {
+    tools.toggleRegion(header ? { width: header.width, height: header.height } : null);
+  }
+
+  /** The field's WCS for the frame on screen (the tracking transform applied), when solved. */
+  const fieldWcs = $derived.by((): TanWcs | null => {
+    const f = app.field;
+    const w = f.solved ? fromFrameWcs(f.field?.wcs ?? null) : null;
+    // A WCS of another frame geometry (an opened file of another size) is not this frame's.
+    const shape = f.field?.wcs && (f.field.wcs as { frame_shape?: number[] }).frame_shape;
+    if (!w || (shape && header && (shape[0] !== header.height || shape[1] !== header.width))) return null;
+    return trackedWcs(w, f.activeTransform as FieldMotion | null);
+  });
+  const sky = $derived(
+    fieldWcs && geometry ? { wcs: fieldWcs, frame: geometry.frame, turns: geometry.turns, scale: geometry.view.scale } : null,
+  );
+  // -- Field: overlay, star card, Inspector (W4) ------------------------------------------------
+  const field = app.field;
+  /** Frame px -> stage px, from the viewer's geometry (as FieldOverlay computes it). */
+  const screenMap = $derived.by((): ScreenMap | null => {
+    const g = geometry;
+    if (!g || !(g.frame.width > 0)) return null;
+    const d = displaySize(g.frame.width, g.frame.height, g.turns);
+    return { rect: { left: g.view.tx, top: g.view.ty, width: d.width * g.view.scale, height: d.height * g.view.scale }, frame: g.frame, turns: g.turns };
+  });
+  const sel = $derived(field.selection?.selection ?? null);
+  /** The set's star the selection is (by key, else within 2″ of its catalogue position). */
+  const selStar = $derived.by(() => {
+    if (!sel) return null;
+    const stars = field.targets?.stars ?? [];
+    const byKey = sel.key ? stars.find((s) => s.key === sel.key) : null;
+    if (byKey) return byKey;
+    const p = sel.pending_star;
+    if (!p || !Number.isFinite(p.ra_deg) || !Number.isFinite(p.dec_deg)) return null;
+    const cosd = Math.cos((p.dec_deg * Math.PI) / 180);
+    return stars.find((s) => s.ra_deg != null && Math.hypot((s.ra_deg - p.ra_deg) * cosd, s.dec_deg - p.dec_deg) * 3600 < 2) ?? null;
+  });
+  /** The card follows the set: a role given or removed here or elsewhere shows at once (P20). */
+  const cardSel = $derived.by((): Selection | null => {
+    if (!sel) return null;
+    if (!field.targets) return sel;
+    return { ...sel, key: selStar?.key ?? sel.key, role: selStar?.role ?? null, removable: !!selStar };
+  });
+  const cardAt = $derived(screenMap && sel?.ring ? placeRing(screenMap, field.activeTransform, sel.ring) : null);
+  // The toast column sits at the bottom left of the stage, above the scale bar (HUD), so an
+  // Undo toast never covers the rail's controls right after a role change.
+  $effect(() => {
+    const el = stageEl;
+    void stageW;
+    void stageH;
+    void band.viewer;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    app.toastAnchor = { left: Math.round(r.left + 12), bottom: Math.round(window.innerHeight - r.bottom + 40) };
+  });
+  $effect(() => () => {
+    app.toastAnchor = null;
+  });
+  // Framing and Focus keep their own layer toggles (the grid and the set by default).
+  $effect(() => {
+    app.field.mode = ws.mode;
+  });
+  /** The set's target (the card's facts give the separation from it). */
+  const cardTarget = $derived.by(() => {
+    const t = field.targets?.stars.find((x) => x.role === 'target');
+    if (!t || typeof t.dec_deg !== 'number') return null;
+    const ra = typeof t.ra_hours === 'number' ? t.ra_hours : typeof t.ra_deg === 'number' ? t.ra_deg / 15 : null;
+    return ra === null ? null : { ra_hours: ra, dec_deg: t.dec_deg };
+  });
+  /** One star in two catalogues: the VSP candidate at the same position names it too. */
+  const cardAlias = $derived.by(() => {
+    const p = sel?.pending_star;
+    if (!p || sel?.kind === 'vsp' || typeof p.dec_deg !== 'number') return null;
+    const ra = typeof p.ra_hours === 'number' ? p.ra_hours : p.ra_deg / 15;
+    const cosd = Math.cos((p.dec_deg * Math.PI) / 180);
+    const c = field.candidates.find(
+      (k) => typeof k.ra_hours === 'number' && typeof k.dec_deg === 'number' && Math.hypot((k.ra_hours - ra) * 15 * cosd, k.dec_deg - p.dec_deg) * 3600 < 2,
+    );
+    return c?.auid ? `VSP ${c.auid}` : null;
+  });
+  let busyRole = $state<Role | 'remove' | null>(null);
+  const ROLE_WORDS: Record<Role, string> = { target: 'Target', comparison: 'Comparison', check: 'Check star' };
+
+  async function onSelect(at: SelectAt): Promise<void> {
+    // A catalogue candidate clicked on the image goes to the Inspector too.
+    const k = at.hit?.marker.key;
+    if (k && field.candidates.some((c) => c.key === k)) field.inspect(k);
+    try {
+      await field.select(app.client, { x: at.x, y: at.y, seq: header?.seq ?? undefined, tol_px: at.tol_px });
+    } catch (err) {
+      app.reportError('Identify the star', err);
+    }
+  }
+
+  async function setRole(role: Role): Promise<void> {
+    const s = cardSel;
+    if (!s || busyRole) return;
+    busyRole = role;
+    try {
+      const before = new Set((field.targets?.stars ?? []).map((x) => x.key));
+      const { set, undo } = await field.setRole(app.client, role, { selection: s.id, key: s.key });
+      const star = set?.stars.find((x) => x.key === s.key) ?? set?.stars.find((x) => !before.has(x.key) && x.role === role);
+      const name = star?.display_name || star?.name || cardText(s).title || 'the star';
+      const file = set?.path ? set.path.split(/[\\/]/).slice(-2).join('/') : null;
+      if (undo) app.undo.push({ title: `${ROLE_WORDS[role]}: ${name}`, detail: file ? `Written to ${file}` : undefined, group: 'roles', undo: () => undo.run() });
+    } catch (err) {
+      app.reportError(ROLE_WORDS[role], err);
+    } finally {
+      busyRole = null;
+    }
+  }
+
+  async function removeRole(): Promise<void> {
+    const s = cardSel;
+    if (!s?.key || busyRole) return;
+    busyRole = 'remove';
+    try {
+      const { undo } = await field.remove(app.client, s.key);
+      if (undo) app.undo.push({ title: `Removed from the target set: ${cardText(s).title}`, group: 'roles', undo: () => undo.run() });
+    } catch (err) {
+      app.reportError('Remove from the set', err);
+    } finally {
+      busyRole = null;
+    }
+  }
+
+  /** A star picked in a list (Candidates, Variables, Stars) is selected on the image (its card, A49). */
+  function pickAt(x: number, y: number): void {
+    const p = applyTransform(field.activeTransform, x, y, header ? { width: header.width, height: header.height } : null);
+    const tol = geometry ? 10 / geometry.view.scale : 20;
+    void field.select(app.client, { x: p.x, y: p.y, seq: header?.seq ?? undefined, tol_px: tol }).catch((err) => app.reportError('Identify the star', err));
+  }
+  function listPick(_layer: LayerId, m: Marker): void {
+    pickAt(m.x, m.y);
+  }
+  function rowPick(r: CandidateRow): void {
+    if (r.x !== null && r.y !== null) pickAt(r.x, r.y);
+  }
+
+  /** The Inspector shows the star the card is about (when it is a candidate) and the band's pick. */
+  $effect(() => {
+    const k = cardSel?.key;
+    if (k && untrack(() => field.candidates.some((c) => c.key === k) && field.inspected !== k)) untrack(() => field.inspect(k));
+  });
+  const inspRows = $derived(
+    candidateRows(field.candidates, 'candidates', app.shown ? clipping(app.shown.histogram, null).topCode : null, { limits: field.layers?.limits, stars: field.targets?.stars ?? [] }),
+  );
+  const inspRow = $derived(inspRows.find((r) => r.key === field.inspected) ?? null);
+  const inspAt = $derived(
+    inspRow && inspRow.x !== null && inspRow.y !== null && header ? applyTransform(field.activeTransform, inspRow.x, inspRow.y, { width: header.width, height: header.height }) : null,
+  );
+  /** History chips: a short ID ("BCG-523": the sequence prefix tells AAVSO charts apart) and the role. */
+  const inspHistory = $derived(
+    field.history.map((k) => {
+      const r = inspRows.find((row) => row.key === k);
+      const name = r?.name ?? k;
+      return { key: k, label: name.split('-').slice(-2).join('-'), name, role: r?.role ?? null };
+    }),
+  );
+  const geom = $derived(field.targets?.geometry ?? null);
+
+  /** Inspector card (rail): shown when hidden, opened when folded. */
+  function showInspector(): void {
+    if (layout.cards.inspector !== 'open') ws.setCard('inspector', 'open');
+    if (!layout.railOpen) ws.toggleRail();
+  }
+
+  // Escape closes the star card when nothing above it takes the key (a menu, a popover, a
+  // dialog, a field with a draft); the registry's binding still aborts a slew (D21).
+  $effect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !field.selection || openLayers().length || ownsEscape(e.target)) return;
+      void field.clearSelection(app.client);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  });
+
+  /** The loupe sits under the compass when the compass is shown. */
+  const loupeTop = $derived(sky ? Math.max(0, app.imageRect?.top ?? 0) + 8 + COMPASS_SIZE + 8 : 8);
+
+  async function menuAction(action: ViewerMenuAction, pixel: { x: number; y: number } | null): Promise<void> {
+    if (action === 'fit') zoom('fit');
+    else if (action === 'one') zoom('1to1');
+    else if (action === 'region' && pixel && header) tools.regionAt({ width: header.width, height: header.height }, pixel);
+    else if (action === 'identify' && pixel && geometry) {
+      // The same request as a click on the star (A49): 10 screen px of tolerance at this zoom.
+      await app.field
+        .select(app.client, { x: pixel.x, y: pixel.y, seq: header?.seq ?? null, tol_px: 10 / geometry.view.scale })
+        .catch((err) => app.reportError('Measure / identify', err));
+    } else if (action === 'clear') await app.field.clearSelection(app.client);
+    else if (action === 'save-png') {
+      const v = stageEl?.querySelector<HTMLElement>('[role="application"]');
+      const pic = viewer?.snapshot();
+      if (!stageEl || !v || !pic) return;
+      const blob = await composeView(stageEl, v, pic);
+      if (blob) download(blob, viewFileName(header?.seq ?? null));
+      else app.toast('error', 'Save view as PNG', 'The browser could not encode the picture');
+    }
+  }
+
   const clip = $derived(app.shown && ws.mode === 'framing' ? clipping(app.shown.histogram, limits.linearity) : null);
   const check = $derived(
     exposureCheck({
@@ -175,10 +477,22 @@
     }),
   );
   const metricsNow = $derived(app.frameMetrics && recent(app.frameMetrics.seq, header?.seq ?? null) ? app.frameMetrics : null);
+  // A frame shown while another mode was on (an opened file, a solve in Field mode) is
+  // measured when the Framing band comes back, instead of "Measuring…" until a new frame.
+  $effect(() => {
+    if (ws.mode !== 'framing' || !layout.bandOpen) return;
+    untrack(() => {
+      const info = app.shown;
+      const fs = app.frameStats;
+      if (!info || !fs || fs.peaks?.seq === info.frame.header.seq) return;
+      const h = info.frame.header as { bayer?: string | null };
+      fs.measure(info.frame, h.bayer !== undefined ? (h.bayer ?? null) : (app.camera?.sensor?.bayer ?? null));
+    });
+  });
 
   // -- Cards: one order (D10), the state each mode remembers -----------------------
   const cardOpen = (id: CardId) => layout.cards[id] === 'open';
-  const visibleCards = $derived((['camera', 'mount', 'focuser'] as CardId[]).filter((id) => layout.cards[id] !== 'hidden'));
+  const visibleCards = $derived((['camera', 'statistics', 'inspector', 'mount', 'focuser'] as CardId[]).filter((id) => layout.cards[id] !== 'hidden'));
   /** The Focus band shows the V-curve now (the Focuser card does not repeat it). */
   const bandVCurve = $derived(ws.mode === 'focus' && layout.bandOpen && band.height > 0 && !band.compact);
 
@@ -204,10 +518,25 @@
       r.handle('view.stretch-reset', () => app.resetStretch()),
       r.handle('view.levels', () => ws.toggleBand()),
       r.handle('view.crosshair', () => (app.crosshair = !app.crosshair)),
+      r.handle('view.loupe', () => tools.toggleLoupe()),
+      r.handle('view.saturation', () => {
+        if (limits.fullWell !== null || tools.saturation) tools.toggleSaturation();
+      }),
+      r.handle('view.region', () => toggleRegion()),
+      r.handle('view.statistics', () => toggleStatistics()),
       r.handle('rail.toggle', () => ws.toggleRail()),
       r.handle('drawer.toggle', () => ws.toggleDrawer()),
       r.handle('observe.mode.framing', () => ws.setMode('framing')),
       r.handle('observe.mode.focus', () => ws.setMode('focus')),
+      r.handle('observe.mode.field', () => ws.setMode('field')),
+      r.handle('field.solve', () => void app.identifyField()),
+      r.handle('field.grid', () => {
+        if (field.solved) field.toggle('grid');
+      }),
+      r.handle('field.labels', () => {
+        if (field.solved) field.toggle('labels');
+      }),
+      r.handle('field.catalogue', () => (catalogueOpen = !catalogueOpen)),
       r.handle('observe.jog-arm', () => {
         if (app.jogArmed || !app.jogProblem()) app.toggleJogArmed();
       }),
@@ -267,7 +596,7 @@
 {/snippet}
 
 <div class="imaging" data-mode={ws.mode}>
-  <ImagingToolbar {hasFrame} onzoom={zoom} />
+  <ImagingToolbar {hasFrame} onzoom={zoom} bind:catalogueOpen />
 
   <div class="workspace" style:--rail-cols="{railW}px">
     <div class="center" bind:clientWidth={centerW} bind:clientHeight={centerH}>
@@ -287,6 +616,13 @@
           autoStretch={app.autoStretch}
           stretch={app.manual}
           crosshair={app.crosshair}
+          crosshairMode={tools.crosshairMode}
+          palette={tools.palette}
+          preview={tools.preview}
+          bayer={app.camera?.sensor?.bayer ?? null}
+          {saturation}
+          loupe={tools.loupe ? { mag: tools.loupeMag, top: loupeTop } : null}
+          ongeometry={(g) => (geometry = g)}
           nightTint={app.theme === 'night-red'}
           tint={app.viewerTint}
           rotation={app.rotation}
@@ -370,6 +706,26 @@
           {/snippet}
         </FitsViewer>
 
+        <!-- Catalogue layers, grid, reticle and roles in screen space; clicks identify (A49). -->
+        <FieldOverlay
+          {geometry}
+          stage={{ width: stageW, height: stageH }}
+          markers={field.layersAvailable ? field.layers?.layers : null}
+          transform={field.activeTransform}
+          visibility={field.visibility}
+          gLimit={field.depth}
+          grid={fieldWcs ? field.field?.grid : null}
+          reticle={field.solved ? field.field?.target_reticle : null}
+          ring={sel?.ring}
+          mark={field.listMark}
+          hotKey={field.hover?.source === 'candidates' ? field.hover.key : null}
+          apertureR={field.apertureR}
+          tracking={field.activeTransform?.tracking ?? null}
+          interactive={hasFrame}
+          onselect={(a) => void onSelect(a)}
+          onhover={(h) => field.hoverMarker(h)}
+        />
+
         <Hud
           {chips}
           {cursor}
@@ -378,6 +734,37 @@
           stage={{ width: stageW, height: stageH }}
           dragReadout={ws.dragReadout}
           theme={app.theme}
+          solved={!!fieldWcs}
+          {sky}
+        />
+
+        <Marks {geometry} points={exposureMark} stage={{ width: stageW, height: stageH }} />
+        <RegionTool {tools} {geometry} stage={{ width: stageW, height: stageH }} />
+        {#if cardSel}
+          <StarCard
+            selection={cardSel}
+            setTarget={cardTarget}
+            alias={cardAlias}
+            phase={field.selection?.state}
+            message={field.selection?.message}
+            at={cardAt}
+            bounds={{ width: stageW, height: stageH }}
+            {busyRole}
+            onrole={(r) => void setRole(r)}
+            onremove={() => void removeRole()}
+            onclose={() => void field.clearSelection(app.client)}
+            oninspect={showInspector}
+          />
+        {/if}
+        <ViewerMenu
+          {geometry}
+          skyAt={fieldWcs ? (x, y) => pixelToSky(fieldWcs!, x, y) : null}
+          keys={{ fit: app.shortcuts.keyFor('view.fit'), one: app.shortcuts.keyFor('view.one-to-one'), region: app.shortcuts.keyFor('view.region') }}
+          canIdentify={!!header}
+          identifyReason={header ? null : 'no frame yet'}
+          hasSelection={!!app.field.selection?.selection}
+          onaction={(a, p) => void menuAction(a, p)}
+          oncopied={(what, text) => app.toast('info', `${what} copied`, text)}
         />
 
         {#if header}
@@ -440,17 +827,23 @@
           >
             {#snippet tools()}
               {#if ws.mode === 'framing'}
-                <DisplayTools
-                  mode={app.levels?.mode ?? 'linear'}
-                  rotation={app.rotation}
-                  disabled={!app.levels}
-                  onmode={(mode) => app.setLevel({ mode })}
-                  onrotation={(r) => app.setRotation(r)}
-                />
+                <DisplayTools mode={app.levels?.mode ?? 'linear'} disabled={!app.levels} onmode={(mode) => app.setLevel({ mode })} />
               {/if}
+              <ViewOptions
+                tools={app.viewTools}
+                {kind}
+                rotation={app.rotation}
+                onrotation={(r) => app.setRotation(r)}
+                {nightRed}
+                threshold={limits.fullWell}
+                saturationKey={app.shortcuts.keyFor('view.saturation')}
+              />
             {/snippet}
             {#snippet children({ height, compact })}
-              {#if ws.mode === 'focus'}
+              {#if ws.mode === 'field'}
+                <!-- The comparison workspace (imaging/field, W4): the candidates table linked to the image. -->
+                <FieldBand field={app.field} {compact} topCode={app.shown ? clipping(app.shown.histogram, null).topCode : null} onlistpick={listPick} onrowpick={rowPick} />
+              {:else if ws.mode === 'focus'}
                 <FocusBand
                   {height}
                   {compact}
@@ -476,6 +869,8 @@
                   fullWellAdu={limits.fullWell}
                   peaksUnsupported={!!app.frameStats && !app.frameStats.supported}
                   onlevel={(patch) => app.setLevel(patch)}
+                  onhoverstars={(points) => (exposureMark = points)}
+                  palette={effectivePalette(app.viewTools.palette, nightRed)}
                 />
               {/if}
             {/snippet}
@@ -558,8 +953,42 @@
         {#if visibleCards.includes('camera')}
           <CameraCard bind:open={() => cardOpen('camera'), (v) => ws.setCardOpen('camera', v)} />
         {/if}
+        {#if visibleCards.includes('statistics')}
+          <StatisticsCard
+            bind:open={() => cardOpen('statistics'), (v) => ws.setCardOpen('statistics', v)}
+            histogram={app.shown?.histogram ?? null}
+            seq={header?.seq ?? null}
+            cfa={kind === 'cfa'}
+            metrics={app.frameMetrics}
+            region={tools.regionResult}
+            regionOn={tools.region}
+            regionKey={app.shortcuts.keyFor('view.region')}
+            starRadius={typeof app.configValues?.['imaging.star_radius_px'] === 'number' ? (app.configValues['imaging.star_radius_px'] as number) : null}
+            onradius={(px) => app.patchConfig({ 'imaging.star_radius_px': px })}
+            onregion={toggleRegion}
+          />
+        {/if}
+        {#if visibleCards.includes('inspector')}
+          <Card title="Inspector" icon="inspector" collapsible bind:open={() => cardOpen('inspector'), (v) => ws.setCardOpen('inspector', v)}>
+            {#snippet summary()}{inspRow ? inspRow.name : 'No star picked'}{/snippet}
+            <InspectorCard
+              row={inspRow}
+              frame={app.shown?.frame ?? null}
+              at={inspAt}
+              levels={app.levels}
+              turns={geometry?.turns ?? 0}
+              apertureR={geom?.aperture_r_px ?? field.apertureR}
+              annulusIn={geom?.annulus_in_r_px ?? null}
+              annulusOut={geom?.annulus_out_r_px ?? null}
+              scaleArcsec={field.field?.solution?.scale_arcsec_px ?? null}
+              history={inspHistory}
+              onpick={(k) => field.inspect(k)}
+              theme={app.theme}
+            />
+          </Card>
+        {/if}
         {#if visibleCards.includes('mount')}
-          <MountCard bind:open={() => cardOpen('mount'), (v) => ws.setCardOpen('mount', v)} />
+          <MountCard bind:open={() => cardOpen('mount'), (v) => ws.setCardOpen('mount', v)} fieldMode={ws.mode === 'field'} />
         {/if}
         {#if visibleCards.includes('focuser')}
           <FocuserCard bandShowsVCurve={bandVCurve} bind:open={() => cardOpen('focuser'), (v) => ws.setCardOpen('focuser', v)} />

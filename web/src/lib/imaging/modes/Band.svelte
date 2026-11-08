@@ -6,8 +6,8 @@
 
   A 28 px header (--band-header-h) names it and says how it is sized ("fits the image" or
   "set by you" with [Fit to image]); H hides it in every mode. Below 150 px it becomes one
-  summary row of the same facts (the drawer took the space). Field and Run never reach
-  here in this version (their modes are unavailable).
+  summary row of the same facts (the drawer took the space). Field (wave 4) shows the
+  comparison candidates (imaging/field); Run never reaches here in this version.
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte';

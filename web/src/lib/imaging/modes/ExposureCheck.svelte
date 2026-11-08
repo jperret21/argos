@@ -28,9 +28,15 @@
     fullWellAdu?: number | null;
     /** The frame worker is unavailable in this engine. */
     unsupported?: boolean;
+    /**
+     * A row is hovered: where its stars are on the frame (frame px), to mark them on the image
+     * (null: none). Only rows of the frame on screen mark anything (a stamped older list does not).
+     */
+    onhover?: (points: { x: number; y: number }[] | null) => void;
   }
 
-  let { check, linearityAdu = null, fullWellAdu = null, unsupported = false }: Props = $props();
+  let { check, linearityAdu = null, fullWellAdu = null, unsupported = false, onhover }: Props = $props();
+  const hover = (points: { x: number; y: number }[] | null) => onhover?.(check.current ? points : null);
 
   const WORDS = { ok: '', nonlinear: 'non-linear', clipped: 'clipped' } as const;
   const m = $derived(check.metrics);
@@ -51,7 +57,7 @@
   {#if lines}
     <ul aria-label="Brightest stars of frame #{check.peaksSeq}, peak against full scale">
       {#if check.clippedGroup}
-        <li class="clipped group">
+        <li class="clipped group" onmouseenter={() => hover(check.clippedPoints)} onmouseleave={() => hover(null)}>
           <span class="who num">{check.clippedGroup}×</span>
           <span class="meter" role="img" aria-label="{check.clippedGroup} brightest stars at the ADC's top code: clipped">
             <i class="fill" style:width="100%"></i>
@@ -61,7 +67,7 @@
         </li>
       {/if}
       {#each check.rows as r (r.rank)}
-        <li class={r.state}>
+        <li class={r.state} onmouseenter={() => hover([{ x: r.x, y: r.y }])} onmouseleave={() => hover(null)}>
           <span class="who num">#{r.rank}</span>
           <span class="meter" role="img" aria-label="Star {r.rank}: peak {int(r.peak)} of {int(FULL_SCALE)} ADU{r.state !== 'ok' ? `, ${WORDS[r.state]}` : ''}">
             <i class="fill" style:width="{r.frac * 100}%"></i>
@@ -136,7 +142,14 @@
     grid-template-columns: 22px minmax(0, 1fr) 56px 44px;
     align-items: center;
     gap: var(--space-2);
+    margin: -1px calc(-1 * var(--space-1));
+    padding: 1px var(--space-1);
+    border-radius: var(--radius-s);
     font-size: var(--text-xs);
+  }
+  /* The row whose star is marked on the image (the band table's hover fill). */
+  li:hover {
+    background: var(--hover-bg);
   }
   .who {
     color: var(--text-muted);

@@ -83,15 +83,17 @@ describe('band layout (BRAND 11.1, stripLayout unchanged)', () => {
 });
 
 describe('modes and presets', () => {
-  it('Framing and Focus are available; Field and Run say why not', () => {
-    expect(AVAILABLE_MODES).toEqual(['framing', 'focus']);
+  it('Framing, Focus and Field are available; Run says why not', () => {
+    expect(AVAILABLE_MODES).toEqual(['framing', 'focus', 'field']);
     for (const m of MODES.filter((d) => d.unavailable)) expect(m.unavailable).toMatch(/wave/);
     expect(isMode('focus')).toBe(true);
     expect(isMode('watch')).toBe(false);
   });
 
   it('keeps one card order and the D8 panel width; Focus opens the focuser', () => {
-    expect(CARD_IDS).toEqual(['camera', 'mount', 'focuser']);
+    expect(CARD_IDS).toEqual(['camera', 'statistics', 'inspector', 'mount', 'focuser']);
+    // D9: the Statistics card is hidden by default in every mode (I shows it).
+    for (const m of MODES) expect(PRESETS[m.id].cards.statistics).toBe('hidden');
     expect(PRESETS.framing.railW).toBe(RAIL.default);
     expect(PRESETS.focus.cards.focuser).toBe('open');
     expect(PRESETS.framing.cards.focuser).toBe('folded');

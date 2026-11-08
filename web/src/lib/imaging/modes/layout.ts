@@ -12,8 +12,11 @@
  * - The rail keeps ONE card order in every mode, the order of decision D10
  *   (Camera, Mount, Focuser among the cards of wave 3); a mode changes the
  *   states only. D10 is a decision in force; the lab reordered per mode.
- * - Field (wave 4) and Run (waves 5 and 6) are listed but not available: their
- *   bands need field identification, live photometry and the sequencer.
+ * - Field is available from wave 4 (its band hosts the comparison candidates,
+ *   imaging/field); Run (waves 5 and 6) is listed but not available: its band
+ *   needs live photometry and the sequencer.
+ * - Wave 4 adds the Statistics card (D9: hidden by default in every mode, I
+ *   shows it), in its D10 place after Camera.
  * - The band turns into its one-row summary below 150 px (BRAND 11.1,
  *   STRIP.min), not 120 px as in the lab; the right panel is 360-580 px with
  *   400 px by default (D8); the drawer 160 px to half the section (README 1.1).
@@ -64,7 +67,7 @@ export const MODES: readonly ModeDef[] = [
     shortcut: 'observe.mode.field',
     task: 'Identify the field, choose the stars',
     band: 'Comparison candidates',
-    unavailable: 'not in this version: it comes with field identification (wave 4)',
+    unavailable: null,
   },
   {
     id: 'run',
@@ -87,14 +90,16 @@ export function isMode(v: unknown): v is Mode {
   return MODES.some((m) => m.id === v);
 }
 
-/** The rail cards of this version, in the one order of decision D10. */
-export const CARD_IDS = ['camera', 'mount', 'focuser'] as const;
+/** The rail cards of this version, in the one order of decision D10 (README 1.3). */
+export const CARD_IDS = ['camera', 'statistics', 'inspector', 'mount', 'focuser'] as const;
 export type CardId = (typeof CARD_IDS)[number];
 export type CardState = 'open' | 'folded' | 'hidden';
 export const CARD_STATES: readonly CardState[] = ['open', 'folded', 'hidden'];
 
 export const CARD_LABELS: Record<CardId, { title: string; icon: string }> = {
   camera: { title: 'Camera', icon: 'camera' },
+  statistics: { title: 'Statistics', icon: 'statistics' },
+  inspector: { title: 'Inspector', icon: 'inspector' },
   mount: { title: 'Mount', icon: 'mount' },
   focuser: { title: 'Focuser', icon: 'focuser' },
 };
@@ -131,10 +136,12 @@ const base = {
 } as const;
 
 export const PRESETS: Record<Mode, ModeLayout> = {
-  framing: { ...base, drawerTab: 'log', cards: { camera: 'open', mount: 'open', focuser: 'folded' } },
-  focus: { ...base, drawerTab: 'conditions', cards: { camera: 'open', mount: 'folded', focuser: 'open' } },
-  field: { ...base, drawerTab: 'log', cards: { camera: 'folded', mount: 'folded', focuser: 'hidden' } },
-  run: { ...base, drawerTab: 'log', cards: { camera: 'folded', mount: 'folded', focuser: 'hidden' } },
+  framing: { ...base, drawerTab: 'log', cards: { camera: 'open', statistics: 'hidden', inspector: 'hidden', mount: 'open', focuser: 'folded' } },
+  focus: { ...base, drawerTab: 'conditions', cards: { camera: 'open', statistics: 'hidden', inspector: 'hidden', mount: 'folded', focuser: 'open' } },
+  // Field: the band holds the candidates, the Inspector the picked star; the Mount card
+  // (Centre target, Sync) stays open.
+  field: { ...base, drawerTab: 'log', cards: { camera: 'folded', statistics: 'hidden', inspector: 'open', mount: 'open', focuser: 'hidden' } },
+  run: { ...base, drawerTab: 'log', cards: { camera: 'folded', statistics: 'hidden', inspector: 'hidden', mount: 'folded', focuser: 'hidden' } },
 };
 
 export function clonePreset(mode: Mode): ModeLayout {
@@ -155,10 +162,11 @@ export function changedKeys(mode: Mode, l: ModeLayout): string[] {
 
 /**
  * The momentary toggles (the drawer open or closed and its tab, the band shown
- * or hidden with H) are not an arrangement: they never light the "layout
- * changed" mark, or it would be on most of the time (design review W3).
+ * or hidden with H, the Statistics card shown with I) are not an arrangement:
+ * they never light the "layout changed" mark, or it would be on most of the
+ * time (design review W3).
  */
-export const MOMENTARY: readonly string[] = ['drawerOpen', 'drawerTab', 'bandOpen'];
+export const MOMENTARY: readonly string[] = ['drawerOpen', 'drawerTab', 'bandOpen', 'card.statistics'];
 
 /** The arrangement choices that differ from the preset (cards, band height, rail width…). */
 export function arrangementChanged(mode: Mode, l: ModeLayout): string[] {

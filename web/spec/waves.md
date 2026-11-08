@@ -25,7 +25,7 @@ actually delivered).
 | W2 | Settings | **done** 2026-11-03 | `5462efd` server, `78b054a` design system and components, `437f612` Settings, `622b91e` gallery | `web/screenshots/2026-11-02_wave2-settings` |
 | — | 0.5.0 fixes merged into the web branch | **done** | `c746875` (merge of `release/0.5.0`, incl. `94b12b7`) | — |
 | W3 | Observe: acquisition | **reviewed and fixed** 2026-11-08 (exit criterion met through the UI; design, technical and science reviews applied, `progress.md` Wave 3 sections 2 and 6); the owner's commit pending | — (uncommitted) | `web/screenshots/2026-11-08_wave3-observe` |
-| W4 | Field identification and image tools | to do | — | — |
+| W4 | Field identification and image tools | **done** 2026-11-08: exit criterion met (roles and Night Red through the UI; tracking on 195 real frames, 0.2-0.9 px, no loss); design, technical and science reviews applied (`progress.md` Wave 4, section 6); the owner's commit pending | — (uncommitted) | `web/screenshots/2026-11-08_wave4-field` |
 | W5 | Live photometry | to do | — | — |
 | W6 | Plan (and Run, Watch, attention) | to do | — | — |
 | W7 | Review | to do | — | — |
@@ -271,7 +271,7 @@ the science review checks; exit criterion; notes.
 - **Team used:** backend, controls and instruments, workspace and charts, integrator,
   design / technical / science reviews, fixer. Base commit `c746875`.
 
-### W4 — Field identification and image tools
+### W4 — Field identification and image tools (integrated 2026-11-08; reviews and commit pending)
 
 - **Goal:** identify the field, see catalogues and roles on the image, click stars, centre
   the target; complete the viewer tools.

@@ -50,6 +50,8 @@ export interface ExposureCheck {
   rows: PeakRow[];
   /** Two or more stars at the top code: one line says how many (0: none, or one shown as a row). */
   clippedGroup: number;
+  /** Where the stars of the clipped line are (frame px), to mark them on the image on hover. */
+  clippedPoints: { x: number; y: number }[];
   /** Lines the band has room for: the list keeps this height whatever the frame (no jump). */
   capacity: number;
   /** Frames between the one measured and the one on screen (0: this frame; null: none). */
@@ -142,6 +144,7 @@ export function exposureCheck(i: ExposureInput): ExposureCheck {
   return {
     rows,
     clippedGroup,
+    clippedPoints: clippedGroup ? all.filter((r) => r.state === 'clipped').map((r) => ({ x: r.x, y: r.y })) : [],
     capacity,
     lag: usable ? i.seq! - i.peaks!.seq : null,
     linearity: lin !== null ? frac(lin) : null,

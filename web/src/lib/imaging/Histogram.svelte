@@ -43,6 +43,7 @@
   import { valueHandle } from '../app/attachments/handle';
   import { adcStep } from '../viewer/framestats';
   import { binHistogram, type BinnedHistogram } from '../viewer/histogram';
+  import { paletteColour, type Palette as DisplayPalette } from '../viewer/palettes/lut';
   import { dragLevel, handleLevels, type LevelHandle, pickHandle } from '../viewer/levels';
   import { stretchValue, type Histogram16, type StretchParams } from '../viewer/stretch';
 
@@ -66,6 +67,8 @@
     ramp?: boolean;
     /** Full-scale colour of the viewer (--viewer-tint, 0..1 RGB) for the ramp. */
     tint?: readonly [number, number, number];
+    /** The palette the viewer draws (W4, viewer/palettes): the ramp shows it too. */
+    palette?: DisplayPalette;
     /** Write the level values on the handles (off where fields beside the plot show them). */
     handleValues?: boolean;
   }
@@ -82,6 +85,7 @@
     transfer = false,
     ramp = false,
     tint = [1, 1, 1],
+    palette = 'neutral',
     handleValues = true,
   }: Props = $props();
 
@@ -283,10 +287,11 @@
     for (let x = 0; x < W; x++) {
       const v = u.posToVal(x / dpr, 'x');
       const n = p ? stretchValue(v, p) : 0;
-      // The shader writes n x tint into an 8-bit target: round(n x tint x 255).
-      const R = Math.round(n * r * 255);
-      const G = Math.round(n * g * 255);
-      const B = Math.round(n * b * 255);
+      // The shader writes c(n) x tint into an 8-bit target: round(c x tint x 255), c the palette's entry.
+      const c = palette === 'neutral' ? null : paletteColour(palette, n);
+      const R = Math.round((c ? c[0] : n) * r * 255);
+      const G = Math.round((c ? c[1] : n) * g * 255);
+      const B = Math.round((c ? c[2] : n) * b * 255);
       for (let y = 0; y < H; y++) {
         const o = (y * W + x) * 4;
         img.data[o] = R;
@@ -531,7 +536,7 @@
 
   $effect(() => {
     if (levels) void [levels.black, levels.white, levels.midtones, levels.mode];
-    void [tint[0], tint[1], tint[2], clipped, transfer, ramp, clip];
+    void [tint[0], tint[1], tint[2], clipped, transfer, ramp, clip, palette];
     untrack(() => plot?.redraw(false, false));
   });
 

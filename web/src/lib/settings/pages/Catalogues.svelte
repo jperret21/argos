@@ -125,6 +125,7 @@
 
 <style>
   .page {
+    container: catalogues / inline-size;
     display: flex;
     flex-direction: column;
     gap: var(--space-5);
@@ -180,6 +181,23 @@
     grid-column: 2;
     color: var(--text-muted);
     font-size: var(--text-xs);
+  }
+  /* Narrow (the Settings sheet over Observe is 560 px): the key above the control, which
+     may wrap, so no segment ever crosses the box or the sheet's edge. */
+  @container catalogues (max-width: 640px) {
+    .preset {
+      grid-template-columns: minmax(0, 1fr);
+      padding-left: var(--space-3);
+    }
+    .preset :global(.segmented),
+    .preset > :global(:nth-child(2)),
+    .preset-note {
+      grid-column: 1;
+    }
+    .preset :global(.segmented) {
+      flex-wrap: wrap;
+      max-width: 100%;
+    }
   }
   .foot {
     max-width: var(--page-max-w);

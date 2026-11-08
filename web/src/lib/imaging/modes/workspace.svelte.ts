@@ -10,7 +10,7 @@
  *   brings the presets back (ImagingScreen calls it on app.layoutGeneration).
  * - A mode marks itself when its layout differs from its preset (`modified`,
  *   `changedKeys`), and Arrange resets it (with Undo, through `onreset`).
- * - The mode never changes by itself; an unavailable mode (Field, Run in this
+ * - The mode never changes by itself; an unavailable mode (Run in this
  *   version) is refused with its reason.
  * - The switch cross-fades through a View Transition when the engine has one
  *   and motion is allowed (BRAND 9: task-mode switches only, `--duration-base`);

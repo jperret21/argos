@@ -593,8 +593,8 @@ in the cell menu instead of pyqtgraph Export. No brass for data (07 P39).
 | Progress | WS `{"type":"job","job":{id, kind, state: queued\|running\|done\|failed\|cancelled, done, total\|null, stage, message, started_utc, ended_utc, result\|null, error\|null, seq}}`, throttled to ≤ 4 Hz, final message always sent. |
 | Cancel | `DELETE /api/jobs/{id}`: honoured at a safe boundary (between frames, between devices, kill the ASTAP process); `409 unsupported` when the kind cannot be cancelled. |
 | Recover | `GET /api/jobs` (active + last 20), `GET /api/jobs/{id}` (result kept 10 min). |
-| Kinds | `discovery`, `site_search`, `support_bundle`, `sessions_scan`, `session_open`, `file_solve`, `file_catalogue`, `rerun`, `export` |
-| Not jobs | Stateful singletons keep their domain events: live view, capture, sequence, autofocus, live field solve, live catalogue fetch, point identification (`selection`), filter move, slew, jog, focuser move. |
+| Kinds | `discovery`, `site_search`, `support_bundle`, `sessions_scan`, `session_open`, `field_solve` (W4: the manual Identify field, A43; it starts `running` with `stage: "queued"`), `file_solve`, `file_catalogue`, `rerun`, `export` |
+| Not jobs | Stateful singletons keep their domain events: live view, capture, sequence, autofocus, the automatic field solve (A44), live catalogue fetch, point identification (`selection`), filter move, slew, jog, focuser move. |
 
 ### 4.3 Routes and events
 
