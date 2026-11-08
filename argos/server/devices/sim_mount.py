@@ -293,6 +293,22 @@ class SimMount:
                 self._rebase(now)  # RA reference continuous across the switch
             self._tracking = bool(enabled)
 
+    def sync(self, ra_hours: float, dec_deg: float) -> None:
+        """ASCOM ``SyncToCoordinates`` (``telescope.py:540-562``): the current
+        pointing now reads *ra_hours*, *dec_deg* (wave 4, A32 / A33)."""
+        with self._lock:
+            now = self._clock()
+            self._advance(now)
+            if self._parked:
+                raise MountParked("Mount is parked — unpark before syncing")
+            if self._slew is not None:
+                raise DeviceError("The mount is slewing — sync once the slew has ended")
+            if not self._tracking:
+                raise DeviceError("Tracking must be enabled before syncing — enable tracking first")
+            self._stop_axes(now)
+            self._ra0, self._dec0 = float(ra_hours) % 24.0, float(dec_deg)
+            self._t0 = now
+
     # -- wave 3: jog and tracking rate -----------------------------------------
 
     def move_axis(self, axis: int, rate_deg_s: float) -> None:

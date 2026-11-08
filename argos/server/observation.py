@@ -28,7 +28,7 @@ from argos.core.catalog.object_resolver import (
     is_variable_object_type,
     object_type_label,
 )
-from argos.core.catalog.targets import ROLE_TARGET, TargetSet, TargetStar
+from argos.core.catalog.targets import ROLE_TARGET, TargetStar
 from argos.server.errors import ApiError
 from argos.server.state import utc_iso
 
@@ -160,6 +160,8 @@ class ObservationService:
             source="observation",
             topic="camera",
         )
+        # Wave 4: the target set is keyed by the name (on_object_changed, 1281-1293).
+        self._hub.targets.on_object_changed()
         return record
 
     def set_target(
@@ -197,6 +199,7 @@ class ObservationService:
         with self._hub._lock:
             self._check_unlocked()
             record = self._set(object_name=name, target=target, photometry_target=photometry)
+        self._hub.targets.on_object_changed()
         self._hub.log(
             "info",
             f"Catalogue target: {name} — RA {target['ra_hours']:.5f}h Dec {target['dec_deg']:+.5f}°",
@@ -229,10 +232,9 @@ class ObservationService:
             mags={},
         )
         try:
-            tset = TargetSet.load(path)
-            tset.object_name = target["name"]
-            tset.set_role(star)
-            tset.save(path)
+            # Through the target service (wave 4): comparisons from a known VSP
+            # sequence are selected as set_target_role does (1295-1302).
+            path = self._hub.targets.write_role_for(target["name"], star)
         except OSError as exc:
             self._hub.log("error", f"Save targets: {exc}", source="observation", topic="camera")
             return None

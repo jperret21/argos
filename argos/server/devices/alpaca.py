@@ -350,6 +350,12 @@ class AlpacaMount:
         self._refuse_if_parked("slewing")
         self._call(self._scope.slew_to, ra_hours, dec_deg)  # enables tracking first
 
+    def sync(self, ra_hours: float, dec_deg: float) -> None:
+        """``sync_to`` (``telescope.py:540-562``: clock checked, tracking required,
+        J2000 converted to the mount's system)."""
+        self._refuse_if_parked("syncing")
+        self._call(self._scope.sync_to, ra_hours, dec_deg)
+
     def stop(self) -> None:
         self._call(self._scope.abort_slew)
 

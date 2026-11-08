@@ -53,6 +53,13 @@ catalogue lookups (``observation.py``) and the **metrics** thread with the
 conditions rows (``conditions.py``). Every one keeps its records under
 ``_lock`` and never holds it across device I/O.
 
+Wave 4 (Field identification) adds the field service (``field.py``: plate
+solve jobs and the automatic identification, the catalogue fetch, the
+overlay layers, the per-frame tracking transform, the star selection) fed
+with every published frame, and the target set (``targets.py``). The mount
+poller checks every reading against the solution (a slew from elsewhere
+invalidates it); GoTo and Centre invalidate it at once.
+
 A command or connect that was already talking to a device when the observer
 disconnected it must not write its answer into the state afterwards: every
 connect and teardown bumps that slot's ``generation``, and a result read
@@ -120,6 +127,7 @@ from argos.server.devices.sim_aux import SimOptics
 from argos.server.discovery import DEFAULT_LAYERS, DiscoveryLayers, run_discovery
 from argos.server.errors import ApiError
 from argos.server.events import EventBus
+from argos.server.field import FieldService
 from argos.server.fits_source import FITS_SUFFIXES, FitsReadError, load_raw_fits_frame
 from argos.server.focuser import FocuserService
 from argos.server.frames import FrameSource, encode_frame
@@ -133,6 +141,7 @@ from argos.server.sessions import SessionIndex, is_session
 from argos.server.settings import Settings, SimOptions
 from argos.server.site_check import SITE_KEYS, SiteCheck
 from argos.server.stellarium import StellariumBridge
+from argos.server.targets import TargetService
 from argos.server.state import (
     CAMERA_BUSY,
     CameraState,
@@ -357,6 +366,9 @@ class Hub:
         self._autofocus: AutofocusRun | None = None
         self._af_record: dict[str, Any] = idle_record()
         self._af_runs = 0
+        # -- wave 4 (Field identification) --------------------------------------
+        self.targets = TargetService(self)
+        self.field = FieldService(self)
 
         self.config.add_listener(self._on_config_changed)
         if self.config.load_error:
@@ -376,9 +388,11 @@ class Hub:
         """Start the background services (the event loop is attached)."""
         if self._settings.network_interval_s > 0:
             self.network.start()
+        self.targets.publish()  # the cached record a new client receives
 
     def shutdown(self) -> None:
         """Release everything at server exit."""
+        self.field.close()
         self.jobs.shutdown()
         self.network.stop()
         self.stellarium.stop(announce=False)
@@ -487,6 +501,16 @@ class Hub:
                 snapshots.append(("activity", seq, {"type": "activity", **self._activity}))
             return snapshots
 
+    def field_snapshots(self) -> list[tuple[str, int, dict[str, Any]]]:
+        """Wave 4 snapshots a new client gets after the replayed log lines."""
+        with self._lock:
+            seq = self._seq
+            snapshots = self.field.snapshots(seq)
+            targets = self.targets.cached_record()
+            if targets is not None:
+                snapshots.append(("targets", seq, {"type": "targets", **targets}))
+            return snapshots
+
     def devices(self) -> dict[str, Any]:
         with self._lock:
             return self._devices_payload()
@@ -509,6 +533,17 @@ class Hub:
             self._last_devices = devices
             self._publish("devices", {"devices": devices})
         self._publish("status", self._status_payload())
+        if hasattr(self, "field"):
+            self._update_center_available()
+
+    def _update_center_available(self) -> None:
+        """Lock held: ``center_available`` of the field and of MountState (A29, A32)."""
+        self.field.refresh_center()
+
+    def _sync_center_available(self, value: bool) -> None:
+        """Lock held: mirror the field's Centre availability in MountState."""
+        if self._mount_state.center_available != value:
+            self._set_mount_extras(center_available=value)
 
     def _publish_network(self, state: dict[str, Any]) -> None:
         with self._lock:
@@ -644,6 +679,12 @@ class Hub:
             key.startswith("hardware.overrides.") for key in changed
         ):
             self._apply_profile_from_config(announce=True)
+        # wave 4: catalogue refetch / re-projection, the target set's folder and geometry
+        self.field.on_config_changed(changed)
+        if "sessions_path" in changed:
+            self.targets.reload()
+        elif any(key.startswith(("photometry.", "camera.")) for key in changed):
+            self.targets.publish()
 
     def _apply_profile_from_config(self, announce: bool) -> None:
         """``active.load_from_config`` (active.py:92-110) on the server's config."""
@@ -2323,6 +2364,7 @@ class Hub:
                     if live:
                         self._refresh_camera(**changes)
                 self.metrics.submit(job)
+                self.field.on_frame(seq, pixels, origin)
                 if log_note:
                     self.log(level, message, source="camera", topic="camera")  # type: ignore[arg-type]
                 if save_job is not None:
@@ -2538,6 +2580,8 @@ class Hub:
         """The metrics thread measured a frame: ``frame_metrics`` and a conditions row."""
         with self._lock:
             self._publish("frame_metrics", {"seq": job.seq, **result, "t": utc_iso()})
+        # wave 4: the photometry aperture follows the frame's mean FWHM (1493-1504)
+        self.targets.on_frame_fwhm(result.get("fwhm_px"))
         if job.row is None:
             return
         row = self.conditions.append(
@@ -2679,6 +2723,9 @@ class Hub:
         with self._lock:
             if self._camera_state.state in CAMERA_BUSY or self._job is not None:
                 raise ApiError(409, "busy", "Camera is busy — stop it before opening a file")
+        # Another field, another night (open_fits_frame, acquisition_engine.py:741-767).
+        self.field.invalidate("file_opened")
+        with self._lock:
             self._frame_seq += 1
             seq = self._frame_seq
             bayer = opened.bayer or active.profile().bayer_pattern
@@ -2704,6 +2751,7 @@ class Hub:
         self.metrics.submit(
             MetricsJob(seq=seq, arr=opened.pixels, origin="file", radius=self._star_radius())
         )
+        self.field.on_frame(seq, opened.pixels, "file", hint=opened.pointing)
         shape = "×".join(str(n) for n in (opened.pixels.shape[1], opened.pixels.shape[0]))
         self.log("info", f"Opened {p.name} ({shape})", source="camera", topic="camera")
         if opened.epoch_utc is None:
@@ -3008,6 +3056,8 @@ class Hub:
         result = self._mount_command("goto", ra, float(dec_deg), target=Target(ra, float(dec_deg)))
         with self._lock:
             self._goto_target = (ra, float(dec_deg))
+            self._update_center_available()
+        self.field.invalidate("slew")  # the session's ``slewed`` (imaging_page.py:524)
         self.log("info", f"GoTo RA {ra:.4f} h, Dec {dec_deg:+.4f}°", source="mount", topic="mount")
         with self._lock:
             # Under the lock that also announces "Slew finished": a slew that
@@ -3032,6 +3082,120 @@ class Hub:
         result = self._mount_command("park", target=None)
         self.log("info", "Parking", source="mount", topic="mount")
         return result
+
+    # -- wave 4: Centre target and Sync to the plate solution (A32, A33) ----------
+
+    def _require_unblocked_mount(self) -> tuple[MountDevice, int]:
+        with self._lock:
+            mount = self._require("mount")
+            generation = self._slots["mount"].generation
+            blocked = self._mount_state.goto_blocked
+        if blocked is not None:
+            raise ApiError(409, "clock_error", blocked["message"])
+        if getattr(mount, "sync", None) is None:
+            raise ApiError(409, "unsupported", "This mount cannot be synced")
+        return mount, generation
+
+    def _mount_failure(self, action: str, exc: Exception, generation: int) -> ApiError:
+        if isinstance(exc, MountParked):
+            return ApiError(409, "parked", str(exc))
+        with self._lock:
+            current = generation == self._slots["mount"].generation
+        if not current:
+            return ApiError(409, "not_connected", "Disconnected during the command")
+        self.log("error", f"{action}: {exc}", source="mount", topic="mount")
+        return ApiError(502, "device_error", str(exc) or action)
+
+    def mount_center(self, target: dict[str, Any] | None = None) -> dict:
+        """``POST /api/mount/center`` (``_center_selected_target``, imaging_page.py:2692-2715;
+        ``center_target_from_solution``, device_session.py:734-765)."""
+        mount, generation = self._require_unblocked_mount()
+        # The current frame's centre through the tracked solution (S30).
+        solved_ra, solved_dec = self.field.solved_centre()
+        if target is not None:
+            ra_h, dec_d = float(target["ra_hours"]) % 24.0, float(target["dec_deg"])
+            label = str(target.get("name") or "the requested target")
+        else:
+            targets = self.targets.target_set().by_role("target")
+            with self._lock:
+                goto = self._goto_target
+            if targets:
+                ra_h, dec_d = targets[0].ra_deg / 15.0, targets[0].dec_deg
+                label = targets[0].display_name
+            elif goto is not None:
+                ra_h, dec_d = goto
+                label = "current GoTo target"
+            else:
+                raise ApiError(
+                    409, "no_target", "Center target: select a target or issue a GoTo first."
+                )
+        self.jog.stop_all_before("Center")
+        self.log(
+            "info",
+            f"Centering {label} from the current plate solution…",
+            source="mount",
+            topic="mount",
+        )
+        try:
+            mount.set_tracking(True)
+            mount.sync(solved_ra, solved_dec)  # type: ignore[attr-defined]
+        except Exception as exc:
+            raise self._mount_failure("Center target", exc, generation) from exc
+        self.log(
+            "cmd",
+            f"Center: synced solved field RA {solved_ra:.4f}h Dec {solved_dec:+.4f}°",
+            source="mount",
+            topic="mount",
+        )
+        try:
+            mount.goto(ra_h, dec_d)
+        except Exception as exc:
+            self.field.invalidate("center")  # the sync changed the pointing model
+            raise self._mount_failure("Center target", exc, generation) from exc
+        with self._lock:
+            self._goto_target = (ra_h, dec_d)
+        self.field.invalidate("center")  # the pre-centring solution is now stale
+        self.log(
+            "cmd",
+            f"Center: slewing to target RA {ra_h:.4f}h Dec {dec_d:+.4f}°",
+            source="mount",
+            topic="mount",
+        )
+        state = self._refresh_mount(mount, generation, "center", Target(ra_h, dec_d))
+        if state is None:
+            raise ApiError(409, "not_connected", "Disconnected during the command")
+        with self._lock:
+            if self._mount_state.state == "slewing":
+                self.set_activity("Slewing", source="mount", topic="mount", log=False)
+        return state.to_dict()
+
+    def mount_sync(self) -> dict:
+        """``POST /api/mount/sync`` ``{"source": "solution"}`` (Q-O3: Sync to plate
+        solution, no slew; ``telescope.py:540-562``)."""
+        mount, generation = self._require_unblocked_mount()
+        ra_h, dec_d = self.field.solved_centre()
+        self.jog.stop_all_before("Sync")
+        # The mount will read the solved centre: the field stays valid.
+        with self._lock:
+            before = self.field._attempt_radec
+        self.field.rebase_mount_reference(ra_h, dec_d)
+        try:
+            mount.sync(ra_h, dec_d)  # type: ignore[attr-defined]
+        except Exception as exc:
+            with self._lock:
+                self.field._attempt_radec = before
+            raise self._mount_failure("Sync", exc, generation) from exc
+        self.log(
+            "cmd",
+            f"Sync to plate solution: RA {ra_h:.4f}h Dec {dec_d:+.4f}°",
+            source="mount",
+            topic="mount",
+        )
+        state = self._refresh_mount(mount, generation, "sync")
+        if state is None:
+            raise ApiError(409, "not_connected", "Disconnected during the command")
+        self.field.rebase_mount_reference(state.ra_hours, state.dec_deg)
+        return state.to_dict()
 
     def mount_unpark(self) -> dict:
         return self._mount_command("unpark")
@@ -3142,6 +3306,7 @@ class Hub:
                 self._last_reading = reading
                 self._apply_mount(self._mount_from_reading(reading), telemetry=True)
             self.site_check.on_reading(reading, generation)
+            self.field.check_mount(reading.ra_hours, reading.dec_deg)
             if recovered:
                 self.log("info", "Mount responding again", source="mount", topic="mount")
 

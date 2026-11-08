@@ -95,6 +95,8 @@ class MountDevice(Protocol):
 
     def set_tracking(self, enabled: bool) -> None: ...
 
+    # Wave 4 (A32, A33), optional: ``sync(ra_hours, dec_deg)`` — SyncToCoordinates.
+
     def close(self) -> None: ...
 
 

@@ -158,8 +158,11 @@ class OpenedFrame:
         date_obs: str | None,
         epoch_utc: str | None,
         bayer: str | None,
+        pointing: tuple[float, float] | None = None,
     ) -> None:
         self.pixels = pixels
+        #: ``(ra_hours, dec_deg)`` from OBJCTRA / OBJCTDEC: the solve hint (wave 4).
+        self.pointing = pointing
         self.exposure_s = exposure_s
         self.timestamp = timestamp
         self.date_obs = date_obs
@@ -179,6 +182,7 @@ def load_raw_fits_frame(path: Path) -> OpenedFrame:
     from astropy.io import fits
 
     from argos.server.capture import fits_exposure_mid, raw_adu
+    from argos.server.field_solve import header_hint
 
     try:
         with fits.open(path, memmap=False) as hdul:
@@ -229,4 +233,5 @@ def load_raw_fits_frame(path: Path) -> OpenedFrame:
         date_obs=str(date_obs).strip() if date_obs else None,
         epoch_utc=utc_iso(mid) if mid is not None else None,
         bayer=str(bayer).strip() or None if bayer else None,
+        pointing=header_hint(header),
     )

@@ -1312,7 +1312,7 @@ MountState += {"alignment": "altaz"|"eq"|"eq_gem"|null,    // AlignmentMode at c
                "tracking_rates": [string],                // what the driver lists (Q-O15); [] unknown
                "goto_blocked": {"reason": "clock", "clock_error_s": float,
                                 "message": string}|null,  // GoTo/Sync/Center are refused (H4)
-               "center_available": false,                 // wave 4 (plate solution)
+               "center_available": bool,                  // wave 4: Field.center_available
                "jog": {"primary": float, "secondary": float,   // deg/s now commanded, 0 = stopped
                        "stop_pending": ["primary"|"secondary"],  // a stop failed; retried
                        "max_rate_deg_s": float, "deadman_s": float,
@@ -1630,6 +1630,452 @@ log lines (dropped oldest first only once the logs are gone); each carries
 accepts one text message from the client: `{"type": "jog_stop"}` stops
 every axis this client is jogging. Anything else is ignored.
 
+## API 2 routes, wave 4 (Field identification and image tools)
+
+Wave 4 (`web/spec/README.md` §7 "Field identification and image tools":
+rows A32-A33, A43-A49, A51-A53) adds the routes, records and events below,
+still under `"api": 2` (additive). ASTAP, catalogue queries, point
+identification and the per-frame field work run on worker threads, never
+on the event loop. The science rules are those of the fixed Qt engine
+(0.5.0), ported Qt-free into `argos/server/field_solve.py` (ASTAP run,
+WCS, grid), `field_catalog.py` (catalogue fetch, layers, candidates),
+`field.py` (field state, auto identification, tracking, star selection,
+centre and sync) and `targets.py` (target set and roles); each module
+cites the Qt lines it ports.
+
+| Method | Path | Body | Returns | Row |
+|---|---|---|---|---|
+| GET | `/api/field` | — | Field | A45 |
+| POST | `/api/field/solve` | `{}` (optional) | `202 {"job_id", "field": Field}` | A43 |
+| DELETE | `/api/field/solve` | — | Field (the running solve, manual or automatic, is cancelled) | A43 |
+| PUT | `/api/field/auto` | `{"enabled": bool}` | Field | A44 |
+| GET | `/api/field/catalog` | — | Catalog | A46 |
+| POST | `/api/field/catalog/refetch` | — | `202` Catalog (`fetching`) | A46 |
+| GET | `/api/field/layers` | — | FieldLayers | A47 |
+| GET | `/api/field/transform` | — | FieldTransform | A48 |
+| GET | `/api/field/select` | — | SelectionEvent \| `{"id": null, "selection": null}` | A49 |
+| POST | `/api/field/select` | SelectBody | SelectionEvent | A49 |
+| DELETE | `/api/field/select` | — | `{"id": null, "selection": null}` | A49 |
+| GET | `/api/targets` | — | Targets | A51 |
+| POST | `/api/targets` | TargetRoleBody | Targets | A52 |
+| DELETE | `/api/targets/{key}` | — | Targets + `"removed": TargetStar` | A53 |
+| POST | `/api/mount/center` | `{"target"?: {"ra_hours", "dec_deg", "name"?}}` | MountState | A32 |
+| POST | `/api/mount/sync` | `{"source": "solution"}` | MountState | A33 |
+
+New WebSocket events (`/ws/events`), all snapshots (the newest is
+complete; compacted to the newest under backpressure): `field`, `catalog`,
+`field_layers`, `field_transform`, `selection`, `targets`. A new client
+receives each of them once, right after the replayed log lines (so the
+order of the earlier snapshots is unchanged). A manual solve also
+publishes `job` events (kind `field_solve`). New error codes: `no_frame` (nothing to solve),
+`not_solved` (the field has no solution), `no_target`, `not_found`, `file_solution` (Centre
+target or Sync on the solution of an opened file).
+
+**Strict JSON on the socket.** `/ws/events` frames are serialised with `allow_nan=False`;
+a non-finite number (NaN, ±inf) goes out as `null`, as REST answers, so `JSON.parse` never
+drops a snapshot.
+
+### Positions: frame pixels
+
+Every position on the wire is in **frame px, numpy convention** (the
+centre of pixel `(row i, column j)` is `x = j, y = i`, origin top left,
+y down, never rotated by the display). The science code measures on the
+green plane `(G1+G2)/2` of each 2×2 tile (`green.py:30-47`), the plane
+ASTAP solves and the star detector measures; the server converts:
+
+```
+x_frame = 2 · x_green + 0.5      y_frame = 2 · y_green + 0.5      r_frame = 2 · r_green
+```
+
+(`+0.5`: the green sample of tile `(i, j)` averages raw `(2i, 2j)` and
+`(2i+1, 2j+1)`, whose centroid is `(2i+0.5, 2j+0.5)`; the same rule for the
+mono simulator.) Radii carry their unit: `r_px` (frame px),
+`*_green_px` where a green-plane value is kept for reference.
+
+### Field (A43-A45)
+
+```
+Field = {"state": "none"|"solving"|"solved"|"failed"|"invalidated",
+         "auto": bool,                      // automatic identification armed
+         "auto_source": "observer"|"sequence"|null,
+         "solving": {"mode": "manual"|"auto", "job_id": string|null,
+                     "frame_seq": int, "started_utc": ISO}|null,
+         "reason": "slew"|"mount_moved"|"geometry"|"file_opened"|"source_changed"
+                   |"center"|null,          // invalidated
+         "message": string|null,            // the failure or invalidation sentence (as logged)
+         "generation": int,                 // +1 on every new solution and every invalidation
+         "solution": Solution|null,         // the last good solution (a failed attempt keeps it)
+         "wcs": FrameWcs|null,
+         "grid": Grid|null,
+         "target_reticle": {"x", "y", "name", "ra_hours", "dec_deg"}|null,
+                                            // null when the target is 90° or more from the
+                                            // field (it has no TAN projection)
+         "last_attempt": {"mode": "manual"|"auto", "outcome": "solved"|"failed"|"cancelled",
+                          "message": string, "t": ISO}|null,
+         "center_available": bool,          // a solution of a CAMERA frame, a connected mount
+                                            // and a target (never for an opened file)
+         "revision": int}
+
+Solution = {"ra_hours", "dec_deg",                  // CRVAL (J2000)
+            "scale_arcsec_px": float|null,          // per FRAME px (ASTAP green scale ÷ 2)
+            "rotation_deg": float|null,             // ASTAP's (CROTA2): the sensor frame's angle
+            "mirrored": bool|null,                  // the sky as the wire draws it (frame px, y
+                                                    // down): det(CD) < 0; not ASTAP's FITS flag
+            "delta_target_arcmin": float|null, "target_name": string|null,
+            "frame_seq": int, "frame_origin": "live"|"single"|"file"|…,
+            "frame_shape": [h, w],                  // frame px
+            "mode": "manual"|"auto", "solved_utc": ISO,
+            "hint": {"ra_hours", "dec_deg", "source": "mount"|"header"}|null,
+            "summary": string}                      // the OK log line
+FrameWcs = {"ctype": ["RA---TAN", "DEC--TAN"],
+            "crval": [ra_deg, dec_deg],
+            "crpix": [x1, y1],                      // FITS 1-based, frame px
+            "cd": [[cd1_1, cd1_2], [cd2_1, cd2_2]], // degrees per frame px
+            "frame_shape": [h, w]}
+            // numpy x = FITS pixel − 1; TAN projection as in FrameWCS (platesolve.py:329-379)
+Grid = {"lines": [[[x, y], …], …],                  // polyline segments (broken off-frame)
+        "labels": [{"x", "y", "text", "axis": "ra"|"dec"}],
+        "centre": {"x", "y", "label"}|null}
+```
+
+- **Identify field** (`POST /api/field/solve`, `solve_now`
+  `acquisition_engine.py:1038-1056`, `astrometry_controller.py:105-119`):
+  solves the newest frame (live, Take shot or opened file) on its green
+  plane with the thorough settings (`build_solve_settings(live=False)`,
+  `astrometry_session.py:36-75`: 120 s timeout, blind retry). The ASTAP
+  database flags follow S24 (`-D <set> -d <folder>`, `platesolve.py:306-319`).
+  Hint: the connected mount's pointing for a camera frame; for an opened
+  file the header's `OBJCTRA`/`OBJCTDEC` (the mount points elsewhere), else
+  blind. `409 no_frame` "No frame to solve yet — take a frame or open a FITS
+  image first."; `409 busy` (`owner` = the solve's job id, or `"auto"`)
+  while a solve runs. A half-quality preview cannot occur: the server keeps
+  every frame at full resolution (Q-O14), so `decimated` is never
+  answered. The answer is `202 {"job_id", "field"}`; the job (kind
+  `field_solve`, resource `field`) reports its stages (`"ASTAP"`,
+  `"ASTAP at native sampling"`, `"ASTAP whole-sky"`) and ends `done`
+  (`result` = Solution), `failed` (`error.code` `not_solved`, message as
+  ASTAP's) or `cancelled`. An unexpected error after ASTAP (a degenerate WCS, an I/O
+  error) ends the attempt the same way (`failed`, `not_solved`, ERROR "Solve: the
+  solution could not be used (…)"): the field is never left claimed by a finished job.
+  The job starts `running` with `stage: "queued"`. CMD "Plate-solving frame #<seq>… (hint RA <h>h
+  Dec <d>°)" / "(blind — no mount)" / "(hint from the FITS header)".
+- **Cancel**: `DELETE /api/jobs/{id}` or `DELETE /api/field/solve` kills
+  the ASTAP process at once (the Qt solve could not be cancelled); the
+  field keeps its previous solution; INFO "Field identification
+  cancelled.".
+- **Result** (`_on_worker_solved` `astrometry_controller.py:210-238`,
+  `_on_astrometry_solved` `imaging_page.py:1393-1416`): OK "Solved — RA
+  …h  Dec …°  …″/px  rot …°  Δtarget …′" (the full-resolution scale; the
+  Qt summary); `generation` +1; the catalogue is fetched once per field
+  (A46); the target set is re-projected. A solution for a frame whose
+  geometry is no longer the current one is discarded (INFO "Solve finished
+  for a different frame geometry — discarded."). A failure keeps the last
+  good solution: `state: "failed"`, ERROR "Solve: <message>" (manual),
+  INFO for an automatic attempt.
+- **Automatic identification** (`PUT /api/field/auto`,
+  `astrometry_controller.py:82-85, 121-154`): per new frame (latest wins,
+  on the field thread) a live solve (`live=True`: bounded timeout,
+  `astrometry.live_search_radius_deg`) starts when the field has no
+  solution, `astrometry.live_resolve_s` (20 s) passed, or the mount moved
+  `astrometry.live_resolve_arcmin` (2′) since the last attempt. An
+  automatic solve is no job (README §4.2) but is cancellable with
+  `DELETE /api/field/solve`. INFO "Automatic field identification on/off".
+  Sequences (wave 6) arm it for the run even without a prior solution
+  (Q-O12) through `FieldService.arm_for_sequence()` / `disarm_after_sequence()`,
+  which restore the observer's choice afterwards (`auto_source: "sequence"`).
+- **Invalidation** (`_clear_astrometry` `imaging_page.py:2501-2563`,
+  `invalidate_astrometry` `acquisition_engine.py:1067-1084`): the
+  solution, the catalogue, the layers, the tracking transform and the
+  selection are dropped (the Qt card and ring stayed, P24) and
+  `state: "invalidated"` with `reason`: `slew` (an ARGOS GoTo), `center`
+  (Centre target), `mount_moved` (the mount reports ≥
+  `astrometry.live_resolve_arcmin` from where it was at the solve, a slew
+  from Stellarium or the Seestar app: INFO "Mount pointing changed outside
+  ARGOS — stale astrometry overlays cleared. Plate-solve the current
+  frame."), `geometry` (a frame of another size, INFO "Frame geometry
+  changed — WCS overlays cleared (solve again)."), `file_opened` (Open
+  FITS, `acquisition_engine.py:741-767`) or `source_changed` (camera
+  frames arrive after an opened file was solved: its solution would be
+  drawn on another field). The target set is kept. A solve running at
+  that moment is cancelled and released at once (`solving: null`; a new
+  Identify field may start); one that ends after the field moved is
+  discarded (INFO "Solve finished for a field that has moved since —
+  discarded.": Qt applied it to the new field). A cancelled attempt
+  returns the field to its previous state.
+
+### Catalogue (A46)
+
+```
+Catalog = {"state": "idle"|"fetching"|"ready"|"error",
+           "generation": int,               // the field generation it belongs to
+           "centre": {"ra_hours", "dec_deg"}|null, "radius_deg": float|null,
+           "counts": {"variables", "comparisons", "field_stars", "named_objects",
+                      "exoplanet_hosts"},
+           "limits": {"field_stars": int, "named_objects": int},   // budgets asked
+           "warnings": [string],            // Qt's VSP warning, plus each source that failed
+                                            // ("Gaia DR3 unavailable: …", "SIMBAD unavailable: …",
+                                            // "NASA Exoplanet Archive unavailable: …"); the log
+                                            // lines stay Qt's
+           "error": string|null,
+           "fetched_utc": ISO|null, "revision": int}
+```
+
+- Fetched on a thread once per field after a solve (`maybe_fetch_catalog`,
+  `acquisition_engine.py:1105-1173`: re-used while the field centre moved
+  less than the field radius; VSX at the solved centre, VSP around the
+  first target of the set, the 70 / 30 Gaia / SIMBAD split of
+  `catalog.identification_max_objects`, every `catalog.*` key as Qt) with
+  the queries of `CatalogWorker.run` (`catalog_worker.py:90-172`). The
+  log lines are Qt's (`_on_catalog`, `acquisition_engine.py:1175-1240`).
+  Not cancellable (as Qt); a newer field discards a late result.
+- `POST /api/field/catalog/refetch` (`refetch_catalog`,
+  `acquisition_engine.py:1086-1103`): `409 not_solved` "Identify the field
+  first: the catalogue is fetched around a plate solution." instead of a
+  silent no-op; `409 busy` while a fetch runs. A `PATCH /api/config` of a
+  key the fetch reads (`catalog.mag_limit`, `max_results`,
+  `include_suspected`, `field_stars_*` except `detected_only`,
+  `identification_max_objects`, `named_objects_*`, `exoplanet_hosts_*`)
+  refetches the solved field (debounced 0.5 s).
+- When the VSP answer arrives after a target was chosen, comparisons are
+  auto-selected for it (`acquisition_engine.py:1225-1240`, A52).
+
+### Layers (A47) and the tracking transform (A48)
+
+```
+FieldLayers = {"generation": int, "revision": int,
+               "available": bool,                    // the field is solved
+               "frame_shape": [h, w]|null,
+               "display_mag_limit": float,          // catalog.display_mag_limit
+               "aperture_r_px": float,              // photometry aperture (frame px)
+               "layers": {"stars": [Marker], "variables": [Marker], "galaxies": [Marker],
+                          "nebulae_clusters": [Marker], "exoplanets": [Marker],
+                          "other_objects": [Marker], "vsp": [Marker], "selected": [Marker]},
+               "counts": {layer: int},               // Qt chip counts (display limit applied)
+               "candidates": [Candidate],            // FieldBand table (PROPOSAL §7)
+               "limits": {"comparison_max_separation_arcmin", "comparison_max_delta_mag",
+                          "comparison_min_snr",       // the observer's photometry.* rules
+                          "gaia_depth_g": float|null  // G the held Gaia list is complete to
+                         }|null}
+Marker = {"id": string,                              // stable within a generation
+          "x", "y",                                  // frame px through the REFERENCE solve
+          "label": string,                           // "" when Qt drew no label
+          "tooltip": string,                         // Qt's tooltip text, lines joined by \n
+          "kind": "gaia"|"simbad"|"point_identity"|"variable"|"deep_sky"|"exoplanet"|"vsp"|"target",
+          "key": string|null,                        // TargetStar key the star would have in the set
+          "ra_hours", "dec_deg",
+          "g_mag"?: float|null, "suspected"?: bool, "role"?: string, "detected"?: bool,
+          // variables: "index", "name", "var_type", "mag_text", "max_mag", "min_mag",
+          //   "brightest_mag", "period_d", "auid", "sep_arcmin" (from the field centre)
+          // stars: "source_id", "bp_mag", "rp_mag", "name"|null}
+Candidate = {"auid", "label", "chart_id", "x", "y", "ra_hours", "dec_deg", "key",
+             "v_mag": float|null, "b_mag": float|null,
+             "b_minus_v": float|null,                // VSP B − V, null unless both bands
+             "delta_b_minus_v": float|null,          // minus the target's B − V (VSP or SIMBAD/Gaia: null)
+             "sep_arcmin": float|null,               // from the first target, else the field centre
+             "peak_adu": int|null, "snr": float|null, "saturated": bool|null,
+             "neighbours_in_aperture": int|null,     // see below; null when it cannot be stated
+             "vsx": {"name", "var_type", "suspected", "max_mag", "min_mag", "sep_arcsec"}|null,
+                                                     // a VSX entry within 3″ (a known or
+                                                     // suspected variable)
+             "detected": bool, "role": string|null, "measured_seq": int|null}
+FieldTransform = {"generation": int, "frame_seq": int|null,
+                  "rot_deg": float, "dx": float, "dy": float,   // frame px
+                  "cx": float, "cy": float,                     // pivot, frame px
+                  "anchors": int, "residual_px": float|null,
+                  "anchor_source": "target_set"|"detected"|null, "lost_frames": int,
+                  "tracking": "ok"|"degraded"|"lost"|null}     // null: no frame tracked yet
+```
+
+- **Projection** (`_project_catalog` `imaging_page.py:1497-1754`,
+  `_project_targets` 1756-1783): through the **reference** solve, sent
+  once per catalogue generation and again (`revision` +1) when the target
+  set or a display key changes (`catalog.display_mag_limit`,
+  `catalog.field_stars_detected_only`, `catalog.show_essential_objects`,
+  `catalog.show_cached_exoplanets`). Rules: VSX all in frame; Gaia carry
+  `g_mag` (the client filters by the display limit; counts use it), and
+  with `catalog.field_stars_detected_only` only sources within 4 green px
+  of a source detected on the solved frame (up to 2 000 sources; Qt kept
+  the 120 brightest, too few on a rich field); SIMBAD names cross-matched to
+  Gaia within 3″ (one marker per source, 1801-1836), generic survey ids
+  never used as labels (1898-1917); SIMBAD categories galaxy / nebula /
+  cluster / star / other (1868-1896); Essential catalogue objects within
+  the field radius (`catalog.show_essential_objects`); cached exoplanet
+  hosts (`catalog.show_cached_exoplanets`); markers within 8 green px
+  merged (1839-1856); VSP candidates only where a source was detected
+  (1694-1705); `selected` = the target set with `role`. Point identities
+  found by A49 join the stars (or their category) for the field.
+- **Tracking** (`ApertureTracker`, `tracking.py:235-339`;
+  `_wcs_for_frame` / `_build_live_tracker` `acquisition_engine.py:1542-1593`;
+  the web's `FieldTracker`, `field_track.py`): every new frame of the solved
+  geometry re-centroids the anchors and fits a rigid transform (rotation +
+  translation on an alt-az mount; translation only on an equatorial mount,
+  `allow_rotation`). In Qt only photometry used the tracker; here it also
+  places every overlay, hit-tests clicks and gives Centre and Sync the
+  current frame's centre, so it departs from Qt where a wrong lock would be
+  drawn:
+  - **Anchors**, chosen on the **solved** frame (where the reference
+    positions are true): the target set's comparisons and checks that pass
+    `select_tracking_anchors` (Qt); with fewer than two of them, up to six
+    bright stars detected on the solved frame, unsaturated (3×3 peak below
+    `sat_adu` on the solved frame), 20 green px apart (`anchor_source:
+    "detected"`; one anchor gives no rotation and no consistency test);
+    else every star of the set (Qt's last resort).
+  - Each anchor's signal baseline (core's 20 % lost-anchor test) is measured
+    on the solved frame; each centroid is taken twice, the second window
+    centred on the first (a window centred on the prediction lags a moving
+    star by about one frame px).
+  - With three or more anchors an update needs two anchors whose
+    separations agree with the reference within 1.5 green px; a lone window
+    that slid onto another star or onto sky is no lock.
+  - A frame with no consistent anchor keeps the previous transform
+    (`lost_frames` counts them, `tracking: "lost"`) and is re-acquired by
+    matching the frame's detected stars to the solved frame's 300 brightest
+    with a translation vote (at least 6 matched stars), then refitted. WARN
+    "Tracking: no anchor star found — overlays and apertures unguided" once
+    per loss (Qt logged its line on every frame); INFO "Tracking: field found
+    again (n anchors)." when it comes back. `degraded`: fewer anchors used
+    than min(3, constellation).
+  - A target-set change rebuilds the constellation **from the current
+    pose** (Qt reset to the identity, `acquisition_engine.py:1301`, which is
+    wrong once the field has drifted); a new solution resets to identity.
+  The marker at reference position `(x, y)` is drawn at
+  `x' = cx + cos θ·(x − cx) − sin θ·(y − cy) + dx`,
+  `y' = cy + sin θ·(x − cx) + cos θ·(y − cy) + dy` with `θ = rot_deg`.
+  Measured on 195 consecutive frames of a real RR Lyr session against
+  star-matching truth: 0.2-0.9 frame px median error, no loss; with jumps of
+  45 green px (every tenth frame) every step was re-acquired.
+- **Candidates** (PROPOSAL §7; the FieldBand table): the VSP comparison
+  stars inside the frame, measured on the solved frame (`measure_aperture`
+  at the catalogue position snapped as `_pilot_comparison_quality`,
+  `acquisition_engine.py:1431-1491`). `b_minus_v` = VSP `B` − VSP `V`.
+  `neighbours_in_aperture` = the Gaia DR3 sources of the field, other than
+  the candidate itself (its counterpart: the nearest Gaia source within
+  max(3″, FWHM/2) whose G is within 1.5 mag of the VSP V; and any source
+  within 1 frame px), whose reference position lies within the photometry
+  aperture radius (`aperture_r_px`) of the candidate and that are at most
+  3 mag fainter than it (`G ≤ m + 3`, `m` = the counterpart's G, else VSP
+  V). `null` unless the held Gaia list is complete to `m + 3`
+  (`limits.gaia_depth_g`: the query's G limit, or its faintest source when
+  the identification budget truncated it), or without Gaia sources: a
+  definite 0 is never claimed where the list cannot see. `vsx`: the VSX
+  entry within 3″ of the candidate (the band says "variable?"; the
+  automatic selection is Qt's and does not exclude it, an owner decision).
+
+### Star selection (A49)
+
+```
+SelectBody = {"x": float, "y": float,     // frame px
+              "seq"?: int,                 // the frame the click was made on
+              "tol_px"?: float}            // hit tolerance, frame px (default 20 = 10 green px)
+SelectionEvent = {"id": int, "state": "identifying"|"resolved"|"no_match"|"failed"|"tracking",
+                  "selection": Selection|null, "message": string|null}
+Selection = {"id": int, "seq": int,
+             "kind": "target"|"variable"|"vsp"|"simbad"|"deep_sky"|"exoplanet"|"gaia"
+                     |"point_identity"|"measured"|"none",
+             "title": string, "rows": [{"key": string, "value": string}],
+             "ring": {"x", "y", "r_px", "aperture": "photometry"|"star",
+                      "space": "reference"|"frame"}|null,
+                      // reference: a catalogue position, moved by field_transform like the
+                      // markers; frame: the clicked / measured position on frame `seq`
+             "pending_star": PendingStar|null,
+             "key": string|null, "role": string|null,      // its key / role in the set
+             "roles_enabled": bool, "roles_reason": string|null,
+             "removable": bool, "identifying": bool,
+             "measurement": {"x", "y", "fwhm_px", "hfd_px", "fwhm_arcsec", "hfd_arcsec",
+                             "eccentricity", "snr", "peak_adu", "sky_adu",
+                             "ra_hours"|null, "dec_deg"|null}|null}
+PendingStar = {"ra_deg", "dec_deg", "ra_hours", "auid", "name", "source", "mags", "chart_id"}
+```
+
+- Hit-test order and card bodies of `_on_star_clicked`
+  (`imaging_page.py:804-978`): a star of the target set, a VSX variable, a
+  VSP comparison, a SIMBAD object, an Essential catalogue object, an
+  exoplanet host, a Gaia source, an earlier point identity — hidden layers
+  still identify (Q-O18) — then an unmarked source: `measure_star_at`
+  (`metrics.py:225-276`). With a solution the click is identified by a
+  10″ Gaia / SIMBAD cone (`identify_point_source`; network as Qt: Gaia
+  when `catalog.field_stars_enabled`, SIMBAD when
+  `catalog.named_objects_enabled` and `catalog.named_objects_allow_network`,
+  Q-O1): the answer is `identifying` at once and the outcome arrives as a
+  `selection` event (`resolved` / `no_match` / `failed`). A new select
+  supersedes a running lookup (its late answer is dropped, P21). Without a
+  solution the card shows the measurement, `roles_enabled: false`,
+  `roles_reason` "identify the field first".
+- A measured (unmarked) star is followed frame by frame (`state:
+  "tracking"`, `_remeasure_selection` `imaging_page.py:1241-1257`,
+  `TRACK_SNAP_SEARCH`). The selection is dropped by `DELETE`, a field
+  invalidation and a frame geometry change.
+- `409 no_frame` without a frame; `400 invalid_argument` outside the frame.
+
+### Target set (A51-A53)
+
+```
+Targets = {"object_name": string,         // the set's key (D11), "Unknown" when empty
+           "path": string,                // <sessions_path>/targets/<object>.json
+           "stars": [TargetStar], "summary": {…},   // TargetSet.summary() (targets.py:98-122)
+           "geometry": {"aperture_px", "annulus_in_px", "annulus_out_px",   // green px
+                        "aperture_r_px", "annulus_in_r_px", "annulus_out_r_px",  // frame px
+                        "fwhm_px": float|null, "fwhm_source": "frame"|"default"},
+           "revision": int}
+TargetStar = {"key", "role": "target"|"comparison"|"check", "name", "display_name",
+              "ra_deg", "dec_deg", "ra_hours", "auid", "source", "mags", "chart_id", "note",
+              "x": float|null, "y": float|null}   // reference frame px when solved and in frame
+TargetRoleBody = {"role": "target"|"comparison"|"check",
+                  // exactly one of:
+                  "selection"?: int,            // the current Selection's id (its pending_star)
+                  "star"?: PendingStar,         // ra_deg/dec_deg (exact), or ra_hours
+                  "variable_index"?: int}       // Marker.index of the variables layer
+```
+
+- `POST /api/targets` (`_on_card_role` `imaging_page.py:2035-2044`,
+  `set_target_role` `acquisition_engine.py:1295-1302`): fills the object
+  name with the star's name when it is empty (D11, before the save), sets
+  the role (`TargetSet.set_role`), auto-selects VSP comparisons for a new
+  target when the field's VSP sequence is known (`_auto_select_comparisons`
+  with the pilot quality gate, 1348-1491; WARN when fewer pass), writes
+  `targets/<object>.json` atomically in the Qt format, resets the
+  tracking, and publishes `targets` and `field_layers`. OK "<Role>:
+  <name>". `409 not_found` for a selection that is no longer the current
+  one; `404 not_found` for a `variable_index` the field's catalogue does
+  not have; `409 busy` while a sequence owns the observation.
+- `DELETE /api/targets/{key}` (`remove_target`, 1506-1511): the answer
+  carries `removed` (the star as it was, for Undo = `POST` with `star`);
+  `404 not_found` for an unknown key. OK "Removed from target set: <name>".
+- The set follows the observation's object name (`on_object_changed`,
+  1281-1293): a new name re-reads its own file and publishes `targets`.
+  `geometry` is `photometry_geometry` (1493-1504) on the last frame's mean
+  FWHM (`fwhm_source: "frame"`), else the default FWHM.
+
+### Centre target and Sync (A32, A33)
+
+- `POST /api/mount/center` (`_center_selected_target`
+  `imaging_page.py:2692-2715`, `center_target_from_solution`
+  `device_session.py:734-765`): target = the body's, else the first
+  `target` of the set, else the last GoTo target; the solved centre is
+  read through the **tracked** solution (the current frame's centre, S30:
+  Qt used the reference solve). Tracking on, Sync to the solved centre,
+  GoTo the target; the field is invalidated (`reason: "center"`). CMD
+  "Center: synced solved field RA …h Dec …°", "Center: slewing to target
+  RA …h Dec …°". `409 not_solved`, `409 file_solution` ("This solution is
+  for an opened file, not where the mount points: identify a camera frame
+  first."; an opened file says nothing about the mount's pointing, and a
+  sync on it would corrupt the pointing model), `409 no_target`,
+  `409 not_connected`, `409 clock_error` (H4), `409 parked`.
+- `POST /api/mount/sync` `{"source": "solution"}` (Q-O3: "Sync to plate
+  solution", no slew; `telescope.py:540-562`): syncs the mount to the
+  current frame's solved centre; the field stays valid (its mount
+  reference is moved to the new reading). `409 not_solved`,
+  `file_solution`, `not_connected`, `clock_error`, `parked`; a driver refusal (tracking off)
+  is `502 device_error` with its text.
+
+### Backpressure (wave 4)
+
+`field`, `catalog`, `field_layers`, `field_transform`, `selection` and
+`targets` are snapshots: under backpressure only the newest of each is
+kept. `field_layers` can carry a few thousand markers (the Gaia budget),
+so it is sent once per generation or change, never per frame; the per
+frame motion is `field_transform`.
+
 ## State records
 
 ```
@@ -1716,6 +2162,12 @@ DeviceState     = {"state": "disconnected"|"connecting"|"connected"|"busy"|"erro
 | `{"type": "frame_metrics", …FrameMetrics}` | Wave 3. Once per metered frame (latest frame wins). |
 | `{"type": "frame_saved", …FrameSaved}` | Wave 3. Every FITS a Take shot wrote; a stream with `seq`. |
 | `{"type": "conditions", …ConditionsRow}` | Wave 3. One row per metered camera frame; a stream with `seq`. |
+| `{"type": "field", …Field}` | Wave 4. Every change of the field: solve started, solved, failed, cancelled, invalidated, automatic mode, Centre availability. |
+| `{"type": "catalog", …Catalog}` | Wave 4. Fetch started, ready, error, reset by an invalidation. |
+| `{"type": "field_layers", …FieldLayers}` | Wave 4. Once per catalogue generation, then on a role or display-setting change, and once more when the candidates are measured. |
+| `{"type": "field_transform", …FieldTransform}` | Wave 4. Every new frame of the solved field (the tracking fit); identity after a solve or an invalidation. |
+| `{"type": "selection", …SelectionEvent}` | Wave 4. Every star selection, its identification outcome, each followed frame of a measured star, and its clearing. |
+| `{"type": "targets", …Targets}` | Wave 4. Every change of the target set, of its object (name), of its positions (a new solution) and of the aperture. |
 | `{"type": "log", …LogEntry}` | Server events, plus WARNING-and-above records from `argos.core`, such as Alpaca driver warnings (core INFO, logged on every exposure, stays in the server log; a core message repeated within 60 s is sent once). Right after the first `status` (and `network`, `stellarium`, `activity`, in that order), a new client receives the last 200 log lines, oldest first, so a page opened mid-session shows what happened before; older lines come from `GET /api/logs`. A client that reconnects drops the lines whose `seq` it already holds. |
 
 A camera change therefore sends both a `camera` message and a `status`
@@ -1900,3 +2352,8 @@ wide by 1920 px high, 16-bit, mono.
 | A34-A36 | Wave 3: focuser record and polling, `POST /api/focuser/move` / `step` / `halt` (D9 queue), autofocus `start` / `stop` with V-curve samples and fit |
 | A37 | Wave 3: `conditions` rows, `GET /api/session/conditions` |
 | A38-A41 | Wave 3: observation identity (`GET` / `PUT /api/observation`, `POST` / `DELETE /api/observation/target`), `GET /api/catalog/resolve`, `GET /api/catalog/suggest` |
+| A43-A45 | Wave 4: `GET /api/field`, `POST` / `DELETE /api/field/solve` (job `field_solve`, ASTAP killed on cancel), `PUT /api/field/auto`, `field` event; positions in frame px |
+| A46-A48 | Wave 4: `GET /api/field/catalog`, `POST /api/field/catalog/refetch`, `GET /api/field/layers`, `GET /api/field/transform`; `catalog`, `field_layers` (with the FieldBand `candidates`: `b_minus_v`, `neighbours_in_aperture`), `field_transform` events |
+| A49 | Wave 4: `GET` / `POST` / `DELETE /api/field/select`, `selection` event (point identification superseded by a newer click) |
+| A51-A53 | Wave 4: `GET` / `POST /api/targets`, `DELETE /api/targets/{key}` (`removed` for Undo), `targets` event; `targets/<object>.json` in the Qt format |
+| A32-A33 | Wave 4: `POST /api/mount/center` (tracked solution, S30), `POST /api/mount/sync` `{"source": "solution"}` (Q-O3); `MountState.center_available` |

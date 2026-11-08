@@ -211,6 +211,7 @@ class EventBus:
         initial: tuple[int, dict[str, Any]] | None = None,
         history: list[dict[str, Any]] | None = None,
         snapshots: list[tuple[str, int, dict[str, Any]]] | None = None,
+        after_history: list[tuple[str, int, dict[str, Any]]] | None = None,
     ) -> EventSubscriber:
         """Register a client, pre-loaded with a ``status`` snapshot, the other
         current *snapshots* (``network``, ``activity``) and past log lines.
@@ -227,6 +228,10 @@ class EventBus:
             sub.offer(kind, seq, payload)
         for payload in history or ():
             sub.offer("log", None, payload)
+        # Wave 4 snapshots (field, catalogue, layers…) follow the replayed lines,
+        # so the order of the earlier ones is unchanged.
+        for kind, seq, payload in after_history or ():
+            sub.offer(kind, seq, payload)
         self._events.add(sub)
         return sub
 

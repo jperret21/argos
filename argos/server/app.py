@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import platform
 import re
 import threading
@@ -19,7 +20,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Any, Awaitable, Callable, Literal
 
 import anyio
-from fastapi import APIRouter, Body, Depends, FastAPI, Query, WebSocket
+from fastapi import APIRouter, Body, Depends, FastAPI, Path, Query, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.concurrency import run_in_threadpool
@@ -45,6 +46,7 @@ from argos.server import profiles as profile_records
 from argos.server import runtime
 from argos.server.hub import Hub
 from argos.server.settings import Settings
+from argos.server.targets import star_from_pending
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +168,71 @@ class ObservationTargetBody(_Body):
     object_type: str = Field(default="", max_length=32)
     source: str = Field(default="", max_length=64)
     programme: Literal["variable", "exoplanet", "other"] | None = None
+
+
+# -- wave 4 (Field identification) ---------------------------------------------
+
+
+class FieldSolveBody(_Body):
+    """``POST /api/field/solve``: no option today (strict: unknown fields refused)."""
+
+
+class FieldAutoBody(_Body):
+    enabled: bool
+
+
+class SelectBody(_Body):
+    x: float = Field(ge=-1e6, le=1e6)
+    y: float = Field(ge=-1e6, le=1e6)
+    seq: int | None = Field(default=None, ge=0)
+    tol_px: float | None = Field(default=None, gt=0.0, le=2000.0)
+
+
+class PendingStarBody(_Body):
+    ra_deg: float | None = Field(default=None, ge=-360.0, le=720.0)
+    ra_hours: float | None = Field(default=None, ge=0.0, le=24.0)
+    dec_deg: float = Field(ge=-90.0, le=90.0)
+    auid: str | None = Field(default=None, max_length=32)
+    name: str | None = Field(default=None, max_length=128)
+    source: str = Field(default="manual", min_length=1, max_length=64)
+    mags: dict[Annotated[str, Field(min_length=1, max_length=16)], float] = Field(
+        default_factory=dict, max_length=16
+    )
+    chart_id: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def _needs_ra(self) -> "PendingStarBody":
+        if self.ra_deg is None and self.ra_hours is None:
+            raise ValueError("the star needs ra_deg or ra_hours")
+        return self
+
+
+class TargetRoleBody(_Body):
+    role: Literal["target", "comparison", "check"]
+    selection: int | None = Field(default=None, ge=0)
+    star: PendingStarBody | None = None
+    variable_index: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _exactly_one(self) -> "TargetRoleBody":
+        given = [v for v in (self.selection, self.star, self.variable_index) if v is not None]
+        if len(given) != 1:
+            raise ValueError("give exactly one of selection, star, variable_index")
+        return self
+
+
+class CenterTargetBody(_Body):
+    ra_hours: float = Field(ge=0.0, le=24.0)
+    dec_deg: float = Field(ge=-90.0, le=90.0)
+    name: str | None = Field(default=None, max_length=68)
+
+
+class CenterBody(_Body):
+    target: CenterTargetBody | None = None
+
+
+class SyncBody(_Body):
+    source: Literal["solution"]
 
 
 class OpenFitsBody(_Body):
@@ -467,6 +534,30 @@ def app_info(settings: Settings, hub: Hub) -> dict[str, Any]:
         "project_url": PROJECT_URL,
         "docs_url": DOCS_URL,
     }
+
+
+def _finite_only(value: Any) -> Any:
+    """A copy with every NaN or infinity replaced by ``None``."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: _finite_only(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite_only(item) for item in value]
+    return value
+
+
+def wire_json(message: Any) -> str:
+    """One ``/ws/events`` frame: strict JSON, as REST answers.
+
+    ``JSON.parse`` rejects ``NaN``; one bad float must never make the browser
+    drop a snapshot, so non-finite numbers go out as ``null`` (FastAPI's REST
+    encoding does the same).
+    """
+    try:
+        return json.dumps(message, separators=(",", ":"), allow_nan=False)
+    except ValueError:
+        return json.dumps(_finite_only(message), separators=(",", ":"), allow_nan=False)
 
 
 def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
@@ -867,6 +958,79 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
             ra_hours, dec_deg, network=network, radius_arcsec=radius_arcsec
         )
 
+    # -- wave 4: field identification, layers, selection, targets (A32-A33, A43-A53)
+    @api.get("/field")
+    def field_state() -> dict[str, Any]:
+        return hub.field.record()
+
+    @api.post("/field/solve", status_code=202)
+    def field_solve(body: FieldSolveBody | None = None) -> dict[str, Any]:
+        return hub.field.solve()
+
+    @api.delete("/field/solve")
+    def field_solve_cancel() -> dict[str, Any]:
+        return hub.field.cancel_solve()
+
+    @api.put("/field/auto")
+    def field_auto(body: FieldAutoBody) -> dict[str, Any]:
+        return hub.field.set_auto(body.enabled)
+
+    @api.get("/field/catalog")
+    def field_catalog() -> dict[str, Any]:
+        return hub.field.catalog_record()
+
+    @api.post("/field/catalog/refetch", status_code=202)
+    def field_catalog_refetch() -> dict[str, Any]:
+        return hub.field.refetch()
+
+    @api.get("/field/layers")
+    def field_layers() -> dict[str, Any]:
+        return hub.field.layers_record()
+
+    @api.get("/field/transform")
+    def field_transform() -> dict[str, Any]:
+        return hub.field.transform_record()
+
+    @api.get("/field/select")
+    def field_selection() -> dict[str, Any]:
+        return hub.field.selection_record()
+
+    @api.post("/field/select")
+    def field_select(body: SelectBody) -> dict[str, Any]:
+        return hub.field.select(body.x, body.y, seq=body.seq, tol_px=body.tol_px)
+
+    @api.delete("/field/select")
+    def field_select_clear() -> dict[str, Any]:
+        return hub.field.clear_selection()
+
+    @api.get("/targets")
+    def targets_get() -> dict[str, Any]:
+        return hub.targets.record()
+
+    @api.post("/targets")
+    def targets_post(body: TargetRoleBody) -> dict[str, Any]:
+        if body.selection is not None:
+            pending = hub.field.pending_for(body.selection)
+        elif body.variable_index is not None:
+            pending = hub.field.variable_pending(body.variable_index)
+        else:
+            assert body.star is not None
+            pending = body.star.model_dump()
+        return hub.targets.assign(star_from_pending(pending, body.role))
+
+    @api.delete("/targets/{key}")
+    def targets_delete(key: str = Path(min_length=1, max_length=200)) -> dict[str, Any]:
+        return hub.targets.remove(key)
+
+    @api.post("/mount/center")
+    def mount_center(body: CenterBody | None = None) -> dict[str, Any]:
+        target = body.target.model_dump() if body is not None and body.target else None
+        return hub.mount_center(target)
+
+    @api.post("/mount/sync")
+    def mount_sync(body: SyncBody) -> dict[str, Any]:
+        return hub.mount_sync()
+
     @app.websocket("/ws/events")
     async def ws_events(websocket: WebSocket) -> None:
         if not await _admit(websocket, auth, hosts):
@@ -878,13 +1042,16 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
         # The status first (contract), then the other snapshots and the recent
         # log lines, so a page opened mid-session still shows what happened.
         sub = hub.bus.subscribe_events(
-            hub.status_event(), history=hub.log_history(), snapshots=hub.initial_snapshots()
+            hub.status_event(),
+            history=hub.log_history(),
+            snapshots=hub.initial_snapshots(),
+            after_history=hub.field_snapshots(),
         )
 
         async def send_next() -> bool:
             batch = await sub.next_batch()
             for message in batch:
-                await websocket.send_text(json.dumps(message, separators=(",", ":")))
+                await websocket.send_text(wire_json(message))
             return bool(batch)
 
         async def on_text(text: str) -> None:
