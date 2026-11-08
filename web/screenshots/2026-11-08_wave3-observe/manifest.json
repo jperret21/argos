@@ -1,0 +1,507 @@
+{
+ "title": "Wave 3: Observe, acquisition (after the reviews)",
+ "date": "2026-11-08",
+ "summary": "Wave 3 of web/spec/README.md section 7 after its design, technical and science reviews were applied: Observe in the Framing and Focus task modes (D1) against the simulator. Take shot writes exactly the FITS metadata of the fixed Qt engine (80 of 80 header checks on frames saved through the UI), refuses a Light behind the Dark slot and never saves a frame exposed across a wheel move or an offset change; autofocus runs, cancels (said 'Returned' only once read back) and halts; the jog stops on key-up, blur and socket loss and keeps working after its pad is reopened. Visible fixes of the review round: the conditions plots break at intervals without frames and name them, the exposure check never blinks, the V-curve keeps its evidence once decided, one home per value in Focus mode, a stable toolbar, numbers in Mono, the jog readout in the mount's frame, less brass (jog 9 368 accent px, was 17 629). Ten scenes at 1440 x 900 in the three themes and 1280 x 800 Observatory; the Night Red originals pass the audit.",
+ "shots": [
+  {
+   "file": "observatory-1440x900-framing-live.png",
+   "caption": "Observe in Framing mode with live view (simulator, M 13). Toolbar: equipment, the task modes (Field and Run unavailable), Open FITS, the Take shot split button whose face reserves the width of its widest value ('Light · 1.0 s'), Live with its frame ring, Stop, Autofocus, the zoom % kept visible. Framing band: histogram with brass black and white levels and the beyond-range count in its header row, level fields as the levels' one home (the handles carry only B, M, W), the share of pixels shown black and white, and the exposure check: the brightest clipped stars as one line, the unclipped peaks as true-length bars to 65 535 with linearity and full-well marks, a 'this frame' stamp. Camera card without a progress row (Sensor °C, Format); Mount card with Tracking as a neutral toggle and Slew secondary (the fields hold the current target). (observatory, 1440x900.)",
+   "tags": [
+    "observe",
+    "framing",
+    "live",
+    "levels",
+    "exposure-check",
+    "toolbar",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-framing-live.png",
+   "caption": "Observe in Framing mode with live view (simulator, M 13). Toolbar: equipment, the task modes (Field and Run unavailable), Open FITS, the Take shot split button whose face reserves the width of its widest value ('Light · 1.0 s'), Live with its frame ring, Stop, Autofocus, the zoom % kept visible. Framing band: histogram with brass black and white levels and the beyond-range count in its header row, level fields as the levels' one home (the handles carry only B, M, W), the share of pixels shown black and white, and the exposure check: the brightest clipped stars as one line, the unclipped peaks as true-length bars to 65 535 with linearity and full-well marks, a 'this frame' stamp. Camera card without a progress row (Sensor °C, Format); Mount card with Tracking as a neutral toggle and Slew secondary (the fields hold the current target). (charcoal, 1440x900.)",
+   "tags": [
+    "observe",
+    "framing",
+    "live",
+    "levels",
+    "exposure-check",
+    "toolbar",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-framing-live.png",
+   "caption": "Observe in Framing mode with live view (simulator, M 13). Toolbar: equipment, the task modes (Field and Run unavailable), Open FITS, the Take shot split button whose face reserves the width of its widest value ('Light · 1.0 s'), Live with its frame ring, Stop, Autofocus, the zoom % kept visible. Framing band: histogram with brass black and white levels and the beyond-range count in its header row, level fields as the levels' one home (the handles carry only B, M, W), the share of pixels shown black and white, and the exposure check: the brightest clipped stars as one line, the unclipped peaks as true-length bars to 65 535 with linearity and full-well marks, a 'this frame' stamp. Camera card without a progress row (Sensor °C, Format); Mount card with Tracking as a neutral toggle and Slew secondary (the fields hold the current target). (night-red, 1440x900.)",
+   "tags": [
+    "observe",
+    "framing",
+    "live",
+    "levels",
+    "exposure-check",
+    "toolbar",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-framing-live.png",
+   "caption": "Observe in Framing mode with live view (simulator, M 13). Toolbar: equipment, the task modes (Field and Run unavailable), Open FITS, the Take shot split button whose face reserves the width of its widest value ('Light · 1.0 s'), Live with its frame ring, Stop, Autofocus, the zoom % kept visible. Framing band: histogram with brass black and white levels and the beyond-range count in its header row, level fields as the levels' one home (the handles carry only B, M, W), the share of pixels shown black and white, and the exposure check: the brightest clipped stars as one line, the unclipped peaks as true-length bars to 65 535 with linearity and full-well marks, a 'this frame' stamp. Camera card without a progress row (Sensor °C, Format); Mount card with Tracking as a neutral toggle and Slew secondary (the fields hold the current target). (observatory, 1280x800.)",
+   "tags": [
+    "observe",
+    "framing",
+    "live",
+    "levels",
+    "exposure-check",
+    "toolbar",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-goto-suggestions.png",
+   "caption": "GoTo by catalogue name: typing 'M 1' in the Mount card's Object field lists offline names in natural order (M 1, M 10, M 11 … M 14, never M 100 before M 13), the second row highlighted from the keyboard. Live view keeps running behind. (observatory, 1440x900.)",
+   "tags": [
+    "observe",
+    "mount",
+    "goto",
+    "catalogue",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-goto-suggestions.png",
+   "caption": "GoTo by catalogue name: typing 'M 1' in the Mount card's Object field lists offline names in natural order (M 1, M 10, M 11 … M 14, never M 100 before M 13), the second row highlighted from the keyboard. Live view keeps running behind. (charcoal, 1440x900.)",
+   "tags": [
+    "observe",
+    "mount",
+    "goto",
+    "catalogue",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-goto-suggestions.png",
+   "caption": "GoTo by catalogue name: typing 'M 1' in the Mount card's Object field lists offline names in natural order (M 1, M 10, M 11 … M 14, never M 100 before M 13), the second row highlighted from the keyboard. Live view keeps running behind. (night-red, 1440x900.)",
+   "tags": [
+    "observe",
+    "mount",
+    "goto",
+    "catalogue",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-goto-suggestions.png",
+   "caption": "GoTo by catalogue name: typing 'M 1' in the Mount card's Object field lists offline names in natural order (M 1, M 10, M 11 … M 14, never M 100 before M 13), the second row highlighted from the keyboard. Live view keeps running behind. (observatory, 1280x800.)",
+   "tags": [
+    "observe",
+    "mount",
+    "goto",
+    "catalogue",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-wheel-moving.png",
+   "caption": "The filter wheel turning to LP, asked from the Camera card: the requested slot spins inside the Filter control (no line is inserted, so the rail does not move) and NEXT FRAME reads 'filter LP (turning)'. (observatory, 1440x900.)",
+   "tags": [
+    "observe",
+    "camera",
+    "filter-wheel",
+    "S3",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-wheel-moving.png",
+   "caption": "The filter wheel turning to LP, asked from the Camera card: the requested slot spins inside the Filter control (no line is inserted, so the rail does not move) and NEXT FRAME reads 'filter LP (turning)'. (charcoal, 1440x900.)",
+   "tags": [
+    "observe",
+    "camera",
+    "filter-wheel",
+    "S3",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-wheel-moving.png",
+   "caption": "The filter wheel turning to LP, asked from the Camera card: the requested slot spins inside the Filter control (no line is inserted, so the rail does not move) and NEXT FRAME reads 'filter LP (turning)'. (night-red, 1440x900.)",
+   "tags": [
+    "observe",
+    "camera",
+    "filter-wheel",
+    "S3",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-wheel-moving.png",
+   "caption": "The filter wheel turning to LP, asked from the Camera card: the requested slot spins inside the Filter control (no line is inserted, so the rail does not move) and NEXT FRAME reads 'filter LP (turning)'. (observatory, 1280x800.)",
+   "tags": [
+    "observe",
+    "camera",
+    "filter-wheel",
+    "S3",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-dark-refused.png",
+   "caption": "S1, the Seestar has no shutter: with Dark chosen and the wheel turning to LP, Take shot is unavailable; the Camera card says why before the press and Enter on the button explains it in the tooltip ('the filter wheel is turning to LP: a Dark frame needs it settled on Dark first'). The server refuses it too (409). The HUD marks the frame on screen as 'Last frame'. (observatory, 1440x900.)",
+   "tags": [
+    "observe",
+    "camera",
+    "dark",
+    "S1",
+    "refusal",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-dark-refused.png",
+   "caption": "S1, the Seestar has no shutter: with Dark chosen and the wheel turning to LP, Take shot is unavailable; the Camera card says why before the press and Enter on the button explains it in the tooltip ('the filter wheel is turning to LP: a Dark frame needs it settled on Dark first'). The server refuses it too (409). The HUD marks the frame on screen as 'Last frame'. (charcoal, 1440x900.)",
+   "tags": [
+    "observe",
+    "camera",
+    "dark",
+    "S1",
+    "refusal",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-dark-refused.png",
+   "caption": "S1, the Seestar has no shutter: with Dark chosen and the wheel turning to LP, Take shot is unavailable; the Camera card says why before the press and Enter on the button explains it in the tooltip ('the filter wheel is turning to LP: a Dark frame needs it settled on Dark first'). The server refuses it too (409). The HUD marks the frame on screen as 'Last frame'. (night-red, 1440x900.)",
+   "tags": [
+    "observe",
+    "camera",
+    "dark",
+    "S1",
+    "refusal",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-dark-refused.png",
+   "caption": "S1, the Seestar has no shutter: with Dark chosen and the wheel turning to LP, Take shot is unavailable; the Camera card says why before the press and Enter on the button explains it in the tooltip ('the filter wheel is turning to LP: a Dark frame needs it settled on Dark first'). The server refuses it too (409). The HUD marks the frame on screen as 'Last frame'. (observatory, 1280x800.)",
+   "tags": [
+    "observe",
+    "camera",
+    "dark",
+    "S1",
+    "refusal",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-park-hold.png",
+   "caption": "Park by hold (owner decision D4): the 700 ms hold in progress on the Park button with its ring; a tap only teaches the hold, Enter opens the inline confirmation. The capture cancels the hold before it completes. (observatory, 1440x900.)",
+   "tags": [
+    "observe",
+    "mount",
+    "park",
+    "D4",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-park-hold.png",
+   "caption": "Park by hold (owner decision D4): the 700 ms hold in progress on the Park button with its ring; a tap only teaches the hold, Enter opens the inline confirmation. The capture cancels the hold before it completes. (charcoal, 1440x900.)",
+   "tags": [
+    "observe",
+    "mount",
+    "park",
+    "D4",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-park-hold.png",
+   "caption": "Park by hold (owner decision D4): the 700 ms hold in progress on the Park button with its ring; a tap only teaches the hold, Enter opens the inline confirmation. The capture cancels the hold before it completes. (night-red, 1440x900.)",
+   "tags": [
+    "observe",
+    "mount",
+    "park",
+    "D4",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-park-hold.png",
+   "caption": "Park by hold (owner decision D4): the 700 ms hold in progress on the Park button with its ring; a tap only teaches the hold, Enter opens the inline confirmation. The capture cancels the hold before it completes. (observatory, 1280x800.)",
+   "tags": [
+    "observe",
+    "mount",
+    "park",
+    "D4",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-jog-active.png",
+   "caption": "Jog with the server dead-man: J armed the arrow keys (brass pad edge), East held (brass key), the dead-man meter renewed every 250 ms. On this equatorial mount the offset readout follows the key words, ΔRA as time (+6m52s) and ΔDec in arcminutes, and the scope draws east to the right with a scale that grows (±2°, ±10°, ±45°). The Mount card says '1.38° away' in words; Slew stays secondary during the jog. (observatory, 1440x900.)",
+   "tags": [
+    "observe",
+    "mount",
+    "jog",
+    "H3",
+    "dead-man",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-jog-active.png",
+   "caption": "Jog with the server dead-man: J armed the arrow keys (brass pad edge), East held (brass key), the dead-man meter renewed every 250 ms. On this equatorial mount the offset readout follows the key words, ΔRA as time (+6m52s) and ΔDec in arcminutes, and the scope draws east to the right with a scale that grows (±2°, ±10°, ±45°). The Mount card says '1.38° away' in words; Slew stays secondary during the jog. (charcoal, 1440x900.)",
+   "tags": [
+    "observe",
+    "mount",
+    "jog",
+    "H3",
+    "dead-man",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-jog-active.png",
+   "caption": "Jog with the server dead-man: J armed the arrow keys (brass pad edge), East held (brass key), the dead-man meter renewed every 250 ms. On this equatorial mount the offset readout follows the key words, ΔRA as time (+6m52s) and ΔDec in arcminutes, and the scope draws east to the right with a scale that grows (±2°, ±10°, ±45°). The Mount card says '1.38° away' in words; Slew stays secondary during the jog. (night-red, 1440x900.)",
+   "tags": [
+    "observe",
+    "mount",
+    "jog",
+    "H3",
+    "dead-man",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-jog-active.png",
+   "caption": "Jog with the server dead-man: J armed the arrow keys (brass pad edge), East held (brass key), the dead-man meter renewed every 250 ms. On this equatorial mount the offset readout follows the key words, ΔRA as time (+6m52s) and ΔDec in arcminutes, and the scope draws east to the right with a scale that grows (±2°, ±10°, ±45°). The Mount card says '1.38° away' in words; Slew stays secondary during the jog. (observatory, 1280x800.)",
+   "tags": [
+    "observe",
+    "mount",
+    "jog",
+    "H3",
+    "dead-man",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-af-progress.png",
+   "caption": "Autofocus running in Focus mode: the toolbar's Stop AF with the sweep's ring (plain Stop unavailable while autofocus owns the camera), the band titled 'V-curve · this autofocus' with the coarse samples and, before the minimum is bracketed, 'no hyperbola: the lowest HFD is at an edge of the sweep'; HFD now and STEP 6 / 14 in the band only; the Focuser card says in words what the focuser does; the status bar keeps 'AF 6/14'; the Camera card has one ownership line. The HFD trend over the session breaks its lines at every interval without frames (hatched, named when there is room). (observatory, 1440x900.)",
+   "tags": [
+    "observe",
+    "focus",
+    "autofocus",
+    "v-curve",
+    "S22",
+    "S23",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-af-progress.png",
+   "caption": "Autofocus running in Focus mode: the toolbar's Stop AF with the sweep's ring (plain Stop unavailable while autofocus owns the camera), the band titled 'V-curve · this autofocus' with the coarse samples and, before the minimum is bracketed, 'no hyperbola: the lowest HFD is at an edge of the sweep'; HFD now and STEP 6 / 14 in the band only; the Focuser card says in words what the focuser does; the status bar keeps 'AF 6/14'; the Camera card has one ownership line. The HFD trend over the session breaks its lines at every interval without frames (hatched, named when there is room). (charcoal, 1440x900.)",
+   "tags": [
+    "observe",
+    "focus",
+    "autofocus",
+    "v-curve",
+    "S22",
+    "S23",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-af-progress.png",
+   "caption": "Autofocus running in Focus mode: the toolbar's Stop AF with the sweep's ring (plain Stop unavailable while autofocus owns the camera), the band titled 'V-curve · this autofocus' with the coarse samples and, before the minimum is bracketed, 'no hyperbola: the lowest HFD is at an edge of the sweep'; HFD now and STEP 6 / 14 in the band only; the Focuser card says in words what the focuser does; the status bar keeps 'AF 6/14'; the Camera card has one ownership line. The HFD trend over the session breaks its lines at every interval without frames (hatched, named when there is room). (night-red, 1440x900.)",
+   "tags": [
+    "observe",
+    "focus",
+    "autofocus",
+    "v-curve",
+    "S22",
+    "S23",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-af-progress.png",
+   "caption": "Autofocus running in Focus mode: the toolbar's Stop AF with the sweep's ring (plain Stop unavailable while autofocus owns the camera), the band titled 'V-curve · this autofocus' with the coarse samples and, before the minimum is bracketed, 'no hyperbola: the lowest HFD is at an edge of the sweep'; HFD now and STEP 6 / 14 in the band only; the Focuser card says in words what the focuser does; the status bar keeps 'AF 6/14'; the Camera card has one ownership line. The HFD trend over the session breaks its lines at every interval without frames (hatched, named when there is room). (observatory, 1280x800.)",
+   "tags": [
+    "observe",
+    "focus",
+    "autofocus",
+    "v-curve",
+    "S22",
+    "S23",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-af-done.png",
+   "caption": "Autofocus done: 'V-curve · last autofocus · HH:MM UTC', the decision in brass ('best'), the display hyperbola kept with its ±1σ envelope (over every sample when the worker's few fine points give none, said in the legend: 'all samples'), the legend listing only what is drawn; HFD now, Best · last AF and Verified HFD in the band; the Focuser readouts with their units inline ('5 333 steps'); the HUD's AF chip without its dot once the sweep has ended. (observatory, 1440x900.)",
+   "tags": [
+    "observe",
+    "focus",
+    "autofocus",
+    "v-curve",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-af-done.png",
+   "caption": "Autofocus done: 'V-curve · last autofocus · HH:MM UTC', the decision in brass ('best'), the display hyperbola kept with its ±1σ envelope (over every sample when the worker's few fine points give none, said in the legend: 'all samples'), the legend listing only what is drawn; HFD now, Best · last AF and Verified HFD in the band; the Focuser readouts with their units inline ('5 333 steps'); the HUD's AF chip without its dot once the sweep has ended. (charcoal, 1440x900.)",
+   "tags": [
+    "observe",
+    "focus",
+    "autofocus",
+    "v-curve",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-af-done.png",
+   "caption": "Autofocus done: 'V-curve · last autofocus · HH:MM UTC', the decision in brass ('best'), the display hyperbola kept with its ±1σ envelope (over every sample when the worker's few fine points give none, said in the legend: 'all samples'), the legend listing only what is drawn; HFD now, Best · last AF and Verified HFD in the band; the Focuser readouts with their units inline ('5 333 steps'); the HUD's AF chip without its dot once the sweep has ended. (night-red, 1440x900.)",
+   "tags": [
+    "observe",
+    "focus",
+    "autofocus",
+    "v-curve",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-af-done.png",
+   "caption": "Autofocus done: 'V-curve · last autofocus · HH:MM UTC', the decision in brass ('best'), the display hyperbola kept with its ±1σ envelope (over every sample when the worker's few fine points give none, said in the legend: 'all samples'), the legend listing only what is drawn; HFD now, Best · last AF and Verified HFD in the band; the Focuser readouts with their units inline ('5 333 steps'); the HUD's AF chip without its dot once the sweep has ended. (observatory, 1280x800.)",
+   "tags": [
+    "observe",
+    "focus",
+    "autofocus",
+    "v-curve",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-conditions.png",
+   "caption": "Conditions drawer tab (D) in Focus mode with live view: the latest values with sparklines, and HFD / FWHM, stars and sky on one UTC axis to now. Every interval without a frame breaks the lines and is a neutral hatched period named by its cause ('autofocus 14:49–14:49', else 'no frame'); labels never overlap. The Focus band falls to its one-row summary above the drawer. (observatory, 1440x900.)",
+   "tags": [
+    "observe",
+    "conditions",
+    "timeline",
+    "D6",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-conditions.png",
+   "caption": "Conditions drawer tab (D) in Focus mode with live view: the latest values with sparklines, and HFD / FWHM, stars and sky on one UTC axis to now. Every interval without a frame breaks the lines and is a neutral hatched period named by its cause ('autofocus 14:49–14:49', else 'no frame'); labels never overlap. The Focus band falls to its one-row summary above the drawer. (charcoal, 1440x900.)",
+   "tags": [
+    "observe",
+    "conditions",
+    "timeline",
+    "D6",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-conditions.png",
+   "caption": "Conditions drawer tab (D) in Focus mode with live view: the latest values with sparklines, and HFD / FWHM, stars and sky on one UTC axis to now. Every interval without a frame breaks the lines and is a neutral hatched period named by its cause ('autofocus 14:49–14:49', else 'no frame'); labels never overlap. The Focus band falls to its one-row summary above the drawer. (night-red, 1440x900.)",
+   "tags": [
+    "observe",
+    "conditions",
+    "timeline",
+    "D6",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-conditions.png",
+   "caption": "Conditions drawer tab (D) in Focus mode with live view: the latest values with sparklines, and HFD / FWHM, stars and sky on one UTC axis to now. Every interval without a frame breaks the lines and is a neutral hatched period named by its cause ('autofocus 14:49–14:49', else 'no frame'); labels never overlap. The Focus band falls to its one-row summary above the drawer. (observatory, 1280x800.)",
+   "tags": [
+    "observe",
+    "conditions",
+    "timeline",
+    "D6",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-open-fits.png",
+   "caption": "Open FITS image (⌘O): the in-app picker on '~ / fits' (root drawn once, long paths middle-truncated); a calibrated float frame is refused in the server's words and the dialog stays open for another choice. (observatory, 1440x900.)",
+   "tags": [
+    "observe",
+    "open-fits",
+    "S4",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-open-fits.png",
+   "caption": "Open FITS image (⌘O): the in-app picker on '~ / fits' (root drawn once, long paths middle-truncated); a calibrated float frame is refused in the server's words and the dialog stays open for another choice. (charcoal, 1440x900.)",
+   "tags": [
+    "observe",
+    "open-fits",
+    "S4",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-open-fits.png",
+   "caption": "Open FITS image (⌘O): the in-app picker on '~ / fits' (root drawn once, long paths middle-truncated); a calibrated float frame is refused in the server's words and the dialog stays open for another choice. (night-red, 1440x900.)",
+   "tags": [
+    "observe",
+    "open-fits",
+    "S4",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-open-fits.png",
+   "caption": "Open FITS image (⌘O): the in-app picker on '~ / fits' (root drawn once, long paths middle-truncated); a calibrated float frame is refused in the server's words and the dialog stays open for another choice. (observatory, 1280x800.)",
+   "tags": [
+    "observe",
+    "open-fits",
+    "S4",
+    "observatory",
+    "1280x800"
+   ]
+  }
+ ]
+}
