@@ -1227,3 +1227,330 @@ code.
   Qt hit order (a VSX variable before the VSP star at the same place; the card now names
   both and the table shows the role, the stored identity stays the VSX one).
 
+## Wave 5: Live photometry (2026-11-08)
+
+Scope (README section 7, row W5): API rows A50 and A54-A58 (server, `argos/server/protocol.md`
+"API 2 routes, wave 5"); the components `LightCurvePlot` (with `charts/uplot/*`),
+`TargetSetList` and the Ensemble table; the Photometry card, the drawer tabs Light curve /
+Variables / Ensemble and the Field band live status; mapping rows M8 (live parts), M78-M79,
+M95 (live tabs), M96-M99; the W5 rows of `web/lab/PROPOSAL.md` section 6 and the BJD_TDB and
+leave-one-out items of its section 7; the wave 4 leftovers. Built by four roles (server, light
+curve, photometry front end, integration); the owner's decisions of the wave: apertures placed
+by core's `ApertureTracker` as Qt (the web tracker measured, not adopted), VSX-variable
+comparisons stay eligible and flagged "variable?", no per-star Gaia query.
+Screenshots: `web/screenshots/2026-11-08_wave5-photometry/` (12 scenes at 1 440 x 900 in the
+three themes and at 1 280 x 800 Observatory, plus the palette, the shortcuts sheet and the
+context menu: 52 shots at device scale 2, with a manifest).
+
+**Status: integrated, exit criterion met through the UI; the design, technical and science
+reviews are still to run; the owner's commit pending.** Qt defects found while porting are
+fixed in the release worktree (`notes/release_0_5_0.md` S31-S34, uncommitted there).
+
+Verification (2026-11-08, server on port 8753 and vite on 5153 with a temporary
+`--config-dir`, `--log-dir`, sessions folder, `HOME` and `TMPDIR`, no simulator (as the Qt
+reference, no mount), ASTAP as installed; the catalogue cache copied read-only into the
+temporary HOME; copies of real raw frames hard-linked under the temporary HOME;
+`~/.argos/config.json` untouched, nothing written to `~/Argos/sessions`; `argos/ui`,
+`argos/workers`, `argos/core` of this tree unchanged):
+
+- Four live replays through the UI against the fixed Qt engine: **1 748 values, 0
+  differences, compared exactly** (section 2). The first replay was run again after the last
+  code change, with the check star's own BJD_TDB added to the copied table: 360 values, 0
+  differences. No console error, no request off the machine.
+- `.venv/bin/python -m pytest -q` (temporary HOME and TMPDIR): **1 243 passed, 72 skipped**
+  (1 228 / 71 before the wave); ruff and black clean on `argos/server` and `tests/server`.
+  Release worktree (`.worktrees/release-0.5.0`): **627 passed, 45 skipped**.
+- `npm run check` 0 errors, 0 warnings (647 files, `src/lab` included); `npm test` **815
+  passed** (69 files); `npm run build` OK (JS 1 007 kB, 332 kB gzip; was 891 / 292);
+  `src/lib` imports nothing from `src/lab`.
+- Screenshots: 52, all read (Observatory one by one, the other variants as contact sheets).
+  `npm run audit:night-red`: the 13 Night Red originals pass (rule A 0 px, rule B 0 px).
+  `npm run audit:brass` on the Observatory 1 440 shots (device scale 2, so about 4 x the
+  DPR 1 counts): 13 700-16 300 accent-family px per scene, most of it the "Connect all"
+  primary button of the no-equipment notice (wave 3); 37 800 in 04-zoom-kept, where the
+  focused plot shows its focus ring.
+
+### 1. Mapping rows closed by the wave
+
+| Row | Qt element | Web | Status |
+|---|---|---|---|
+| M8 | Menu Photometry: Photometry setup…, Live curves & diagnostics…, Re-run subs… | Photometry card (set, verdict, geometry, Recommend…, the three drawer tabs) + Settings › Photometry (W2); drawer Light curve; palette entries "Show the light curve / the variable stars of the field / the comparison ensemble", "Complete the comparison ensemble", "Replace the VSP comparisons" | Live parts done; Re-run subs is Review R1 (D2, W7) |
+| M78 | `VariableTable` | Drawer › Variables (D7): Qt's filter and "n of N stars" count, virtual table, role as its shape, Set as target with Undo (also Enter / double-click); the filter filters the variable markers on the image | Done |
+| M79 | `TargetTable` | `TargetSetList` in the Photometry card: role shapes, AUID, newest value per row, Remove with Undo (asked first during a run), rows linked to the image | Done for Observe; the Plan Target set card is W6 |
+| M95 | `PhotometryWindow` | Dissolved: Variables, Light curve, Ensemble drawer tabs; Targets → `TargetSetList`; Metrics → Conditions (W3); Aperture · references → Settings › Photometry (W2) | Live tabs done; exports and the R1 banner are W7 |
+| M96 | `LightCurvePanel` | `LightCurvePlot` (one implementation, `charts/lightcurve/*`): facets, U / M toggles, legend keys hide a series, F fits | Done |
+| M97 | `ComparisonEnsembleTable` | Drawer › Ensemble (leave-one-out per comparison, O − C, status, flags in words, the check last) + Photometry card actions; Recommend with the count (A58), Refresh catalogue, Copy TSV | Done; the read-only Review copy is W7 |
+| M98 | `PhotometrySetupPanel` | Settings › Photometry (W2) + the effective geometry, read-only, on the card (aperture and annulus in green px, where the FWHM comes from) | Done |
+| M99 | "Differential photometry" dock | Drawer › Light curve: target + check (D25), the ensemble facet from 300 px | Done |
+
+API rows A50 and A54-A58 are all used by the UI: the snapshot (A54) after each
+(re)connection and after a gap, the point stream (A55) and resets (A56) in `seq` order, the
+leave-one-out report (A57) in the Ensemble tab and the card, the `photometry` status in the
+Field band, the variables (A50) in the Variables tab, the recommendation (A58) in the card,
+the Ensemble tab and the palette.
+
+### 2. Exit criterion and its evidence
+
+**A sequence-free live run shows target and check curves identical to the Qt values (same
+points, same errors, same flags).**
+
+- *Qt reference*: the fixed 0.5.0 engine from the release worktree, driven offscreen with
+  fake devices (`AcquisitionEngine.open_fits_frame`, the frame's ASTAP solution,
+  `measure_photometry_if_idle`, as `tests/workers/test_acquisition_engine.py` does), on the
+  same frames, with the same target-set file (the owner's set with one comparison turned
+  into the check star), the same site (the frames' FITS header) and the same settings.
+- *Web*: the real server and page. Frame 1 through the Open FITS dialog (a typed file path),
+  the next frames opened through the API; each frame identified with **S** in the page, and
+  the next frame only once the Photometry card names the frame's point. At the end, **Copy
+  data (TSV)** from the plot's toolbar: the values the plot holds.
+- *Compared exactly* (float equality, no tolerance), point by point: target magnitude,
+  error (final, with the run's systematic floor), formal error, σ_syst, relative flux and
+  its error, BJD_TDB, airmass, comparisons used, flags; check magnitude, error, check −
+  catalogue V and flags.
+
+| Replay (copies of real frames) | Frames | Check star | Settings | Target / check points | Values | Differences | Flags |
+|---|---|---|---|---|---|---|---|
+| XX Cyg 2026-09-07 | 24 | 000-BCK-396 | as installed | 24 / 24 | 336 | 0 | none |
+| RR Lyr 2026-09-25 | first 40 | 000-BJW-666 | as installed | 40 / 40 | 560 | 0 | none |
+| XX Cyg 2026-08-29 | 22 | 000-BJV-176 | as installed | 22 / 18 | 292 | 0 | 2 suspect check points |
+| RR Lyr 2026-09-25 | first 40 | 000-BJW-666 | linearity limit 30 000 ADU on both sides | 40 / 40 | 560 | 0 | 15 saturated target points |
+
+The 4th replay lowers the linearity limit on both sides (web `hardware.overrides.
+linearity_max_adu`, Qt `camera.linearity_max_adu`) only to exercise the saturated flag on
+real data; the four replays have no other setting changed. Readouts at display precision
+agree too (RR Lyr frame 20 in the tooltip: JD 2461309.34946, BJD 2461309.35173, 7.363 ±
+0.081, check − V −0.026 ± 0.082, airmass 3.467, as Qt rounded). The check star's own
+BJD_TDB (6.4 s after XX Cyg's on 2026-09-07, another direction on the sky) is on screen and
+in the copied table since the last change, and equals Qt's on the 24 frames of the re-run.
+Limits: the RR Lyr replays used 40 of the 80 frames; the RR Lyr site in Settings was wrong
+that night, so both sides used the FITS header site: the airmass is identical on both sides,
+not physically right. The server-side parity (every field of every point, the CSV files and
+the leave-one-out report, 890 points on three sessions) is the server role's report;
+`tests/server/test_photometry.py` keeps an in-suite parity test.
+
+Other flows checked through the UI (scripted, headless Chrome):
+- **Zoom states**: + on the focused plot at frame 12 gives "Zoom kept"; the 12 following
+  frames leave the view range identical (`data-lc-view`, to the millisecond); End gives
+  "Following · 10m 52s", F "Whole run".
+- **Undo of a new target**: on the RR Lyr field with an empty set, Set as target from the
+  filtered Variables tab gave `target RR Lyr (vsx)` and `comparison 000-BCG-653
+  (vsp_auto)`; Undo emptied the set and `targets/RR_Lyr.json` holds 0 stars.
+- **Typed file path** in the Open FITS dialog: the file is selected in its folder and Open
+  opens it (all four replays).
+- **Palette and keys**: "ensemble" lists Show the comparison ensemble and Complete the
+  comparison ensemble (up to 5); the ? sheet has the "Light curve (when it has the focus)"
+  group.
+- From Open FITS to the point on screen, ASTAP included: median 1.3 s, at most 2.5 s per
+  frame.
+
+### 3. PROPOSAL section 6, W5 promotions
+
+| Lab source | In `web/src/lib` | Status |
+|---|---|---|
+| charts, workspace and research light curves, `core/uplot/*` | one `charts/lightcurve/LightCurvePlot.svelte` + `charts/uplot/{axes,markers,zoom}.ts` | Done |
+| Linked facets on one time axis | target, check, ensemble (drawer ≥ 300 px) | Done |
+| Check as check − catalogue V with a trailing 15-point mean ± 1σ (D10) | check facet, its legend and σ15 in the toolbar; the card shows the same σ | Done |
+| Flags by shape | saturated cross, suspect hollow, counted in the legend (real flags, section 2) | Done |
+| Newest point with a static ring | all facets | Done |
+| Zoom states named by a chip, never moved by new data | Whole run / Following / Zoom kept | Done (section 2) |
+| UTC / JD / BJD axis | BJD_TDB from the server; disabled with the reason when a point has none | Done |
+| Copy TSV | full precision, one row per frame, `frame_seq` | Done |
+| Field band live status | the tab row and the one-row summary | Done |
+| The Run band uses the same component | `variant="band"` built and in the gallery | Not wired: Run mode is wave 6 |
+| Section 7: BJD_TDB per frame in the stream | `bjd_tdb` on every point with a site, `null` without (X2) | Done |
+| Section 7: leave-one-out status per comparison | A57 entries, Ensemble tab, card verdict | Done |
+
+### 4. Fixed during the integration (found in the running UI)
+
+- **The plot had no catalogue magnitudes**: the check was drawn as measured ("no catalogue
+  magnitude") and the ensemble facet was empty ("used 0 of 7"). The feed effect read the
+  photometry store's curves, so it re-ran on every point and reloaded the whole plot store
+  (O(N²), Qt's S19 again) from curves the stream had created without magnitudes, erasing
+  the target set's offsets. The plot now subscribes once and a reload keeps a known offset.
+  Tests in `lightcurve.test.ts`.
+- **A plot mounted after points arrived froze**: it was loaded with the snapshot's old `seq`,
+  so every next point was a gap; and a reset reached it without its `seq`, so the points
+  after a reset were dropped until the next snapshot. The feed now passes the position held
+  and the reset's `seq` / `revision`; a reset clears the curves even after a gap. Test in
+  `photometry.test.ts`.
+- **The two wire types drifted** (`t` of a point); the `as unknown as` casts between the
+  photometry store and the plot store are gone, so svelte-check now covers that contract.
+- **The check star's BJD was the target's**: the tooltip and the copied table gave one BJD
+  per frame, the target's (6.4 s off for the XX Cyg check). The tooltip now adds the check's
+  own BJD when it differs at 5 decimals, and the table a last column `check_bjd_tdb`.
+- **A typed file path in the file picker** listed its folder without choosing the file (the
+  client ignored the server's new `selected`).
+- **The check facet was 35-45 px tall** at the drawer's default height: target 3 : check 2
+  (: ensemble 2), and the last facet gets the time axis' 22 px on top of its share.
+- **Palette and keys**: the live photometry commands (show each tab, Complete, Replace with
+  its reason during a run); the plot's keys registered as local rows of a `chart` scope (the
+  ? sheet lists them; no conflict with the Observe keys). Recommend moved to `ArgosApp`
+  (card, Ensemble tab and palette share it). The plot's time axis, error bars and flux view
+  are remembered per viewer.
+
+### 5. Wave 4 leftovers
+
+| Leftover | Closed by | Checked |
+|---|---|---|
+| `frame_metrics` replayed to a client that connects mid-run | server | the server role's live smoke (a late client receives `photometry`, `comparison_quality`, `frame_metrics`, `targets`, `field`); not re-run in the browser |
+| The file picker refused a typed file path | server (`selected`) and client (section 4) | through the UI, four replays |
+| Undo of a new target left its automatic comparisons | server (`auto_selected`, `?also=`) and client | through the UI (section 2) |
+| The star selection survived a page reload | client (`FieldStore.pageLoaded()`) | by the photometry front-end role in the running app; not re-run by the integration |
+| One Night Red rule-B pixel on a label edge | Night Red label ink 25 % towards `--viewer-tint` | night-red 15-context-menu (labels on, XX Cyg field) passes, rule A 0, rule B 0 |
+
+### 6. Known gaps and issues (before the reviews)
+
+- **Reviews not run**: design, technical and science reviews of the wave are next.
+- **Run mode and the Run band** wait for wave 6, as does the sequence path of the server
+  (measuring every saved sub, the run folder, `photometry_quality.json` in a run, locked
+  geometry): built, not exercised end to end.
+- **Ensemble facet definition** (light-curve role): per frame, mean ± 1σ of the comparisons'
+  leave-one-out magnitude − catalogue magnitude. The mean is close to 0 by construction
+  (1e-15 on the first XX Cyg frame); the spread carries the information. The science review
+  should confirm it or ask the server for the zero point and its rms.
+- **No weight column** in the Ensemble tab (no server field); the leave-one-out effect is
+  shown as O − C.
+- **Field band**: with the drawer open at its default height, a band between 36 and 150 px
+  shows the one-row summary with an empty strip above it (wave 4 band layout).
+- **No-equipment notice** under the cursor readout at 1 280 px and over the image (wave 3).
+- **Catalogue refetch per Open FITS** (server, wave 4 behaviour): Variables and Recommend are
+  unavailable for tens of seconds after each replayed frame.
+- **Owner decisions reported by the server role** (QT DEFECT): CSV overwrite outside a run,
+  e-/ADU from the Camera form's gain, the ApertureTracker over many frames (wave 6).
+- **Bundle** 1 007 kB (332 kB gzip).
+- **Capture note**: in headless Chrome a hover readout reached the screenshot only after two
+  animation frames were forced before the shot (a stale frame of the capture, not of the app).
+- **WebKitGTK** untested; Gaia, SIMBAD and NASA unreachable from this network (Stars 0).
+
+
+### 7. Review round (2026-11-08): what was fixed
+
+Three reviews (design, technical, science) ran on the integrated wave. Every high and medium
+finding was fixed except where noted; most low ones too. Evidence: server 8758 and vite 5158
+with temporary folders, `HOME` and `TMPDIR`; copies of the real XX Cyg (2026-08-29,
+2026-09-07) and RR Lyr (2026-09-25) frames; the Qt fixes in the release worktree with a test
+each that fails before the fix (`notes/release_0_5_0.md` S32 extended, S35-S38).
+
+**Science**
+- **A frame on which the field had moved since the solve was measured on blank sky** (Qt and
+  server: `_build_live_tracker` fell back to every star of the set, unseen; noise centroids
+  passed for anchors): the fallback now takes only stars seen where the solution places them
+  (SNR ≥ 5), an empty tracker is rebuilt on the next frame, and a frame with no anchor gets
+  no point (WARN, status `skipped` / `field_lost`, a `frame_skipped` record). Release S35.
+  The review's replays through the fixed release engine (RR Lyr frames 46-60 and 168-180,
+  each measured through the previous frame's solution): only the two jump frames lose
+  their point, every other magnitude is unchanged; identical to the review's patched run.
+- **Recommend emptied the ensemble when VSP stars existed but none passed the gate** (Qt
+  `reselect_comparison_stars`, server A58 `replace`): chosen on a copy, saved only when a
+  comparison was picked (`added 0`, `removed []`); the WARN no longer says "solve a
+  full-resolution frame first" for a solved field. Release S32 extended.
+- **Sequence frames' `DATE-AVG` included half the download time** (Qt sequence worker; the
+  server has no sequence writer yet): the clock starts just before StartExposure and stops
+  at ImageReady. Release S36.
+- **The ensemble facet showed nothing** (mean of the leave-one-out residuals, 0 by
+  construction): the server now sends each point's `zero_point` and `zp_rms`
+  (`DiffResult`, A54 / A55) and the facet draws the target's zero point ± rms (the night's
+  transparency, up = more light; in the flux view the transmission against the run median).
+- **The card and the plot disagreed on the check's σ with two points**: one rule (no σ
+  under 3 points) in both.
+
+**Technical**
+- **The plot froze after a frame was measured twice** (two solutions on one opened frame):
+  rows at the same time are kept, as Qt keeps both points; the index check counts the
+  points received per curve; a sink that answers `gap` makes the store re-read A54. Copy
+  data (TSV) gives a frame measured twice two rows.
+- **Error bars were wrong for frames measured out of time order, and each point resent its
+  curve's whole error column** (traffic in N²): A55 no longer has `mag_errs`; both client
+  stores recompute every bar as hypot(max(0, formal), sigma_syst) row by row (pyHypot, the
+  Python bits), in any measurement order.
+- **BJD_TDB needed the internet** (core `bjd_tdb` let astropy download IERS tables; offline
+  every BJD was lost and each frame took 2.3 s, 18 s on a hanging network): astropy's
+  bundled tables, never a download, same value to the bit (release S37; the server sets the
+  same before measuring).
+- **The curve CSVs were rewritten in place** (a reader saw a partial file): written beside
+  the file and renamed over it (release S38; the server writes through
+  `write_csv_atomic`, the same bytes).
+- **A54 `star_key`** is `null` once the star left the set; **the status** waits after a
+  change of the set's stars instead of reporting the previous set's measurement.
+
+**Design**
+- **Plot height at the drawer's default 216 px**: facet titles sit in the plot's top margin
+  (no header rows), the caption row is gone (the last tick says UTC, the last facet's title
+  the date), the tool row is 32 px; a facet that would fall under its floor (target 48 px,
+  check 32 px) is left out and the target's title then carries the check's σ and check − V.
+  Measured in the page (the plot area of each facet): at 216 px the target gets 54 px and
+  the check 33 px (27 and 13 before), at 1 280 × 800 the same; at 330 px 81, 47 and 51 px
+  for the target, the check and the ensemble.
+- **Y scales**: ticks on a 1-2-5 step, three or more labelled values from 26 px of data
+  (two below), magnitudes with two decimals at least; the check on a symmetric ±rung scale
+  (±0.05 … ±5 mag) that holds its band and 90 % of the visible points, named in its title,
+  the rest drawn as carets on the edge: a noisy check (σ15 0.62 mag, 11-suspect) now looks
+  noisy.
+- **Clipping**: the y range is padded in pixels; markers and rings are no longer clipped to
+  the plot box (only bars and bands are).
+- **Readout**: the items wrap out of sight whole (never cut inside a number), in priority
+  order (ring glyph for Latest / Selected, target, σ15, check − V, time); the toolbar's
+  overdue words are dropped (the now-line says them).
+- **Card**: values only in the readouts (not in the set rows), the unit in the key, σ to 3
+  decimals, Comparisons "4 / 7" (in the newest zero point / in the set), the verdict count
+  first and wrapping, the live status said once (by the Field band when it is shown).
+- **Words**: one phrase "check − V" (card, facet, tooltip), the ensemble spread written σ,
+  the verdict's word always in the tab row, the badge "Waiting · n of 10 pts", the Ensemble
+  tab's note on its own wrapped line, numbers in Plex Mono in notes, verdicts, the set row,
+  facet titles, the recommend gate, the status line, the Variables Mag column.
+- **Dense runs**: the check's band edges drawn as 1 px lines over the markers.
+- **No-equipment prompt** above the cursor readout (it was under it at 1 280 px).
+- **Low ones**: "n newer ›" after a kept zoom; the zoom chip is a label; Conditions says
+  "Whole run" too; the tooltip opens away from the newest points in live views; key focus is
+  a line under the tools (accent pixels in 04-zoom-kept 21 232 against 32 474 before, 13 894
+  without focus); the Ensemble tab's check row is filled from its curve; one empty-state
+  sentence, "No target" in the band, no verdict without a target, Recommend… dimmed with
+  its reason; Recommend's buttons say their effect ("Complete: +0", "Replace 7 VSP picks
+  with up to 5", Replace in the deliberate style during a run); no single-series legend
+  keys; a divider in the band summary.
+
+**Not done, and why**
+- **Plot tools in the drawer's tab row** and **the Field band's leftover height given to the
+  drawer** (design, high, parts 1 and 2): moving the tools needs the plot's zoom state
+  outside the plot, and giving the band's leftover to the drawer makes the drawer's
+  separator drag dead over that range; both belong with the wave 6 Run band layout.
+- **Error bars off by default in dense views** and **a chevron where a bar leaves the
+  range** (design, medium and low): not done.
+- **"star(s)"** in the Ensemble footer: Qt's count line word for word (tested), kept.
+- **Batch re-run after a pointing jump** (science, Qt): an owner decision, reported, not
+  fixed.
+
+**Checks after the fixes**
+- **Exit criterion again, through the UI**: XX Cyg 2026-09-07, 24 copies replayed through
+  the page (the first frame by the Open FITS dialog with a typed path, every frame
+  identified with S), Copy data (TSV) against the fixed Qt engine's values: 24 target and
+  24 check points, 360 values, 0 differences; a kept zoom unchanged over 12 new frames.
+  The RR Lyr (40 frames, linearity 30 000 ADU) and XX Cyg 2026-08-29 (22 frames) replays
+  give the integration's 15 saturated and 2 suspect points.
+- Whole Python suite (main tree, temporary `HOME` and `TMPDIR`): 1 248 passed, 72 skipped.
+  Release worktree: 632 passed, 45 skipped. ruff and black clean in both.
+- `npm run check` 0 errors 0 warnings; `npm test` 821 passed; `npm run build` OK (JS
+  1 010 kB, 330 kB gzip).
+- Night Red audit: 13 of 13 originals pass both rules.
+
+### 8. Known gaps and issues (before wave 6)
+
+- **Run mode and the Run band** (LightCurvePlot `variant="band"`) wait for wave 6, as does
+  the server's sequence path (one point per saved sub, the run folder,
+  `photometry_quality.json` in a run, locked geometry): built, not exercised end to end.
+- **Drawer and band layout**: the plot tools stay in the plot's own 32 px row, and a Field
+  band between 36 and 150 px keeps its empty strip above the one-row summary (wave 4 band
+  layout); both with the wave 6 Run band.
+- **Qt defects reported, owner decisions**: the batch re-run never recovers after a pointing
+  jump larger than the search radius (blank-sky points, then none, reported as tracked);
+  whether `fits_exposure_mid` should date Argos sequence frames by `DATE-OBS + EXPTIME/2`
+  (their `DATE-AVG` was late by half the download before S36); live CSVs outside a run
+  overwritten from memory; the e-/ADU from the Camera form's gain; the ApertureTracker over
+  many frames of one solution.
+- **Photometry queue**: unbounded; with BJD offline it keeps up (40-50 ms per frame), but a
+  burst of opened frames is measured in order, none dropped.
+- **No weight column** in the Ensemble tab (core's zero point is a plain mean).
+- **Catalogue refetch per Open FITS** (server, wave 4 behaviour): Variables and Recommend
+  are unavailable for tens of seconds after each replayed frame.
+- **Bundle** 1 010 kB (330 kB gzip). **WebKitGTK** untested. Gaia, SIMBAD and NASA
+  unreachable from this network (Stars 0).

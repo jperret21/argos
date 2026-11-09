@@ -91,7 +91,7 @@ export function isMode(v: unknown): v is Mode {
 }
 
 /** The rail cards of this version, in the one order of decision D10 (README 1.3). */
-export const CARD_IDS = ['camera', 'statistics', 'inspector', 'mount', 'focuser'] as const;
+export const CARD_IDS = ['camera', 'statistics', 'inspector', 'photometry', 'mount', 'focuser'] as const;
 export type CardId = (typeof CARD_IDS)[number];
 export type CardState = 'open' | 'folded' | 'hidden';
 export const CARD_STATES: readonly CardState[] = ['open', 'folded', 'hidden'];
@@ -100,12 +100,19 @@ export const CARD_LABELS: Record<CardId, { title: string; icon: string }> = {
   camera: { title: 'Camera', icon: 'camera' },
   statistics: { title: 'Statistics', icon: 'statistics' },
   inspector: { title: 'Inspector', icon: 'inspector' },
+  photometry: { title: 'Photometry', icon: 'photometry' },
   mount: { title: 'Mount', icon: 'mount' },
   focuser: { title: 'Focuser', icon: 'focuser' },
 };
 
-/** Drawer tabs of this version; the Log tab is always last (LogDrawer, 01 2.3.9). */
+/**
+ * Drawer tabs of this version (D8: Light curve, Variables, Ensemble, Conditions); the Log
+ * tab is always last (LogDrawer, 01 2.3.9).
+ */
 export const DRAWER_TABS = [
+  { id: 'light-curve', label: 'Light curve', icon: 'light-curve' },
+  { id: 'variables', label: 'Variables', icon: 'variable-star' },
+  { id: 'ensemble', label: 'Ensemble', icon: 'comparison-quality' },
   { id: 'conditions', label: 'Conditions', icon: 'session-metrics' },
   { id: 'log', label: 'Log', icon: 'log' },
 ] as const;
@@ -136,12 +143,12 @@ const base = {
 } as const;
 
 export const PRESETS: Record<Mode, ModeLayout> = {
-  framing: { ...base, drawerTab: 'log', cards: { camera: 'open', statistics: 'hidden', inspector: 'hidden', mount: 'open', focuser: 'folded' } },
-  focus: { ...base, drawerTab: 'conditions', cards: { camera: 'open', statistics: 'hidden', inspector: 'hidden', mount: 'folded', focuser: 'open' } },
-  // Field: the band holds the candidates, the Inspector the picked star; the Mount card
-  // (Centre target, Sync) stays open.
-  field: { ...base, drawerTab: 'log', cards: { camera: 'folded', statistics: 'hidden', inspector: 'open', mount: 'open', focuser: 'hidden' } },
-  run: { ...base, drawerTab: 'log', cards: { camera: 'folded', statistics: 'hidden', inspector: 'hidden', mount: 'folded', focuser: 'hidden' } },
+  framing: { ...base, drawerTab: 'log', cards: { camera: 'open', statistics: 'hidden', inspector: 'hidden', photometry: 'folded', mount: 'open', focuser: 'folded' } },
+  focus: { ...base, drawerTab: 'conditions', cards: { camera: 'open', statistics: 'hidden', inspector: 'hidden', photometry: 'folded', mount: 'folded', focuser: 'open' } },
+  // Field: the band holds the candidates, the Inspector the picked star, the Photometry card
+  // the set and its live verdict; the Mount card (Centre target, Sync) stays open.
+  field: { ...base, drawerTab: 'log', cards: { camera: 'folded', statistics: 'hidden', inspector: 'open', photometry: 'open', mount: 'open', focuser: 'hidden' } },
+  run: { ...base, drawerTab: 'light-curve', cards: { camera: 'folded', statistics: 'hidden', inspector: 'hidden', photometry: 'open', mount: 'folded', focuser: 'hidden' } },
 };
 
 export function clonePreset(mode: Mode): ModeLayout {

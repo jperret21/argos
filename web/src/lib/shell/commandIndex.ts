@@ -82,6 +82,21 @@ export interface IndexSource {
   darkGuard?(t?: FrameType): string | null;
   // -- Wave 4 (optional, as above): field identification, Centre target, Sync --
   fieldCommands?(): FieldCommands | null;
+  // -- Wave 5 (optional, as above): live photometry --
+  photometryCommands?(): PhotometryCommands | null;
+}
+
+/** What the palette needs from live photometry (W5, A50, A54-A58). */
+export interface PhotometryCommands {
+  /** Why Recommend cannot run (null: it can). */
+  recommendReason: string | null;
+  /** A sequence owns the observation: Replace asks first on the card, not from the palette. */
+  running: boolean;
+  /** The comparison count Complete fills up to (photometry.auto_comparisons). */
+  count: number;
+  /** Open the Observe drawer on one of the live photometry tabs. */
+  openTab(tab: 'light-curve' | 'variables' | 'ensemble'): void;
+  recommend(mode: 'complete' | 'replace'): Promise<unknown>;
 }
 
 /** What the palette needs from the field (W4, A32-A33, A43-A44). */
@@ -370,6 +385,39 @@ export function buildIndex(app: IndexSource, afterMount: AfterMount): Command[] 
     if (field.solving) {
       out.push({ id: 'act.field-cancel', title: 'Cancel the field identification', group: 'Actions', icon: 'stop', keywords: 'astap plate solve stop', hint: 'Observe', disabled: serverDown, run: () => field.cancelSolve() });
     }
+  }
+
+  // -- Live photometry (W5): the drawer tabs and the comparison recommendation (A58) ----------
+  const phot = app.photometryCommands?.() ?? null;
+  if (phot) {
+    const tabs = [
+      { tab: 'light-curve', title: 'Show the light curve', icon: 'light-curve', keywords: 'photometry curve magnitude target check bjd' },
+      { tab: 'variables', title: 'Show the variable stars of the field', icon: 'variable-star', keywords: 'vsx variables target choose photometry' },
+      { tab: 'ensemble', title: 'Show the comparison ensemble', icon: 'comparison-quality', keywords: 'comparisons leave-one-out quality stable photometry' },
+    ] as const;
+    for (const t of tabs) {
+      out.push({ id: `act.phot-${t.tab}`, title: t.title, group: 'Actions', icon: t.icon, keywords: t.keywords, hint: 'Observe drawer', run: () => phot.openTab(t.tab) });
+    }
+    out.push({
+      id: 'act.phot-complete',
+      title: `Complete the comparison ensemble (up to ${phot.count})`,
+      group: 'Actions',
+      icon: 'recommend-comparisons',
+      keywords: 'recommend comparisons vsp add pilot photometry',
+      hint: 'Photometry',
+      disabled: serverDown ?? phot.recommendReason,
+      run: () => phot.recommend('complete'),
+    });
+    out.push({
+      id: 'act.phot-replace',
+      title: 'Replace the VSP comparisons (recommend from pilot)',
+      group: 'Actions',
+      icon: 'recommend-comparisons',
+      keywords: 'recommend comparisons vsp reselect pilot photometry',
+      hint: 'Photometry',
+      disabled: serverDown ?? phot.recommendReason ?? (phot.running ? 'a run is measuring: use Recommend… on the Photometry card, it asks first' : null),
+      run: () => phot.recommend('replace'),
+    });
   }
 
   // -- Actions that work from any section ---------------------------------------------

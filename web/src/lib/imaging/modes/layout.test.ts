@@ -91,7 +91,7 @@ describe('modes and presets', () => {
   });
 
   it('keeps one card order and the D8 panel width; Focus opens the focuser', () => {
-    expect(CARD_IDS).toEqual(['camera', 'statistics', 'inspector', 'mount', 'focuser']);
+    expect(CARD_IDS).toEqual(['camera', 'statistics', 'inspector', 'photometry', 'mount', 'focuser']);
     // D9: the Statistics card is hidden by default in every mode (I shows it).
     for (const m of MODES) expect(PRESETS[m.id].cards.statistics).toBe('hidden');
     expect(PRESETS.framing.railW).toBe(RAIL.default);

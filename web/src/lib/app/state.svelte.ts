@@ -98,7 +98,8 @@ import type { DisplayInfo, PointerInfo } from '../viewer/types';
 import { type FitMode, isFitMode } from '../viewer/view';
 import { ViewerTools } from '../viewer/tools/tools.svelte';
 import { FieldStore } from '../imaging/field/field.svelte';
-import type { FieldCommands } from '../shell/commandIndex';
+import { PhotometryStore } from '../imaging/photometry/photometry.svelte';
+import type { FieldCommands, PhotometryCommands } from '../shell/commandIndex';
 import { openLayers, setReservedKeys, topModalIndex } from '../components/layers';
 import type { FsLister } from '../components/filepicker';
 import type { BundleRequest, BundleResult } from '../components/supportbundle';
@@ -296,6 +297,8 @@ export class ArgosApp {
    * reads its WCS (compass, scale bar, cursor RA / Dec); the Field band its candidates.
    */
   readonly field = new FieldStore();
+  /** Live photometry (W5, imaging/photometry): curves, leave-one-out report, status, variables. */
+  readonly photometry = new PhotometryStore();
   autoStretch = $state(true);
   /** Manual levels; used while autoStretch is off. */
   manual: StretchParams | null = $state.raw(null);
@@ -416,6 +419,9 @@ export class ArgosApp {
     );
     this.events.on('conditions', (m) => this.conditions.ingest(m));
     this.field.attach(this.events);
+    // A star picked before a reload does not come back with the page (W4 leftover).
+    this.field.pageLoaded();
+    this.photometry.attach(this.events, this.client);
     this.events.on('frame_metrics', (m) => {
       if (typeof m.seq === 'number') this.frameMetrics = m as unknown as FrameMetricsRecord;
     });
@@ -732,6 +738,7 @@ export class ArgosApp {
     if (restarted) this.log.restart();
     // Its selection ids start at 1 again: forget the old process's superseded clicks.
     if (restarted) this.field.restart();
+    if (restarted) this.photometry.restart();
     const quiet = (what: string) => (err: unknown) => {
       // An API 1 server has none of these routes: keep the v1 behaviour.
       if (err instanceof ApiError && err.status === 404) return;
@@ -765,6 +772,8 @@ export class ArgosApp {
     // Conditions rows missed while the link was down (or all of a restarted server's).
     if (restarted) this.conditions.clear();
     void this.conditions.sync().catch(() => undefined);
+    // Live photometry and the field's variables (W5): the stream's snapshot.
+    void this.photometry.refresh();
   }
 
   // -- Log v2 ---------------------------------------------------------------------
@@ -1853,6 +1862,57 @@ export class ArgosApp {
       setAuto: (on) => this.setFieldAuto(on),
       center: () => this.centerTarget(),
       sync: () => this.syncToSolution(),
+    };
+  }
+
+  // -- Wave 5: live photometry (A58 and the palette) ---------------------------------------
+
+  /** Why Recommend comparisons cannot run (null: it can): the server answers 409 otherwise. */
+  recommendProblem(): string | null {
+    if (!this.field.solved) return 'identify the field first (S)';
+    if (!(this.field.targets?.stars ?? []).some((s) => s.role === 'target')) return 'choose a target star first';
+    return null;
+  }
+
+  /** photometry.auto_comparisons: the size Complete fills the ensemble up to (Qt default 5). */
+  autoComparisons(): number {
+    const v = this.configValues?.['photometry.auto_comparisons'];
+    return typeof v === 'number' && Number.isFinite(v) ? v : 5;
+  }
+
+  /**
+   * A58: complete the ensemble or replace the VSP picks (manual choices stay); the set comes
+   * back with the answer, the toast says what changed, the server logs it in Qt's words.
+   */
+  async recommendComparisons(mode: 'complete' | 'replace', count?: number | null): Promise<void> {
+    try {
+      const r = await this.photometry.recommend(mode, count ?? null, this.client);
+      if (r.targets) this.field.ingest('targets', r.targets);
+      const removed = r.removed?.length ?? 0;
+      const n = r.comparisons?.length ?? 0;
+      const title =
+        mode === 'replace'
+          ? `Replaced the VSP ensemble: ${r.added} added, ${removed} removed`
+          : r.added
+            ? `Added ${r.added} comparison star${r.added === 1 ? '' : 's'}`
+            : 'No comparison added';
+      this.toast('info', title, `${n} comparison${n === 1 ? '' : 's'} in the ensemble`);
+    } catch (err) {
+      this.reportError('Recommend comparisons', err);
+    }
+  }
+
+  /** The command palette's live photometry entries (shell/commandIndex.ts). */
+  photometryCommands(): PhotometryCommands {
+    return {
+      recommendReason: this.recommendProblem(),
+      running: this.photometry.running,
+      count: this.autoComparisons(),
+      openTab: (tab) => {
+        if (this.section !== 'imaging') this.go('imaging');
+        this.observe.setDrawer({ drawerOpen: true, drawerTab: tab });
+      },
+      recommend: (mode) => this.recommendComparisons(mode),
     };
   }
 

@@ -28,6 +28,7 @@ export const SCOPE_TITLES: Record<string, string> = {
   configuration: 'Settings',
   table: 'Tables',
   menu: 'Menus and lists',
+  chart: 'Light curve (when it has the focus)',
 };
 
 const OBSERVE = 'imaging';
@@ -167,4 +168,13 @@ export const KEYMAP: readonly ShortcutDef[] = [
     local: true,
   },
   { id: 'menu.activate', keys: ['Enter', 'Space'], label: 'Choose the item', scope: 'menu', local: true },
+  // The light curve (W5, LightCurvePlot) handles these while it has the focus (click it or Tab
+  // to it); the Observe keys above act again as soon as it loses the focus. Escape stays the app's.
+  { id: 'chart.fit', keys: ['F'], label: 'Fit the whole run', scope: 'chart', local: true },
+  { id: 'chart.zoom', keys: ['+', '-'], label: 'Zoom the time axis in / out', scope: 'chart', local: true },
+  { id: 'chart.follow', keys: ['End'], label: 'Follow the newest point', scope: 'chart', local: true },
+  { id: 'chart.pan', keys: ['Shift+ArrowLeft', 'Shift+ArrowRight'], label: 'Pan the time axis', scope: 'chart', local: true },
+  { id: 'chart.point', keys: ['ArrowLeft', 'ArrowRight'], label: 'Previous / next point', scope: 'chart', local: true },
+  { id: 'chart.errors', keys: ['U'], label: 'Error bars', scope: 'chart', local: true },
+  { id: 'chart.flux', keys: ['M'], label: 'Magnitude / relative flux', scope: 'chart', local: true },
 ];

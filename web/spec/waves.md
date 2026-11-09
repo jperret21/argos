@@ -26,7 +26,7 @@ actually delivered).
 | — | 0.5.0 fixes merged into the web branch | **done** | `c746875` (merge of `release/0.5.0`, incl. `94b12b7`) | — |
 | W3 | Observe: acquisition | **reviewed and fixed** 2026-11-08 (exit criterion met through the UI; design, technical and science reviews applied, `progress.md` Wave 3 sections 2 and 6); the owner's commit pending | — (uncommitted) | `web/screenshots/2026-11-08_wave3-observe` |
 | W4 | Field identification and image tools | **done** 2026-11-08: exit criterion met (roles and Night Red through the UI; tracking on 195 real frames, 0.2-0.9 px, no loss); design, technical and science reviews applied (`progress.md` Wave 4, section 6); the owner's commit pending | — (uncommitted) | `web/screenshots/2026-11-08_wave4-field` |
-| W5 | Live photometry | to do | — | — |
+| W5 | Live photometry | **reviewed and fixed** 2026-11-08: exit criterion met through the UI (4 replays of real frames, 1 748 values equal to the fixed Qt engine's, 0 difference; re-run after the review fixes: 360 values, 0 difference; `progress.md` Wave 5, sections 2 and 7); design, technical and science findings fixed except the drawer tool row and band leftover (wave 6) and two owner decisions; Qt fixes S31-S38 and S32 extended in the release worktree; the owner's commit pending | — (uncommitted) | `web/screenshots/2026-11-08_wave5-photometry` |
 | W6 | Plan (and Run, Watch, attention) | to do | — | — |
 | W7 | Review | to do | — | — |
 | W8 | Desktop app and Qt retirement | to do | — | — |

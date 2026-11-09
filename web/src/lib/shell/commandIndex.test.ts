@@ -134,6 +134,30 @@ describe('command palette index', () => {
     expect(buildIndex(source(), none).some((c) => c.id === 'hw.center')).toBe(false);
   });
 
+  it('offers the live photometry tabs and the comparison recommendation (W5)', async () => {
+    const calls: string[] = [];
+    const phot = {
+      recommendReason: null as string | null,
+      running: false,
+      count: 5,
+      openTab: (t: string) => void calls.push(`tab:${t}`),
+      recommend: async (m: string) => calls.push(`rec:${m}`),
+    };
+    const idx = buildIndex(source({ photometryCommands: () => phot }), none);
+    await idx.find((c) => c.id === 'act.phot-light-curve')!.run();
+    await idx.find((c) => c.id === 'act.phot-ensemble')!.run();
+    const complete = idx.find((c) => c.id === 'act.phot-complete')!;
+    expect(complete).toMatchObject({ title: 'Complete the comparison ensemble (up to 5)', disabled: null });
+    expect(complete.hardware).toBeUndefined();
+    await complete.run();
+    expect(calls).toEqual(['tab:light-curve', 'tab:ensemble', 'rec:complete']);
+    expect(rank('leave-one-out', idx)[0].cmd.id).toBe('act.phot-ensemble');
+    // The server would answer 409: the reason is shown instead.
+    const blocked = buildIndex(source({ photometryCommands: () => ({ ...phot, recommendReason: 'identify the field first (S)', running: true }) }), none);
+    expect(blocked.find((c) => c.id === 'act.phot-replace')!.disabled).toBe('identify the field first (S)');
+    expect(buildIndex(source({ photometryCommands: () => ({ ...phot, running: true }) }), none).find((c) => c.id === 'act.phot-replace')!.disabled).toMatch(/asks first/);
+  });
+
   it('ranks "park" to the Park command and "latitude" to the field', () => {
     const idx = buildIndex(source(), none);
     expect(rank('park', idx)[0].cmd.id).toBe('hw.park');

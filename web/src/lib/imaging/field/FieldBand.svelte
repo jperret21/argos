@@ -21,10 +21,11 @@
   - Below 150 px the band is one summary row (BRAND 11.1).
 -->
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { type Snippet, untrack } from 'svelte';
   import { flip } from 'svelte/animate';
   import { loadPref, savePref } from '../../app/prefs';
   import { reducedMotion } from '../../components/motion.svelte';
+  import NumText from '../../components/NumText.svelte';
   import type { Column } from '../../components/table';
   import VirtualTable from '../../components/VirtualTable.svelte';
   import { fixed, int, signed } from '../../format/number';
@@ -44,12 +45,14 @@
     onrowpick?: (row: CandidateRow) => void;
     /** The open list (remembered per viewer). */
     tab?: 'candidates' | 'ensemble' | 'variables' | 'stars';
+    /** The live photometry status (W5), at the right of the tab row; `true` in the summary row. */
+    live?: Snippet<[boolean]>;
   }
 
   type Tab = 'candidates' | 'ensemble' | 'variables' | 'stars';
   const isTab = (v: unknown): v is Tab => v === 'candidates' || v === 'ensemble' || v === 'variables' || v === 'stars';
 
-  let { field, compact = false, topCode = null, onlistpick, onrowpick, tab = $bindable(loadPref('argos.field.tab', isTab, 'candidates')) }: Props = $props();
+  let { field, compact = false, topCode = null, onlistpick, onrowpick, tab = $bindable(loadPref('argos.field.tab', isTab, 'candidates')), live }: Props = $props();
   $effect(() => {
     const t = tab;
     untrack(() => savePref('argos.field.tab', t));
@@ -189,8 +192,10 @@
 {#if compact}
   <div class="row-compact">
     <span class="k">Ensemble</span>
-    <span class="num">{summary.comparisons} comparison{summary.comparisons === 1 ? '' : 's'}{summary.check ? ` · check ${summary.check}` : ' · no check star'}{summary.flagged ? ` · ${summary.flagged} flagged` : ''}</span>
+    <span class="grp"><NumText text={`${summary.comparisons} comparison${summary.comparisons === 1 ? '' : 's'}${summary.check ? ` · check ${summary.check}` : ' · no check star'}${summary.flagged ? ` · ${summary.flagged} flagged` : ''}`} /></span>
+    <span class="div" aria-hidden="true"></span>
     <span class="k">Candidates</span><span class="num">{summary.candidates}</span>
+    {#if live}<span class="live-slot">{@render live(true)}</span>{/if}
   </div>
 {:else}
   <div class="wrap">
@@ -205,6 +210,7 @@
           {t.label} <span class="n num">{field.layersAvailable ? int(t.n) : '—'}</span>
         </button>
       {/each}
+      {#if live}<span class="live-slot">{@render live(false)}</span>{/if}
     </div>
     {#if field.layersAvailable && (tab === 'candidates' || tab === 'ensemble')}
       <p class="note" title="{contextText} · {commonText.join(' · ')} · {rulesText}">
@@ -292,6 +298,11 @@
 {/if}
 
 <style>
+  .live-slot {
+    display: inline-flex;
+    min-width: 0;
+    margin-left: auto;
+  }
   .wrap {
     display: flex;
     flex-direction: column;
@@ -482,6 +493,13 @@
     padding: 0 var(--space-3);
     color: var(--fg);
     font-size: var(--text-s);
+  }
+  /* Between the summary's key-value groups (the rest of the row's rule). */
+  .row-compact .div {
+    width: 1px;
+    height: 14px;
+    background: var(--border-soft);
+    flex: none;
   }
   .k {
     color: var(--text-muted);

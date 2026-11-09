@@ -313,6 +313,19 @@ fields in place.
   (Z), region statistics (R) and the Statistics card (I), the context menu, CFA preview
   (Raw, R, G, B) and Fire / Ice palettes (OKLab lightness linear in the stretch; neutral
   only in Night Red).
+- **Live photometry** (wave 5, `spec/progress.md` Wave 5): one point per field solution
+  outside a sequence, measured by the server with the fixed Qt engine's code (apertures
+  placed by core's tracker; a frame on which no star of the set is where the solution
+  places it gets no point, with a warning). The **Photometry** card (the set with roles,
+  the target's newest magnitude, the check's 15-point scatter and check − V, comparisons
+  used / in the set, the geometry, the ensemble verdict, Recommend… with each action's
+  effect in numbers) and the drawer tabs **Light curve** (one `LightCurvePlot`: target,
+  check as check − catalogue V on a symmetric ±rung scale with its trailing ±1σ band,
+  and from 300 px the target's ensemble zero point ± rms; flags by shape; the newest
+  point ringed; Whole run / Following / Zoom kept with an "n newer" button; UTC / JD /
+  BJD; Copy data as TSV), **Variables** (the field's VSX list, Set as target) and
+  **Ensemble** (the leave-one-out report, the check's own row). The Field band says the
+  live status.
 - **Open FITS image** (⌘O from any section): the in-app file picker; raw 16-bit frames
   only, a calibrated or stacked file is refused in the server's words and the dialog
   stays open; live view stops first.
@@ -455,8 +468,9 @@ npm run capture:lab -- controls --out /tmp/lab --only buttons-night-red
 ## Known limits
 
 - Connection, Observe (Framing, Focus, Field) and Settings exist; Plan and Review are
-  placeholders (waves 6 and 7). No live photometry or sequences yet (waves 5 and 6). What
-  is done and what is missing, row by row: `spec/progress.md`.
+  placeholders (waves 6 and 7). Live photometry runs outside a sequence; sequences, the
+  Run band and the server's per-sub measurement come with wave 6. What is done and what
+  is missing, row by row: `spec/progress.md`.
 - Alpaca mode is wired but has only been exercised against a closed port (the error
   path); the server side was tested against fake devices, not a Seestar.
 - Seestar frames are raw colour mosaics (`channels: 1`, `sensor.bayer` set): they are

@@ -75,7 +75,22 @@
   import FieldOverlay, { type SelectAt } from '../viewer/overlay/FieldOverlay.svelte';
   import type { LayerId, Marker, Role } from '../viewer/overlay/layers';
   import { applyTransform, placeRing, type ScreenMap } from '../viewer/overlay/project';
-  import { candidateRows, type CandidateRow } from './field/candidates';
+  import { candidateRows, ensembleRows as fieldEnsembleRows, type CandidateRow } from './field/candidates';
+  import LightCurvePlot from '../charts/lightcurve/LightCurvePlot.svelte';
+  import { LiveCurveStore } from '../charts/lightcurve/store';
+  import type { TimeAxisMode } from '../charts/uplot/axes';
+  import { loadPref, savePref } from '../app/prefs';
+  import EnsembleTable from './photometry/EnsembleTable.svelte';
+  import EnsembleVerdict from './photometry/EnsembleVerdict.svelte';
+  import LightCurveTab from './photometry/LightCurveTab.svelte';
+  import LiveStatus from './photometry/LiveStatus.svelte';
+  import PhotometryCard from './photometry/PhotometryCard.svelte';
+  import { countLine, curveFor, ensembleRows, ensembleTsv, filterVariables, measuredCount, minPoints, statusLine, verdict as verdictOf, type EnsembleRow } from './photometry/present';
+  import type { FieldVariable, RecommendMode } from './photometry/types';
+  import RecommendPopover from './photometry/RecommendPopover.svelte';
+  import VariablesTab from './photometry/VariablesTab.svelte';
+  import ConfirmDialog from '../components/ConfirmDialog.svelte';
+  import type { TargetStar } from './field/types';
   import InspectorCard from './field/InspectorCard.svelte';
   import { cardText, fieldChip } from './field/present';
   import StarCard from './field/StarCard.svelte';
@@ -89,7 +104,7 @@
   import FieldBand from './field/FieldBand.svelte';
   import FocusBand from './modes/FocusBand.svelte';
   import FramingBand from './modes/FramingBand.svelte';
-  import { BAND, bandLayout, bandMax, DRAWER_TABS, drawerHeight, layoutCost, RAIL, type CardId } from './modes/layout';
+  import { BAND, bandLayout, bandMax, DRAWER_TABS, drawerHeight, layoutCost, RAIL, type CardId, type DrawerTab } from './modes/layout';
   import MountCard from './MountCard.svelte';
 
   interface Props {
@@ -224,6 +239,16 @@
     return c ? { id: 'centre', text: `Centre ${formatRA(c.raHours)} ${formatDec(c.decDeg)}`, kind: 'num', title: 'Centre of the frame on screen (plate solution, J2000)' } : null;
   });
   const chips = $derived([...frameChipList, ...(fieldHud ? [fieldHud] : []), ...(centreHud ? [centreHud] : [])]);
+  /**
+   * The bottom prompt (no equipment, link lost) sits above the cursor readout row, which the
+   * HUD keeps 8 px inside the image's bottom edge (Hud.svelte): never under it at 1280 px or
+   * with a tall drawer (wave 5 design review).
+   */
+  const promptBottom = $derived.by(() => {
+    const r = app.imageRect;
+    const hudBottom = Math.max(8, stageH - Math.min(stageH, (r?.top ?? 0) + (r?.height ?? stageH)) + 8);
+    return hudBottom + 34 + 8;
+  });
   const cursor = $derived.by(() => {
     const p = app.pointer;
     const s = p && fieldWcs ? pixelToSky(fieldWcs, p.x, p.y) : null;
@@ -402,6 +427,144 @@
     if (r.x !== null && r.y !== null) pickAt(r.x, r.y);
   }
 
+  // -- Live photometry (W5, imaging/photometry): card, drawer tabs, Field band status ----------
+  const phot = app.photometry;
+  const setStars = $derived(field.targets?.stars ?? []);
+  const photTarget = $derived(setStars.find((s) => s.role === 'target') ?? null);
+  const photLine = $derived(
+    statusLine({
+      status: phot.status,
+      connected: app.health === 'ok',
+      solved: field.solved,
+      hasTarget: !!photTarget,
+      comparisons: setStars.filter((s) => s.role === 'comparison').length,
+      points: photTarget ? measuredCount(curveFor(phot.curves, photTarget)) : 0,
+    }),
+  );
+  const photVerdict = $derived(verdictOf(phot.quality));
+  /** The field's words for a set star (Δ(B−V), far, clipped, blended, variable?), by key. */
+  const fieldFlags = $derived.by(() => {
+    const rows = fieldEnsembleRows(field.candidates, setStars, app.shown ? clipping(app.shown.histogram, null).topCode : null, field.layers?.limits ?? null);
+    return new Map(rows.map((r) => [r.key, r.flags]));
+  });
+  const ensRows = $derived(ensembleRows(setStars, phot.quality, { flagsOf: (s) => fieldFlags.get(s.key) ?? [], lastJd: phot.status?.last?.jd_utc ?? null, curves: phot.curves }));
+  /** The set star hovered on the image marks its row (TargetSetList, Ensemble). */
+  const setHotKey = $derived(field.hover?.source === 'image' ? field.hover.key : null);
+  let removingKey = $state<string | null>(null);
+  let confirmRemove = $state<TargetStar | null>(null);
+  let recommendBusy = $state<RecommendMode | null>(null);
+  const cfgNum = (k: string) => {
+    const v = app.configValues?.[k];
+    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+  };
+  const recommendReason = $derived(app.recommendProblem());
+
+  /** A set star hovered in a list rings it on the image (reference px, moved by the tracking). */
+  function hoverStar(s: { key: string; x?: number | null; y?: number | null } | null): void {
+    if (!s || typeof s.x !== 'number' || typeof s.y !== 'number') return field.setHover(null, 'list');
+    field.setHover({ source: 'list', key: s.key, points: [{ x: s.x, y: s.y }], reference: true });
+  }
+  /** A set star picked in a list: its card on the image (A49) and the Inspector. */
+  function pickStar(s: { key: string; x?: number | null; y?: number | null }): void {
+    if (field.candidates.some((c) => c.key === s.key)) field.inspect(s.key);
+    if (typeof s.x === 'number' && typeof s.y === 'number') pickAt(s.x, s.y);
+  }
+  /** Remove = immediate + Undo; during a run the zero point changes, so ask first (D24, 08 P12). */
+  function askRemove(s: TargetStar): void {
+    if (phot.running) confirmRemove = s;
+    else void removeStar(s);
+  }
+  async function removeStar(s: TargetStar): Promise<void> {
+    if (removingKey) return;
+    removingKey = s.key;
+    try {
+      const { undo } = await field.remove(app.client, s.key);
+      const name = s.display_name || s.name || s.auid || s.key;
+      if (undo) app.undo.push({ title: `Removed from the target set: ${name}`, group: 'roles', undo: () => undo.run() });
+    } catch (err) {
+      app.reportError('Remove from the set', err);
+    } finally {
+      removingKey = null;
+    }
+  }
+  /** A58: complete the ensemble or replace the VSP picks (ArgosApp, shared with the palette). */
+  async function recommend(mode: RecommendMode, count: number): Promise<void> {
+    recommendBusy = mode;
+    try {
+      await app.recommendComparisons(mode, count);
+    } finally {
+      recommendBusy = null;
+    }
+  }
+  /** A variable from the Variables tab becomes the target (A52 `variable_index`), with Undo. */
+  let variableBusy = $state(false);
+  async function variableTarget(v: FieldVariable): Promise<void> {
+    if (variableBusy) return;
+    variableBusy = true;
+    try {
+      const { set, undo } = await field.setRole(app.client, 'target', { variableIndex: v.index, key: v.key });
+      const auto = set?.auto_selected?.length ?? 0;
+      const file = set?.path ? set.path.split(/[\\/]/).slice(-2).join('/') : null;
+      if (undo) {
+        app.undo.push({
+          title: `Target: ${v.name}${auto ? ` · ${auto} comparison${auto === 1 ? '' : 's'} chosen` : ''}`,
+          detail: file ? `Written to ${file}` : undefined,
+          group: 'roles',
+          undo: () => undo.run(),
+        });
+      }
+    } catch (err) {
+      app.reportError('Set as target', err);
+    } finally {
+      variableBusy = false;
+    }
+  }
+  /** D7: the Variables filter drives the image's variable markers. */
+  $effect(() => {
+    const q = field.variableQuery;
+    const lim = field.variableMagLimit;
+    const rows = phot.variables?.rows ?? null;
+    const shown = rows && (q.trim() || (lim !== null && lim > 0)) ? new Set(filterVariables(rows, q, lim).map((r) => r.index)) : null;
+    untrack(() => (field.variablesShown = shown));
+  });
+  const shownMarkers = $derived.by(() => {
+    const l = field.layersAvailable ? field.layers?.layers : null;
+    const keep = field.variablesShown;
+    if (!l || !keep || !l.variables) return l;
+    return { ...l, variables: l.variables.filter((m) => m.index === undefined || keep.has(m.index)) };
+  });
+  function copyText(text: string, what: string, n: number): void {
+    void navigator.clipboard
+      .writeText(text)
+      .then(() => app.toast('info', `Copied ${n} ${what}`, 'Tab-separated, ready to paste in a spreadsheet'))
+      .catch((err: unknown) => app.reportError('Copy', err));
+  }
+  function copyEnsemble(): void {
+    copyText(ensembleTsv(ensRows, { ra: formatRA, dec: (d) => formatDec(d) }), ensRows.length === 1 ? 'row' : 'rows', ensRows.length);
+  }
+  /** The plot's time axis, error bars and flux view, remembered per viewer (README 3.11). */
+  let lcAxis = $state<TimeAxisMode>(loadPref('argos.lightcurve.axis', (v): v is TimeAxisMode => v === 'utc' || v === 'jd' || v === 'bjd', 'utc'));
+  let lcErrors = $state(loadPref('argos.lightcurve.errors', (v): v is boolean => typeof v === 'boolean', true));
+  let lcFlux = $state(loadPref('argos.lightcurve.flux', (v): v is boolean => typeof v === 'boolean', false));
+  $effect(() => savePref('argos.lightcurve.axis', lcAxis));
+  $effect(() => savePref('argos.lightcurve.errors', lcErrors));
+  $effect(() => savePref('argos.lightcurve.flux', lcFlux));
+  /** The plot's own store (charts/lightcurve), fed by the validated stream. */
+  const curveStore = new LiveCurveStore();
+  // The wire types are shared (types.ts records are assignable to the plot store's): no cast.
+  // Subscribed once (untracked): feed() reads the held curves, and an effect that re-ran on every
+  // point would reload the whole plot per frame (Qt's S19) and lose its catalogue offsets.
+  $effect(() => untrack(() => phot.feed({ load: (s) => curveStore.load(s), apply: (ev) => curveStore.apply(ev), reset: (ev) => curveStore.reset(ev) })));
+  $effect(() => {
+    const stars = setStars;
+    const band = phot.live?.band ?? null;
+    untrack(() => curveStore.applyTargets(stars, band));
+  });
+  /** The card's drawer buttons: open the tab, or close the drawer when it is on screen. */
+  function drawerTab(id: 'light-curve' | 'variables' | 'ensemble'): void {
+    ws.toggleDrawer(id);
+  }
+
   /** The Inspector shows the star the card is about (when it is a candidate) and the band's pick. */
   $effect(() => {
     const k = cardSel?.key;
@@ -492,7 +655,7 @@
 
   // -- Cards: one order (D10), the state each mode remembers -----------------------
   const cardOpen = (id: CardId) => layout.cards[id] === 'open';
-  const visibleCards = $derived((['camera', 'statistics', 'inspector', 'mount', 'focuser'] as CardId[]).filter((id) => layout.cards[id] !== 'hidden'));
+  const visibleCards = $derived((['camera', 'statistics', 'inspector', 'photometry', 'mount', 'focuser'] as CardId[]).filter((id) => layout.cards[id] !== 'hidden'));
   /** The Focus band shows the V-curve now (the Focuser card does not repeat it). */
   const bandVCurve = $derived(ws.mode === 'focus' && layout.bandOpen && band.height > 0 && !band.compact);
 
@@ -710,7 +873,7 @@
         <FieldOverlay
           {geometry}
           stage={{ width: stageW, height: stageH }}
-          markers={field.layersAvailable ? field.layers?.layers : null}
+          markers={shownMarkers}
           transform={field.activeTransform}
           visibility={field.visibility}
           gLimit={field.depth}
@@ -770,12 +933,12 @@
         {#if header}
           <!-- A frame on screen but no equipment: the prompt sits at the bottom, off the image centre. -->
           {#if app.linkOpen && !app.cameraReady}
-            <div class="prompt" role="group" aria-label={cameraMissing ? 'Camera not connected' : 'No equipment connected'}>
+            <div class="prompt" style:bottom="{promptBottom}px" role="group" aria-label={cameraMissing ? 'Camera not connected' : 'No equipment connected'}>
               <span class="prompt-text">{cameraMissing ? 'Camera not connected' : 'No equipment connected'}</span>
               {@render connectButton()}
             </div>
           {:else if app.stale && app.events.link !== 'idle'}
-            <div class="prompt" role="status">
+            <div class="prompt" style:bottom="{promptBottom}px" role="status">
               <!-- Says what is on screen: the frame chip reads "Last frame", the edge is dashed, readouts are muted. -->
               <span class="prompt-text">Server link lost: last frame and readouts received, commands paused</span>
               <IconButton
@@ -842,7 +1005,11 @@
             {#snippet children({ height, compact })}
               {#if ws.mode === 'field'}
                 <!-- The comparison workspace (imaging/field, W4): the candidates table linked to the image. -->
-                <FieldBand field={app.field} {compact} topCode={app.shown ? clipping(app.shown.histogram, null).topCode : null} onlistpick={listPick} onrowpick={rowPick} />
+                <FieldBand field={app.field} {compact} topCode={app.shown ? clipping(app.shown.histogram, null).topCode : null} onlistpick={listPick} onrowpick={rowPick}>
+                  {#snippet live(small: boolean)}
+                    <LiveStatus line={photLine} status={phot.status} compact={small} onopen={() => ws.setDrawer({ drawerOpen: true, drawerTab: 'light-curve' })} />
+                  {/snippet}
+                </FieldBand>
               {:else if ws.mode === 'focus'}
                 <FocusBand
                   {height}
@@ -907,16 +1074,93 @@
             label="Observe drawer"
             tabs={DRAWER_TABS.filter((t) => t.id !== 'log')}
             tab={layout.drawerTab}
-            ontab={(id) => ws.setDrawer({ drawerTab: id as 'conditions' | 'log' })}
+            ontab={(id) => ws.setDrawer({ drawerTab: id as DrawerTab })}
           >
             {#snippet tools(id: string)}
               {#if id === 'conditions'}
                 <ConditionsTools store={app.conditions} view={app.conditionsView} expecting={app.live} />
+              {:else if id === 'light-curve'}
+                <!-- No target: no verdict (the empty state says what to do; a report of a previous set may still be held). -->
+                {#if photTarget}<EnsembleVerdict verdict={photVerdict} minPoints={minPoints(phot.quality)} />{/if}
+              {:else if id === 'ensemble'}
+                <RecommendPopover
+                  count={cfgNum('photometry.auto_comparisons') ?? 5}
+                  gate={{ snr: cfgNum('photometry.comparison_min_snr'), dmag: cfgNum('photometry.comparison_max_delta_mag'), sepArcmin: cfgNum('photometry.comparison_max_separation_arcmin') }}
+                  reason={recommendReason}
+                  running={phot.running}
+                  busy={recommendBusy}
+                  showLabel={false}
+                  onrecommend={recommend}
+                />
+                <IconButton
+                  icon="refresh"
+                  label="Refresh catalogue"
+                  size="s"
+                  variant="ghost"
+                  busy={field.fetching}
+                  disabledReason={field.solved ? null : 'identify the field first (S)'}
+                  tooltipText="Fetch the VSP comparison stars again for the solved field"
+                  onclick={() => void field.refetch(app.client).catch((err) => app.reportError('Refresh catalogue', err))}
+                />
+                <IconButton icon="copy" label="Copy the ensemble (TSV)" size="s" variant="ghost" disabledReason={ensRows.length ? null : 'no star in the ensemble'} onclick={copyEnsemble} />
               {/if}
             {/snippet}
             {#snippet content(id: string)}
               {#if id === 'conditions'}
                 <ConditionsTimeline store={app.conditions} view={app.conditionsView} theme={app.theme} expecting={app.live} periods={app.afPeriods} rows />
+              {:else if id === 'light-curve'}
+                <LightCurveTab stars={setStars} curves={phot.curves} line={photLine}>
+                  {#snippet plot()}
+                    <LightCurvePlot
+                      store={curveStore}
+                      facets={drawerH >= 300 ? ['target', 'check', 'ensemble'] : ['target', 'check']}
+                      variant="drawer"
+                      expecting={field.field?.auto === true && app.live}
+                      theme={app.theme}
+                      targetKey={photTarget ? (curveFor(phot.curves, photTarget)?.key ?? null) : null}
+                      notify={(title, message) => app.toast('info', title, message ?? '')}
+                      label="Live light curve"
+                      bind:axis={lcAxis}
+                      bind:errors={lcErrors}
+                      bind:flux={lcFlux}
+                    />
+                  {/snippet}
+                </LightCurveTab>
+              {:else if id === 'variables'}
+                <VariablesTab
+                  rows={phot.variables?.available ? phot.variables.rows : null}
+                  solving={field.solving}
+                  error={phot.variablesError}
+                  query={field.variableQuery}
+                  magLimit={field.variableMagLimit}
+                  hotKey={field.hover?.source === 'image' && field.hover.key ? field.hover.key : null}
+                  targetReason={field.solved ? null : 'identify the field first (S)'}
+                  busy={variableBusy}
+                  onquery={(q) => (field.variableQuery = q)}
+                  onmaglimit={(v) => (field.variableMagLimit = v)}
+                  onhover={(r) => hoverStar(r)}
+                  onpick={(r) => pickStar(r)}
+                  ontarget={(r) => void variableTarget(r)}
+                  oncopy={(_tsv, n) => app.toast('info', `Copied ${n} row${n === 1 ? '' : 's'}`)}
+                />
+              {:else if id === 'ensemble'}
+                <EnsembleTable
+                  rows={ensRows}
+                  verdict={photVerdict}
+                  minPoints={minPoints(phot.quality)}
+                  countText={countLine(setStars)}
+                  hotKey={setHotKey}
+                  selected={field.inspected}
+                  removeReason={null}
+                  removing={removingKey}
+                  onremove={(r: EnsembleRow) => {
+                    const s = setStars.find((x) => x.key === r.key);
+                    if (s) askRemove(s);
+                  }}
+                  onhover={(r) => hoverStar(r)}
+                  onpick={(r) => pickStar(r)}
+                  oncopy={(_tsv, n) => app.toast('info', `Copied ${n} row${n === 1 ? '' : 's'}`)}
+                />
               {/if}
             {/snippet}
           </LogDrawer>
@@ -987,6 +1231,34 @@
             />
           </Card>
         {/if}
+        {#if visibleCards.includes('photometry')}
+          <PhotometryCard
+            bind:open={() => cardOpen('photometry'), (v) => ws.setCardOpen('photometry', v)}
+            stars={setStars}
+            curves={phot.curves}
+            report={phot.quality}
+            line={photLine}
+            showLine={!(ws.mode === 'field' && layout.bandOpen && band.height > 0)}
+            geometry={field.targets?.geometry ?? null}
+            seriesFwhm={phot.live?.geometry?.series_fwhm_px ?? null}
+            band={phot.live?.band ?? null}
+            hotKey={setHotKey}
+            removing={removingKey}
+            recommend={{
+              count: cfgNum('photometry.auto_comparisons') ?? 5,
+              gate: { snr: cfgNum('photometry.comparison_min_snr'), dmag: cfgNum('photometry.comparison_max_delta_mag'), sepArcmin: cfgNum('photometry.comparison_max_separation_arcmin') },
+              reason: recommendReason,
+              running: phot.running,
+              busy: recommendBusy,
+            }}
+            drawerTab={layout.drawerOpen ? layout.drawerTab : null}
+            onrecommend={recommend}
+            onremove={askRemove}
+            onhover={hoverStar}
+            onpick={pickStar}
+            ondrawer={drawerTab}
+          />
+        {/if}
         {#if visibleCards.includes('mount')}
           <MountCard bind:open={() => cardOpen('mount'), (v) => ws.setCardOpen('mount', v)} fieldMode={ws.mode === 'field'} />
         {/if}
@@ -998,6 +1270,20 @@
         {/if}
       </aside>
     {/if}
+    <ConfirmDialog
+      open={confirmRemove !== null}
+      title="Remove {confirmRemove?.display_name || confirmRemove?.name || 'the star'} during the run?"
+      message="The ensemble of every following frame changes (its zero point for a comparison). Undo puts the star back."
+      confirmLabel="Remove from the set"
+      cancelLabel="Keep it"
+      destructive
+      onconfirm={() => {
+        const s = confirmRemove;
+        confirmRemove = null;
+        if (s) void removeStar(s);
+      }}
+      oncancel={() => (confirmRemove = null)}
+    />
   </div>
 </div>
 
