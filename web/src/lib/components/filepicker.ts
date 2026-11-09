@@ -47,6 +47,8 @@ export interface FsListing {
   entries: FsEntry[];
   /** More than 5 000 entries: only the first 5 000 are listed. */
   truncated?: boolean;
+  /** API 2, wave 5: `path` named a file; its folder is listed and this is the file's name. */
+  selected?: string | null;
 }
 
 export interface FsListRequest {

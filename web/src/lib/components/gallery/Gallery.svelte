@@ -16,7 +16,9 @@
   import { ShortcutRegistry } from '../../app/shortcuts';
   import { type StartupStage } from '../../app/startup';
   import { isTheme, saveTheme, THEME_LABELS, THEMES, type Theme } from '../../app/theme';
+  import LightCurveGallery from '../../charts/lightcurve/gallery/LightCurveGallery.svelte';
   import FieldGallery from '../../imaging/field/gallery/FieldGallery.svelte';
+  import PhotometryGallery from '../../imaging/photometry/gallery/PhotometryGallery.svelte';
   import WorkspaceGallery from '../../imaging/modes/gallery/WorkspaceGallery.svelte';
   import ToolsGallery from '../../viewer/tools/gallery/ToolsGallery.svelte';
   import RailFooter from '../../shell/RailFooter.svelte';
@@ -254,6 +256,12 @@
       onchange={(t: Theme) => saveTheme(t)}
     />
   </header>
+
+  <!-- Wave 5, live photometry: LightCurvePlot in every state. -->
+  <LightCurveGallery />
+
+  <!-- Wave 5, live photometry: Photometry card, TargetSetList, Ensemble, Variables, Light curve tab, live status. -->
+  <PhotometryGallery />
 
   <!-- Wave 4, field and overlays: overlay, star card, Catalogue layers popover, Field band, Inspector, virtual table. -->
   <FieldGallery />

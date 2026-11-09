@@ -316,6 +316,10 @@ export interface TargetSet {
   revision?: number;
   /** DELETE /api/targets/{key}: the star as it was (Undo = POST with `star`). */
   removed?: TargetStar;
+  /** POST /api/targets (W5): the comparisons chosen automatically with this call. */
+  auto_selected?: string[];
+  /** DELETE /api/targets/{key}?also=…: the automatic comparisons removed with the star. */
+  removed_also?: TargetStar[];
 }
 
 export type SetRoleRequest = { role: Role } & ({ selection: number } | { star: PendingStar } | { variable_index: number });

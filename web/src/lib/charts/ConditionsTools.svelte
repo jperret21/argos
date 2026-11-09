@@ -50,7 +50,7 @@
       >
     {/each}
   </div>
-  <span class="state">{view.zoom ? 'Zoom kept · F fits' : 'Session to now'}</span>
+  <span class="state">{view.zoom ? 'Zoom kept · F fits' : 'Whole run'}</span>
   <IconButton icon="zoom-fit" label="Fit: the session to now" shortcut="F" size="s" variant="ghost" tooltip="top" onclick={() => view.fit()} />
   <AgeMeter age={live.age} cadence={live.cadence} {expecting} width={48} />
 </div>

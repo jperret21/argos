@@ -217,6 +217,31 @@ describe('FieldStore', () => {
     expect(client.calls[0]).toEqual(['POST', '/api/field/select', { x: 1, y: 2, seq: 5, tol_px: 20 }]);
   });
 
+  it('does not bring back a selection made before a page reload (W4 leftover)', () => {
+    const f = new FieldStore({ storage: new MemStore() });
+    f.pageLoaded();
+    // The connection's snapshot carries the star picked on the previous page: not shown.
+    expect(f.ingest('selection', sel(3))).toBe(false);
+    expect(f.selection).toBeNull();
+    // Its followed frames are dropped with it.
+    expect(f.ingest('selection', { ...sel(3), state: 'tracking' })).toBe(false);
+    expect(f.selection).toBeNull();
+    // A star picked afterwards (here or in another browser) is shown.
+    expect(f.ingest('selection', sel(4))).toBe(true);
+    expect(f.selection?.id).toBe(4);
+    // A reconnection replays the selection of this page: kept.
+    expect(f.ingest('selection', sel(4))).toBe(true);
+    expect(f.selection?.id).toBe(4);
+  });
+
+  it('keeps the first snapshot when the server holds no selection', () => {
+    const f = new FieldStore({ storage: new MemStore() });
+    f.pageLoaded();
+    expect(f.ingest('selection', { id: null, selection: null })).toBe(true);
+    expect(f.ingest('selection', sel(5))).toBe(true);
+    expect(f.selection?.id).toBe(5);
+  });
+
   it('forgets the superseded ids of a server that restarted (its ids start at 1 again)', async () => {
     const f = new FieldStore({ storage: new MemStore() });
     const client = fakeClient({ 'POST /api/field/select': sel(2) });
@@ -252,6 +277,26 @@ describe('FieldStore', () => {
     await r.undo?.run();
     expect(client.calls[1]).toEqual(['DELETE', '/api/targets/rr', undefined]);
     expect(f.targets?.stars.length).toBe(0);
+  });
+
+  it('undoes a new target with the comparisons chosen automatically with it (W4 leftover)', async () => {
+    const f = new FieldStore({ storage: new MemStore() });
+    const keep = star({ key: 'manual', role: 'comparison' });
+    f.ingest('targets', { object_name: 'XX Cyg', stars: [keep] });
+    const after = {
+      object_name: 'XX Cyg',
+      stars: [keep, star({ key: 'xx', role: 'target' }), star({ key: 'auid:000-A', role: 'comparison' }), star({ key: 'auid:000-B', role: 'comparison' })],
+      auto_selected: ['auid:000-A', 'auid:000-B'],
+    };
+    const client = fakeClient({
+      'POST /api/targets': after,
+      'DELETE /api/targets/xx?also=auid%3A000-A,auid%3A000-B': { object_name: 'XX Cyg', stars: [keep], removed: star({ key: 'xx', role: 'target' }) },
+    });
+    const r = await f.setRole(client, 'target', { variableIndex: 3 });
+    expect(client.calls[0]).toEqual(['POST', '/api/targets', { role: 'target', variable_index: 3 }]);
+    await r.undo?.run();
+    expect(client.calls[1]).toEqual(['DELETE', '/api/targets/xx?also=auid%3A000-A,auid%3A000-B', undefined]);
+    expect(f.targets?.stars.map((s) => s.key)).toEqual(['manual']);
   });
 
   it('undoes a role change by restoring the old role, and a removal with the removed star', async () => {

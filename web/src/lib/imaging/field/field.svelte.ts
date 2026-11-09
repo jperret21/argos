@@ -205,8 +205,19 @@ export class FieldStore {
   history: string[] = $state([]);
   /** A select request is on the way (the card says so at once). */
   selecting = $state(false);
+  /**
+   * The Variables tab's filter (D7: it drives the image's variable markers): the query, the
+   * brightest-magnitude limit, and the variable indices it keeps (null: no filter).
+   */
+  variableQuery = $state('');
+  variableMagLimit: number | null = $state(null);
+  variablesShown: ReadonlySet<number> | null = $state.raw(null);
 
   private readonly superseded = new Set<number>();
+  /** False from pageLoaded() until the connection's selection snapshot is seen (ingest). */
+  private adopted = true;
+  /** This page made a selection (a click before the snapshot is its own). */
+  private picked = false;
   private readonly store: Store | undefined;
 
   constructor(options: { storage?: Store } = {}) {
@@ -324,6 +335,19 @@ export class FieldStore {
       case 'selection': {
         const s = checkSelection(m);
         if (!s) return false;
+        if (!this.adopted) {
+          // The first selection message of this page is the server's snapshot of the
+          // connection: a star picked before a page reload is not this page's choice, and
+          // the card and ring do not come back with the page (wave 4 leftover). Its later
+          // events (each followed frame) are dropped with it; a reconnection keeps the
+          // selection made on this page.
+          this.adopted = true;
+          if (s.id !== null && !this.picked) {
+            this.superseded.add(s.id);
+            this.selection = null;
+            return false;
+          }
+        }
         if (s.id !== null && this.superseded.has(s.id)) return false; // a late answer to a replaced click
         this.selection = s.selection ? s : null;
         return true;
@@ -336,6 +360,16 @@ export class FieldStore {
       default:
         return false;
     }
+  }
+
+  /**
+   * The page has just loaded (AppState, before the socket opens): the selection the server
+   * still holds from before the reload is not shown (wave 4 leftover: it must not survive a
+   * reload). A reconnection of the same page keeps its selection.
+   */
+  pageLoaded(): void {
+    this.adopted = false;
+    this.picked = false;
   }
 
   /**
@@ -443,6 +477,7 @@ export class FieldStore {
   async select(client: FieldClient, req: SelectRequest): Promise<SelectionEvent | null> {
     const previous = this.selection?.id ?? null;
     if (previous !== null) this.superseded.add(previous);
+    this.picked = true;
     this.selecting = true;
     try {
       const ev = checkSelection(await client.request<unknown>('POST', '/api/field/select', req));
@@ -488,7 +523,10 @@ export class FieldStore {
       if (before.role !== role) undo = { label: 'Undo', run: () => this.restore(client, before) };
     } else {
       const added = set?.stars.find((s) => !keysBefore.has(s.key) && s.role === role) ?? null;
-      if (added) undo = { label: 'Undo', run: () => this.remove(client, added.key).then((r) => r.set) };
+      // A new target brings its automatic comparisons (A52 `auto_selected`): Undo takes them
+      // out with it, in the same save (W5: DELETE …?also=), unless the observer changed them.
+      const also = (set?.auto_selected ?? []).filter((k) => typeof k === 'string' && k !== added?.key);
+      if (added) undo = { label: 'Undo', run: () => this.remove(client, added.key, also).then((r) => r.set) };
     }
     return { set, undo };
   }
@@ -499,10 +537,14 @@ export class FieldStore {
     return set;
   }
 
-  /** A53: take a star out of the set; Undo puts it back with its role (A52 with `removed`). */
-  async remove(client: FieldClient, key: string): Promise<{ set: TargetSet | null; undo: RoleUndo | null }> {
+  /**
+   * A53: take a star out of the set; Undo puts it back with its role (A52 with `removed`).
+   * `also`: automatic comparisons to remove in the same save (the Undo of a new target).
+   */
+  async remove(client: FieldClient, key: string, also: readonly string[] = []): Promise<{ set: TargetSet | null; undo: RoleUndo | null }> {
     const known = this.targetStar(key);
-    const set = checkTargets(await client.request<unknown>('DELETE', `/api/targets/${encodeURIComponent(key)}`));
+    const q = also.length ? `?also=${also.map(encodeURIComponent).join(',')}` : '';
+    const set = checkTargets(await client.request<unknown>('DELETE', `/api/targets/${encodeURIComponent(key)}${q}`));
     if (set) this.targets = set;
     const removed = set?.removed ?? known;
     return { set, undo: removed ? { label: 'Undo', run: () => this.restore(client, removed) } : null };

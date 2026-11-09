@@ -25,6 +25,8 @@
 </script>
 
 <script lang="ts">
+  import NumText from './NumText.svelte';
+
   interface Props {
     items: readonly ReadoutItem[];
     cols?: 2 | 3 | 4;
@@ -42,7 +44,7 @@
           <span class="v">{it.v}</span>{#if it.unit}<span class="u">{it.unit}</span>{/if}
           {#if it.flag}<span class="flag">{it.flag}</span>{/if}
         </dd>
-        {#if it.note}<span class="note">{it.note}</span>{/if}
+        {#if it.note}<span class="note"><NumText text={it.note} /></span>{/if}
       </div>
     {/each}
   </dl>

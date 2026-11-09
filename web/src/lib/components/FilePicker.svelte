@@ -146,7 +146,10 @@
       confirmReplace = false;
       typed = next.path;
       const shown = visibleEntries(next.entries, mode, filter, showHidden);
-      active = select ? shown.findIndex((e) => e.name === select) : -1;
+      // A typed file path: the server lists its folder and names the file (`selected`, wave 5).
+      const want = select ?? next.selected ?? null;
+      if (want && !select && mode === 'save-file') saveName = want;
+      active = want ? shown.findIndex((e) => e.name === want) : -1;
       queueMicrotask(scrollActive);
       return true;
     } catch (err) {

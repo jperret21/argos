@@ -487,7 +487,11 @@
   --overlay-exoplanet: var(--variable);
   --overlay-other: var(--fg-muted);
   --overlay-grid: var(--cyan);
-  --overlay-label: var(--fg);
+  /* Labels on the black image: --fg pulled towards the pure red of --viewer-tint (no new
+     hex; G and B 107 instead of 143). Skia's text pre-blend lifts G and B on the faint,
+     anti-aliased glyph edges over the black halo: in --fg one edge pixel of a set label
+     reached rgb(13, 10, 10) and failed audit rule B at device scale 2 (wave 4). */
+  --overlay-label: color-mix(in srgb, var(--fg) 75%, var(--viewer-tint));
 
   --chart-surface: var(--bg-2);
   --chart-grid: var(--border-soft);
