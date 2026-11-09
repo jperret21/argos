@@ -523,3 +523,21 @@ def test_a_failed_csv_rewrite_leaves_the_previous_file(tmp_path, monkeypatch) ->
     monkeypatch.setattr(lcmod, "_row", row)
     lc.to_csv(path)
     assert len(path.read_text().splitlines()) == 5
+
+
+def test_frame_egain_is_the_frames_own_gain() -> None:
+    """S41: a saved frame's e-/ADU: the gain table at its GAIN setting, then its
+    EGAIN; None (the caller's live chain) when neither is usable."""
+    from argos.core.photometry.params import frame_egain
+
+    table = {"200": 0.29}
+    assert frame_egain({"GAIN": 200, "EGAIN": 0.31}, table) == 0.29
+    assert frame_egain({"GAIN": 200.0, "EGAIN": 0.31}, table) == 0.29
+    assert frame_egain({"GAIN": 80, "EGAIN": 0.31}, table) == 0.31  # no table entry
+    assert frame_egain({"GAIN": 200, "EGAIN": 0.31}) == 0.31  # no table
+    assert frame_egain({"GAIN": 1.5, "EGAIN": 0.31}, {"1": 9.0}) == 0.31  # not a gain setting
+    assert frame_egain({"GAIN": True, "EGAIN": 0.31}, {"1": 9.0}) == 0.31
+    assert frame_egain({"GAIN": 200}, {"200": "bad"}) is None
+    for bad in (0, -1.0, 150.0, float("nan"), "x", True, None):
+        assert frame_egain({"EGAIN": bad}) is None, bad
+    assert frame_egain({}) is None

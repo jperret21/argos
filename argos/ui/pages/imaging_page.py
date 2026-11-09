@@ -2341,6 +2341,8 @@ class ImagingPage(QWidget):
             # Never the 0/0 default: no site, no airmass and no BJD_TDB.
             site=observing_site(self._config) or (None, None, 0.0),
             diagnostics=bool(self._cfg("diagnostics.enabled", False)),
+            # Each saved sub's errors use its own gain; the form's only as a fallback.
+            egain_table=self._cfg("camera.egain_table", {}) or {},
         )
         dialog = QProgressDialog("Re-running photometry…", "Cancel", 0, len(paths), self)
         dialog.setWindowTitle("Batch photometry")

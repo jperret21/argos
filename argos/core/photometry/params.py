@@ -9,6 +9,7 @@ both. Qt-free.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Callable
 
@@ -75,6 +76,35 @@ class PhotometryParams:
         """
         f = fwhm if fwhm else DEFAULT_FWHM
         return max(self.aperture_min_px, self.aperture_fwhm_mult * f)
+
+
+def frame_egain(header, table=None) -> float | None:
+    """e-/ADU of a saved frame (Open FITS, batch re-run), or None if unknown.
+
+    The frame's own gain, never the Camera form's: the ``camera.egain_table``
+    entry at the frame's ``GAIN`` setting first, as a live measurement of that
+    frame used it, then the frame's ``EGAIN`` (Argos writes the driver's value
+    or the sensor reference there, and most capture software writes it too).
+    None (the caller keeps its live chain) when neither is usable.
+    """
+    gain = header.get("GAIN")
+    if isinstance(table, dict) and isinstance(gain, (int, float)) and not isinstance(gain, bool):
+        if float(gain).is_integer() and str(int(gain)) in table:
+            value = _positive_egain(table[str(int(gain))])
+            if value is not None:
+                return value
+    return _positive_egain(header.get("EGAIN"))
+
+
+def _positive_egain(value) -> float | None:
+    """``value`` as a plausible e-/ADU (0 < e <= 100), else None."""
+    if isinstance(value, bool):
+        return None
+    try:
+        egain = float(value)
+    except (TypeError, ValueError):
+        return None
+    return egain if math.isfinite(egain) and 0 < egain <= 100 else None
 
 
 def measure_frame(

@@ -12,6 +12,7 @@ AIRMASS/MOONSEP/TARGRA needed by the varstar postprod pipeline.
 from __future__ import annotations
 
 import logging
+import math
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -59,6 +60,8 @@ class FrameContext:
     # Dynamic camera state read just before/after exposure
     ccd_temp: float | None = None
     egain_driver: float | None = None  # e-/ADU from driver (None → active sensor reference)
+    #: ``camera.egain_table`` {gain setting: e-/ADU}; its entry for the frame's gain comes first.
+    egain_table: dict | None = None
     offset: int | None = None
     readout_mode: str | None = None
 
@@ -168,7 +171,7 @@ class FITSWriter:
         start, end = _ensure_utc(exposure_start), _ensure_utc(exposure_end)
         mid = start + (end - start) / 2
 
-        egain, egain_source = _resolve_egain(gain, ctx.egain_driver)
+        egain, egain_source = _resolve_egain(gain, ctx.egain_driver, ctx.egain_table)
         airmass = sky_geometry.compute_airmass(ctx.altitude) if ctx.altitude is not None else None
         moon = sky_geometry.compute_moon_info(
             when_utc=start,
@@ -329,8 +332,21 @@ def _ensure_utc(dt: datetime) -> datetime:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
-def _resolve_egain(gain_setting: int, driver_value: float | None) -> tuple[float, str]:
-    """Return (e-/ADU, source) — driver if available, else active sensor reference."""
+def _resolve_egain(
+    gain_setting: int, driver_value: float | None, table: dict | None = None
+) -> tuple[float, str]:
+    """Return (e-/ADU, source) in the order the photometry uses (S42).
+
+    The ``camera.egain_table`` entry for the gain setting, else the driver's
+    value, else the active sensor reference.
+    """
+    if isinstance(table, dict) and str(gain_setting) in table:
+        try:
+            value = float(table[str(gain_setting)])
+        except (TypeError, ValueError):
+            value = math.nan
+        if math.isfinite(value) and value > 0:
+            return value, "egain_table"
     if driver_value and driver_value > 0:
         return float(driver_value), "driver"
     sensor = hardware.profile().sensor

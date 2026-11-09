@@ -355,7 +355,7 @@ def test_batch_jd_is_exposure_midpoint(tmp_path) -> None:
     hdu.header["EXPTIME"] = 30.0
     hdu.writeto(p)
 
-    _, jd = PhotometryBatchWorker._read_frame(p)
+    _, jd, _ = PhotometryBatchWorker._read_frame(p)
     from argos.core.photometry.airmass import julian_date
     from datetime import datetime, timezone
 
@@ -629,3 +629,28 @@ def test_rerun_output_dir_is_a_new_folder_in_the_session(tmp_path) -> None:
     loose = tmp_path / "other_frames"
     loose.mkdir()
     assert rerun_output_dir(loose, now) == loose / "photometry_rerun_20261101T210509Z"
+
+
+def test_batch_errors_use_each_frames_own_gain(_scene, monkeypatch) -> None:
+    """S41: a batch re-run used the Camera form's e-/ADU for every saved sub; each
+    frame now uses its own (gain table at its GAIN, then its EGAIN), the request's
+    value only for a frame that records none."""
+    import argos.workers.photometry_batch_worker as bw
+
+    req, _out_dir = _scene
+    for path, header in zip(req.fits_paths, ({"GAIN": 200, "EGAIN": 0.31}, {"EGAIN": 0.42}, {})):
+        with fits.open(path, mode="update") as hdul:
+            hdul[0].header.update(header)
+    req.egain_table = {"200": 0.29}
+    seen: list[float] = []
+    real = bw.measure_frame
+    monkeypatch.setattr(
+        bw,
+        "measure_frame",
+        lambda green, wcs, ts, params, **kw: seen.append(params.egain)
+        or real(green, wcs, ts, params, **kw),
+    )
+    worker = PhotometryBatchWorker(req)
+    worker.run()
+
+    assert seen == [pytest.approx(0.29), pytest.approx(0.42), pytest.approx(req.params.egain)]

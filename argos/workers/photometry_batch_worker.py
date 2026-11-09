@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,7 +30,7 @@ from argos.core.catalog.targets import ROLE_CHECK, ROLE_COMPARISON, TargetSet
 from argos.core.imaging.green import green_plane
 from argos.core.photometry.airmass import airmass_at, bjd_tdb, julian_date
 from argos.core.photometry.lightcurve import LcPoint, LightCurve
-from argos.core.photometry.params import PhotometryParams, measure_frame
+from argos.core.photometry.params import PhotometryParams, frame_egain, measure_frame
 from argos.core.photometry.tracking import ApertureTracker, TrackedWCS, select_tracking_anchors
 from argos.core.photometry.uncertainty import apply_systematic_floor, estimate_systematic_floor
 from argos.core.session.diagnostics import SessionDiagnostics
@@ -111,6 +111,9 @@ class BatchRequest:
     object_name: str = "untitled"
     site: tuple[float | None, float | None, float] = (None, None, 0.0)  # lat, lon, elev
     diagnostics: bool = True  # flight recorder (diagnostics.jsonl in out_dir, P11)
+    #: ``camera.egain_table``: each frame's errors use its own gain (``frame_egain``);
+    #: ``params.egain`` only for a frame that records none.
+    egain_table: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -245,7 +248,7 @@ class PhotometryBatchWorker(QThread):
         Returns False, with no point, for a frame that cannot be read or has
         no usable DATE-OBS: an undated point would carry JD 0 to the AAVSO.
         """
-        arr, jd = self._read_frame(fpath)
+        arr, jd, egain = self._read_frame(fpath, self._req.egain_table)
         if arr is None:
             logger.warning("%s: unreadable — skipped", fpath.name)
             diag.record("event", what="frame_skipped", file=fpath.name, reason="unreadable")
@@ -270,11 +273,14 @@ class PhotometryBatchWorker(QThread):
                 shift_px=self._tracker.transform.shift_px,
                 frames_lost=self._tracker.frames_lost,
             )
+        params = self._req.params
+        if egain is not None and egain != params.egain:
+            params = replace(params, egain=egain)
         results = measure_frame(
             green,
             wcs,
             self._req.target_set,
-            self._req.params,
+            params,
             fwhm=self._series_fwhm,
             on_star=lambda s, phot, x, y: diag.star(frame_no, s, phot, x, y),
         )
@@ -450,12 +456,15 @@ class PhotometryBatchWorker(QThread):
         return airmass_at(jd, star.ra_deg, star.dec_deg, float(lat), float(lon))
 
     @staticmethod
-    def _read_frame(fpath: Path) -> tuple[np.ndarray | None, float | None]:
-        """Read a FITS frame → (float32 array, exposure-midpoint JD or None).
+    def _read_frame(
+        fpath: Path, egain_table=None
+    ) -> tuple[np.ndarray | None, float | None, float | None]:
+        """Read a FITS frame → (float32 array, exposure-midpoint JD or None, e-/ADU or None).
 
         DATE-OBS is the exposure *start*; half of EXPTIME is added (P5) so a
         30 s sub doesn't carry a 15 s systematic timing bias. Without EXPTIME
-        the start JD is kept (and the bias with it — a WARN says so).
+        the start JD is kept (and the bias with it — a WARN says so). The
+        e-/ADU is the frame's own (:func:`frame_egain`), None when unknown.
         """
         from astropy.io import fits
 
@@ -464,9 +473,9 @@ class PhotometryBatchWorker(QThread):
                 data = hdul[0].data
                 header = hdul[0].header
         except Exception:
-            return None, None
+            return None, None, None
         if data is None:
-            return None, None
+            return None, None, None
         arr = np.nan_to_num(np.asarray(data, dtype=np.float32))
         jd = None
         date_str = str(header.get("DATE-OBS", "") or "")
@@ -483,7 +492,7 @@ class PhotometryBatchWorker(QThread):
                 jd += float(header["EXPTIME"]) / 2.0 / 86400.0
             except (KeyError, TypeError, ValueError):
                 logger.warning("%s: no EXPTIME — JD is exposure start, not midpoint", fpath.name)
-        return arr, jd
+        return arr, jd, frame_egain(header, egain_table)
 
     def _write_csvs(self, curves: dict[str, LightCurve]) -> None:
         """Write each curve as ``{role}_{object}_{star}.csv`` beside ``targets.json``.

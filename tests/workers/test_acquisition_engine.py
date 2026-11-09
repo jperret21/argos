@@ -1226,3 +1226,125 @@ def test_recommend_with_no_vsp_star_passing_the_gate_keeps_the_ensemble(
 
     assert [s.auid for s in tset.by_role(ROLE_COMPARISON)] == ["C1", "C2"]  # [] before
     assert saved == []
+
+
+def test_a_frame_written_before_0_5_is_dated_by_its_start() -> None:
+    """S39: up to 0.4.x a sequence frame's DATE-AVG included half the image
+    download (S36: +5.2 s median, 16.6 s at most on the owner's RR Lyr run), so
+    Open FITS dated those frames late; their live points used DATE-OBS +
+    EXPTIME/2. A frame of 0.5.0 on, or of other software, keeps its DATE-AVG."""
+    from datetime import datetime, timezone
+
+    from argos.core.session.acquisition_engine import fits_exposure_mid
+
+    frame = {
+        "DATE-OBS": "2026-09-25T20:04:57",
+        "DATE-AVG": "2026-09-25T20:05:20.4",
+        "EXPTIME": 30.0,
+    }
+    start_plus_half = datetime(2026, 9, 25, 20, 5, 12, tzinfo=timezone.utc)
+    date_avg = datetime(2026, 9, 25, 20, 5, 20, 400000, tzinfo=timezone.utc)
+    for software in ("Argos v0.4.2", "Argos v0.4.1.dev3+g1a2b3c", "Argos v0.3.0", "Argos"):
+        assert fits_exposure_mid({**frame, "SOFTWARE": software}) == start_plus_half, software
+    assert fits_exposure_mid({**frame, "SWCREATE": "Argos v0.4.2"}) == start_plus_half
+    for software in ("Argos v0.5.0", "Argos v1.0.0", "N.I.N.A. 3.1", "Argos-like 0.1", ""):
+        assert fits_exposure_mid({**frame, "SOFTWARE": software}) == date_avg, software
+    assert fits_exposure_mid(frame) == date_avg  # no SOFTWARE: third-party, as before
+
+
+def test_measuring_an_object_again_never_overwrites_its_preview_csv(
+    shot_rig, tmp_path, monkeypatch
+) -> None:
+    """S40: outside a run, a live curve's CSV (<sessions>/targets/) was rewritten
+    from the in-memory curve, which an object change or a restart clears, so
+    measuring the object again (A → B → A, the next evening) erased the earlier
+    points on disk. Each curve now has its own file, named after its start."""
+    from datetime import datetime, timedelta, timezone
+
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.catalog.targets import ROLE_CHECK, ROLE_TARGET, TargetSet, TargetStar
+    from argos.core.photometry.lightcurve import read_curves_csv
+    from argos.core.session.review import identify_curve_file
+    from argos.ui.pages.analyze_page import _target_set_of_curve
+
+    engine, _session, _form, _logs = shot_rig
+    target = TargetStar(
+        role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, auid="000-BCP-095", name="SS Cyg"
+    )
+    other = TargetStar(role=ROLE_TARGET, ra_deg=11.0, dec_deg=21.0, auid="C1", name="C1")
+    tset = TargetSet(object_name="SS Cyg", stars=[target, other])
+    _fake_measure_rig(engine, monkeypatch, tset, [])
+    clock = {"now": datetime(2026, 11, 9, 20, 15, 0, tzinfo=timezone.utc)}
+    monkeypatch.setattr(ae, "_utcnow", lambda: clock["now"])
+    folder = tmp_path / "sessions" / "targets"
+    t0 = datetime(2026, 11, 9, 20, 15, tzinfo=timezone.utc)
+
+    def measure(count: int) -> None:
+        for i in range(count):
+            engine._last_exposure_mid = t0 + timedelta(minutes=i)
+            engine._measure_photometry()
+
+    measure(3)
+    first = folder / "SS_Cyg_20261109T201500Z_000-BCP-095.csv"
+    assert len(read_curves_csv(first)["target:" + first.stem].points) == 3
+
+    engine.clear_lightcurves()  # another object, then SS Cyg again
+    clock["now"] += timedelta(minutes=40)
+    measure(1)
+    second = folder / "SS_Cyg_20261109T205500Z_000-BCP-095.csv"
+    assert len(read_curves_csv(first)["target:" + first.stem].points) == 3  # 1 before the fix
+    assert len(read_curves_csv(second)["target:" + second.stem].points) == 1
+
+    engine.clear_lightcurves()  # ... within the same second
+    measure(1)
+    assert (folder / "SS_Cyg_20261109T205500Z-2_000-BCP-095.csv").exists()
+    assert len(read_curves_csv(second)["target:" + second.stem].points) == 1
+
+    # A role change starts a new curve (S33), and so a new file.
+    clock["now"] += timedelta(minutes=1)
+    tset.set_role(TargetStar(role=ROLE_CHECK, ra_deg=11.0, dec_deg=21.0, auid="C1", name="C1"))
+    measure(1)
+    assert (folder / "SS_Cyg_20261109T205500Z-2_C1.csv").exists()  # the target-role curve
+    assert (folder / "SS_Cyg_20261109T205600Z_C1.csv").exists()  # the check-role curve
+
+    # Review still finds the object's set and the star (S10).
+    tset.save(folder / "SS_Cyg.json")
+    found = _target_set_of_curve(second)
+    assert found is not None and found.object_name == "SS Cyg"
+    curves, problems = identify_curve_file(second, read_curves_csv(second), found)
+    assert problems == [] and next(iter(curves.values())).name == "SS Cyg"
+
+    # A run's CSVs keep their names.
+    engine._active_run_root = tmp_path / "run"
+    measure(1)
+    assert (tmp_path / "run" / "photometry" / "target_SS_Cyg_000-BCP-095.csv").exists()
+
+
+def test_an_opened_frame_uses_its_own_gain_for_errors(shot_rig, tmp_path, monkeypatch) -> None:
+    """S41: the e-/ADU of an opened frame's errors came from the Camera form's
+    gain (and the connected driver), not from the frame. It is now the gain
+    table at the frame's GAIN, else the frame's EGAIN; a camera frame keeps the
+    live chain."""
+    engine, session, _form, _logs = shot_rig
+    monkeypatch.setattr(session, "egain_driver", lambda: 2.5)  # the camera, now
+    path = tmp_path / "archived.fit"
+    _write_fits(
+        path, {"DATE-OBS": "2026-09-15T21:00:00", "EXPTIME": 10.0, "GAIN": 200, "EGAIN": 0.31}
+    )
+
+    engine.open_fits_frame(path)
+    assert engine._egain() == pytest.approx(0.31)  # 2.5 (the driver) before the fix
+
+    engine._config.set("camera.egain_table", {"200": 0.29, "80": 1.4})
+    engine.open_fits_frame(path)
+    assert engine._egain() == pytest.approx(
+        0.29
+    )  # the table at the frame's gain, not the form's 80
+
+    _write_fits(tmp_path / "plain.fit", {"DATE-OBS": "2026-09-15T21:00:00", "EXPTIME": 10.0})
+    engine.open_fits_frame(tmp_path / "plain.fit")
+    assert engine._egain() == pytest.approx(1.4)  # no gain recorded: the live chain, as before
+
+    engine.open_fits_frame(path)
+    engine.ingest_frame(_star_frame())  # a camera frame
+    assert engine._egain() == pytest.approx(1.4)

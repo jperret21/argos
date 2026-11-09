@@ -221,3 +221,16 @@ def test_moon_info_when_site_and_target_provided(tmp_path: Path) -> None:
     assert "MOONALT" in hdr
     assert "MOONPHAS" in hdr
     assert 0.0 <= float(hdr["MOONPHAS"]) <= 1.0
+
+
+def test_egain_header_is_the_value_the_photometry_uses(tmp_path: Path) -> None:
+    """S42: the photometry's e-/ADU is the camera.egain_table entry for the gain,
+    else the driver's, else the sensor reference; EGAIN skipped the table, so a
+    calibrated table left a header EGAIN that the errors never used."""
+    ctx = FrameContext(egain_driver=0.42, egain_table={"300": 0.37, "80": 1.9})
+    hdr = _write_frame(tmp_path, context=ctx, gain=300)
+    assert hdr["EGAIN"] == pytest.approx(0.37)  # 0.42 (the driver) before the fix
+    assert "egain_table" in hdr.comments["EGAIN"]
+    (tmp_path / "b").mkdir()
+    ctx = FrameContext(egain_driver=0.42, egain_table={"80": 1.9, "300": "bad"})
+    assert _write_frame(tmp_path / "b", context=ctx, gain=300)["EGAIN"] == pytest.approx(0.42)

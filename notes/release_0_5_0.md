@@ -40,7 +40,13 @@ frame on which the field had moved since the solve was measured on blank sky,
 with no flag), **S32** again (Recommend also emptied the ensemble when VSP stars
 existed but none passed the pilot gate), **S36** (sequence frames' `DATE-AVG`
 included half the download time), **S37** (offline, no point had a BJD_TDB) and
-**S38** (a reader could see a live curve CSV half written).
+**S38** (a reader could see a live curve CSV half written). Three defects they
+reported for an owner decision are fixed too, each with a test that fails on
+the code before it: **S39** (Open FITS dated a 0.4.x sequence frame by its late
+`DATE-AVG`), **S40** (measuring an object again outside a run overwrote its
+live curve CSV) and **S41** (a saved frame's errors used the Camera form's
+gain); and **S42**, found while fixing S41 (the header `EGAIN` skipped the gain
+table the photometry uses).
 
 **Several of these defects affect files you already hold.** The table says
 which; *Check your old files* below says how to find them.
@@ -78,6 +84,10 @@ which; *Check your old files* below says how to find them.
 | S36 | Sequence frames were dated with the download inside the exposure | `DATE-AVG` / `MJD-AVG` late by half the download time (seconds); BJD of Open FITS replays | **yes** |
 | S37 | BJD_TDB needed the internet (IERS tables) | No `bjd_tdb` in any point, CSV or AAVSO report of a session run offline | **yes** |
 | S38 | The live curve CSVs were rewritten in place after every point | A reader saw a partial file; a crash mid-write left the night's curve truncated | **yes** |
+| S39 | Open FITS dated a frame of a 0.4.x sequence by its late `DATE-AVG` | Points of replayed 0.4.x sequence frames: seconds late, BJD with them | **yes** |
+| S40 | Outside a run, measuring an object again overwrote its live curve CSV | Earlier points of `<sessions>/targets/<object>_<star>.csv` gone from disk | **yes** |
+| S41 | A saved frame's errors used the Camera form's e-/ADU, not the frame's | `mag_err` and SNR of Open FITS and batch re-run points; magnitudes unchanged | **yes** |
+| S42 | The header `EGAIN` skipped `camera.egain_table` | With a table entry for the gain: `EGAIN` is not the e-/ADU the errors used | **yes** |
 | S9 | Review read a check star as a second target | Wrong dock and name in Review | no |
 | S10 | **Open curve CSV** exported a per-star file under its file name | AAVSO `NAME` wrong; a comparison exportable as the variable | **yes** |
 | S11 | AAVSO export kept saturated/suspect points, accepted `OBSCODE=XXX` | Flagged points submitted unflagged | **yes** |
@@ -226,6 +236,20 @@ against the day you installed 0.5.0.
   measured without internet access. Compute the BJD_TDB from `jd_utc`, the
   star's coordinates and the site (astropy's `light_travel_time`, as Argos
   does) before you submit or time anything with it.
+- **Replays of 0.4.x sequence frames (S39).** Points measured with **Open
+  FITS…** from those frames are late by the S36 amount; replay them again
+  with 0.5.0, which dates them by `DATE-OBS + EXPTIME/2`.
+- **Overwritten live curves (S40).** A `<sessions>/targets/<object>_<star>.csv`
+  holds only the last sitting with that object (since the last object change
+  or restart): earlier points of that object measured outside a run are no
+  longer in it. Frames saved with **Take shot** can be measured again.
+- **Errors of replayed and re-run points (S41).** When the frames' gain
+  setting was not the one on the Camera form at replay time, the `mag_err` and
+  SNR of those points used the wrong e-/ADU; the magnitudes are right.
+  Re-measure before you use those error bars.
+- **`EGAIN` with a gain table (S42).** Only if `camera.egain_table` has an
+  entry: the `EGAIN` of frames taken at that gain is the driver's or the
+  sensor reference's value, not the table's that the errors used.
 - **Truncated curve CSVs (S38).** A curve CSV that ends in the middle of a row,
   or has fewer rows than the run had frames, was being rewritten when the
   program stopped: re-run the batch measurement on the run's frames.
@@ -411,6 +435,53 @@ frame with **Review → Open FITS…**.
 **How to check.** `tests/workers/test_acquisition_engine.py::test_opened_fits_is_dated_by_its_header_and_drops_the_previous_wcs`,
 `::test_opened_fits_without_a_date_measures_no_point` and
 `::test_opened_fits_that_is_not_raw_16_bit_data_is_refused`.
+
+### S39 — A 0.4.x sequence frame is dated by its start, not its late `DATE-AVG`
+
+**What was wrong.** S36 fixed the writer, not the files: a sequence frame of
+0.4.x has a `DATE-AVG` late by half the download (+5.2 s median, +16.6 s at
+most on RR Lyr 2026-09-25), and **Open FITS…** dates a frame by `DATE-AVG`
+(S4). Its live point had used `DATE-OBS + EXPTIME/2`, so the replay of the same
+frame came out seconds later, and its BJD with it.
+**Who was affected.** Replays of sequence frames written by 0.4.x.
+**What changed.** A frame whose `SOFTWARE` (or `SWCREATE`) is `Argos` or
+`Argos v0.x` below 0.5 is dated by `DATE-OBS + EXPTIME/2`. Frames of 0.5.0 and
+later, and of other software, keep `DATE-AVG`. A 0.4.x Take shot had a right
+`DATE-AVG`; for it the two differ by the exposure-end latency only (well under
+a second). Its `DATE-OBS` was early by the read-backs (tens of milliseconds).
+**How to check.** `tests/workers/test_acquisition_engine.py::test_a_frame_written_before_0_5_is_dated_by_its_start`
+(a 0.4.2 frame dated 20:05:20.4, its `DATE-AVG`, instead of 20:05:12 on the
+code before the fix).
+
+### S41 — A saved frame's errors use its own gain
+
+**What was wrong.** The e-/ADU in a point's errors came from the Camera form's
+gain and the connected camera's driver, also for a frame opened with **Open
+FITS…** or re-measured with **Re-run subs…**, whose `GAIN` may differ. The
+formal errors and the SNR of those points were wrong; the magnitudes are not
+affected.
+**Who was affected.** Replays and batch re-runs of frames taken at another gain
+than the form's at that moment, or with another camera connected.
+**What changed.** A saved frame uses the `camera.egain_table` entry for its own
+`GAIN`, else its `EGAIN`: the value its live measurement used. Only a frame
+that records neither falls back to the live order at the form's gain.
+**How to check.** `tests/workers/test_acquisition_engine.py::test_an_opened_frame_uses_its_own_gain_for_errors`
+(the driver's 2.5 instead of the frame's 0.31 on the code before the fix),
+`tests/workers/test_photometry_batch_worker.py::test_batch_errors_use_each_frames_own_gain`
+(the form's 1.0 for all three frames instead of 0.29, 0.42 and 1.0) and
+`tests/core/test_photometry_core.py::test_frame_egain_is_the_frames_own_gain`.
+
+### S42 — The header `EGAIN` is the e-/ADU the photometry uses
+
+**What was wrong.** The photometry takes the e-/ADU from `camera.egain_table`
+for the gain setting, else the driver, else the sensor reference, and the
+photometry reference says that value goes into `EGAIN`; the FITS writer skipped
+the table.
+**Who was affected.** Only setups with a `camera.egain_table` entry (empty by
+default).
+**What changed.** The writer resolves `EGAIN` in the same order; the comment
+names the source (`egain_table`, `driver` or the sensor reference).
+**How to check.** `tests/core/test_fits_writer.py::test_egain_header_is_the_value_the_photometry_uses`.
 
 ## Pointing and site in files
 
@@ -793,6 +864,24 @@ the quality report already were. The bytes written are the same.
 **How to check.** `tests/core/test_photometry_core.py::test_a_failed_csv_rewrite_leaves_the_previous_file`
 (the header and one of three rows left on the code before the fix).
 
+### S40 — Measuring an object again never overwrites its live curve CSV
+
+**What was wrong.** Outside a run (live preview, Open FITS), a star's curve was
+written to `<sessions>/targets/<object>_<star>.csv`, rewritten after each point
+from the curve in memory. That curve starts empty after an object change or a
+restart, so measuring the same object again (A → B → A, the next evening)
+replaced the file's earlier points with the new ones.
+**Who was affected.** Live photometry outside a sequence, and Open FITS replays,
+of an object measured more than once.
+**What changed.** Each live curve outside a run gets its own file, named after
+the time it started: `<object>_<YYYYMMDDTHHMMSSZ>_<star>.csv` (`-2`, `-3`… on
+the time when two start in the same second). A new curve (object change,
+restart, role change, a batch re-run folded in) starts a new file. Review still
+finds the object's set and the star (S10). A run's CSVs keep their names.
+**How to check.** `tests/workers/test_acquisition_engine.py::test_measuring_an_object_again_never_overwrites_its_preview_csv`
+(on the code before the fix, three points, an object change and one more
+point left one file holding that last point only).
+
 ## Review and AAVSO export
 
 ### S9 — Review keeps the check star's role
@@ -1127,7 +1216,7 @@ patch:
 
 ## State of the branch
 
-- 623 tests pass, 45 skipped (0.4.2: 534 and 45). Every fix carries a test that
+- 638 tests pass, 45 skipped (0.4.2: 534 and 45). Every fix carries a test that
   fails on the code before it, checked commit by commit against its parent; one
   guard test (S3, the wheel cannot be read) pins a fallback 0.4.2 already had.
   Each hardware test was written first and run on the unfixed code (H17
