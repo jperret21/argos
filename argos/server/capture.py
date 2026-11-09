@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -146,6 +147,8 @@ class SaveJob:
     wheel: Any = None
     software: str = SOFTWARE_ID
     extra: dict[str, Any] = field(default_factory=dict)
+    #: ``camera.egain_table``: its entry for the frame's gain is the header EGAIN (S42).
+    egain_table: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -203,6 +206,7 @@ def frame_context(job: SaveJob, filter_name: str, readings: dict[str, Any]) -> F
         software=job.software,
         ccd_temp=readings.get("ccd_temp"),
         egain_driver=readings.get("egain_driver"),
+        egain_table=job.egain_table,
         offset=readings.get("offset"),
         readout_mode=readings.get("readout_mode"),
         filter_name=filter_name,
@@ -310,13 +314,26 @@ def _fits_utc(value: Any) -> datetime | None:
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
 
 
+def _late_date_avg(header: Any) -> bool:
+    """``_late_date_avg`` (S39): a frame written by Argos before 0.5.0, whose
+    sequence ``DATE-AVG`` is late by half the image download (S36)."""
+    text = str(header.get("SOFTWARE") or header.get("SWCREATE") or "").strip()
+    match = re.fullmatch(r"Argos(?: v(\d+)\.(\d+)\S*)?", text)
+    if match is None:
+        return False
+    if match.group(1) is None:
+        return True
+    return (int(match.group(1)), int(match.group(2))) < (0, 5)
+
+
 def fits_exposure_mid(header: Any) -> datetime | None:
     """Exposure midpoint (UTC) of a saved frame, from its header, or None.
 
-    ``acquisition_engine.py:103-122``: ``DATE-AVG``, else ``DATE-OBS`` +
-    ``EXPTIME``/2 (``EXPOSURE`` accepted); never guessed.
+    ``fits_exposure_mid`` of ``acquisition_engine.py``: ``DATE-AVG``, else
+    ``DATE-OBS`` + ``EXPTIME``/2 (``EXPOSURE`` accepted); a frame of Argos
+    before 0.5.0 always by ``DATE-OBS`` + ``EXPTIME``/2 (S39); never guessed.
     """
-    mid = _fits_utc(header.get("DATE-AVG"))
+    mid = None if _late_date_avg(header) else _fits_utc(header.get("DATE-AVG"))
     if mid is not None:
         return mid
     start = _fits_utc(header.get("DATE-OBS"))

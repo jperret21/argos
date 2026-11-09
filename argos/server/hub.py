@@ -87,6 +87,7 @@ from argos.core.config import observing_site
 from argos.core.hardware import active, catalog
 from argos.core.imaging.sky_geometry import compute_airmass
 from argos.core.photometry.airmass import airmass_at, julian_date
+from argos.core.photometry.params import frame_egain
 from argos.server import API_VERSION
 from argos.server import profiles as profile_records
 from argos.server import runtime
@@ -137,6 +138,7 @@ from argos.server.jog import JogService
 from argos.server.logbook import LOG_HISTORY, LogBook
 from argos.server.network import NetworkMonitor
 from argos.server.observation import ObservationService
+from argos.server.photometry import PhotometryService
 from argos.server.sessions import SessionIndex, is_session
 from argos.server.settings import Settings, SimOptions
 from argos.server.site_check import SITE_KEYS, SiteCheck
@@ -369,6 +371,10 @@ class Hub:
         # -- wave 4 (Field identification) --------------------------------------
         self.targets = TargetService(self)
         self.field = FieldService(self)
+        # -- wave 5 (Live photometry) -------------------------------------------
+        self.photometry = PhotometryService(self)
+        #: The newest ``frame_metrics`` record (replayed to a client joining mid-run).
+        self._last_frame_metrics: dict[str, Any] | None = None
 
         self.config.add_listener(self._on_config_changed)
         if self.config.load_error:
@@ -393,6 +399,7 @@ class Hub:
     def shutdown(self) -> None:
         """Release everything at server exit."""
         self.field.close()
+        self.photometry.close()
         self.jobs.shutdown()
         self.network.stop()
         self.stellarium.stop(announce=False)
@@ -509,6 +516,11 @@ class Hub:
             targets = self.targets.cached_record()
             if targets is not None:
                 snapshots.append(("targets", seq, {"type": "targets", **targets}))
+            # Wave 5: the live status, the leave-one-out report and the newest
+            # frame metrics, so a page opened mid-run shows them at once.
+            snapshots.extend(self.photometry.snapshots(seq))
+            if self._last_frame_metrics is not None:
+                snapshots.append(("frame_metrics", seq, dict(self._last_frame_metrics)))
             return snapshots
 
     def devices(self) -> dict[str, Any]:
@@ -2364,7 +2376,7 @@ class Hub:
                     if live:
                         self._refresh_camera(**changes)
                 self.metrics.submit(job)
-                self.field.on_frame(seq, pixels, origin)
+                self.field.on_frame(seq, pixels, origin, epoch=start + (end - start) / 2)
                 if log_note:
                     self.log(level, message, source="camera", topic="camera")  # type: ignore[arg-type]
                 if save_job is not None:
@@ -2528,6 +2540,7 @@ class Hub:
             observer=str(self.config.get("observer.name", "") or "").strip(),
             camera=self._slots["camera"].handle,
             wheel=self.wheel.handle if self.wheel.connected else None,
+            egain_table=dict(self.config.get("camera.egain_table", {}) or {}),
         )
 
     def _save_task(self, job: SaveJob) -> None:
@@ -2579,9 +2592,11 @@ class Hub:
     def _on_metrics(self, job: MetricsJob, result: dict[str, Any]) -> None:
         """The metrics thread measured a frame: ``frame_metrics`` and a conditions row."""
         with self._lock:
-            self._publish("frame_metrics", {"seq": job.seq, **result, "t": utc_iso()})
+            record = {"seq": job.seq, **result, "t": utc_iso()}
+            self._publish("frame_metrics", record)
+            self._last_frame_metrics = {"type": "frame_metrics", **record}
         # wave 4: the photometry aperture follows the frame's mean FWHM (1493-1504)
-        self.targets.on_frame_fwhm(result.get("fwhm_px"))
+        self.targets.on_frame_fwhm(result.get("fwhm_px"), seq=job.seq)
         if job.row is None:
             return
         row = self.conditions.append(
@@ -2751,7 +2766,11 @@ class Hub:
         self.metrics.submit(
             MetricsJob(seq=seq, arr=opened.pixels, origin="file", radius=self._star_radius())
         )
-        self.field.on_frame(seq, opened.pixels, "file", hint=opened.pointing)
+        # The frame's own e-/ADU for its errors, never the Camera form's (S41).
+        egain = frame_egain(opened.gain_header, self.config.get("camera.egain_table", {}) or {})
+        self.field.on_frame(
+            seq, opened.pixels, "file", hint=opened.pointing, epoch=opened.epoch, egain=egain
+        )
         shape = "×".join(str(n) for n in (opened.pixels.shape[1], opened.pixels.shape[0]))
         self.log("info", f"Opened {p.name} ({shape})", source="camera", topic="camera")
         if opened.epoch_utc is None:

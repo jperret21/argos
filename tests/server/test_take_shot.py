@@ -206,12 +206,14 @@ def _qt_reference(
     observer: str,
     camera_reads: dict,
     path: Path,
+    egain_table: dict | None = None,
 ) -> fits.Header:
     """``_save_fits_async`` (acquisition_engine.py:1811-1898), written out independently."""
     site = site or (None, None, None)
     ctx = FrameContext(
         ccd_temp=camera_reads["ccd_temp"],
         egain_driver=camera_reads["egain_driver"],
+        egain_table=egain_table or {},
         offset=camera_reads["offset"],
         readout_mode=camera_reads["readout_mode"],
         filter_name=filter_name,
@@ -293,14 +295,17 @@ def test_save_frame_builds_the_qt_context(tmp_path):
         observer="J. Perret",
         camera=Camera(),
         wheel=None,
+        egain_table={"80": 1.9},
     )
     result = save_frame(job, lambda level, message: None)
     reference = _qt_reference(
         arr, start, end, exposure=2.0, gain=80, frame_type="Light Frame", object_name="SS Cyg",
         filter_name="LP", pos=pos, target=(21.71, 43.59), site=(48.8566, 2.3522, 35.0),
         observer="J. Perret", camera_reads=reads, path=tmp_path / "qt.fit",
+        egain_table={"80": 1.9},
     )  # fmt: skip
     _assert_same_header(_header(str(result.path)), reference)
+    assert _header(str(result.path))["EGAIN"] == 1.9  # S42: the table's, as the errors use
     np.testing.assert_array_equal(_data(str(result.path)), arr)
 
 

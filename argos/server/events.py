@@ -54,9 +54,11 @@ EVENT_BACKLOG = 256
 
 #: Stream kinds: every message counts (no snapshot floor, never replaced by a
 #: newer one). Under backpressure ``log`` lines are dropped first, then the
-#: oldest of the wave 3 streams; each stream carries its own ``seq`` so a
-#: client that sees a gap re-reads the REST page (protocol.md "Backpressure").
-STREAM_KINDS = frozenset({"log", "frame_saved", "conditions"})
+#: oldest of the wave 3 and 5 streams; each stream carries its own ``seq`` so
+#: a client that sees a gap re-reads the REST page (protocol.md "Backpressure").
+STREAM_KINDS = frozenset(
+    {"log", "frame_saved", "conditions", "photometry_point", "photometry_reset"}
+)
 
 
 class EventSubscriber:

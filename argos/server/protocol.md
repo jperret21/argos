@@ -17,7 +17,11 @@ Connection control has its web control) is what ships in API 2. Wave 2
 [API 2 routes, wave 3](#api-2-routes-wave-3-observe-acquisition): Take
 shot with FITS save, capture settings, filter wheel, focuser, autofocus,
 jog with a server dead-man, conditions, observation identity and catalogue
-lookup; still `"api": 2`.
+lookup; still `"api": 2`. Wave 4 (rows A32-A33, A43-A49, A51-A53) adds the
+field, its catalogue, layers, tracking, star selection and the target set;
+wave 5 (rows A50, A54-A58) adds the live photometry of
+[API 2 routes, wave 5](#api-2-routes-wave-5-live-photometry), still
+`"api": 2`.
 
 ## Launching
 
@@ -108,8 +112,10 @@ Dependencies: `uv pip install --python .venv/bin/python fastapi 'uvicorn[standar
   probe), and for explicit requests: discovery (`POST /api/discovery`), the
   internet check (`POST /api/network/check` with `internet: true`) and the
   place search (`POST /api/site/search`: OpenStreetMap Nominatim, then
-  Open-Meteo for the elevation). The site check computes offline: astropy
-  never downloads an IERS or leap-second table for it.
+  Open-Meteo for the elevation). The site check and the live points'
+  BJD_TDB compute offline: astropy never downloads an IERS or leap-second
+  table for them (its bundled tables give the same BJD to the bit;
+  `notes/release_0_5_0.md` S37).
 - **Files.** The server browses only the observer's home folder and the
   ARGOS data folders (`GET /api/fs/list`, see
   [File listing](#file-listing-a11)); it reads session folders only to list
@@ -680,7 +686,8 @@ Listing = {"path": path,            // the folder listed, symbolic links resolve
            "root": path,            // the allowed root that contains it
            "places": [Place, …],    // shortcuts for the picker's side list
            "entries": [Entry, …],   // folders first, then files; each group by name (case-insensitive)
-           "truncated": bool}       // more than 5 000 entries: the first 5 000 are listed
+           "truncated": bool,       // more than 5 000 entries: the first 5 000 are listed
+           "selected": string|null} // wave 5: the file named by `path` (its folder is listed)
 Place   = {"id": "home"|"desktop"|"sessions"|"presets"|"calibrations"|"diagnostics"|"config",
            "label": string, "path": path, "exists": bool}
 Entry   = {"name": string, "kind": "dir"|"file", "size": int|null,   // null for a folder
@@ -701,8 +708,10 @@ stays browsable.
   invalid_argument`. It is resolved (`realpath`) before the check, so
   neither `..` nor a symbolic link can leave the roots: outside them is
   `403 forbidden_path`. A missing folder is `404 not_found`; a file is `400
-  invalid_argument` ("not a folder"); a folder the OS refuses to read is
-  `403 forbidden_path` with the OS reason.
+  invalid_argument` ("not a folder") with `kind=dir`, and with `kind=file` or
+  `any` (wave 5) lists its folder with `selected` = its name (a suffix not in
+  `ext` is `400` "<name> is not a <ext> file"); a folder the OS refuses to
+  read is `403 forbidden_path` with the OS reason.
 - Entries whose symbolic link points outside the roots, or nowhere, are
   left out (never shown, never followed). Hidden names (leading `.`) are
   left out unless `hidden=true`.
@@ -1250,7 +1259,7 @@ The `/ws/frames` header gains (additive):
  // opened files (origin "file"):
  "path": path, "file_name": string,
  "date_obs": string|null,       // the header's DATE-OBS as written
- "epoch_utc": ISO|null}         // exposure midpoint: DATE-AVG, else DATE-OBS + EXPTIME/2, else null
+ "epoch_utc": ISO|null}         // exposure midpoint: DATE-AVG, else DATE-OBS + EXPTIME/2, else null (S39)
 ```
 
 `bayer` is the profile's pattern for a colour camera (`CameraState.sensor.
@@ -1603,7 +1612,7 @@ the Qt Observe page does (`AcquisitionEngine.open_fits_frame`,
   metrics untouched (Review's frame inspector, wave 7, displays any FITS).
   RGB cubes are refused the same way. The size limits are unchanged.
 - **Dated from its header.** `epoch_utc` is `DATE-AVG`, else `DATE-OBS` +
-  `EXPTIME`/2 (`fits_exposure_mid`, `acquisition_engine.py:103-122`), else
+  `EXPTIME`/2 (`fits_exposure_mid`), else
   `null` with WARN "<name> has no usable DATE-OBS time (or EXPTIME) — no
   photometry point can be dated, so none will be measured on it." The frame
   `timestamp` is `DATE-OBS` (else the file time) as in v1; a `DATE-OBS`
@@ -2076,6 +2085,336 @@ kept. `field_layers` can carry a few thousand markers (the Gaia budget),
 so it is sent once per generation or change, never per frame; the per
 frame motion is `field_transform`.
 
+## API 2 routes, wave 5 (Live photometry)
+
+Wave 5 (`web/spec/README.md` §7 "Live photometry": rows A50, A54-A58) adds
+the routes, records and events below, still under `"api": 2` (additive).
+The live measurement is the fixed Qt engine's (0.5.0), ported Qt-free into
+`argos/server/photometry.py` with the source lines it ports:
+`_measure_photometry`, `_wcs_for_frame`, `_build_live_tracker`,
+`_emit_live_point`, `_apply_systematic_floor`, `_write_live_quality_report`,
+`_photometry_csv_path`, `_diagnostics`, `propose_comparison_stars`,
+`reselect_comparison_stars` (`acquisition_engine.py:887-913, 1304-1346,
+1531-1795`) over the unchanged core (`measure_frame`, `ApertureTracker`,
+`comparison_quality_report`, `LightCurve.to_csv`, `bjd_tdb`, `airmass_at`).
+Every measurement runs on the photometry thread, never on the event loop.
+
+| Method | Path | Body | Returns | Row |
+|---|---|---|---|---|
+| GET | `/api/field/variables` | — | FieldVariables | A50 |
+| GET | `/api/photometry/live` | — | LivePhotometry | A54 |
+| POST | `/api/photometry/comparisons/recommend` | RecommendBody | Recommendation | A58 |
+
+New WebSocket events (`/ws/events`): `photometry_point` (A55) and
+`photometry_reset` (A56) form one **stream** with its own `seq` (a client
+that sees a gap, or a `revision` it does not hold, re-reads `GET
+/api/photometry/live`); `comparison_quality` (A57) and `photometry` (the
+live status, shown by the Field band) are **snapshots**. A new client
+receives `photometry`, `comparison_quality` and the newest `frame_metrics`
+once, after the wave 4 snapshots. New error code: `no_comparison`.
+
+### When a point is measured
+
+As Qt, **one point per solution outside a sequence**
+(`measure_photometry_if_idle`, `acquisition_engine.py:1062-1065`, called by
+`_on_astrometry_solved`, `imaging_page.py:1417`): every successful Identify
+field (A43) and every automatic identification (A44) measures the target
+set once, on the newest frame of the solved geometry at the moment the
+solution is applied (Qt's `_last_raw`), through that solution. With
+automatic identification on, live view therefore gives one point per
+re-solve (`astrometry.live_resolve_s`, 20 s by default, or a mount move).
+A sequence (wave 6) will measure every saved sub instead
+(`_on_seq_frame_saved`, 772-797); the service already has that entry
+(`measure_saved_frame`).
+
+Nothing is measured (`photometry.state` says why, no point, no CSV line)
+when the set has no `target` (`no_target`), the frame has no epoch
+(`no_epoch`: WARN "Photometry skipped: the frame has no exposure time
+(DATE-OBS/EXPTIME).") or no star of the set is where the solution places it
+(`field_lost`, see the tracker below). The epoch is the exposure **midpoint**: camera frames
+`start + (end − start)/2` (`_on_frame`, 588-591); opened files `DATE-AVG`,
+else `DATE-OBS` + `EXPTIME`/2 (`fits_exposure_mid`); a frame written by Argos
+before 0.5.0 (`SOFTWARE` `Argos` or `Argos v0.x` below 0.5) always by
+`DATE-OBS` + `EXPTIME`/2, its sequence `DATE-AVG` being late by half the image
+download (release S39). A point is
+kept when its differential magnitude **or** its flux ratio exists (S18:
+ratio-only points have `mag: null`); a star with neither (off frame,
+saturated ensemble, no comparison) gives no point that frame.
+
+### Measurement (identical to Qt)
+
+- **Plane and geometry**: the green plane (`green_plane`); aperture
+  `max(photometry.aperture_min_px, photometry.aperture_fwhm_mult × FWHM)`,
+  annulus `max(annulus_in_px, r_ap + 1)` to `max(annulus_out_px, r_in + 2)`
+  (green px, `measure_frame`, `params.py:80-111`). **Series FWHM** (P7): the
+  mean FWHM of the stars detected on the first measured frame (`detect_stars`
+  with `imaging.star_radius_px`, as `frame_metrics`), frozen for the series;
+  3.0 px (`DEFAULT_FWHM`) on a frame without a measurable FWHM, re-sampled on
+  the next. The series restarts at an object change. (Qt 0.5.0 froze the
+  **second** frame's FWHM, so the first point had its own aperture: fixed
+  for 0.5.0 in the release branch, see `notes/release_0_5_0.md` S31; the
+  server follows the fix.)
+- **Apertures placed by core's `ApertureTracker`** (owner decision; not the
+  wave 4 `FieldTracker`, which keeps placing the overlays): built on the
+  first measured frame after a new solution, a target-set change or an
+  object change (`_build_live_tracker`, 1569-1582): anchors =
+  `select_tracking_anchors` over the comparisons and checks (SNR ≥ 10,
+  unsaturated, not suspect, at most 6), else any star of the set **seen where
+  the solution places it** (SNR ≥ 5); a tracker built with none is built
+  again on the next frame. Search radius `max(8, 2 × aperture(None))` green
+  px; updated on every measured frame with rotation unless the mount reports
+  `eq` / `eq_gem` (`_wcs_for_frame`, 1542-1567). A frame on which no anchor
+  is found (the field moved further than the search radius since the
+  solution, or clouds hide every anchor) gets **no point**: WARN "Photometry
+  skipped: no star of the set where the solution places it — the field moved
+  since the solve, or clouds.", status `skipped` / `field_lost`, a
+  `frame_skipped` event in the flight recorder. (Qt 0.4.2 fell back to every
+  star of the set unseen and measured blank sky with no flag: fixed for
+  0.5.0, `notes/release_0_5_0.md` S35; the server follows the fix.)
+  `photometry.track_apertures: false` measures through the solution alone.
+  Outside a sequence each point follows a fresh solution, so the tracker
+  only re-centres the solution on that frame's anchors.
+- **Calibration** (`measure_targets`, `session.py:47-160`): targets and
+  checks against the full ensemble, each comparison leave-one-out;
+  `egain` from `camera.egain_table`, else the driver, else the sensor model;
+  an opened frame keeps its own: the table at its `GAIN`, else its `EGAIN`
+  (`frame_egain`, release S41), the chain above only when it records neither.
+  A Take shot's header `EGAIN` follows the same chain (release S42).
+- **Errors and flags**: `formal_mag_err`; `mag_err` = `hypot(max(0,
+  formal), σ_syst)` once the curve has ten valid points (or with
+  `photometry.systematic_floor_mag`), recomputed for every point of the
+  curve after each new point (`_apply_systematic_floor`, 1767-1795; the
+  client recomputes the earlier bars the same way from `sigma_syst`);
+  `saturated` (aperture peak ≥ `camera.linearity_max_adu`), `suspect`
+  (hot pixel / cosmic, `aperture.py:109-136`), never used to drop a point.
+- **Time and airmass** (X2): `jd_utc` of the midpoint; with a site set
+  (`observing_site`: a name, or coordinates other than 0/0) `bjd_tdb` from
+  astropy for the star's own RA / Dec and the site, and the star's own
+  airmass at `jd_utc` (Pickering); without a site no `bjd_tdb` and the
+  mount's airmass for a camera frame (`null` without a mount, and `null` for an
+  opened file, another night: Qt used the mount's current altitude, fixed for
+  0.5.0, `notes/release_0_5_0.md` S34).
+- **Files**: each curve is rewritten after every point by
+  `LightCurve.to_csv` (15 columns, `lightcurve.py:14-30`; written beside the
+  file and renamed over it, so a reader never sees it half written: release
+  S38) at
+  `<sessions_path>/targets/<object>_<YYYYMMDDTHHMMSSZ>_<auid or name>.csv`
+  outside a run, one file per curve named after its start (`-2`, `-3`… on the
+  time for two in one second), so measuring an object again never overwrites
+  an earlier curve (`_photometry_csv_path`, release S40; inside a run, wave 6:
+  `<run>/photometry/<role>_<object>_<tag>.csv`); with `diagnostics.enabled`
+  the flight recorder `<sessions_path>/targets/<object>_live_diagnostics.jsonl`
+  (`star`, `ensemble`, `frame` records). The leave-one-out report is written
+  to `<run>/photometry_quality.json` inside a run only (S17).
+
+### Live photometry (A54)
+
+```
+LivePhotometry = {"object_name": string, "run_root": path|null,
+                  "sequence_running": bool,
+                  "band": string,                    // photometry.default_band ("TG")
+                  "obscode": string,                 // observer.obscode
+                  "chart_id": string|null,           // the comparisons' single VSP chart
+                  "site_set": bool,                  // X2: BJD_TDB and the star's airmass
+                  "geometry": Geometry,              // as Targets.geometry, plus
+                                                     // "series_fwhm_px": float|null
+                  "curves": [Curve], "quality": Report|null,
+                  "status": PhotometryStatus,
+                  "revision": int,                   // +1 at every reset
+                  "seq": int}                        // the newest point / reset seq
+Curve = {"key": string,                  // Qt's curve key: AUID, else the display name
+         "star_key": string|null,        // TargetStar key in the set (null: no longer in it)
+         "role": "target"|"comparison"|"check", "name": string, "auid": string|null,
+         "mags": {band: float},          // catalogue magnitudes (VSP)
+         "catalogue_v": float|null,      // D10: the check is plotted as check − this
+         "sigma_syst": float|null,       // the curve's current floor
+         "csv": path|null,
+         "points": [LcPoint]}
+LcPoint = {"jd_utc": float, "t": ISO,    // the exposure midpoint (ms)
+           "bjd_tdb": float|null,
+           "mag": float|null,            // null: ratio-only point (S18)
+           "mag_err": float|null,        // final: with the floor
+           "formal_mag_err": float|null, "sigma_syst": float|null,
+           "airmass": float|null, "fwhm": float|null,   // series FWHM, green px
+           "sky_adu": float|null, "comps_used": int,
+           "relative_flux": float|null, "relative_flux_err": float|null,
+           "relative_comps_used": int,
+           "saturated": bool, "suspect": bool,
+           "frame_seq": int,             // the /ws/frames seq it was measured on
+           "zero_point": float|null,     // the star's ensemble zero point on that frame
+           "zp_rms": float|null}         //   (mean catalogue − instrumental) and its rms
+```
+
+`LcPoint` carries every `LcPoint` field of `lightcurve.py:38-62` (the CSV
+columns) unrounded; `null` for a value the CSV leaves empty or a NaN.
+`zero_point` and `zp_rms` are `DiffResult.zero_point` / `zp_rms` (rounded to
+4 decimals by core, as the flight recorder's `ensemble` record): not in the
+CSV; for the target, the night's extinction and transparency (the plot's
+ensemble facet). A frame may be measured twice (two solutions on the same
+opened frame): its points are kept twice, as Qt keeps them.
+Curves are listed in measurement order (Qt's dict order).
+
+### Points and resets (A55, A56)
+
+```
+PhotometryPoint = {"type": "photometry_point", "seq": int, "revision": int,
+                   "frame_seq": int, "key": string, "star_key": string, "role": string,
+                   "name": string, "auid": string|null,
+                   "index": int,                 // position of the point in its curve
+                   "point": LcPoint,
+                   "sigma_syst": float|null}     // the curve's floor after this point
+                   // when it changed, every earlier point with a magnitude has
+                   // mag_err = hypot(max(0, formal_mag_err), sigma_syst) (Python's
+                   // math.hypot bits): the client recomputes them row by row, in
+                   // whatever order the frames were measured (Qt re-rendered the
+                   // store, S19). The whole column is never resent.
+PhotometryReset = {"type": "photometry_reset", "seq": int, "revision": int,
+                   "reason": "object_changed"|"role_changed"|"cleared"|"sequence_started"}
+```
+
+One `photometry_point` per kept point, in measurement order (the frame's
+stars in target-set order). `index` counts the curve's points received
+(measurement order, not time order: an older opened frame is inserted in
+time by the client). `photometry_reset` follows an object change
+(`on_object_changed` → `clear_lightcurves`, 258-274, 1281-1293; the CSVs stay
+on disk), a star measured under a new role (its curve starts again: a
+comparison's leave-one-out magnitudes and a check's are different quantities;
+Qt appended to the old curve, fixed for 0.5.0, `notes/release_0_5_0.md` S33)
+and, in wave 6, a sequence start (650-692). Both kinds share `seq`; a client
+that re-reads the snapshot ignores the events whose `seq` it covers.
+
+### Comparison quality (A57) and the live status
+
+```
+ComparisonQuality = {"type": "comparison_quality", "revision": int,
+                     "frame_seq": int|null, "report": Report|null}
+Report = {… comparison_quality_report (quality.py:22-98) as written to
+          photometry_quality.json: schema, generated_utc, selection_status
+          ("insufficient_data"|"not_ready"|"live_preview_consistent"),
+          scientific_note, criteria {min_points, max_scatter_mag,
+          max_formal_error_mag}, comparison_stars [Entry] …}
+Entry = {"name", "auid", "n_valid", "scatter_mag", "median_formal_error_mag",
+         "status": "insufficient_data"|"noisy"|"unstable"|"stable",
+         // added on the wire:
+         "key": string,                          // its curve key
+         "star_key": string,                     // its TargetStar key
+         "last": {"mag", "mag_err", "comps_used", "jd_utc"}|null}
+                                                 // its newest leave-one-out point
+PhotometryStatus = {"type": "photometry",
+                    "state": "off"|"waiting"|"measured"|"skipped",
+                    "reason": "no_target"|"not_solved"|"no_epoch"|"no_comparison"
+                              |"no_point"|"field_lost"|null,
+                    "message": string|null,
+                    "frames": int, "points": int,        // since the last reset
+                    "last": {"frame_seq", "t", "jd_utc", "bjd_tdb"|null,
+                             "points": int,               // kept on that frame
+                             "target": {"key", "mag", "mag_err", "bjd_tdb"}|null,
+                             "aperture_px": float, "fwhm_px": float,   // green px
+                             "anchors": int|null,         // tracker anchors used
+                             "tracking": {"rot_deg", "dx", "dy",       // green px
+                                          "residual_px"}|null}|null,
+                    "revision": int}
+```
+
+The leave-one-out report is computed after every measured frame, in live
+preview too (S17, Q-R13), with `photometry.comparison_validation_*`; a reset
+sends `report: null`. Per comparison, `status` is its leave-one-out status
+(PROPOSAL §7). `photometry.state`: `off` (no target in the set), `waiting`
+(a target, no solution yet, or the set changed since the last measurement:
+the next solution measures), `measured` (the last attempt kept points),
+`skipped` (the last attempt kept none: `no_epoch`, `field_lost`,
+`no_comparison` when the set has no comparison, else `no_point`). A curve's
+`star_key` is `null` once its star left the set.
+
+### Field variables (A50)
+
+```
+FieldVariables = {"available": bool,           // the field is solved and its catalogue known
+                  "generation": int,           // field_layers generation
+                  "rows": [VariableRow]}
+VariableRow = {"index": int,                   // A52 variable_index
+               "name", "var_type", "mag_text",  // "max – min" as VSX gives them
+               "brightest_mag": float|null, "period_d": float|null,
+               "sep_arcmin": float|null,        // from the solved field centre
+               "in_set_role": "target"|"comparison"|"check"|null,
+               "suspected": bool, "auid": string|null, "key": string,
+               "ra_hours", "dec_deg", "x", "y"}  // reference frame px
+```
+
+The VSX variables inside the solved frame, in catalogue order (brightest
+first), as the Qt Variables tab (`_refresh_variable_table`,
+`imaging_page.py:2230-2250`; `variable_table.py:58-200`; the role instead
+of Qt's "●"). Filtering and sorting are the client's (Q-R: no server
+filter). Before a solution: `available: false`, no rows.
+
+### Comparison recommendation (A58)
+
+```
+RecommendBody = {"mode": "replace"|"complete",
+                 "count"?: int}                // 1-20: also sets photometry.auto_comparisons
+Recommendation = {"added": int, "removed": [TargetStar],
+                  "comparisons": [TargetStar],  // the set's comparisons afterwards
+                  "targets": Targets}
+```
+
+- `replace` = Qt "Recommend from pilot" (`reselect_comparison_stars`,
+  1324-1346; `imaging_page.py:2213-2224`): the comparisons whose source is
+  `vsp` or `vsp_auto` are replaced by the pilot-qualified picks on the newest
+  solved frame (`_auto_select_comparisons` with `_pilot_comparison_quality`:
+  SNR ≥ `comparison_min_snr`, Δmag ≤ `comparison_max_delta_mag`, distance ≤
+  `comparison_max_separation_arcmin`; score 0.5·SNR + 0.4·Δmag + 0.1·distance,
+  `catalog/photometry.py:88-170`); manual comparisons stay. The new ensemble
+  is chosen on a copy: when no VSP star passes the gate, nothing is removed
+  or saved (`added: 0`, `removed: []`; Qt removed the VSP ensemble anyway,
+  fixed for 0.5.0, `notes/release_0_5_0.md` S32 extended). OK "Photometry:
+  replaced the VSP ensemble with {n} pilot-qualified star(s)." / WARN
+  "Photometry: no pilot-qualified comparison found — the ensemble is
+  unchanged." (after core's WARN that names the gate).
+- `complete` = `propose_comparison_stars` (1304-1322): only adds missing
+  calibrated VSP members up to `photometry.auto_comparisons`. OK
+  "Photometry: selected {n} pilot-qualified comparison(s)." / INFO "Photometry:
+  no comparison added ({m} in the ensemble)."
+- `count` = Qt's "Automatically propose" spin
+  (`_on_auto_comparison_count_changed`, `imaging_page.py:2196-2211`): the
+  config key is written (a `config` event follows) before the action; with
+  `replace` the Qt texts are OK "Photometry: selected {n} pilot-qualified
+  comparison(s)." / INFO "Photometry: requested {count} comparison(s);
+  {selected} pilot-qualified VSP star(s) selected."
+- `409 not_solved` "Identify the field first: comparisons are chosen on the
+  solved frame."; `409 no_target` "Choose a target star first."; `409
+  no_comparison` "No VSP comparison stars are known for this field — refresh
+  the catalogue." (Qt removed the VSP ensemble and added nothing in these
+  cases: fixed for 0.5.0, `notes/release_0_5_0.md` S32); `409 busy` while a
+  sequence owns the observation. The set is saved, the tracker reset, and
+  `targets` and `field_layers` published as for A52.
+
+### Wave 4 follow-ups
+
+- **Undo of a new target** (A52, A53): the `POST /api/targets` answer gains
+  `"auto_selected": [key]`, the comparisons chosen automatically with this
+  call (empty otherwise). `DELETE /api/targets/{key}?also=<key>&also=<key>`
+  (or comma-separated: a piece that does not start with `auid:` or `pos:`
+  continues the previous key, whose `pos:<ra>,<dec>` holds a comma)
+  removes the star and, in the same save, each listed star that is still a
+  comparison of source `vsp_auto` (one the observer has not changed since);
+  the answer carries `removed` and `"removed_also": [TargetStar]`. Undo of a
+  new target = `DELETE` with `also` = its `auto_selected`. One OK line
+  "Removed from target set: <name> (and <n> automatic comparison(s))".
+- **`frame_metrics`** is replayed to a client that connects mid-run (the
+  newest record, once, after the wave 4 snapshots).
+- **File listing** (A11): with `kind=file` or `kind=any`, a `path` naming a
+  file lists its folder with `"selected": <file name>` (a typed file path in
+  the picker); a file whose suffix is not in `ext` is `400 invalid_argument`
+  "<name> is not a <ext> file". Every listing carries `selected` (`null`
+  otherwise). `kind=dir` still answers `400` "not a folder".
+
+### Backpressure (wave 5)
+
+`photometry_point` and `photometry_reset` are a stream (with `log`,
+`frame_saved` and `conditions`): never compacted into one, the oldest dropped
+after the log lines when a client lags; `seq` shows the gap. `photometry`,
+`comparison_quality` and `frame_metrics` are snapshots (newest kept).
+
 ## State records
 
 ```
@@ -2168,6 +2507,10 @@ DeviceState     = {"state": "disconnected"|"connecting"|"connected"|"busy"|"erro
 | `{"type": "field_transform", …FieldTransform}` | Wave 4. Every new frame of the solved field (the tracking fit); identity after a solve or an invalidation. |
 | `{"type": "selection", …SelectionEvent}` | Wave 4. Every star selection, its identification outcome, each followed frame of a measured star, and its clearing. |
 | `{"type": "targets", …Targets}` | Wave 4. Every change of the target set, of its object (name), of its positions (a new solution) and of the aperture. |
+| `{"type": "photometry_point", …PhotometryPoint}` | Wave 5. One per kept live point (a stream with `seq`, shared with `photometry_reset`). |
+| `{"type": "photometry_reset", …PhotometryReset}` | Wave 5. The live curves changed under the client (object change, role change, sequence start): re-read `GET /api/photometry/live`. |
+| `{"type": "comparison_quality", …ComparisonQuality}` | Wave 5. The leave-one-out report after every measured frame (`report: null` after a reset). |
+| `{"type": "photometry", …PhotometryStatus}` | Wave 5. Every change of the live photometry status (set, field, outcome of a measurement). |
 | `{"type": "log", …LogEntry}` | Server events, plus WARNING-and-above records from `argos.core`, such as Alpaca driver warnings (core INFO, logged on every exposure, stays in the server log; a core message repeated within 60 s is sent once). Right after the first `status` (and `network`, `stellarium`, `activity`, in that order), a new client receives the last 200 log lines, oldest first, so a page opened mid-session shows what happened before; older lines come from `GET /api/logs`. A client that reconnects drops the lines whose `seq` it already holds. |
 
 A camera change therefore sends both a `camera` message and a `status`
@@ -2357,3 +2700,7 @@ wide by 1920 px high, 16-bit, mono.
 | A49 | Wave 4: `GET` / `POST` / `DELETE /api/field/select`, `selection` event (point identification superseded by a newer click) |
 | A51-A53 | Wave 4: `GET` / `POST /api/targets`, `DELETE /api/targets/{key}` (`removed` for Undo), `targets` event; `targets/<object>.json` in the Qt format |
 | A32-A33 | Wave 4: `POST /api/mount/center` (tracked solution, S30), `POST /api/mount/sync` `{"source": "solution"}` (Q-O3); `MountState.center_available` |
+| A50 | Wave 5: `GET /api/field/variables` |
+| A54-A57 | Wave 5: `GET /api/photometry/live`; `photometry_point` and `photometry_reset` (a stream), `comparison_quality` and `photometry` (snapshots); BJD_TDB per point; leave-one-out status per comparison |
+| A58 | Wave 5: `POST /api/photometry/comparisons/recommend` (`replace` / `complete`, `count`) |
+| — | Wave 5 follow-ups of wave 4: `auto_selected` in the `POST /api/targets` answer and `DELETE /api/targets/{key}?also=` (Undo of a new target); `frame_metrics` replayed to a new client; `GET /api/fs/list` lists a typed file's folder with `selected` |

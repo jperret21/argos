@@ -221,6 +221,30 @@ class TargetRoleBody(_Body):
         return self
 
 
+def _target_keys(values: list[str]) -> list[str]:
+    """``?also=`` values (repeated or comma-separated) → TargetStar keys.
+
+    A position key holds a comma (``pos:<ra>,<dec>``): a piece that does not
+    start a key (``auid:`` / ``pos:``) continues the previous one.
+    """
+    keys: list[str] = []
+    for value in values:
+        for piece in value.split(","):
+            piece = piece.strip()
+            if not piece:
+                continue
+            if keys and not piece.startswith(("auid:", "pos:")):
+                keys[-1] = f"{keys[-1]},{piece}"
+            else:
+                keys.append(piece)
+    return keys
+
+
+class RecommendBody(_Body):
+    mode: Literal["replace", "complete"]
+    count: int | None = Field(default=None, ge=1, le=20)
+
+
 class CenterTargetBody(_Body):
     ra_hours: float = Field(ge=0.0, le=24.0)
     dec_deg: float = Field(ge=-90.0, le=90.0)
@@ -1019,8 +1043,24 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
         return hub.targets.assign(star_from_pending(pending, body.role))
 
     @api.delete("/targets/{key}")
-    def targets_delete(key: str = Path(min_length=1, max_length=200)) -> dict[str, Any]:
-        return hub.targets.remove(key)
+    def targets_delete(
+        key: str = Path(min_length=1, max_length=200),
+        also: list[str] = Query(default=[], max_length=64),
+    ) -> dict[str, Any]:
+        return hub.targets.remove(key, also=_target_keys(also))
+
+    # -- wave 5: live photometry (A50, A54-A58)
+    @api.get("/field/variables")
+    def field_variables() -> dict[str, Any]:
+        return hub.field.variables_record()
+
+    @api.get("/photometry/live")
+    def photometry_live() -> dict[str, Any]:
+        return hub.photometry.live_record()
+
+    @api.post("/photometry/comparisons/recommend")
+    def photometry_recommend(body: RecommendBody) -> dict[str, Any]:
+        return hub.targets.recommend(body.mode, body.count)
 
     @api.post("/mount/center")
     def mount_center(body: CenterBody | None = None) -> dict[str, Any]:

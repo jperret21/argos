@@ -115,7 +115,7 @@ def test_bad_paths(client, tree):
     assert relative.status_code == 400 and relative.json()["error"]["code"] == "invalid_argument"
     missing = _list(client, path=str(tree["home"] / "nope"))
     assert missing.status_code == 404 and missing.json()["error"]["code"] == "not_found"
-    a_file = _list(client, path=str(tree["home"] / "a.json"))
+    a_file = _list(client, path=str(tree["home"] / "a.json"), kind="dir")
     assert a_file.status_code == 400 and "not a folder" in a_file.json()["error"]["message"]
     bad_kind = _list(client, path=str(tree["home"]), kind="everything")
     assert bad_kind.status_code == 400
@@ -220,3 +220,16 @@ def test_nothing_is_written(client, tree):
     _list(client, path=str(tree["home"]), counts="fits")
     _list(client)
     assert sorted(str(p) for p in tree["home"].rglob("*")) == before
+
+
+def test_a_typed_file_path_lists_its_folder_with_the_file_selected(client, tree):
+    """Wave 4 follow-up: the FilePicker answered 400 to a typed file path."""
+    home = Path(os.path.realpath(tree["home"]))
+    body = _list(client, path=str(tree["home"] / "a.json"), kind="file", ext=".json").json()
+    assert body["path"] == str(home) and body["selected"] == "a.json"
+    assert "a.json" in [e["name"] for e in body["entries"]]
+    assert _list(client, path=str(tree["home"] / "a.json")).json()["selected"] == "a.json"
+    wrong = _list(client, path=str(tree["home"] / "a.json"), kind="file", ext=".fits,.fit")
+    assert wrong.status_code == 400 and wrong.json()["error"]["code"] == "invalid_argument"
+    assert wrong.json()["error"]["message"] == "a.json is not a .fits/.fit file"
+    assert _list(client, path=str(tree["home"])).json()["selected"] is None

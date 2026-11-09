@@ -32,6 +32,7 @@ import math
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
@@ -73,6 +74,7 @@ from argos.server.field_solve import (
     wire_mirrored,
 )
 from argos.server.jobs import JobCancelled, JobContext
+from argos.server.photometry import MeasureRequest
 from argos.server.state import utc_iso
 from argos.server.targets import pending_star, star_from_pending
 
@@ -147,6 +149,10 @@ class Frame:
     raw: np.ndarray
     origin: str
     hint: tuple[float, float] | None = None  # (ra_hours, dec_deg) from a FITS header
+    #: Exposure midpoint (UTC): the photometry epoch (wave 5); None when unknown.
+    epoch: datetime | None = None
+    #: An opened frame's own e-/ADU (``frame_egain``, S41); None → the live chain.
+    egain: float | None = None
 
 
 @dataclass
@@ -157,6 +163,7 @@ class Pilot:
     green_shape: tuple[int, int]
     raw: np.ndarray
     seq: int
+    egain: float | None = None  # the frame's own e-/ADU (S41)
 
 
 def _origin_family(origin: str) -> str:
@@ -195,6 +202,7 @@ class FieldService:
         self._attempt_radec: tuple[float, float] | None = None
         self._ref_raw: np.ndarray | None = None
         self._ref_seq: int | None = None
+        self._ref_egain: float | None = None
         self._detected: list[tuple[float, float]] = []
         self._detected_anchors: list[tuple[float, float, float]] = []
         #: The state a cancelled or discarded attempt returns to.
@@ -381,6 +389,37 @@ class FieldService:
         with self._hub._lock:
             return self._selection
 
+    def variables_record(self) -> dict[str, Any]:
+        """``GET /api/field/variables`` (A50): the Qt Variables tab rows
+        (``_refresh_variable_table``, ``imaging_page.py:2230-2250``) from the
+        variables layer (VSX inside the solved frame, catalogue order)."""
+        with self._hub._lock:
+            layers = self._layers
+            available = bool(layers.get("available")) and self._catalog_result is not None
+            markers = list(layers["layers"]["variables"]) if available else []
+            generation = layers.get("generation", self._generation)
+        rows = [
+            {
+                "index": m["index"],
+                "name": m.get("name") or m.get("label") or "",
+                "var_type": m.get("var_type") or "",
+                "mag_text": m.get("mag_text") or "",
+                "brightest_mag": m.get("brightest_mag"),
+                "period_d": m.get("period_d"),
+                "sep_arcmin": m.get("sep_arcmin"),
+                "in_set_role": m.get("role"),
+                "suspected": bool(m.get("suspected")),
+                "auid": m.get("auid") or None,
+                "key": m.get("key"),
+                "ra_hours": m.get("ra_hours"),
+                "dec_deg": m.get("dec_deg"),
+                "x": m.get("x"),
+                "y": m.get("y"),
+            }
+            for m in sorted(markers, key=lambda m: m["index"])
+        ]
+        return {"available": available, "generation": generation, "rows": rows}
+
     def snapshots(self, seq: int) -> list[tuple[str, int, dict[str, Any]]]:
         """Hub lock held: what a new ``/ws/events`` client receives."""
         return [
@@ -449,7 +488,7 @@ class FieldService:
                 return None
             if green_shape(frame.raw) != self._green_shape:
                 return None
-            return Pilot(self._tracked_wcs(), self._green_shape, frame.raw, frame.seq)
+            return Pilot(self._tracked_wcs(), self._green_shape, frame.raw, frame.seq, frame.egain)
 
     def project_reference(self, ra_deg: float, dec_deg: float) -> tuple[float, float] | None:
         """A sky position in reference frame px, or None (unsolved / off frame)."""
@@ -504,12 +543,18 @@ class FieldService:
     # ------------------------------------------------------------------
 
     def on_frame(
-        self, seq: int, raw: np.ndarray, origin: str, hint: tuple[float, float] | None = None
+        self,
+        seq: int,
+        raw: np.ndarray,
+        origin: str,
+        hint: tuple[float, float] | None = None,
+        epoch: datetime | None = None,
+        egain: float | None = None,
     ) -> None:
         """A new frame was published (camera or file); latest wins on the frame thread."""
         if raw is None or getattr(raw, "ndim", 0) != 2 or self._closed:
             return
-        frame = Frame(seq=seq, raw=raw, origin=origin, hint=hint)
+        frame = Frame(seq=seq, raw=raw, origin=origin, hint=hint, epoch=epoch, egain=egain)
         family = _origin_family(origin)
         dropped = False
         with self._hub._lock:
@@ -916,7 +961,9 @@ class FieldService:
                 "dec_deg": reticle[0][1],
             }
         with self._hub._lock:
+            newest = self._frame if self._frame is not None else frame
             self._generation += 1
+            generation = self._generation
             self._state = "solved"
             self._reason = None
             self._message = None
@@ -930,6 +977,7 @@ class FieldService:
             self._reticle = reticle_record
             self._ref_raw = frame.raw
             self._ref_seq = frame.seq
+            self._ref_egain = frame.egain
             self._detected = detected
             self._detected_anchors = anchors_detected
             self._ref_stars = ref_stars
@@ -952,6 +1000,19 @@ class FieldService:
         self.maybe_fetch_catalog()
         self.schedule_projection()
         self._hub.targets.publish()  # positions on the new solution
+        # Wave 5: one photometry point per solution outside a sequence, on the
+        # newest frame (Qt's _last_raw), measure_photometry_if_idle (1062-1065).
+        self._hub.photometry.on_solved(
+            MeasureRequest(
+                frame_seq=newest.seq,
+                raw=newest.raw,
+                wcs=wcs,
+                epoch=newest.epoch,
+                generation=generation,
+                origin=newest.origin,
+                egain=newest.egain,
+            )
+        )
         return solution
 
     def _end_attempt(
@@ -1019,6 +1080,7 @@ class FieldService:
     def _announce_invalidation(self, reason: str) -> None:
         self._hub.log("info", INVALIDATION_TEXT[reason], source="field", topic="field")
         self._hub.targets.publish()  # positions: off the solution
+        self._hub.photometry.refresh_status()  # waiting for a solution
 
     def _invalidate_locked(self, reason: str) -> None:
         """Lock held. A running solve is cancelled and released: its field is gone."""
@@ -1041,6 +1103,7 @@ class FieldService:
         self._attempt_radec = None
         self._ref_raw = None
         self._ref_seq = None
+        self._ref_egain = None
         self._detected = []
         self._detected_anchors = []
         self._ref_stars = []
@@ -1276,7 +1339,7 @@ class FieldService:
                 result=self._catalog_result or fc.CatalogResult(),
                 point_identities=list(self._point_identities),
             )
-            ref = (self._ref_raw, self._ref_seq)
+            ref = (self._ref_raw, self._ref_seq, self._ref_egain)
             cached = self._quality_cache
         cfg = self._hub.config.get
         limit = float(cfg("catalog.display_mag_limit", 18.0) or 18.0)
@@ -1293,7 +1356,7 @@ class FieldService:
         ):
             return
         if measure:
-            quality = self._candidate_quality(ctx, ref[0], ref[1])
+            quality = self._candidate_quality(ctx, ref[0], ref[1], ref[2])
             with self._hub._lock:
                 if generation != self._generation:
                     return
@@ -1360,9 +1423,12 @@ class FieldService:
             return round(float(mags["B"]) - float(mags["V"]), 4)
         return None
 
-    def _candidate_quality(self, ctx, raw, seq) -> dict[str, Any]:
-        """Peak, SNR and saturation of every VSP star on the solved frame (pilot rule)."""
-        params = self._hub.targets.params(self._hub.targets.egain())
+    def _candidate_quality(self, ctx, raw, seq, egain: float | None = None) -> dict[str, Any]:
+        """Peak, SNR and saturation of every VSP star on the solved frame (pilot rule).
+
+        An opened frame's own e-/ADU (``egain``, S41) before the live chain.
+        """
+        params = self._hub.targets.params(egain if egain is not None else self._hub.targets.egain())
         fwhm = self._hub.targets.geometry()["fwhm_px"]
         r_ap = params.aperture_px(fwhm)
         r_in = max(params.annulus_in_px, r_ap + 1.0)

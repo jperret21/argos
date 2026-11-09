@@ -258,8 +258,16 @@ def list_folder(
         raise ApiError(404, "not_found", f"No folder {real}") from None
     except OSError as exc:
         raise ApiError(403, "forbidden_path", f"Cannot read {real}: {exc.strerror}") from exc
+    selected: str | None = None
     if not stat.S_ISDIR(st.st_mode):
-        raise ApiError(400, "invalid_argument", f"{real} is not a folder")
+        if kind == "dir" or not stat.S_ISREG(st.st_mode):
+            raise ApiError(400, "invalid_argument", f"{real} is not a folder")
+        # A file path typed in the picker: list its folder with the file selected.
+        if exts and not real.name.lower().endswith(exts):
+            wanted = "/".join(exts)
+            raise ApiError(400, "invalid_argument", f"{real.name} is not a {wanted} file")
+        selected = real.name
+        real = real.parent
 
     dirs: list[dict[str, Any]] = []
     files: list[dict[str, Any]] = []
@@ -324,4 +332,5 @@ def list_folder(
         "places": [p.to_dict() for p in (places or roots.places())],
         "entries": listed,
         "truncated": truncated,
+        "selected": selected,
     }

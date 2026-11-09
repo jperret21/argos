@@ -21,6 +21,8 @@ The newest record is cached for a new client's snapshots.
 
 from __future__ import annotations
 
+import copy
+import dataclasses
 import logging
 import math
 import threading
@@ -127,6 +129,8 @@ class TargetService:
         self._path: Path | None = None
         self._revision = 0
         self._last_fwhm: float | None = None
+        #: (frame seq, mean FWHM) of the newest metered frame (Qt ``_last_fwhm``).
+        self._fwhm_seq: tuple[int, float | None] | None = None
         self._last_aperture: float | None = None
         self._record: dict[str, Any] | None = None
 
@@ -151,6 +155,15 @@ class TargetService:
     def target_set(self) -> TargetSet:
         with self._lock:
             return self._current()[0]
+
+    def snapshot(self) -> TargetSet:
+        """A copy of the current set (the photometry thread measures it unlocked)."""
+        with self._lock:
+            tset = self._current()[0]
+            return TargetSet(
+                object_name=tset.object_name,
+                stars=[dataclasses.replace(s, mags=dict(s.mags)) for s in tset.stars],
+            )
 
     def _save(self, tset: TargetSet, path: Path) -> None:
         """``_save_target_set`` (1259-1264). Lock held."""
@@ -189,10 +202,24 @@ class TargetService:
             self._hub.config.get, egain=egain if egain is not None else 1.0
         )
 
+    def _series_fwhm(self) -> float | None:
+        """The live series FWHM (``_phot_fwhm``), else the newest frame's (Qt
+        ``self._phot_fwhm or self._last_fwhm``, 1445, 1501)."""
+        photometry = getattr(self._hub, "photometry", None)
+        series = photometry.series_fwhm() if photometry is not None else None
+        return series or self._last_fwhm
+
+    def fwhm_for(self, seq: int) -> tuple[float | None] | None:
+        """``(fwhm,)`` of metered frame *seq* when it is the newest metered one."""
+        known = self._fwhm_seq
+        if known is None or known[0] != seq:
+            return None
+        return (known[1],)
+
     def geometry(self) -> dict[str, Any]:
         """``photometry_geometry`` (1493-1504), green and frame px."""
         params = self.params()
-        fwhm = self._last_fwhm
+        fwhm = self._series_fwhm()
         aperture = params.aperture_px(fwhm)
         inner = max(params.annulus_in_px, aperture + 1.0)
         outer = max(params.annulus_out_px, inner + 2.0)
@@ -207,12 +234,15 @@ class TargetService:
             "fwhm_source": "frame" if fwhm else "default",
         }
 
-    def on_frame_fwhm(self, fwhm: float | None) -> None:
+    def on_frame_fwhm(self, fwhm: float | None, seq: int | None = None) -> None:
         """A metered frame's mean FWHM (green px): the aperture follows it."""
-        if fwhm is None or not math.isfinite(float(fwhm)) or fwhm <= 0:
+        valid = fwhm is not None and math.isfinite(float(fwhm)) and fwhm > 0
+        if seq is not None:
+            self._fwhm_seq = (int(seq), float(fwhm) if valid else None)
+        if not valid:
             return
         self._last_fwhm = float(fwhm)
-        aperture = round(self.params().aperture_px(self._last_fwhm), 1)
+        aperture = round(self.params().aperture_px(self._series_fwhm()), 1)
         if aperture != self._last_aperture:
             self._last_aperture = aperture
             self.publish()
@@ -251,19 +281,24 @@ class TargetService:
         with self._lock:
             self._revision += 1
         self._hub.field.on_targets_changed()
-        return self.publish()
+        record = self.publish()
+        self._hub.photometry.on_targets_changed()  # _reset_tracker (1301)
+        return record
 
     def on_object_changed(self) -> None:
-        """``on_object_changed`` (1281-1293): the set follows the object name."""
+        """``on_object_changed`` (1281-1293): the set follows the object name,
+        and the live curves start afresh (``clear_lightcurves``)."""
         with self._lock:
             before = self._path
-            self._current()
+            tset, _ = self._current()
             moved = self._path != before
+            obj = tset.object_name
             if moved:
                 self._revision += 1
         if moved:
             self._hub.field.on_targets_changed()
         self.publish()
+        self._hub.photometry.on_object_changed(obj)
 
     def reload(self) -> None:
         """Re-read the file (another writer, a new sessions folder)."""
@@ -272,6 +307,7 @@ class TargetService:
             self._revision += 1
         self._hub.field.on_targets_changed()
         self.publish()
+        self._hub.photometry.on_targets_changed()
 
     # -- A52 / A53 ---------------------------------------------------------------------
 
@@ -287,9 +323,16 @@ class TargetService:
             self._hub.observation.set_name(star.display_name)
         with self._lock:
             tset, path = self._current()
+            before = {s.key() for s in tset.stars}
             tset.set_role(star)
             if star.role == ROLE_TARGET:
                 self._auto_select_comparisons(tset, star)
+            # Undo of a new target also takes these out (DELETE ?also=).
+            auto = [
+                s.key()
+                for s in tset.stars
+                if s.key() not in before and s.key() != star.key() and s.role == ROLE_COMPARISON
+            ]
             self._save(tset, path)
         self._hub.log(
             "ok",
@@ -297,25 +340,148 @@ class TargetService:
             source="photometry",
             topic="photometry",
         )
-        return self._changed()
+        return {**self._changed(), "auto_selected": auto}
 
-    def remove(self, key: str) -> dict[str, Any]:
-        """``DELETE /api/targets/{key}`` (``remove_target``, 1506-1511)."""
+    def remove(self, key: str, also: list[str] | None = None) -> dict[str, Any]:
+        """``DELETE /api/targets/{key}`` (``remove_target``, 1506-1511).
+
+        *also*: the comparisons auto-selected with a new target (its Undo); each
+        is taken out only while it is still an automatic (``vsp_auto``) comparison.
+        """
         with self._lock:
             tset, path = self._current()
             removed = next((s for s in tset.stars if s.key() == key), None)
             if removed is None:
                 raise ApiError(404, "not_found", f"No star {key!r} in the target set")
             tset.remove(key)
+            extra = [
+                s
+                for s in tset.stars
+                if s.key() in set(also or ())
+                and s.key() != key
+                and s.role == ROLE_COMPARISON
+                and s.source == "vsp_auto"
+            ]
+            for star in extra:
+                tset.remove(star.key())
             self._save(tset, path)
+        suffix = f" (and {len(extra)} automatic comparison(s))" if extra else ""
         self._hub.log(
             "ok",
-            f"Removed from target set: {removed.display_name}",
+            f"Removed from target set: {removed.display_name}{suffix}",
             source="photometry",
             topic="photometry",
         )
         record = self._changed()
-        return {**record, "removed": star_record(removed)}
+        return {
+            **record,
+            "removed": star_record(removed),
+            "removed_also": [star_record(s) for s in extra],
+        }
+
+    # -- A58 -------------------------------------------------------------------------
+
+    def recommend(self, mode: str, count: int | None = None) -> dict[str, Any]:
+        """``POST /api/photometry/comparisons/recommend``.
+
+        ``replace`` = ``reselect_comparison_stars`` (1324-1346, "Recommend from
+        pilot", ``imaging_page.py:2213-2224``); ``complete`` =
+        ``propose_comparison_stars`` (1304-1322); *count* = the "Automatically
+        propose" spin (``_on_auto_comparison_count_changed``, 2196-2211).
+        Unlike Qt 0.4.2 (S32, extended in the release branch), nothing is removed
+        when no comparison can be chosen: none known, or none passing the gate.
+        """
+        with self._hub._lock:
+            locked = bool(self._hub.observation.record().get("locked"))
+        if locked:
+            raise ApiError(
+                409, "busy", "A sequence owns the observation.", details={"owner": "sequence"}
+            )
+        if not self._hub.field.solved:
+            raise ApiError(
+                409,
+                "not_solved",
+                "Identify the field first: comparisons are chosen on the solved frame.",
+            )
+        with self._lock:
+            tset, _path = self._current()
+            if not tset.by_role(ROLE_TARGET):
+                raise ApiError(409, "no_target", "Choose a target star first.")
+        if not self._hub.field.comparisons():
+            raise ApiError(
+                409,
+                "no_comparison",
+                "No VSP comparison stars are known for this field — refresh the catalogue.",
+            )
+        if count is not None:
+            self._hub.config.patch({"photometry.auto_comparisons": int(count)})
+        with self._lock:
+            tset, path = self._current()
+            targets = tset.by_role(ROLE_TARGET)
+            if not targets:
+                raise ApiError(409, "no_target", "Choose a target star first.")
+            before = {s.key(): s for s in tset.by_role(ROLE_COMPARISON)}
+            # Chosen on a copy: the set changes only when a comparison was picked.
+            trial = copy.deepcopy(tset)
+            if mode == "replace":
+                trial.stars = [
+                    s
+                    for s in trial.stars
+                    if not (s.role == ROLE_COMPARISON and s.source in {"vsp", "vsp_auto"})
+                ]
+            added = self._auto_select_comparisons(trial, trial.by_role(ROLE_TARGET)[0])
+            changed = bool(added)
+            if changed:
+                tset.stars = trial.stars
+                self._save(tset, path)
+            after = {s.key(): s for s in tset.by_role(ROLE_COMPARISON)}
+            removed = [s for k, s in before.items() if k not in after]
+            selected = len(after)
+        log = self._hub.log
+        if mode == "replace" and count is None:
+            if added:
+                log(
+                    "ok",
+                    f"Photometry: replaced the VSP ensemble with {added} pilot-qualified star(s).",
+                    source="photometry",
+                    topic="photometry",
+                )
+            else:  # the field is solved: the gate (logged above) chose none
+                log(
+                    "warning",
+                    "Photometry: no pilot-qualified comparison found — the ensemble is unchanged.",
+                    source="photometry",
+                    topic="photometry",
+                )
+        elif added:
+            log(
+                "ok",
+                f"Photometry: selected {added} pilot-qualified comparison(s).",
+                source="photometry",
+                topic="photometry",
+            )
+        elif mode == "replace":
+            log(
+                "info",
+                f"Photometry: requested {count} comparison(s); {selected} pilot-qualified VSP "
+                "star(s) selected.",
+                source="photometry",
+                topic="photometry",
+            )
+        else:
+            log(
+                "info",
+                f"Photometry: no comparison added ({selected} in the ensemble).",
+                source="photometry",
+                topic="photometry",
+            )
+        record = self._changed() if changed else self.record()
+        return {
+            "added": int(added),
+            "removed": [star_record(s) for s in removed],
+            "comparisons": [s for s in record["stars"] if s["role"] == ROLE_COMPARISON],
+            "targets": record,
+        }
 
     def write_role_for(self, object_name: str, star: TargetStar) -> Path:
         """Set a role in another object's set (a catalogue target, ``observation.py``)."""
@@ -445,9 +611,14 @@ class TargetService:
         return target_phot.inst_mag, quality
 
     def pilot_measure(self, pilot: Any, egain: float | None = None):
-        """The ``measure(ra, dec)`` closure of ``_pilot_comparison_quality`` (1450-1478)."""
+        """The ``measure(ra, dec)`` closure of ``_pilot_comparison_quality`` (1450-1478).
+
+        An opened frame keeps its own e-/ADU (``Pilot.egain``, S41).
+        """
+        if egain is None:
+            egain = getattr(pilot, "egain", None)
         params = self.params(egain if egain is not None else self.egain())
-        fwhm = self._last_fwhm or DEFAULT_FWHM
+        fwhm = self._series_fwhm() or DEFAULT_FWHM  # 1445
         r_ap = params.aperture_px(fwhm)
         r_in = max(params.annulus_in_px, r_ap + 1.0)
         r_out = max(params.annulus_out_px, r_in + 2.0)

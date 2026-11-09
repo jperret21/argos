@@ -19,6 +19,7 @@ neither exhaust the server's memory nor reach a viewer that cannot show it.
 from __future__ import annotations
 
 import os
+from typing import Any
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -159,8 +160,14 @@ class OpenedFrame:
         epoch_utc: str | None,
         bayer: str | None,
         pointing: tuple[float, float] | None = None,
+        epoch: datetime | None = None,
+        gain_header: dict[str, Any] | None = None,
     ) -> None:
         self.pixels = pixels
+        #: The header's ``GAIN`` and ``EGAIN``: the frame's own e-/ADU (S41).
+        self.gain_header = gain_header or {}
+        #: The exposure midpoint itself (the photometry epoch, wave 5).
+        self.epoch = epoch
         #: ``(ra_hours, dec_deg)`` from OBJCTRA / OBJCTDEC: the solve hint (wave 4).
         self.pointing = pointing
         self.exposure_s = exposure_s
@@ -234,4 +241,6 @@ def load_raw_fits_frame(path: Path) -> OpenedFrame:
         epoch_utc=utc_iso(mid) if mid is not None else None,
         bayer=str(bayer).strip() or None if bayer else None,
         pointing=header_hint(header),
+        epoch=mid,
+        gain_header={key: header.get(key) for key in ("GAIN", "EGAIN")},
     )
