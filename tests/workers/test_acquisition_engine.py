@@ -968,3 +968,383 @@ def test_stop_af_keeps_a_returning_worker_and_refuses_a_second_sweep(shot_rig, m
     assert engine.camera_state is CameraState.IDLE
     engine.start_autofocus()
     assert len(_ReturningAfWorker.created) == 2
+
+
+def _fake_measure_rig(engine, monkeypatch, tset, seen_fwhm):
+    """``_measure_photometry`` with measure_frame stubbed: every star gets a point."""
+    from types import SimpleNamespace
+
+    import argos.core.session.acquisition_engine as ae
+
+    def measure(*_args, fwhm=None, **_kwargs):
+        seen_fwhm.append(fwhm)
+        diff = SimpleNamespace(
+            mag=12.0, mag_err=0.01, formal_mag_err=0.01, comps_used=2, zero_point=0.0, zp_rms=0.0
+        )
+        diff.note = ""
+        phot = SimpleNamespace(sky_adu=300.0, saturated=False, suspect=False)
+        return [SimpleNamespace(star=s, diff=diff, relative=None, phot=phot) for s in tset.stars]
+
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    monkeypatch.setattr(engine, "_wcs_for_frame", lambda *a: None)
+    monkeypatch.setattr(engine, "_write_live_quality_report", lambda tset: None)
+    monkeypatch.setattr(ae, "measure_frame", measure)
+    monkeypatch.setattr(ae, "bjd_tdb", lambda *a: None)  # no IERS download
+    monkeypatch.setattr(ae, "airmass_at", lambda *a: None)
+    engine.astrometry._wcs = object()
+    engine._last_raw = np.zeros((16, 16), np.uint16)
+    engine._last_raw_decimated = False
+
+
+def test_series_fwhm_is_frozen_on_the_first_measured_frame(shot_rig, monkeypatch) -> None:
+    """S31: the series FWHM (one aperture per series, P7) was read before
+    ``_diagnostics`` reset it for a new object, so the first point had its own
+    aperture and the series used the second frame's FWHM (the owner's CSVs:
+    fwhm 2.16 on the first row, 2.12 on the 194 others)."""
+    from datetime import datetime, timedelta, timezone
+
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+
+    engine, _session, _form, _logs = shot_rig
+    tset = TargetSet(
+        object_name="V1",
+        stars=[
+            TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1"),
+            TargetStar(role=ROLE_COMPARISON, ra_deg=10.01, dec_deg=20.0, auid="C1"),
+        ],
+    )
+    seen: list = []
+    _fake_measure_rig(engine, monkeypatch, tset, seen)
+    t0 = datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc)
+    for i, fwhm in enumerate((2.0, 3.0, 2.5)):
+        engine._last_fwhm = fwhm
+        engine._last_exposure_mid = t0 + timedelta(minutes=i)
+        engine._measure_photometry()
+
+    assert seen == [2.0, 2.0, 2.0]  # [2.0, 3.0, 3.0] before the fix
+    assert [p.fwhm for p in engine.lightcurves["V1"].points] == [2.0, 2.0, 2.0]
+
+
+def test_recommend_without_vsp_stars_keeps_the_ensemble(shot_rig, monkeypatch) -> None:
+    """S32: "Recommend from pilot" (and the comparison-count spin) removed every
+    VSP comparison before looking for new ones, so with no VSP catalogue (not
+    solved yet, the catalogue not back, or after a GoTo) the ensemble was
+    emptied and targets.json saved without comparisons."""
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+
+    engine, _session, _form, _logs = shot_rig
+    tset = TargetSet(
+        object_name="V1",
+        stars=[
+            TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1"),
+            TargetStar(ROLE_COMPARISON, 10.01, 20.0, auid="C1", source="vsp_auto", mags={"V": 9}),
+            TargetStar(ROLE_COMPARISON, 10.02, 20.0, auid="C2", source="vsp", mags={"V": 10}),
+        ],
+    )
+    saved: list = []
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    monkeypatch.setattr(engine, "_save_target_set", saved.append)
+    assert engine.comparisons == []  # no VSP catalogue for this field
+
+    assert engine.reselect_comparison_stars() == 0
+
+    assert [s.auid for s in tset.by_role(ROLE_COMPARISON)] == ["C1", "C2"]  # [] before
+    assert saved == []
+
+
+def test_a_role_change_starts_a_new_curve(shot_rig, monkeypatch) -> None:
+    """S33: a star whose role changed kept appending to its old curve, so a
+    check star's curve (and its check_*.csv) began with the leave-one-out
+    magnitudes it had as a comparison, under the comparison role."""
+    from datetime import datetime, timedelta, timezone
+
+    from argos.core.catalog.targets import (
+        ROLE_CHECK,
+        ROLE_COMPARISON,
+        ROLE_TARGET,
+        TargetSet,
+        TargetStar,
+    )
+
+    engine, _session, _form, _logs = shot_rig
+    star = TargetStar(role=ROLE_COMPARISON, ra_deg=10.01, dec_deg=20.0, auid="C1")
+    tset = TargetSet(
+        object_name="V1",
+        stars=[TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1"), star],
+    )
+    _fake_measure_rig(engine, monkeypatch, tset, [])
+    renders: list[int] = []
+    engine.curves_changed.connect(lambda: renders.append(1))
+    t0 = datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc)
+    for i in range(3):
+        if i == 2:
+            tset.set_role(TargetStar(role=ROLE_CHECK, ra_deg=10.01, dec_deg=20.0, auid="C1"))
+        engine._last_exposure_mid = t0 + timedelta(minutes=i)
+        engine._measure_photometry()
+
+    curve = engine.lightcurves["C1"]
+    assert curve.role == ROLE_CHECK and len(curve.points) == 1  # comparison, 3 before
+    assert renders == [1]  # the old comparison curve leaves the display
+
+
+def test_an_opened_frame_never_takes_the_mount_airmass(shot_rig, tmp_path, monkeypatch) -> None:
+    """S34: without a site, a point's airmass is the mount's (X2) — also for a
+    FITS opened from another night, whose point got the altitude the mount has
+    now (airmass 1.154 for a mount at 60°, whatever the archived frame saw)."""
+    from unittest.mock import MagicMock
+
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.alpaca.telescope import MountPosition
+    from argos.core.catalog.targets import ROLE_TARGET, TargetSet, TargetStar
+    from argos.core.photometry.airmass import airmass_from_altitude
+
+    engine, session, _form, _logs = shot_rig
+    session._telescope = MagicMock()
+    session._on_position(MountPosition(21.7, 43.6, 60.0, 270.0, True, False))
+    star = TargetStar(role=ROLE_TARGET, ra_deg=325.678, dec_deg=43.586, name="SS Cyg")
+    seen: list = []
+    _fake_measure_rig(engine, monkeypatch, TargetSet("SS Cyg", [star]), seen)
+    monkeypatch.setattr(ae, "measure_frame", lambda *a, **k: [_one_result(star)])
+    path = tmp_path / "archived.fit"
+    _write_fits(path, {"DATE-OBS": "2026-09-15T21:00:00", "EXPTIME": 10.0})
+
+    engine.open_fits_frame(path)
+    engine.astrometry._wcs = object()
+    engine._measure_photometry()
+    assert engine.lightcurves["SS Cyg"].points[-1].airmass is None  # 1.154 before the fix
+
+    # A camera frame of tonight keeps the mount's airmass (X2).
+    engine.ingest_frame(_star_frame())
+    engine._measure_photometry()
+    assert engine.lightcurves["SS Cyg"].points[-1].airmass == pytest.approx(
+        airmass_from_altitude(60.0)
+    )
+
+
+def _one_result(star):
+    from types import SimpleNamespace
+
+    diff = SimpleNamespace(
+        mag=11.0, mag_err=0.02, formal_mag_err=0.02, comps_used=3, zero_point=0.0, zp_rms=0.0
+    )
+    diff.note = ""
+    phot = SimpleNamespace(sky_adu=300.0, saturated=False, suspect=False)
+    return SimpleNamespace(star=star, diff=diff, relative=None, phot=phot)
+
+
+class _GridWCS:
+    """A solve that places each star at a fixed green-plane pixel."""
+
+    def __init__(self, xy: dict) -> None:
+        self._xy = xy
+
+    def world_to_pixel_deg(self, ra: float, dec: float):
+        return self._xy[(ra, dec)]
+
+
+def _field_frame(green_xy, h: int = 400, w: int = 600) -> np.ndarray:
+    """A raw frame with bright stars at ``green_xy`` (green px) on a noisy sky."""
+    yy, xx = np.mgrid[0:h, 0:w]
+    img = np.random.default_rng(7).normal(300.0, 12.0, (h, w))
+    for gx, gy in green_xy:
+        img += 15000.0 * np.exp(-((xx - 2 * gx) ** 2 + (yy - 2 * gy) ** 2) / (2 * 3.0**2))
+    return np.clip(img, 0, 65535).astype(np.uint16)
+
+
+def test_a_field_that_moved_since_the_solve_gets_no_point(shot_rig, monkeypatch) -> None:
+    """S35: a frame measured through a solution the field has since left by more
+    than the tracker's search radius (a sequence frame measured through the
+    previous frame's solve, after a pointing jump) was measured on blank sky.
+    With no anchor qualified, the tracker fell back to every star of the set at
+    the stale positions and took noise centroids as anchors: a target point
+    with no flag and no warning (the owner's RR Lyr 2026-09-25 run, frames
+    52 and 175)."""
+    from datetime import datetime, timezone
+
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+
+    engine, _session, _form, logs = shot_rig
+    xy = {(10.0, 20.0): (150.0, 100.0)}
+    stars = [TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1")]
+    for i, pos in enumerate([(60.0, 50.0), (230.0, 60.0), (70.0, 150.0), (220.0, 150.0)]):
+        ra = 10.0 + 0.01 * (i + 1)
+        xy[(ra, 20.0)] = pos
+        stars.append(
+            TargetStar(ROLE_COMPARISON, ra, 20.0, auid=f"C{i}", source="vsp", mags={"V": 10.0})
+        )
+    tset = TargetSet(object_name="V1", stars=stars)
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    frame_a = _field_frame(list(xy.values()))
+    frame_b = np.roll(frame_a, 60, axis=1)  # the field moved 30 green px (search radius 15)
+
+    def measure(raw, minute: int) -> None:
+        engine.astrometry._wcs = _GridWCS(xy)
+        engine._on_reference_solved(None, None, "")
+        engine._last_raw, engine._last_raw_decimated = raw, False
+        engine._last_exposure_mid = datetime(2026, 11, 1, 3, minute, tzinfo=timezone.utc)
+        engine._measure_photometry()
+
+    measure(frame_a, 0)
+    assert len(engine.lightcurves["V1"].points) == 1  # the solved frame is measured
+    assert engine._tracker.anchors_used == 4
+
+    measure(frame_b, 1)
+    assert len(engine.lightcurves["V1"].points) == 1  # 2, unflagged, before the fix
+    assert any(level == "WARN" and "field moved" in msg for level, msg in logs)
+
+    # Back on the solved field (no new solve): the tracker finds its stars again.
+    engine._last_raw = frame_a
+    engine._measure_photometry()
+    assert len(engine.lightcurves["V1"].points) == 2
+
+
+def test_recommend_with_no_vsp_star_passing_the_gate_keeps_the_ensemble(
+    shot_rig, monkeypatch
+) -> None:
+    """S32 extended: with VSP stars in the field but none passing the pilot gate
+    (all further than 25′, as for the owner's RR Lyr field, where the six
+    comparisons are 27–59′ away), "Recommend from pilot" still removed every
+    VSP comparison, added none and saved the set with no comparison."""
+    from argos.core.catalog.aavso import Band, ComparisonStar
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+
+    engine, _session, _form, _logs = shot_rig
+    tset = TargetSet(
+        object_name="V1",
+        stars=[
+            TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1"),
+            TargetStar(ROLE_COMPARISON, 10.01, 20.0, auid="C1", source="vsp_auto", mags={"V": 9}),
+            TargetStar(ROLE_COMPARISON, 10.02, 20.0, auid="C2", source="vsp", mags={"V": 10}),
+        ],
+    )
+    saved: list = []
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    monkeypatch.setattr(engine, "_save_target_set", saved.append)
+    engine._comparisons = [ComparisonStar("C9", 12.0, 20.0, "90", (Band("V", 9.0),))]  # 1.9° off
+
+    assert engine.reselect_comparison_stars() == 0
+
+    assert [s.auid for s in tset.by_role(ROLE_COMPARISON)] == ["C1", "C2"]  # [] before
+    assert saved == []
+
+
+def test_a_frame_written_before_0_5_is_dated_by_its_start() -> None:
+    """S39: up to 0.4.x a sequence frame's DATE-AVG included half the image
+    download (S36: +5.2 s median, 16.6 s at most on the owner's RR Lyr run), so
+    Open FITS dated those frames late; their live points used DATE-OBS +
+    EXPTIME/2. A frame of 0.5.0 on, or of other software, keeps its DATE-AVG."""
+    from datetime import datetime, timezone
+
+    from argos.core.session.acquisition_engine import fits_exposure_mid
+
+    frame = {
+        "DATE-OBS": "2026-09-25T20:04:57",
+        "DATE-AVG": "2026-09-25T20:05:20.4",
+        "EXPTIME": 30.0,
+    }
+    start_plus_half = datetime(2026, 9, 25, 20, 5, 12, tzinfo=timezone.utc)
+    date_avg = datetime(2026, 9, 25, 20, 5, 20, 400000, tzinfo=timezone.utc)
+    for software in ("Argos v0.4.2", "Argos v0.4.1.dev3+g1a2b3c", "Argos v0.3.0", "Argos"):
+        assert fits_exposure_mid({**frame, "SOFTWARE": software}) == start_plus_half, software
+    assert fits_exposure_mid({**frame, "SWCREATE": "Argos v0.4.2"}) == start_plus_half
+    for software in ("Argos v0.5.0", "Argos v1.0.0", "N.I.N.A. 3.1", "Argos-like 0.1", ""):
+        assert fits_exposure_mid({**frame, "SOFTWARE": software}) == date_avg, software
+    assert fits_exposure_mid(frame) == date_avg  # no SOFTWARE: third-party, as before
+
+
+def test_measuring_an_object_again_never_overwrites_its_preview_csv(
+    shot_rig, tmp_path, monkeypatch
+) -> None:
+    """S40: outside a run, a live curve's CSV (<sessions>/targets/) was rewritten
+    from the in-memory curve, which an object change or a restart clears, so
+    measuring the object again (A → B → A, the next evening) erased the earlier
+    points on disk. Each curve now has its own file, named after its start."""
+    from datetime import datetime, timedelta, timezone
+
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.catalog.targets import ROLE_CHECK, ROLE_TARGET, TargetSet, TargetStar
+    from argos.core.photometry.lightcurve import read_curves_csv
+    from argos.core.session.review import identify_curve_file
+    from argos.ui.pages.analyze_page import _target_set_of_curve
+
+    engine, _session, _form, _logs = shot_rig
+    target = TargetStar(
+        role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, auid="000-BCP-095", name="SS Cyg"
+    )
+    other = TargetStar(role=ROLE_TARGET, ra_deg=11.0, dec_deg=21.0, auid="C1", name="C1")
+    tset = TargetSet(object_name="SS Cyg", stars=[target, other])
+    _fake_measure_rig(engine, monkeypatch, tset, [])
+    clock = {"now": datetime(2026, 11, 9, 20, 15, 0, tzinfo=timezone.utc)}
+    monkeypatch.setattr(ae, "_utcnow", lambda: clock["now"])
+    folder = tmp_path / "sessions" / "targets"
+    t0 = datetime(2026, 11, 9, 20, 15, tzinfo=timezone.utc)
+
+    def measure(count: int) -> None:
+        for i in range(count):
+            engine._last_exposure_mid = t0 + timedelta(minutes=i)
+            engine._measure_photometry()
+
+    measure(3)
+    first = folder / "SS_Cyg_20261109T201500Z_000-BCP-095.csv"
+    assert len(read_curves_csv(first)["target:" + first.stem].points) == 3
+
+    engine.clear_lightcurves()  # another object, then SS Cyg again
+    clock["now"] += timedelta(minutes=40)
+    measure(1)
+    second = folder / "SS_Cyg_20261109T205500Z_000-BCP-095.csv"
+    assert len(read_curves_csv(first)["target:" + first.stem].points) == 3  # 1 before the fix
+    assert len(read_curves_csv(second)["target:" + second.stem].points) == 1
+
+    engine.clear_lightcurves()  # ... within the same second
+    measure(1)
+    assert (folder / "SS_Cyg_20261109T205500Z-2_000-BCP-095.csv").exists()
+    assert len(read_curves_csv(second)["target:" + second.stem].points) == 1
+
+    # A role change starts a new curve (S33), and so a new file.
+    clock["now"] += timedelta(minutes=1)
+    tset.set_role(TargetStar(role=ROLE_CHECK, ra_deg=11.0, dec_deg=21.0, auid="C1", name="C1"))
+    measure(1)
+    assert (folder / "SS_Cyg_20261109T205500Z-2_C1.csv").exists()  # the target-role curve
+    assert (folder / "SS_Cyg_20261109T205600Z_C1.csv").exists()  # the check-role curve
+
+    # Review still finds the object's set and the star (S10).
+    tset.save(folder / "SS_Cyg.json")
+    found = _target_set_of_curve(second)
+    assert found is not None and found.object_name == "SS Cyg"
+    curves, problems = identify_curve_file(second, read_curves_csv(second), found)
+    assert problems == [] and next(iter(curves.values())).name == "SS Cyg"
+
+    # A run's CSVs keep their names.
+    engine._active_run_root = tmp_path / "run"
+    measure(1)
+    assert (tmp_path / "run" / "photometry" / "target_SS_Cyg_000-BCP-095.csv").exists()
+
+
+def test_an_opened_frame_uses_its_own_gain_for_errors(shot_rig, tmp_path, monkeypatch) -> None:
+    """S41: the e-/ADU of an opened frame's errors came from the Camera form's
+    gain (and the connected driver), not from the frame. It is now the gain
+    table at the frame's GAIN, else the frame's EGAIN; a camera frame keeps the
+    live chain."""
+    engine, session, _form, _logs = shot_rig
+    monkeypatch.setattr(session, "egain_driver", lambda: 2.5)  # the camera, now
+    path = tmp_path / "archived.fit"
+    _write_fits(
+        path, {"DATE-OBS": "2026-09-15T21:00:00", "EXPTIME": 10.0, "GAIN": 200, "EGAIN": 0.31}
+    )
+
+    engine.open_fits_frame(path)
+    assert engine._egain() == pytest.approx(0.31)  # 2.5 (the driver) before the fix
+
+    engine._config.set("camera.egain_table", {"200": 0.29, "80": 1.4})
+    engine.open_fits_frame(path)
+    assert engine._egain() == pytest.approx(
+        0.29
+    )  # the table at the frame's gain, not the form's 80
+
+    _write_fits(tmp_path / "plain.fit", {"DATE-OBS": "2026-09-15T21:00:00", "EXPTIME": 10.0})
+    engine.open_fits_frame(tmp_path / "plain.fit")
+    assert engine._egain() == pytest.approx(1.4)  # no gain recorded: the live chain, as before
+
+    engine.open_fits_frame(path)
+    engine.ingest_frame(_star_frame())  # a camera frame
+    assert engine._egain() == pytest.approx(1.4)

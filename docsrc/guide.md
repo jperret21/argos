@@ -434,7 +434,10 @@ A sequence is organised for Siril under the configured sessions folder:
 `photometry_quality.json` is the leave-one-out assessment of the comparison
 ensemble described in {doc}`differential_photometry`.
 
-Live measurements and target sets are also kept under `<sessions>/targets/`.
+Live measurements and target sets are also kept under `<sessions>/targets/`:
+outside a sequence, each live curve has its own CSV,
+`<object>_<UTC start>_<star>.csv`, so measuring an object again never
+overwrites an earlier curve.
 A batch re-measurement (**Re-run subs…**) writes its per-star CSVs, named
 `<role>_<object>_<star>.csv`, and the target set it used into a new
 `photometry_rerun_<UTC>/` folder of the session; it measures only light frames

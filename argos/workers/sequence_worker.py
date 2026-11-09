@@ -348,12 +348,15 @@ class SequenceWorker(QThread):
 
         Returns ``(path, FrameRecord)``, or ``(None, None)`` on stop/timeout.
         """
-        start_dt = datetime.now(timezone.utc)
         self._camera.set_gain(spec.gain)
         # P1 header truthfulness: read the achieved state back from the
         # devices — a header must never record a setting the hardware refused.
         gain_actual = self._read_back_gain(spec.gain)
         filter_actual = self._read_back_filter(spec.wheel_filter)
+        # The exposure's own clock: from StartExposure to ImageReady, never the
+        # read-backs before it nor the download after it (S36) — as the live
+        # preview does. DATE-AVG (what Open FITS dates a frame by) depends on it.
+        start_dt = datetime.now(timezone.utc)
         self._camera.start_exposure(spec.exposure_s, light=spec.is_light)
 
         deadline = time.monotonic() + spec.exposure_s + _DOWNLOAD_MARGIN_S
@@ -367,9 +370,9 @@ class SequenceWorker(QThread):
                 )
                 return None, None
             self.msleep(_POLL_MS)
+        end_dt = datetime.now(timezone.utc)
 
         arr = self._camera.get_image_array()
-        end_dt = datetime.now(timezone.utc)
         self.frame_image.emit(arr)
 
         # Per-frame QA metrics (§7) — computed here so they land in the FITS

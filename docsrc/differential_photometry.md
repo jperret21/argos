@@ -208,11 +208,14 @@ which is part of why the run-level floor of §5 exists.
 During a live run ARGOS resolves the electron gain in order: the
 `camera.egain_table` entry for the current gain setting, else the driver's
 `ElectronsPerADU`, else the sensor reference curve for the profile's sensor.
-That value is what goes into `EGAIN` in the FITS header.
+That value is what goes into `EGAIN` in the FITS header (before 0.5.0 the header
+skipped the table).
 
-An **offline re-measurement** of saved subs resolves the same order minus the
-driver step, which needs a live handle: `camera.egain_table`, else the sensor
-reference curve. Both paths therefore agree on the same $g$ for the same frame.
+A **saved frame**, opened with **Open FITS…** or re-measured with **Re-run
+subs…**, keeps its own gain: the `camera.egain_table` entry for its `GAIN`
+setting, else its `EGAIN`, so it gets the $g$ its live measurement used. Only a
+frame that records neither falls back to the live order, at the Camera form's
+gain (before 0.5.0 every saved frame did).
 
 :::{admonition} Before 0.4.2
 :class: warning

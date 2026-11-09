@@ -2217,10 +2217,15 @@ class ImagingPage(QWidget):
             self.log_message.emit(
                 "OK", f"Photometry: replaced the VSP ensemble with {added} pilot-qualified star(s)."
             )
-        else:
+        elif not self._engine.comparisons:
             self.log_message.emit(
                 "WARN",
                 "Photometry: no pilot-qualified comparison found — solve a full-resolution frame first.",
+            )
+        else:  # S32: the field's VSP stars all fail the pilot gate (logged above)
+            self.log_message.emit(
+                "WARN",
+                "Photometry: no pilot-qualified comparison found — the ensemble is unchanged.",
             )
 
     def _refresh_target_table(self) -> None:
@@ -2336,6 +2341,8 @@ class ImagingPage(QWidget):
             # Never the 0/0 default: no site, no airmass and no BJD_TDB.
             site=observing_site(self._config) or (None, None, 0.0),
             diagnostics=bool(self._cfg("diagnostics.enabled", False)),
+            # Each saved sub's errors use its own gain; the form's only as a fallback.
+            egain_table=self._cfg("camera.egain_table", {}) or {},
         )
         dialog = QProgressDialog("Re-running photometry…", "Cancel", 0, len(paths), self)
         dialog.setWindowTitle("Batch photometry")

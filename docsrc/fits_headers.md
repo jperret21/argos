@@ -87,7 +87,11 @@ Image-type folders are lower-case plurals, as Siril expects.
 | `EXPOSURE` | [s] exposure time (alias) |
 
 The midpoint headers are the ones photometry uses: a light curve point is timed
-by `DATE-AVG`, not `DATE-OBS`.
+by `DATE-AVG`, not `DATE-OBS`. One exception: a frame written by ARGOS before
+0.5.0 (`SOFTWARE` = `Argos v0.4.x`) is timed by `DATE-OBS + EXPTIME/2`, because
+a sequence frame of those versions has a `DATE-AVG` late by half the image
+download (seconds over Wi-Fi). Other software reading those files should do the
+same.
 
 ## Sensor and gain
 
