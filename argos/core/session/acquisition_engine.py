@@ -24,6 +24,8 @@ stops using a device *before* the session drops the handle.
 
 from __future__ import annotations
 
+import copy
+
 import logging
 import math
 import time
@@ -248,6 +250,8 @@ class AcquisitionEngine(QObject):
         # half-quality preview whose plate scale would poison a solve.
         self._last_raw: np.ndarray | None = None
         self._last_raw_decimated = False
+        #: The last frame came from Open FITS (another night): no mount airmass (S34).
+        self._last_raw_from_file = False
         self._green_shape: tuple[int, int] | None = None  # of the last processed frame
         self._last_metrics = None  # last displayed FrameMetrics (FITS QA uses the saved array)
         self._last_fwhm: float | None = None  # mean detected-star FWHM (green px)
@@ -594,6 +598,7 @@ class AcquisitionEngine(QObject):
         # photometry skip half-quality frames (their plate scale is wrong).
         self._last_raw_decimated = preview_arr.shape != full_arr.shape
         self._last_raw = preview_arr
+        self._last_raw_from_file = False
         self.frame_ready.emit(
             LiveFrame(
                 preview=preview_arr,
@@ -734,6 +739,7 @@ class AcquisitionEngine(QObject):
         """
         self._last_raw_decimated = False
         self._last_raw = full_arr
+        self._last_raw_from_file = False
         self.frame_ready.emit(
             LiveFrame(preview=full_arr, full=full_arr, start=None, end=None, decimated=False)
         )
@@ -763,6 +769,7 @@ class AcquisitionEngine(QObject):
         self._last_exposure_mid = fits_exposure_mid(header)
         self._active_run_root = None
         self.ingest_frame(frame)
+        self._last_raw_from_file = True
         return self._last_exposure_mid
 
     @pyqtSlot(object)
@@ -1330,19 +1337,25 @@ class AcquisitionEngine(QObject):
         """
         tset = self.target_set()
         targets = tset.by_role(ROLE_TARGET)
-        if not targets:
+        if not targets or not self._comparisons:
+            # No VSP stars to choose from (unsolved, catalogue not back, after a
+            # GoTo): keep the ensemble rather than empty it (S32).
             return 0
-        before = len(tset.by_role(ROLE_COMPARISON))
-        tset.stars = [
+        # Choose on a copy: when no VSP star passes the pilot gate (all too
+        # far, too faint, off the frame), the ensemble is kept, not emptied.
+        trial = copy.deepcopy(tset)
+        trial.stars = [
             star
-            for star in tset.stars
+            for star in trial.stars
             if not (star.role == ROLE_COMPARISON and star.source in {"vsp", "vsp_auto"})
         ]
-        added = self._auto_select_comparisons(tset, targets[0])
-        if added or len(tset.by_role(ROLE_COMPARISON)) != before:
-            self._save_target_set(tset)
-            self._reset_tracker()
-            self.targets_changed.emit(tset)
+        added = self._auto_select_comparisons(trial, trial.by_role(ROLE_TARGET)[0])
+        if not added:
+            return 0
+        tset.stars = trial.stars
+        self._save_target_set(tset)
+        self._reset_tracker()
+        self.targets_changed.emit(tset)
         return added
 
     def _auto_select_comparisons(self, tset: TargetSet, target: TargetStar) -> int:
@@ -1552,7 +1565,9 @@ class AcquisitionEngine(QObject):
         wcs = self._astrometry.wcs
         if not params.track_apertures:
             return wcs
-        if self._tracker is None:
+        if self._tracker is None or not self._tracker.anchor_count:
+            # Also when built with no star seen (clouds, or the field had
+            # moved): try again on this frame rather than until the next solve.
             self._tracker = self._build_live_tracker(green, wcs, tset, params)
         telescope = self._session.telescope
         # The alt-az tracker needs a rigid rotation + translation.  On an EQ
@@ -1560,10 +1575,19 @@ class AcquisitionEngine(QObject):
         # centroid noise must not rotate a whole overlay about the sensor.
         allow_rotation = getattr(telescope, "alignment_mode", None) not in {"EQ", "EQ (GEM)"}
         self._tracker.update(green, allow_rotation=allow_rotation)
-        if not self._tracker.anchors_used:
-            self.log_message.emit("WARN", "Photometry: no anchor star found — apertures unguided")
         self.apertures_tracked.emit()
         return TrackedWCS(wcs, self._tracker)
+
+    def _field_lost(self, params: PhotometryParams) -> bool:
+        """No star of the set where the tracked solution places it (S35).
+
+        The field moved further than the tracker's search radius since the
+        solve (a pointing jump, or a frame measured through an older solve),
+        or clouds hide every anchor: apertures there would measure blank sky.
+        """
+        return (
+            params.track_apertures and self._tracker is not None and not self._tracker.anchors_used
+        )
 
     @staticmethod
     def _build_live_tracker(
@@ -1571,8 +1595,12 @@ class AcquisitionEngine(QObject):
     ) -> ApertureTracker:
         candidates = tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK)
         anchors = select_tracking_anchors(green, wcs, candidates, params)
-        if not anchors:  # a variable near minimum is a poor centroid
-            anchors = list(tset.stars)
+        if not anchors:
+            # Comparisons too faint to steer: any star of the set will do, a
+            # variable near minimum included — but only one seen where the
+            # solution places it. Taking them all unseen let the tracker lock
+            # on noise when the field had moved since the solve (S35).
+            anchors = select_tracking_anchors(green, wcs, list(tset.stars), params, min_snr=5.0)
         xy = [wcs.world_to_pixel_deg(s.ra_deg, s.dec_deg) for s in anchors]
         h, w = green.shape
         return ApertureTracker(
@@ -1616,24 +1644,38 @@ class AcquisitionEngine(QObject):
                 "WARN", "Photometry skipped: the frame has no exposure time (DATE-OBS/EXPTIME)."
             )
             return
+        # The recorder first: a new object (or run) resets the series FWHM, which
+        # is then frozen on THIS frame. Freezing it before the reset gave the
+        # first point its own aperture and the series the second frame's (S31).
+        diag = self._diagnostics(tset)
         if self._phot_fwhm is None and self._last_fwhm:
             self._phot_fwhm = self._last_fwhm
         fwhm = self._phot_fwhm or DEFAULT_FWHM
         params = PhotometryParams.from_config(self._cfg, egain=self._egain())
-        diag = self._diagnostics(tset)
         frame_no = self._diag_frame
         self._diag_frame += 1
         green = green_plane(self._last_raw)
+        tracked = self._wcs_for_frame(green, tset, params)
+        if self._field_lost(params):
+            self.log_message.emit(
+                "WARN",
+                "Photometry skipped: no star of the set where the solution places it"
+                " — the field moved since the solve, or clouds.",
+            )
+            diag.record("event", frame=frame_no, what="frame_skipped", reason="field_lost")
+            return
         results = measure_frame(
             green,
-            self._wcs_for_frame(green, tset, params),
+            tracked,
             tset,
             params,
             fwhm=fwhm,
             on_star=lambda s, phot, x, y: diag.star(frame_no, s, phot, x, y),
         )
         jd = julian_date(self._last_exposure_mid)
-        pos = self._session.last_position
+        # The mount says where it points now: never the airmass of an opened
+        # frame from another night (S34).
+        pos = None if self._last_raw_from_file else self._session.last_position
         air = airmass_from_altitude(pos.altitude) if pos else None
         # Never the 0/0 default: without a site, the airmass is the mount's
         # (or none) and there is no BJD_TDB.
@@ -1733,10 +1775,16 @@ class AcquisitionEngine(QObject):
             relative_flux_err=res.relative.flux_ratio_err if res.relative else None,
         )
         key = res.star.auid or res.star.display_name
-        lc = self._lightcurves.setdefault(
-            key,
-            LightCurve(auid=res.star.auid or "", name=res.star.display_name, role=res.star.role),
-        )
+        lc = self._lightcurves.get(key)
+        if lc is None or lc.role != res.star.role:
+            # A star whose role changed starts a new curve (S33): a comparison's
+            # leave-one-out magnitudes and a check's are different quantities.
+            if lc is not None:
+                self._curves_dirty = True  # the old curve leaves the display
+            lc = LightCurve(
+                auid=res.star.auid or "", name=res.star.display_name, role=res.star.role
+            )
+            self._lightcurves[key] = lc
         lc.append(point)
         floor_changed = self._apply_systematic_floor(lc)
         if floor_changed:

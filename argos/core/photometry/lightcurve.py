@@ -6,9 +6,11 @@ written to ``photometry.csv`` (the hand-off to post-processing). Qt-free.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import csv
 from dataclasses import dataclass, field
 import math
+import os
 from pathlib import Path
 
 _COLUMNS = (
@@ -80,10 +82,13 @@ class LightCurve:
         self.points.append(point)
 
     def to_csv(self, path) -> None:
-        """Write the curve to ``path`` (parent dirs created)."""
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", newline="", encoding="utf-8") as f:
+        """Write the curve to ``path`` (parent dirs created), atomically.
+
+        The live engine rewrites the whole file after every point: a reader
+        (Review, a spreadsheet, star_var_script) or a crash mid-write must only
+        ever see the previous file or the new one, never a truncated one (S38).
+        """
+        with _atomic_text(path) as f:
             writer = csv.writer(f)
             writer.writerow(_COLUMNS)
             for p in self.points:
@@ -133,11 +138,24 @@ def _row(p: LcPoint) -> list:
     ]
 
 
-def write_curves_csv(path, curves) -> None:
-    """Write several curves to one lossless, session-scoped CSV export."""
+@contextmanager
+def _atomic_text(path):
+    """A text file written beside ``path`` and renamed over it once complete."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as f:
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with tmp.open("w", newline="", encoding="utf-8") as f:
+            yield f
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def write_curves_csv(path, curves) -> None:
+    """Write several curves to one lossless, session-scoped CSV export (atomically)."""
+    with _atomic_text(path) as f:
         writer = csv.writer(f)
         writer.writerow(_MULTI_COLUMNS)
         for index, lc in enumerate(curves, start=1):

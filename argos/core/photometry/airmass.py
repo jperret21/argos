@@ -68,6 +68,22 @@ def julian_date(dt: datetime) -> float:
     return jdn + frac
 
 
+def _bundled_iers_only() -> None:
+    """Never let astropy download IERS or leap-second tables (S37).
+
+    By default astropy fetches finals2000A.all and the leap-second list on
+    first use (2.3 s online, ~18 s per call on a network that hangs) and,
+    offline, refuses its bundled table once it is 30 days old: every BJD_TDB
+    was then lost. The bundled tables give the same BJD to the bit (the
+    observer's position on the rotating Earth is all UT1 moves, by microseconds).
+    The same settings as the mount's coordinate conversion (telescope.py).
+    """
+    from astropy.utils import iers
+
+    iers.conf.auto_download = False
+    iers.conf.auto_max_age = None
+
+
 def bjd_tdb(
     jd_utc: float,
     ra_deg: float,
@@ -87,6 +103,7 @@ def bjd_tdb(
         from astropy.coordinates import EarthLocation, SkyCoord
         from astropy.time import Time
 
+        _bundled_iers_only()
         t = Time(jd_utc, format="jd", scale="utc")
         loc = EarthLocation.from_geodetic(
             lon=lon_deg * u.deg, lat=lat_deg * u.deg, height=elev_m * u.m

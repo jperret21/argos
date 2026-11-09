@@ -1,7 +1,7 @@
 # Argos 0.5.0 — data-integrity and hardware-safety fixes
 
 > Branch: `release/0.5.0`, cut from the published `release/0.4.2`.
-> Last updated: 2026-11-01.
+> Last updated: 2026-11-08.
 
 A bug-fix release with no new features. Specifying the web UI meant taking an
 inventory of the Qt code, and that inventory turned up defects that affect
@@ -28,6 +28,19 @@ One check was added after the review, **X3**: a site that is set but is not
 where the telescope is (the site of an earlier trip, for example) went
 unnoticed, and the airmass of the whole run was computed for it. The mount now
 gets compared with the Settings site when it connects.
+
+Porting the live photometry to the web UI (its wave 5) found four more defects
+in the live measurement, each with a test that fails on the code before it:
+**S31** (the first point of a series had its own aperture), **S32** ("Recommend
+from pilot" emptied the comparison ensemble when no VSP star was known), **S33**
+(a star whose role changed kept one curve for both roles) and **S34** (without a
+site, an opened frame's point took the mount's current airmass). Its reviews
+found five more, each with a test that fails on the code before it: **S35** (a
+frame on which the field had moved since the solve was measured on blank sky,
+with no flag), **S32** again (Recommend also emptied the ensemble when VSP stars
+existed but none passed the pilot gate), **S36** (sequence frames' `DATE-AVG`
+included half the download time), **S37** (offline, no point had a BJD_TDB) and
+**S38** (a reader could see a live curve CSV half written).
 
 **Several of these defects affect files you already hold.** The table says
 which; *Check your old files* below says how to find them.
@@ -57,6 +70,14 @@ which; *Check your old files* below says how to find them.
 | S17 | Comparison vetting ran only once a sequence had saved a frame | No vetting in live preview (display) | no |
 | S18 | A ratio-only live point raised `TypeError` | Point missing from both plots; a crash report per point | no |
 | S19 | Every point after the 10th re-rendered every curve, O(N²) | UI frozen for seconds per frame late in a night; zoom reset | no |
+| S31 | The live series FWHM was frozen on the second measured frame, not the first | The first point of every series (each object, each run) measured with another aperture | **yes** |
+| S32 | **Recommend from pilot** removed the VSP ensemble before knowing it had stars to replace it with | Comparisons gone from `targets.json` (unsolved field, catalogue not back, after a GoTo) | **yes** |
+| S33 | A star whose role changed kept one live curve for both roles | A `check_*.csv` (or comparison one) starting with the other role's points | **yes** |
+| S34 | Without a site, a point measured on an opened frame took the mount's current airmass | CSV `airmass` / AAVSO `AMASS` of replayed frames: tonight's mount altitude | **yes** |
+| S35 | A frame on which the field had moved since the solve was measured on blank sky | Unflagged points of every star on such frames; a larger `sigma_syst` on every row of the run | **yes** |
+| S36 | Sequence frames were dated with the download inside the exposure | `DATE-AVG` / `MJD-AVG` late by half the download time (seconds); BJD of Open FITS replays | **yes** |
+| S37 | BJD_TDB needed the internet (IERS tables) | No `bjd_tdb` in any point, CSV or AAVSO report of a session run offline | **yes** |
+| S38 | The live curve CSVs were rewritten in place after every point | A reader saw a partial file; a crash mid-write left the night's curve truncated | **yes** |
 | S9 | Review read a check star as a second target | Wrong dock and name in Review | no |
 | S10 | **Open curve CSV** exported a per-star file under its file name | AAVSO `NAME` wrong; a comparison exportable as the variable | **yes** |
 | S11 | AAVSO export kept saturated/suspect points, accepted `OBSCODE=XXX` | Flagged points submitted unflagged | **yes** |
@@ -153,6 +174,61 @@ against the day you installed 0.5.0.
 - **Runs with no live curve (S14) or mixed apertures (S15).** Re-run the batch
   measurement on the run's frames (**Re-run subs…**, which now works on an Argos
   session, S12): it measures every frame with one aperture geometry.
+- **The first point of a live curve (S31).** In a curve CSV (`photometry/*.csv`
+  of a run, or `<sessions>/targets/*.csv`), compare the `fwhm` column of the
+  first row with the second: when they differ, the first point was measured
+  with an aperture of `aperture_fwhm_mult × fwhm` of its own (2.5 × 2.16 against
+  2.5 × 2.12 green px in one real run of 195 points), while every other point
+  used the second value. Drop the first row of every star of that run, or re-run
+  the batch measurement (one aperture for all frames).
+- **A star that changed role during a run (S33).** If you changed a star's role
+  while points were measured (a comparison made the check star, or the
+  reverse), its new role's CSV (`check_<object>_<star>.csv`) begins with the
+  points measured under the old role: for a former comparison these are
+  leave-one-out magnitudes against the other comparisons, not check-star
+  magnitudes. Compare the file's first rows with the other role's CSV of the
+  same star: the rows they share in time belong to the old role; drop them.
+- **Opened frames without a site (S34).** Points measured on frames opened with
+  **Open FITS…** while a mount was connected and no site was set have the
+  airmass of where the mount pointed at that moment, not of the archived
+  frame. Replace their CSV `airmass` (and AAVSO `AMASS`) with `na`, or recompute
+  it for your site and the frame's `DATE-OBS`.
+- **Comparison ensembles (S32).** If you pressed **Recommend from pilot**, or
+  changed the comparison count, before the field was solved and its catalogue
+  had arrived (or after a GoTo), or on a field where no VSP star passes the
+  pilot gate (SNR ≥ 10, Δmag ≤ 1.5, within 25′: on the RR Lyr field all six are
+  27–59′ away), the VSP comparisons were removed from
+  `<sessions>/targets/<object>.json` and none were added. Open the set: if it
+  has a target and no VSP comparison, solve the field and recommend again (or
+  pick the comparisons by hand).
+- **Points measured on blank sky (S35).** When the field moved by more than
+  the tracker's search radius (15 green px with the default aperture) between
+  the solve and the measured frame (a pointing jump, or a sequence frame
+  measured through the previous frame's solve), every star of that frame was
+  measured where it no longer was, and the points were kept with no flag. In
+  the run's `<object>_live_diagnostics.jsonl`, look for frames whose `star`
+  records all have `snr` below 5: drop every star's row at that frame's
+  `jd_utc` in the run's curve CSVs, and recompute `sigma_syst` without them
+  (it is estimated from every point of the run, so those rows raised it on
+  every row). One real run (RR Lyr, 2026-09-25, 195 frames) had two such
+  frames: the target 7.547 ± 0.757 and 6.257 ± 1.043, about 1.4 mag off its
+  neighbours, and `sigma_syst` 0.0166 instead of 0.0150.
+- **Sequence frame times (S36).** In a sequence frame's header, `DATE-AVG`
+  minus `DATE-OBS` should be `EXPTIME / 2`; it was larger by half the
+  download time (+5.2 s median, +16.6 s at most, for 10 s subs over Wi-Fi). The
+  live curves used `DATE-OBS + EXPTIME/2` and are right. Points measured from
+  these files later with **Open FITS…** (which dates a frame by `DATE-AVG`),
+  or by another program reading `DATE-AVG`/`MJD-AVG`, are late by that amount:
+  recompute the mid-exposure as `DATE-OBS + EXPTIME/2`. `DATE-OBS` itself was
+  early by the gain and filter read-backs (tens of milliseconds).
+- **BJD_TDB of offline sessions (S37).** A curve CSV with a site set (an
+  `airmass` column filled from the site) but an empty `bjd_tdb` column was
+  measured without internet access. Compute the BJD_TDB from `jd_utc`, the
+  star's coordinates and the site (astropy's `light_travel_time`, as Argos
+  does) before you submit or time anything with it.
+- **Truncated curve CSVs (S38).** A curve CSV that ends in the middle of a row,
+  or has fewer rows than the run had frames, was being rewritten when the
+  program stopped: re-run the batch measurement on the run's frames.
 - **AAVSO files (S10, S11).** Do not submit a file with `#OBSCODE=XXX`, or one
   whose `NAME` starts with `TARGET_`, `COMPARISON_` or `CHECK_` (an exported
   per-star CSV). A `NAME` shaped like a file name, `<OBJECT>_<AUID or star
@@ -554,6 +630,168 @@ is still on) would have frozen the live view: pyqtgraph's `autoRange()`, which
 the panel used, turns auto-range off itself, so the flags read `[False, False]`
 after the first re-render (checked on 0.4.2). The panel now uses
 `enableAutoRange()`.
+
+### S31 — The live series FWHM is frozen on the first measured frame
+
+**What was wrong.** One aperture per series (P7): the FWHM is frozen on the
+first measured frame and re-sampled only after an autofocus or a change of
+object. The engine froze it, then opened the flight recorder, which resets the
+series FWHM for a new object (and for a new run): the first frame was measured
+with its own FWHM, and the series was frozen on the **second** frame's. The
+owner's RR Lyr run of 2026-09-25 shows it: `fwhm` 2.16 on the first row of every
+curve, 2.12 on the 194 others; XX Cyg 2026-09-07: 2.18, then 2.19.
+**Who was affected.** Every live curve of 0.4.2 (each object, each sequence
+run): its first point had another aperture radius than the rest of the series.
+**What changed.** The recorder is opened first; the series FWHM is then frozen
+on the frame being measured, as the batch re-run does (its first readable
+frame).
+**How to check.** `tests/workers/test_acquisition_engine.py::test_series_fwhm_is_frozen_on_the_first_measured_frame`
+(`[2.0, 3.0, 3.0]` on the code before the fix, `[2.0, 2.0, 2.0]` now).
+
+### S32 — Recommend from pilot keeps the ensemble when there is nothing to choose from
+
+**What was wrong.** **Recommend from pilot**, and a change of the "Automatically
+propose" comparison count, first removed every VSP comparison (`vsp`,
+`vsp_auto`) from the set, then picked new ones from the field's VSP catalogue.
+With no VSP star known (field not solved, catalogue not back yet or failed, or
+any time after a GoTo, which drops the catalogue) nothing was picked, and the
+set was saved without its comparisons: no differential magnitude from the next
+frame on. The Activity log said "no pilot-qualified comparison found".
+**Who was affected.** Anyone who pressed it before the catalogue arrived.
+**What changed.** Without VSP stars to choose from, the set is left unchanged
+(same message).
+**How to check.** `tests/workers/test_acquisition_engine.py::test_recommend_without_vsp_stars_keeps_the_ensemble`
+(the set lost both comparisons on the code before the fix).
+
+### S33 — A star whose role changes starts a new live curve
+
+**What was wrong.** Live curves are kept per star (AUID, else name). When a
+star changed role (a comparison made the check star, or the reverse), its
+measurements kept going into the same curve, still labelled with the first
+role: a check star's curve began with its leave-one-out comparison magnitudes,
+and in a run its new `check_*.csv` was written with both. The dock drew the
+check points in the comparison plot.
+**Who was affected.** Runs where a star's role was changed while points were
+measured.
+**What changed.** A star measured under a new role starts a new curve (the old
+role's CSV, inside a run, keeps its points); the display drops the old curve.
+**How to check.** `tests/workers/test_acquisition_engine.py::test_a_role_change_starts_a_new_curve`
+(three comparison points under one curve on the code before the fix).
+
+### S34 — An opened frame never takes the mount's airmass
+
+**What was wrong.** Without a site set, a live point's airmass is the mount's
+(X2: never the 0/0 default). The engine applied that rule to frames opened with
+**Open FITS…** too: an archived frame of another night was given the airmass of
+wherever the connected mount pointed when it was measured (1.154 for a mount at
+60°, whatever the frame saw).
+**Who was affected.** Replays of archived frames with a mount connected and no
+site set.
+**What changed.** A point measured on an opened frame has no mount airmass
+(none without a site, as the batch re-run); a site set gives the star's own
+airmass at the frame's time, as before.
+**How to check.** `tests/workers/test_acquisition_engine.py::test_an_opened_frame_never_takes_the_mount_airmass`
+(1.1541 on the code before the fix).
+
+### S35 — A frame on which the field moved since the solve gets no point
+
+**What was wrong.** Live photometry places its apertures through the latest
+solve, corrected by the aperture tracker, which re-centroids anchor stars
+within 15 green px of where the solve puts them. The tracker is rebuilt on the
+first frame after each solve, from the comparisons bright enough to steer it.
+When none was found there (the field had moved by more than the search radius
+since the solve), it fell back to every star of the set, unseen, then took
+noise centroids for stars (positive noise is never empty) and reported every
+anchor found. The frame was measured on blank sky: no warning (the "apertures
+unguided" message never fired), no flag, and the point kept. It happens to a
+sequence frame measured through the previous frame's solve after a pointing
+jump, and to a live frame after a solve. One real run (RR Lyr, 2026-09-25) has
+two such frames: the field jumped 22.8 px and 140 px, the target was measured at
+SNR 1.5–1.9 and written as 7.547 ± 0.757 and 6.257 ± 1.043 (about 1.4 mag off
+its neighbours), and those points raised the run-level `sigma_syst` of every
+row.
+**Who was affected.** Live and sequence photometry after a pointing jump (or a
+slew) larger than the search radius between the solve and the measured frame.
+**What changed.** The fallback takes only stars of the set seen where the
+solution places them (SNR ≥ 5); a tracker built with none is rebuilt on the next
+frame. A frame on which no anchor is found gets no point: a WARN says
+"Photometry skipped: no star of the set where the solution places it — the
+field moved since the solve, or clouds", and the flight recorder logs a
+`frame_skipped` event. This also applies to a frame on which clouds hide every
+anchor (each below 20 % of its first signal): such a frame used to be measured
+"unguided" at the last good position. On the review's replays (92 XX Cyg
+frames, the RR Lyr frames around both jumps) only the two frames above lose
+their point; every other value is unchanged. The web server's port has the same
+change.
+**How to check.** `tests/workers/test_acquisition_engine.py::test_a_field_that_moved_since_the_solve_gets_no_point`
+(an unflagged second point on the code before the fix).
+
+### S32 (extended) — Recommend keeps the ensemble when no VSP star passes the gate
+
+**What was wrong.** The S32 fix kept the ensemble only when the field had no
+VSP star at all. With VSP stars that all fail the pilot gate (SNR ≥ 10,
+Δmag ≤ 1.5, within 25′, on the frame), **Recommend from pilot** still removed
+every VSP comparison, added none and saved the set without comparisons. On the
+RR Lyr field all six VSP comparisons are 27–59′ from the target.
+**Who was affected.** Fields whose VSP stars are all far from the target, too
+faint or too bright for the filter.
+**What changed.** The new ensemble is chosen on a copy of the set; the set is
+changed and saved only when at least one comparison was picked (the WARN that
+lists the gate still says why none was).
+**How to check.** `tests/workers/test_acquisition_engine.py::test_recommend_with_no_vsp_star_passing_the_gate_keeps_the_ensemble`
+(the set lost both comparisons on the code before the fix).
+
+### S36 — A sequence frame is dated by its exposure, not its download
+
+**What was wrong.** The sequence worker started its clock before the gain and
+filter read-backs and stopped it after downloading the image, so `DATE-AVG`
+and `MJD-AVG` (written as the middle of that span) were late by half the
+download time: +5.2 s median and +16.6 s at most on 10 s subs over Wi-Fi
+(RR Lyr 2026-09-25), +1.8 s and +2.3 s on two XX Cyg runs. The Take shot and
+the live preview already stop the clock at ImageReady. The live curve points
+of a sequence are timed from `DATE-OBS + EXPTIME/2` and were right; a frame
+opened with **Open FITS…** is timed from `DATE-AVG` (S4), so a replay dated
+the same frame later, and its BJD with it.
+**Who was affected.** Every sequence frame (seconds late in `DATE-AVG`), and
+anyone timing those files by `DATE-AVG` (replays, other software).
+**What changed.** The clock starts just before StartExposure and stops at
+ImageReady, as the live preview's.
+**How to check.** `tests/workers/test_sequence_worker_observation.py::test_sequence_frame_times_are_the_exposure_not_the_download`
+(`DATE-OBS` 0.3 s early and `DATE-AVG − DATE-OBS` 0.6 s for a 0.2 s exposure
+on the code before the fix).
+
+### S37 — BJD_TDB is computed offline
+
+**What was wrong.** `bjd_tdb` let astropy download its IERS tables
+(`finals2000A.all`, the leap-second list) from the internet on first use: 2.3 s
+on the first point online, about 18 s per point on a network that hangs. Offline,
+astropy refused its bundled table (older than 30 days) for the dates of the
+session, the error was swallowed, and the point had no BJD_TDB even with a site
+set: the CSV `bjd_tdb` column was empty and the AAVSO export had no BJD. Whether
+it happened depended on whether a mount with a non-J2000 coordinate system had
+been used earlier in the session (telescope.py turns the download off).
+**Who was affected.** Sessions observed without internet access (in the field,
+or behind a refused connection).
+**What changed.** BJD_TDB uses astropy's bundled IERS tables and never
+downloads; the value is the same to the bit as with the downloaded tables
+(checked on three dates up to 2029).
+**How to check.** `tests/core/test_photometry_core.py::test_bjd_tdb_needs_no_network`
+(eight download attempts and no BJD on the code before the fix).
+
+### S38 — A live curve CSV is replaced, never rewritten in place
+
+**What was wrong.** The live engine rewrites a star's whole curve CSV after each
+point. The file was truncated and written in place, so a program reading it
+(Review, a spreadsheet, star_var_script) could see a partial or empty file
+(1 778 of 2 097 reads in a concurrent test), and a crash or power loss
+mid-write left the night's curve truncated on disk.
+**Who was affected.** Anyone reading a curve CSV during a run; a run that
+stopped abnormally.
+**What changed.** The file (and the session-wide curves export) is written
+beside the old one and renamed over it once complete, as the target set and
+the quality report already were. The bytes written are the same.
+**How to check.** `tests/core/test_photometry_core.py::test_a_failed_csv_rewrite_leaves_the_previous_file`
+(the header and one of three rows left on the code before the fix).
 
 ## Review and AAVSO export
 

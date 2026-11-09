@@ -2217,10 +2217,15 @@ class ImagingPage(QWidget):
             self.log_message.emit(
                 "OK", f"Photometry: replaced the VSP ensemble with {added} pilot-qualified star(s)."
             )
-        else:
+        elif not self._engine.comparisons:
             self.log_message.emit(
                 "WARN",
                 "Photometry: no pilot-qualified comparison found — solve a full-resolution frame first.",
+            )
+        else:  # S32: the field's VSP stars all fail the pilot gate (logged above)
+            self.log_message.emit(
+                "WARN",
+                "Photometry: no pilot-qualified comparison found — the ensemble is unchanged.",
             )
 
     def _refresh_target_table(self) -> None:

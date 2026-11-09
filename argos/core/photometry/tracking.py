@@ -275,6 +275,11 @@ class ApertureTracker:
         self.residual_px = 0.0  # median |fit − measured| of the kept anchors
         self.frames_lost = 0  # consecutive frames with no anchor found
 
+    @property
+    def anchor_count(self) -> int:
+        """Anchor stars the tracker was built with (0: none was seen)."""
+        return len(self._anchors)
+
     def update(self, green: np.ndarray, *, allow_rotation: bool = True) -> int:
         """Re-fit the transform on one frame; returns anchors matched.
 

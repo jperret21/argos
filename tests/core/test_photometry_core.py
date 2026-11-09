@@ -442,3 +442,84 @@ def test_aavso_check_magnitude_ignores_flagged_check_points(tmp_path) -> None:
     write_aavso(path, [target, check], obscode="ABC")
     rows = [ln.split(",") for ln in path.read_text().splitlines() if not ln.startswith("#")]
     assert [(row[9], row[10]) for row in rows] == [("na", "na"), ("000-KKK-222", "11.6000")]
+
+
+_BJD_OFFLINE = """
+import json, warnings
+warnings.simplefilter("ignore")
+import astropy.utils.data as data
+calls = []
+def blocked(*args, **kwargs):
+    calls.append(str(args[0]) if args else "")
+    raise OSError("network blocked")
+data.download_file = blocked
+from argos.core.photometry.airmass import bjd_tdb
+print(json.dumps({"bjd": bjd_tdb(2461290.67, 316.0, 42.0, 48.85, 2.35, 50.0), "calls": calls}))
+"""
+
+
+def test_bjd_tdb_needs_no_network(tmp_path) -> None:
+    """S37: astropy downloaded IERS tables on the first BJD of a session; offline
+    it refused its bundled table (older than 30 days), so bjd_tdb returned None
+    and no live point, CSV or AAVSO report had a BJD_TDB. Run in a fresh
+    process (astropy caches its tables) with the network blocked."""
+    import json
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    import pytest
+
+    root = Path(__file__).resolve().parents[2]
+    blocked = "http://127.0.0.1:9"
+    env = dict(
+        os.environ,
+        PYTHONPATH=str(root),
+        HOME=str(tmp_path),
+        XDG_CACHE_HOME=str(tmp_path / "cache"),
+        XDG_CONFIG_HOME=str(tmp_path / "config"),
+        HTTP_PROXY=blocked,
+        HTTPS_PROXY=blocked,
+        http_proxy=blocked,
+        https_proxy=blocked,
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", _BJD_OFFLINE], env=env, capture_output=True, text=True, timeout=120
+    )
+    result = json.loads(out.stdout.strip().splitlines()[-1])
+    assert result["calls"] == []  # finals2000A.all and the leap seconds before the fix
+    # The value an online astropy 7.2 gives for this instant, site and star.
+    assert result["bjd"] == pytest.approx(2461290.6741261533, abs=2e-9)  # None before
+
+
+def test_a_failed_csv_rewrite_leaves_the_previous_file(tmp_path, monkeypatch) -> None:
+    """S38: to_csv truncated the live CSV and rewrote it in place after every
+    point, so a reader saw a partial or empty file (1 778 of 2 097 reads in a
+    concurrent test) and a crash mid-write left the night's curve truncated."""
+    import pytest
+
+    import argos.core.photometry.lightcurve as lcmod
+
+    lc = LightCurve(auid="000-BBB-001", name="NU Ori")
+    for i in range(3):
+        lc.append(LcPoint(jd_utc=2451545.0 + i, mag=9.0, mag_err=0.02))
+    path = tmp_path / "target.csv"
+    lc.to_csv(path)
+    before = path.read_bytes()
+    lc.append(LcPoint(jd_utc=2451549.0, mag=9.1, mag_err=0.02))
+    row = lcmod._row
+
+    def fail_mid_file(p):
+        if p.jd_utc == 2451546.0:
+            raise OSError("disk full")
+        return row(p)
+
+    monkeypatch.setattr(lcmod, "_row", fail_mid_file)
+    with pytest.raises(OSError):
+        lc.to_csv(path)
+    assert path.read_bytes() == before  # the header and 1 of 3 rows before the fix
+    assert [p.name for p in tmp_path.iterdir()] == ["target.csv"]
+    monkeypatch.setattr(lcmod, "_row", row)
+    lc.to_csv(path)
+    assert len(path.read_text().splitlines()) == 5
