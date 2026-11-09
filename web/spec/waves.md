@@ -24,9 +24,10 @@ actually delivered).
 | Lab | Design lab and art direction | **done** 2026-11-01 | `d96f440` prototypes, `694a20f` decisions D1-D11 accepted | `web/screenshots/2026-11-01_lab-*` |
 | W2 | Settings | **done** 2026-11-03 | `5462efd` server, `78b054a` design system and components, `437f612` Settings, `622b91e` gallery | `web/screenshots/2026-11-02_wave2-settings` |
 | — | 0.5.0 fixes merged into the web branch | **done** | `c746875` (merge of `release/0.5.0`, incl. `94b12b7`) | — |
-| W3 | Observe: acquisition | **reviewed and fixed** 2026-11-08 (exit criterion met through the UI; design, technical and science reviews applied, `progress.md` Wave 3 sections 2 and 6); the owner's commit pending | — (uncommitted) | `web/screenshots/2026-11-08_wave3-observe` |
-| W4 | Field identification and image tools | **done** 2026-11-08: exit criterion met (roles and Night Red through the UI; tracking on 195 real frames, 0.2-0.9 px, no loss); design, technical and science reviews applied (`progress.md` Wave 4, section 6); the owner's commit pending | — (uncommitted) | `web/screenshots/2026-11-08_wave4-field` |
-| W5 | Live photometry | **reviewed and fixed** 2026-11-08: exit criterion met through the UI (4 replays of real frames, 1 748 values equal to the fixed Qt engine's, 0 difference; re-run after the review fixes: 360 values, 0 difference; `progress.md` Wave 5, sections 2 and 7); design, technical and science findings fixed except the drawer tool row and band leftover (wave 6) and two owner decisions; Qt fixes S31-S38 and S32 extended in the release worktree; the owner's commit pending | — (uncommitted) | `web/screenshots/2026-11-08_wave5-photometry` |
+| W3 | Observe: acquisition | **done** 2026-11-08 (exit criterion met through the UI; design, technical and science reviews applied, `progress.md` Wave 3 sections 2 and 6) | `c2ccfee` server, `3c2ec60` components, `7279517` integration, `5162fd0` gallery | `web/screenshots/2026-11-08_wave3-observe` |
+| W4 | Field identification and image tools | **done** 2026-11-08: exit criterion met (roles and Night Red through the UI; tracking on 195 real frames, 0.2-0.9 px, no loss); design, technical and science reviews applied (`progress.md` Wave 4, section 6) | `e3f0b0d` server, `46f1f96` components, `fbf19a4` integration, `3fcbb94` gallery | `web/screenshots/2026-11-08_wave4-field` |
+| — | 0.5.0 fixes S31-S42 merged into the web branch | **done** 2026-11-09 | `17724df` (merge of `release/0.5.0`: `02a53b9` S31-S38, `116488e` S39-S42) | — |
+| W5 | Live photometry | **done** 2026-11-09: exit criterion met through the UI (4 replays of real frames, 1 748 values equal to the fixed Qt engine's, 0 difference; re-run after the review fixes: 360 values, 0 difference; `progress.md` Wave 5, sections 2 and 7); design, technical and science findings fixed except the drawer tool row and band leftover (wave 6); the owner's decisions applied as Qt fixes S39-S42, ported to the server | `abf5431` server, `4655564` components, `ddc176b` integration, this commit gallery | `web/screenshots/2026-11-08_wave5-photometry` |
 | W6 | Plan (and Run, Watch, attention) | to do | — | — |
 | W7 | Review | to do | — | — |
 | W8 | Desktop app and Qt retirement | to do | — | — |
@@ -238,7 +239,7 @@ the science review checks; exit criterion; notes.
   500 kB (split Settings into its own chunk); place search (Nominatim) and a real Seestar's
   own site untested; WebKit untested.
 
-### W3 — Observe: acquisition (integrated 2026-11-08; reviews and commit pending)
+### W3 — Observe: acquisition (done)
 
 - **Goal:** a full capture night: framing, filter, focus, autofocus, single FITS saves
   (lights, darks), jog, catalogue GoTo, Stellarium.
@@ -271,7 +272,7 @@ the science review checks; exit criterion; notes.
 - **Team used:** backend, controls and instruments, workspace and charts, integrator,
   design / technical / science reviews, fixer. Base commit `c746875`.
 
-### W4 — Field identification and image tools (integrated 2026-11-08; reviews and commit pending)
+### W4 — Field identification and image tools (done)
 
 - **Goal:** identify the field, see catalogues and roles on the image, click stars, centre
   the target; complete the viewer tools.
@@ -295,7 +296,7 @@ the science review checks; exit criterion; notes.
   writes `targets/<object>.json`; Night Red shows no non-red pixel.
 - **Notes:** check WebGL2 R16UI on WebKitGTK before relying on the GPU palettes (PROPOSAL §9).
 
-### W5 — Live photometry
+### W5 — Live photometry (done)
 
 - **Goal:** measure a variable star live: target set, ensemble, light curve, variables list.
 - **API:** A50, A54-A58.
@@ -340,6 +341,23 @@ the science review checks; exit criterion; notes.
   §4.10), with the owner marking true and false alarms.
 - **Exit criterion:** a transit plan produces `observation.json`; Stop / Pause / outcome
   visible; no silent clamp.
+- **Owner decisions (2026-11-09):**
+  - Run it in two halves, each a complete wave with the same team and the three reviews:
+    **6a** Plan and sequences (Plan screen, server sequences with per-frame measurement and
+    the run folder, RunCard with Pause / Stop, mount interlock, preflight) and **6b** the
+    night (Run mode with the live curve under the image, Watch, attention with sound,
+    keep-awake, end-of-night wrap-up). About 3 h and 3 M tokens each.
+  - **Batch re-run after a field jump** (Qt): when the tracker loses lock, re-solve that
+    frame with ASTAP (about 0.5 s, existing code) and re-anchor; the points stay flagged
+    until then. Today the batch never recovers: on RR Lyr 2026-09-25 (frames 0-79, frame 0's
+    solution) frames 52-60 get unflagged blank-sky points (apertures 20-70 px off), 61-79
+    no point, and the summary reports the run as tracked. A Qt fix with a test that fails
+    before, in 6a.
+  - **Aperture tracking during a sequence:** keep Qt's `ApertureTracker` plus S35 for
+    parity; then compare it with the web tracker (which keeps more points) on the owner's
+    runs, with figures, before any change.
+  - Carry over from W5: the plot tools into the drawer's tab row (lift the zoom state out
+    of the plot) and the Field band's empty strip between 36 and 150 px.
 
 ### W7 — Review
 
