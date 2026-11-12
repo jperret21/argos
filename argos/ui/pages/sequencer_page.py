@@ -7,6 +7,7 @@ engine wiring; frames, the log and live light curve stay on Capture.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 
 from PyQt6.QtCore import pyqtSignal, pyqtSlot
@@ -20,6 +21,9 @@ from argos.core.exoplanet.transit import make_transit_sequence, predict_next_tra
 from argos.core.photometry.airmass import bjd_tdb, julian_date, utc_from_bjd_tdb
 from argos.workers.exoplanet_worker import ExoplanetLookupWorker
 from argos.workers.object_resolver_worker import ObjectResolverWorker
+
+#: The most frames one step holds (the editor's Count range).
+MAX_STEP_COUNT = 9999
 
 
 class SequencerPage(QWidget):
@@ -280,16 +284,29 @@ class SequencerPage(QWidget):
         except ValueError as exc:
             self.panel.set_exoplanet_error(str(exc))
             return
+        frames = plan.steps[0].count
+        if frames > MAX_STEP_COUNT:
+            # S47: the editor holds at most 9999 frames per step; cutting the series
+            # there silently dropped the end of the coverage observation.json declared.
+            coverage_s = (window.coverage_end_bjd_tdb - window.coverage_start_bjd_tdb) * 86400.0
+            self.panel.set_status(  # the table is left as it was; Prepare stays available
+                f"Transit sequence not prepared: this coverage needs {frames} frames, more "
+                f"than the {MAX_STEP_COUNT} a step holds. Use a cadence of at least "
+                f"{math.ceil(coverage_s / MAX_STEP_COUNT)} s or a shorter baseline."
+            )
+            return
         self._transit_window = window
         local_window = self._local_transit_window(target, window)
         self.panel.set_exoplanet_result(
             target, window, local_mid=local_window[1] if local_window else None
         )
         self._show_transit_visibility(target, window, local_window)
-        self.panel.load_plan(plan)
+        notes = self.panel.load_plan(plan)
+        adjusted = f" Adjusted: {'; '.join(notes)}." if notes else ""
         self.panel.set_status(
-            f"Transit sequence prepared: {plan.steps[0].count} light frames at "
-            f"{settings['cadence_s']:.1f}s cadence. Review the start time before running."
+            f"Transit sequence prepared: {self.panel.to_plan().steps[0].count} light frames "
+            f"at {settings['cadence_s']:.1f}s cadence. Review the start time before running."
+            + adjusted
         )
 
     def save_layout(self) -> None:

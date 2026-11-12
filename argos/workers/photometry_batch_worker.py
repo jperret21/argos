@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,7 +32,12 @@ from argos.core.imaging.green import green_plane
 from argos.core.photometry.airmass import airmass_at, bjd_tdb, julian_date
 from argos.core.photometry.lightcurve import LcPoint, LightCurve
 from argos.core.photometry.params import PhotometryParams, frame_egain, measure_frame
-from argos.core.photometry.tracking import ApertureTracker, TrackedWCS, select_tracking_anchors
+from argos.core.photometry.tracking import (
+    ApertureTracker,
+    TrackedWCS,
+    anchors_seen,
+    select_tracking_anchors,
+)
 from argos.core.photometry.uncertainty import apply_systematic_floor, estimate_systematic_floor
 from argos.core.session.diagnostics import SessionDiagnostics
 from argos.core.session.types import PhotometryPoint
@@ -42,6 +48,9 @@ logger = logging.getLogger(__name__)
 _FITS_SUFFIXES = (".fit", ".fits", ".fts")
 #: IMAGETYP words that mark a calibration frame, never measured as a light.
 _CALIBRATION_WORDS = ("dark", "flat", "bias", "offset", "zero")
+#: S43: an anchor is seen when its aperture at the tracked position has this SNR
+#: (the S35 "seen" threshold); the lock holds when half the anchors are seen.
+_LOCK_MIN_SNR = 5.0
 
 
 def discover_light_frames(folder: Path) -> list[Path]:
@@ -114,6 +123,10 @@ class BatchRequest:
     #: ``camera.egain_table``: each frame's errors use its own gain (``frame_egain``);
     #: ``params.egain`` only for a frame that records none.
     egain_table: dict = field(default_factory=dict)
+    #: Plate-solves a frame's green plane -> FrameWCS, or None (S43): called on a
+    #: frame on which the tracker lost the field, to re-anchor the apertures.
+    #: None (no ASTAP): the frames after a loss are flagged instead.
+    solver: Callable[[np.ndarray], object] | None = None
 
 
 @dataclass
@@ -122,17 +135,22 @@ class BatchResult:
 
     ``frames_done`` counts the frames measured; ``frames_skipped`` those that
     could not be read or dated. A ``cancelled`` run writes no CSV and its
-    curves are partial (``ok`` still means "no error").
+    curves are partial (``ok`` still means "no error"). ``frames_resolved``
+    counts the frames re-solved after the tracker lost the field (S43),
+    ``frames_unanchored`` those measured without the field: their points are
+    flagged suspect.
     """
 
     curves: dict[str, LightCurve] = field(default_factory=dict)
     frames_done: int = 0
     error: str = ""
-    rotation_deg: float = 0.0  # accumulated field rotation vs the reference solve
-    shift_px: float = 0.0  # accumulated pointing drift vs the reference solve
+    rotation_deg: float = 0.0  # accumulated field rotation vs the last solve
+    shift_px: float = 0.0  # accumulated pointing drift vs the last solve
     frames_skipped: int = 0
     cancelled: bool = False
     out_dir: Path | None = None  # where the CSVs were written
+    frames_resolved: int = 0
+    frames_unanchored: int = 0
 
     @property
     def ok(self) -> bool:
@@ -159,6 +177,15 @@ class PhotometryBatchWorker(QThread):
         self._tracker: ApertureTracker | None = None
         self._check_keys: set[str] = set()  # curve keys that are check stars (P2)
         self._series_fwhm: float | None = None  # measured once, fixed all series (P7)
+        # S43: the solve the apertures hang from (a re-solve replaces it), the
+        # tracker's anchor stars, and whether the field is held since that solve.
+        self._reference = request.wcs
+        self._anchor_stars: list = []
+        self._anchored = True
+        self._frames_resolved = 0
+        self._frames_unanchored = 0
+        self._solver_failed_logged = False
+        self._flagged: set[int] = set()  # id() of the points measured without the field
 
     def cancel(self) -> None:
         """Ask the run to stop at the next frame boundary."""
@@ -195,7 +222,7 @@ class PhotometryBatchWorker(QThread):
                 handled += 1
                 self.progress.emit(handled, total)
             cancelled = self._cancel
-            self._apply_systematic_floors(curves)
+            self._apply_systematic_floors(curves, self._flagged)
             if not cancelled:  # a partial run must not replace any file
                 self._write_csvs(curves)
             result = BatchResult(
@@ -204,12 +231,18 @@ class PhotometryBatchWorker(QThread):
                 frames_skipped=skipped,
                 cancelled=cancelled,
                 out_dir=None if cancelled else req.out_dir,
+                frames_resolved=self._frames_resolved,
+                frames_unanchored=self._frames_unanchored,
             )
             for key in sorted(self._check_keys):
                 lc = curves.get(key)
-                if lc is None or len(lc.points) < 2:
+                if lc is None:
                     continue
-                mags = [p.mag for p in lc.points]
+                mags = [
+                    p.mag for p in lc.points if id(p) not in self._flagged and math.isfinite(p.mag)
+                ]
+                if len(mags) < 2:
+                    continue
                 mean = sum(mags) / len(mags)
                 k_rms = (sum((m - mean) ** 2 for m in mags) / (len(mags) - 1)) ** 0.5
                 logger.info("Check star %s: RMS %.4f mag over %d frames", key, k_rms, len(mags))
@@ -217,18 +250,29 @@ class PhotometryBatchWorker(QThread):
             if self._tracker is not None:
                 result.rotation_deg = self._tracker.transform.rotation_deg
                 result.shift_px = self._tracker.transform.shift_px
-                logger.info(
-                    "Batch tracking: field rotated %.2f°, drifted %.1f px over %d frames",
-                    result.rotation_deg,
-                    result.shift_px,
-                    done,
-                )
+                if self._frames_unanchored or self._frames_resolved:
+                    logger.warning(
+                        "Batch tracking: the field was lost on %d frame(s): %d re-solved, "
+                        "%d measured without it (points flagged suspect)",
+                        self._frames_resolved + self._frames_unanchored,
+                        self._frames_resolved,
+                        self._frames_unanchored,
+                    )
+                else:
+                    logger.info(
+                        "Batch tracking: field rotated %.2f°, drifted %.1f px over %d frames",
+                        result.rotation_deg,
+                        result.shift_px,
+                        done,
+                    )
             diag.record(
                 "event",
                 what="batch_end",
                 frames_done=done,
                 rotation_deg=result.rotation_deg,
                 shift_px=result.shift_px,
+                frames_resolved=self._frames_resolved,
+                frames_unanchored=self._frames_unanchored,
             )
             self.finished_batch.emit(result)
         except Exception as exc:  # pragma: no cover - safety net
@@ -262,6 +306,7 @@ class PhotometryBatchWorker(QThread):
         if self._series_fwhm is None:
             self._series_fwhm = self._measure_series_fwhm(arr, diag)
         diag.record("frame", frame=frame_no, file=fpath.name, jd_utc=jd, fwhm=self._series_fwhm)
+        wcs, anchored = self._anchor(green, wcs, diag, frame_no, fpath.name)
         if self._tracker is not None:
             diag.record(
                 "tracking",
@@ -272,6 +317,7 @@ class PhotometryBatchWorker(QThread):
                 rotation_deg=self._tracker.transform.rotation_deg,
                 shift_px=self._tracker.transform.shift_px,
                 frames_lost=self._tracker.frames_lost,
+                anchored=anchored,
             )
         params = self._req.params
         if egain is not None and egain != params.egain:
@@ -295,8 +341,71 @@ class PhotometryBatchWorker(QThread):
                     comps_used=res.diff.comps_used,
                     note=res.diff.note or None,
                 )
-        self._emit_points(results, jd, curves)
+        self._emit_points(results, jd, curves, flagged=not anchored)
         return True
+
+    def _lock_holds(self, green, wcs) -> bool:
+        """The tracker found anchors and half of them show a star where it put them."""
+        if self._tracker is None or not self._tracker.anchors_used or not self._anchor_stars:
+            return False
+        seen = anchors_seen(green, wcs, self._anchor_stars, self._req.params, min_snr=_LOCK_MIN_SNR)
+        return seen >= max(1, math.ceil(len(self._anchor_stars) / 2))
+
+    def _anchor(self, green, wcs, diag, frame_no: int, fname: str):
+        """Check the tracker's lock; re-solve and re-anchor the frame when it is lost (S43).
+
+        Returns ``(wcs, anchored)``. Once the field is lost, the points stay
+        flagged until a solve re-anchors the apertures: a tracker that lost the
+        field keeps a stale transform, and a window that finds a star again may
+        have found another one.
+        """
+        if self._tracker is None:  # tracking off: the reference solve, as chosen
+            return wcs, True
+        if self._anchored and self._lock_holds(green, wcs):
+            return wcs, True
+        if self._anchored:
+            self._anchored = False
+            logger.warning(
+                "%s: the field moved off the apertures (a pointing jump, or clouds)", fname
+            )
+            diag.record(
+                "event", frame=frame_no, what="field_lost", anchors=self._tracker.anchors_used
+            )
+        solution = self._solve(green, fname)
+        if solution is not None:
+            self._reference = solution
+            self._tracker = self._build_tracker(green)
+            self._tracker.update(green)
+            tracked = TrackedWCS(self._reference, self._tracker)
+            if self._lock_holds(green, tracked):
+                self._anchored = True
+                self._frames_resolved += 1
+                logger.info("%s: re-solved, apertures re-anchored on the field", fname)
+                diag.record("event", frame=frame_no, what="re_anchored")
+                return tracked, True
+            wcs = tracked
+        self._frames_unanchored += 1
+        diag.record(
+            "event",
+            frame=frame_no,
+            what="unanchored",
+            reason="no solver" if self._req.solver is None else "not re-solved",
+        )
+        return wcs, False
+
+    def _solve(self, green, fname: str):
+        """The frame's own solution from the request's solver, or None."""
+        if self._req.solver is None:
+            return None
+        try:
+            solution = self._req.solver(green)
+        except Exception as exc:  # a solver failure flags the frame, never ends the run
+            logger.warning("%s: re-solve failed: %s", fname, exc)
+            return None
+        if solution is None and not self._solver_failed_logged:
+            self._solver_failed_logged = True
+            logger.warning("%s: the frame did not solve — its points are flagged", fname)
+        return solution
 
     def _measure_series_fwhm(self, raw, diag) -> float | None:
         """Field FWHM from the first readable frame — one aperture per series (P7).
@@ -331,7 +440,7 @@ class PhotometryBatchWorker(QThread):
         self._tracker.update(green)
         if not self._tracker.anchors_used:
             logger.warning("%s: no anchor star found — apertures unguided", fname)
-        return TrackedWCS(self._req.wcs, self._tracker)
+        return TrackedWCS(self._reference, self._tracker)
 
     def _build_tracker(self, green) -> ApertureTracker:
         """Anchor the tracker on the stable stars of the set (comps + checks).
@@ -340,11 +449,17 @@ class PhotometryBatchWorker(QThread):
         poor centroid — only fall back to targets when there is nothing else.
         """
         tset = self._req.target_set
+        wcs = self._reference
         candidates = tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK)
-        anchors = select_tracking_anchors(green, self._req.wcs, candidates, self._req.params)
+        anchors = select_tracking_anchors(green, wcs, candidates, self._req.params)
         if not anchors:
-            anchors = list(tset.stars)
-        xy = [self._req.wcs.world_to_pixel_deg(s.ra_deg, s.dec_deg) for s in anchors]
+            # Any star of the set seen where the solution places it (S35); with
+            # none seen, the lock check fails and the frame is re-solved (S43).
+            anchors = select_tracking_anchors(
+                green, wcs, list(tset.stars), self._req.params, min_snr=_LOCK_MIN_SNR
+            ) or list(tset.stars)
+        self._anchor_stars = anchors
+        xy = [wcs.world_to_pixel_deg(s.ra_deg, s.dec_deg) for s in anchors]
         h, w = green.shape
         search_r = max(8.0, 2.0 * self._req.params.aperture_px(None))
         return ApertureTracker(
@@ -353,7 +468,9 @@ class PhotometryBatchWorker(QThread):
             search_r=search_r,
         )
 
-    def _emit_points(self, results, jd: float | None, curves: dict[str, LightCurve]) -> None:
+    def _emit_points(
+        self, results, jd: float | None, curves: dict[str, LightCurve], *, flagged: bool = False
+    ) -> None:
         """Convert one frame's measurements into curve points + point signals.
 
         ``results`` carry targets, check stars (P2) and leave-one-out
@@ -385,7 +502,8 @@ class PhotometryBatchWorker(QThread):
                 comps_used=res.diff.comps_used if res.diff else 0,
                 relative_comps_used=res.relative.comps_used if res.relative else 0,
                 saturated=bool(res.phot and res.phot.saturated),
-                suspect=bool(res.phot and res.phot.suspect),
+                # S43: measured without the field (the tracker lost it, no re-solve).
+                suspect=bool(res.phot and res.phot.suspect) or flagged,
                 formal_mag_err=(
                     res.diff.formal_mag_err or res.diff.mag_err
                     if res.diff and res.diff.mag_err is not None
@@ -402,6 +520,8 @@ class PhotometryBatchWorker(QThread):
                 ),
             )
             lc.append(pt)
+            if flagged:
+                self._flagged.add(id(pt))
             self.point.emit(
                 PhotometryPoint(
                     key=key,
@@ -417,14 +537,20 @@ class PhotometryBatchWorker(QThread):
             )
 
     @staticmethod
-    def _apply_systematic_floors(curves: dict[str, LightCurve]) -> None:
-        """Apply the shared star_var_script uncertainty model after a batch."""
+    def _apply_systematic_floors(
+        curves: dict[str, LightCurve], flagged: set[int] = frozenset()
+    ) -> None:
+        """Apply the shared star_var_script uncertainty model after a batch.
+
+        Points measured without the field (``flagged``, S43) do not set the floor.
+        """
         for curve in curves.values():
             floor = estimate_systematic_floor(
                 [
                     (point.jd_utc, point.mag, point.formal_mag_err or point.mag_err)
                     for point in curve.points
-                    if math.isfinite(point.mag)
+                    if id(point) not in flagged
+                    and math.isfinite(point.mag)
                     and math.isfinite(point.formal_mag_err or point.mag_err)
                 ]
             )

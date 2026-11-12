@@ -75,6 +75,31 @@ def build_solve_settings(
     )
 
 
+def batch_frame_solver(
+    cfg_get: CfgGet, centre_radec: tuple[float, float] | None
+) -> Callable[[object], FrameWCS | None]:
+    """A solver for a batch re-run frame on which the tracker lost the field (S43).
+
+    The returned callable plate-solves a green plane with the configured ASTAP
+    (the live settings: bounded timeout, search radius about ``centre_radec``,
+    the reference solve's centre) and returns its :class:`FrameWCS`, or None
+    when it does not solve. No whole-sky retry: the frames of a run are on the
+    reference's field, and a blind search of a clouded frame would cost minutes.
+    """
+    import numpy as np
+
+    from argos.core.imaging.platesolve import solve_array
+
+    def solve(green) -> FrameWCS | None:
+        plane = np.asarray(green)
+        settings = build_solve_settings(cfg_get, plane.shape, live=True, mount_radec=centre_radec)
+        settings.allow_blind_retry = False
+        result = solve_array(np.clip(plane, 0, 65535).astype(np.uint16), settings)
+        return wcs_from_result(result, plane.shape) if result.solved else None
+
+    return solve
+
+
 def full_res_scale(result: SolveResult) -> float | None:
     """Full-res plate scale (″/px) from a solve.
 

@@ -70,6 +70,38 @@ def select_tracking_anchors(
     return [star for _snr, star in qualified[:max_anchors]]
 
 
+def anchors_seen(green, wcs, stars, params, *, min_snr: float = 5.0) -> int:
+    """How many of ``stars`` show a star (SNR >= ``min_snr``) where ``wcs`` places them.
+
+    The independent check of a tracker's lock (S43): after a pointing jump
+    larger than the search radius, the tracker's windows centroid on noise or
+    on a neighbour and still report anchors, but its transform keeps the
+    apertures on blank sky, where an aperture measures no star.
+    """
+    from argos.core.photometry.aperture import measure_aperture
+
+    r_ap = params.aperture_px(None)
+    r_in = max(params.annulus_in_px, r_ap + 1.0)
+    r_out = max(params.annulus_out_px, r_in + 2.0)
+    seen = 0
+    for star in stars:
+        x, y = wcs.world_to_pixel_deg(star.ra_deg, star.dec_deg)
+        phot = measure_aperture(
+            green,
+            float(x),
+            float(y),
+            r_ap,
+            r_in,
+            r_out,
+            egain=params.egain,
+            read_noise_e=params.read_noise_e,
+            sat_adu=params.sat_adu,
+        )
+        if phot is not None and phot.snr >= min_snr:
+            seen += 1
+    return seen
+
+
 def refine_centroid(green: np.ndarray, x: float, y: float, r: float) -> tuple[float, float] | None:
     """Flux-weighted centroid within radius ``r`` of ``(x, y)``, or None.
 

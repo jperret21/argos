@@ -338,6 +338,8 @@ class AcquisitionEngine(QObject):
         # on the first measured frame, re-created when the object changes.
         self._diag: SessionDiagnostics | None = None
         self._diag_object: str | None = None
+        #: The run folder the recorder writes in (None: the live one, S45).
+        self._diag_root: Path | None = None
         self._diag_frame = 0
 
         # P7: one aperture radius per series — the FWHM is frozen on the first
@@ -857,7 +859,11 @@ class AcquisitionEngine(QObject):
             except (TypeError, ValueError):
                 pass
         self.frame_saved.emit(path, record)  # the page logs the summary line
-        # P5: one differential point per saved sub (uses the latest solve's WCS).
+        # P5: one differential point per saved Light sub (uses the latest solve's WCS).
+        # S44: never a Dark, Flat or Bias sub: its point was junk, and measuring it
+        # moved the aperture tracker, which changed the Light points after it.
+        if record is not None and getattr(record, "image_type", None) != "Light Frame":
+            return
         if self._astrometry.wcs is not None and self.target_set().by_role(ROLE_TARGET):
             self._measure_photometry()
 
@@ -888,6 +894,10 @@ class AcquisitionEngine(QObject):
 
     def _on_seq_finished(self, completed: bool) -> None:
         self._sequence = None
+        # S45: the run's folder is closed. Every sub's point was measured before this
+        # (frame_saved precedes finished), so a later live point goes to the live CSVs
+        # and never rewrites this run's CSVs or photometry_quality.json.
+        self._active_run_root = None
         # Hand the camera back (state_changed → "Idle" in the status bar). If
         # the sequence died while a mid-run autofocus held the camera, this
         # just cancels the pending resume — AF releases to IDLE on its own.
@@ -957,13 +967,21 @@ class AcquisitionEngine(QObject):
         closes the previous file and starts a fresh frame counter.
         """
         obj = tset.object_name or "Unknown"
-        if self._diag is None or self._diag_object != obj:
+        run_root = self._active_run_root
+        if self._diag is None or self._diag_object != obj or self._diag_root != run_root:
+            # A new object or a new run restarts the series; a run that ended only
+            # moves the recorder out of its folder (S45).
+            restart = (
+                self._diag is None
+                or self._diag_object != obj
+                or (run_root is not None and run_root != self._diag_root)
+            )
             if self._diag is not None:
                 self._diag.close()
             safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in obj)
             root = (
-                self._active_run_root / "diagnostics"
-                if self._active_run_root is not None
+                run_root / "diagnostics"
+                if run_root is not None
                 else self._sessions_base() / "targets"
             )
             self._diag = SessionDiagnostics(
@@ -971,8 +989,10 @@ class AcquisitionEngine(QObject):
                 enabled=bool(self._cfg("diagnostics.enabled", False)),
             )
             self._diag_object = obj
+            self._diag_root = run_root
             self._diag_frame = 0
-            self._phot_fwhm = None  # new object → re-sample the series FWHM (P7)
+            if restart:
+                self._phot_fwhm = None  # new object → re-sample the series FWHM (P7)
         return self._diag
 
     # ------------------------------------------------------------------
@@ -1433,6 +1453,8 @@ class AcquisitionEngine(QObject):
         # target scientifically unusable.
         band = str(self._cfg("photometry.default_band", "TG") or "TG")
         existing = tset.by_role(ROLE_COMPARISON)
+        # S46: the target and the check star are never offered as comparisons.
+        others = [s for s in tset.stars if s.role != ROLE_COMPARISON]
         calibrated = [
             s for s in existing if s.mags.get(band) is not None or s.mags.get("V") is not None
         ]
@@ -1449,7 +1471,7 @@ class AcquisitionEngine(QObject):
             self._comparisons,
             wcs=self._astrometry.wcs,
             green_shape=self._green_shape,
-            count=wanted + len(existing),
+            count=wanted + len(existing) + len(others),
             candidate_quality=quality,
             target_inst_mag=target_inst_mag,
             min_snr=min_snr,
@@ -1460,7 +1482,16 @@ class AcquisitionEngine(QObject):
         # A manual click and its VSP record use different keys (position vs
         # AUID).  Keep a single physical star in the target set even in that
         # case, favouring the VSP record because it carries calibrated mags.
+        def same_star(a: TargetStar, b: TargetStar) -> bool:
+            if a.auid and b.auid and a.auid == b.auid:
+                return True
+            sep = angular_separation_deg(a.ra_deg / 15.0, a.dec_deg, b.ra_deg / 15.0, b.dec_deg)
+            return sep < 1.0 / 3600.0
+
         def already_present(candidate: TargetStar) -> bool:
+            # S46: set_role(candidate) replaced a check star of the same AUID.
+            if any(same_star(star, candidate) for star in others):
+                return True
             for saved in tuple(existing):
                 if saved.auid and candidate.auid and saved.auid == candidate.auid:
                     return True
