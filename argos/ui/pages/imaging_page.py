@@ -81,7 +81,11 @@ from argos.core.catalog.object_resolver import is_variable_object_type
 from argos.core.catalog.targets import TargetStar
 from argos.core.hardware import active as hardware
 from argos.core.imaging import sensor_models
-from argos.core.imaging.astrometry_session import field_geometry, project_points
+from argos.core.imaging.astrometry_session import (
+    batch_frame_solver,
+    field_geometry,
+    project_points,
+)
 from argos.core.imaging.debayer import VIEW_SUPERPIXEL
 from argos.core.imaging.metrics import (
     arcsec_per_full_px,
@@ -2330,6 +2334,8 @@ class ImagingPage(QWidget):
             )
             return
         params = PhotometryParams.from_config(self._cfg, egain=self._engine_egain())
+        crval = (getattr(wcs, "crval1", None), getattr(wcs, "crval2", None))
+        centre = (crval[0] / 15.0 % 24.0, crval[1]) if None not in crval else None
         req = BatchRequest(
             fits_paths=paths,
             wcs=wcs,
@@ -2343,6 +2349,9 @@ class ImagingPage(QWidget):
             diagnostics=bool(self._cfg("diagnostics.enabled", False)),
             # Each saved sub's errors use its own gain; the form's only as a fallback.
             egain_table=self._cfg("camera.egain_table", {}) or {},
+            # S43: a frame on which the tracker loses the field is re-solved near
+            # the reference's centre and the apertures re-anchored on it.
+            solver=batch_frame_solver(self._cfg, centre),
         )
         dialog = QProgressDialog("Re-running photometry…", "Cancel", 0, len(paths), self)
         dialog.setWindowTitle("Batch photometry")
@@ -2415,7 +2424,23 @@ class ImagingPage(QWidget):
             "OK",
             f"Batch photometry: {result.frames_done} frame(s) measured; curves: {counts}{where}.",
         )
-        if abs(result.rotation_deg) > 0.05 or result.shift_px > 1.0:
+        if result.frames_resolved:
+            self.log_message.emit(
+                "INFO",
+                f"Batch photometry: the field jumped on {result.frames_resolved} frame(s); "
+                "each was re-solved and the apertures re-anchored on it.",
+            )
+        if result.frames_unanchored:
+            # S43: never "tracked" when the apertures were not on the field.
+            self.log_message.emit(
+                "WARN",
+                f"Batch photometry: {result.frames_unanchored} frame(s) measured where the "
+                "field was lost (a pointing jump or clouds) and not re-solved: their points "
+                "are flagged suspect and left out of the AAVSO export.",
+            )
+        elif not result.frames_resolved and (
+            abs(result.rotation_deg) > 0.05 or result.shift_px > 1.0
+        ):
             self.log_message.emit(
                 "INFO",
                 f"Apertures tracked the field: {result.rotation_deg:+.2f}° rotation, "

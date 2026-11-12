@@ -8,6 +8,8 @@ canonical 9-column CSVs that Analyze reloads. Runs the QThread synchronously via
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pytest
 from astropy.io import fits
@@ -654,3 +656,170 @@ def test_batch_errors_use_each_frames_own_gain(_scene, monkeypatch) -> None:
     worker.run()
 
     assert seen == [pytest.approx(0.29), pytest.approx(0.42), pytest.approx(req.params.egain)]
+
+
+# ── S43: a field jump during a batch re-run ────────────────────────────────
+
+
+def _jump_scene(tmp_path, *, n_before=4, n_after=4, jump=(26.0, 12.0)):
+    """Frames whose field jumps by more than the tracker's search radius
+    (15 green px) after ``n_before`` frames, as on the owner's RR Lyr run of
+    2026-09-25 (frame 52: 22.8 green px, frame 175: 140 px).
+
+    A field star that is not in the set lands, after the jump, where comparison
+    C1 was: the tracker's window for C1 locks on it and reports an anchor, as
+    the windows locked on noise on the real frames. The reference solve is
+    exact for the frames before the jump only.
+    """
+    ref = {
+        (1.0, 1.0): (60.0, 60.0),  # target
+        (2.0, 2.0): (100.0, 40.0),  # comp 1
+        (3.0, 3.0): (40.0, 110.0),  # comp 2
+        (4.0, 4.0): (110.0, 105.0),  # comp 3
+    }
+    jumped = {k: (x + jump[0], y + jump[1]) for k, (x, y) in ref.items()}
+    neighbour = (100.0 - jump[0], 40.0 - jump[1])  # lands on C1's old place
+    ts = TargetSet(object_name="JMP Tau")
+    ts.set_role(TargetStar(role=ROLE_TARGET, ra_deg=1.0, dec_deg=1.0, auid="T"))
+    for i in (2, 3, 4):
+        ts.set_role(
+            TargetStar(
+                role=ROLE_COMPARISON,
+                ra_deg=float(i),
+                dec_deg=float(i),
+                auid=f"C{i - 1}",
+                mags={"V": 11.0},
+            )
+        )
+    rng = np.random.default_rng(43)
+    paths = []
+    for i in range(n_before + n_after):
+        pos = ref if i < n_before else jumped
+        shift = (0.0, 0.0) if i < n_before else jump
+        stars = [(pos[(1.0, 1.0)], 20000.0)]
+        stars += [(pos[(float(k), float(k))], 8000.0) for k in (2, 3, 4)]
+        stars.append(((neighbour[0] + shift[0], neighbour[1] + shift[1]), 8000.0))
+        raw = _raw_with_green_stars(stars, green_shape=(160, 160))
+        raw += rng.normal(0.0, 3.0, raw.shape).astype(np.float32)
+        p = tmp_path / f"jmp_{i:03d}.fits"
+        _write_fits(p, raw, f"2026-09-25T21:{i:02d}:00")
+        paths.append(p)
+    req = BatchRequest(
+        fits_paths=paths,
+        wcs=_FakeWCS(ref),
+        target_set=ts,
+        params=PhotometryParams.from_config(lambda k, d: d),
+        out_dir=tmp_path / "out",
+        object_name="JMP Tau",
+    )
+    return req, _FakeWCS(jumped)
+
+
+def test_batch_re_solves_a_frame_on_which_the_field_jumped(tmp_path) -> None:
+    """S43: after a pointing jump larger than the tracker's search radius, the
+    batch kept measuring through the stale transform: unflagged blank-sky
+    points (RR Lyr 2026-09-25 frames 52-79, apertures 20-130 px off), and a
+    summary that said the field was tracked. The frame on which the lock is
+    lost is now re-solved and the apertures re-anchored on its solution."""
+    req, jumped_solution = _jump_scene(tmp_path)
+    calls: list = []
+
+    def solver(green):
+        calls.append(green.shape)
+        return jumped_solution
+
+    req.solver = solver
+    result, _points = _run_batch(req)
+
+    assert result.ok and result.frames_done == 8
+    curve = result.curves["T"]
+    assert len(curve.points) == 8
+    assert not any(p.suspect for p in curve.points)
+    mags = [p.mag for p in curve.points]
+    assert max(mags) - min(mags) < 0.05, mags  # never a blank-sky value
+    assert calls == [(160, 160)]  # one re-solve, on the frame of the jump
+    assert result.frames_resolved == 1
+    assert result.frames_unanchored == 0
+
+
+def test_batch_flags_points_until_the_field_is_re_anchored(tmp_path) -> None:
+    """S43: without a solve (no ASTAP, or it fails), the frames after a lost
+    lock are flagged suspect — they used to be written as good points — they
+    stay out of the run's systematic floor, and the result says so."""
+    req, _jumped = _jump_scene(tmp_path)
+    req.solver = lambda green: None  # the re-solve fails
+    result, _points = _run_batch(req)
+
+    assert result.ok and result.frames_done == 8
+    by_frame = {round(p.jd_utc, 6): p for p in result.curves["T"].points}
+    jds = sorted(by_frame)
+    assert len(jds) > 4  # blank-sky points are kept, flagged
+    assert all(not by_frame[jd].suspect for jd in jds[:4])
+    assert all(by_frame[jd].suspect for jd in jds[4:])  # unflagged before the fix
+    good = [by_frame[jd] for jd in jds[:4]]
+    assert all(p.sigma_syst is None or p.sigma_syst < 0.05 for p in good)
+    assert result.frames_resolved == 0
+    assert result.frames_unanchored == 4
+
+
+@pytest.mark.skipif(
+    not os.environ.get("ARGOS_S43_SESSION"),
+    reason="set ARGOS_S43_SESSION to a COPY of the RR Lyr 2026-09-25 session (lights/, targets.json)",
+)
+def test_batch_follows_the_real_rr_lyr_jump_with_astap(tmp_path) -> None:
+    """S43 on the owner's frames (a copy): RR Lyr 2026-09-25, frames 0-79,
+    measured through frame 0's solve. Frame 52 jumped 22.8 green px; every
+    target aperture must sit on the star (checked against each frame's own
+    ASTAP solve), with no point flagged and no frame lost."""
+    import json
+    import math
+    from pathlib import Path
+
+    from argos.core.imaging.astrometry_session import batch_frame_solver
+    from argos.core.imaging.green import green_plane
+    from argos.core.imaging.platesolve import find_astap
+    from argos.workers.photometry_batch_worker import discover_light_frames
+
+    if find_astap() is None:
+        pytest.skip("ASTAP not installed")
+    session = Path(os.environ["ARGOS_S43_SESSION"])
+    paths = discover_light_frames(session / "lights")[:80]
+    tset = TargetSet.load(session / "targets.json")
+    target = tset.by_role(ROLE_TARGET)[0]
+    cfg = lambda key, default: default  # noqa: E731 - the shipped defaults
+    solver = batch_frame_solver(cfg, (target.ra_deg / 15.0, target.dec_deg))
+
+    def solve(path):
+        raw, _jd, _gain = PhotometryBatchWorker._read_frame(path)
+        return solver(green_plane(raw))
+
+    reference = solve(paths[0])
+    assert reference is not None
+    req = BatchRequest(
+        fits_paths=paths,
+        wcs=reference,
+        target_set=tset,
+        params=PhotometryParams.from_config(cfg),
+        out_dir=tmp_path / "out",
+        object_name="RR Lyr",
+        diagnostics=True,
+        # As the page does: re-solves near the reference solve's centre.
+        solver=batch_frame_solver(cfg, (reference.crval1 / 15.0 % 24.0, reference.crval2)),
+    )
+    result, _points = _run_batch(req)
+
+    assert result.frames_done == 80
+    assert result.frames_resolved >= 1  # frame 52
+    assert result.frames_unanchored == 0
+    diag = next((tmp_path / "out").glob("*_diagnostics.jsonl"))
+    placed = {
+        d["frame"]: (d["x"], d["y"])
+        for d in map(json.loads, diag.read_text().splitlines())
+        if d["kind"] == "star" and d.get("role") == ROLE_TARGET
+    }
+    for frame in range(48, 80):
+        truth = solve(paths[frame])
+        assert truth is not None, frame
+        tx, ty = truth.world_to_pixel_deg(target.ra_deg, target.dec_deg)
+        x, y = placed[frame]
+        assert math.hypot(x - float(tx), y - float(ty)) < 2.0, frame

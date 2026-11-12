@@ -164,3 +164,30 @@ def test_cancelled_batch_is_reported_and_not_adopted() -> None:
     assert adopted == []
     assert any("cancelled" in msg for _level, msg in logs), logs
     assert not any(level == "OK" for level, _msg in logs), logs
+
+
+def test_batch_summary_never_says_tracked_when_the_field_was_lost() -> None:
+    """S43: the end-of-run message said "Apertures tracked the field" on a run
+    whose apertures sat on blank sky for 28 frames."""
+    import argos.ui.pages.imaging_page as ip
+    from argos.core.photometry.lightcurve import LcPoint, LightCurve
+    from argos.workers.photometry_batch_worker import BatchResult
+
+    logs: list[tuple[str, str]] = []
+    page = SimpleNamespace(
+        _batch_dialog=None,
+        _batch_worker=object(),
+        _batch_total=80,
+        log_message=SimpleNamespace(emit=lambda level, msg: logs.append((level, msg))),
+        _engine=SimpleNamespace(adopt_curves=lambda curves: None),
+        _open_photometry=lambda: None,
+        _cfg=lambda key, default: default,
+    )
+    curve = LightCurve(auid="T", name="T", role="target")
+    curve.append(LcPoint(jd_utc=2461309.3, mag=7.5, mag_err=0.01))
+    result = BatchResult(curves={"T": curve}, frames_done=80, rotation_deg=0.2, shift_px=309.0)
+    result.frames_unanchored = 28
+    ip.ImagingPage._on_batch_done(page, result)
+
+    assert not any("tracked the field" in msg for _level, msg in logs), logs
+    assert any(level == "WARN" and "28" in msg and "flagged" in msg for level, msg in logs), logs

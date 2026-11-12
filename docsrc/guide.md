@@ -442,7 +442,11 @@ A batch re-measurement (**Re-run subs…**) writes its per-star CSVs, named
 `<role>_<object>_<star>.csv`, and the target set it used into a new
 `photometry_rerun_<UTC>/` folder of the session; it measures only light frames
 (by `IMAGETYP`), skips frames without `DATE-OBS`, and a cancelled run writes
-nothing.
+nothing. A frame on which the field has jumped away from the apertures (a
+pointing jump, a slew) is plate-solved again with ASTAP and its apertures put
+back on the stars; when that fails (no ASTAP, clouds), the points from that
+frame on are written flagged `suspect` until a solve succeeds, and the
+end-of-run message says how many frames were re-solved or flagged.
 When you report an observation, keep the raw FITS, `session.json`, the CSV
 exports and any `*_diagnostics.jsonl` together.
 
