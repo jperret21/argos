@@ -106,6 +106,8 @@
   import FramingBand from './modes/FramingBand.svelte';
   import { BAND, bandLayout, bandMax, DRAWER_TABS, drawerHeight, layoutCost, RAIL, type CardId, type DrawerTab } from './modes/layout';
   import MountCard from './MountCard.svelte';
+  import RunCard from './RunCard.svelte';
+  import { isEngaged } from '../run/run';
 
   interface Props {
     perf?: boolean;
@@ -426,6 +428,17 @@
   function rowPick(r: CandidateRow): void {
     if (r.x !== null && r.y !== null) pickAt(r.x, r.y);
   }
+
+  // -- The run (W6a, D2): the Run card heads the rail while a run is engaged (or scheduled), and
+  // keeps its outcome until dismissed; it is not a mode card (no Arrange entry): it is there
+  // exactly when there is a run to watch.
+  const seqStore = app.sequence;
+  const runShown = $derived(isEngaged(seqStore.state) || seqStore.outcomeVisible);
+  let runOpen = $state(loadPref('argos.card.observe.run', (v): v is boolean => typeof v === 'boolean', true));
+  const runMarks = $derived.by(() => {
+    const from = seqStore.state?.started_t ?? null;
+    return from === null ? [] : app.afPeriods.filter((p) => p.from >= from).map((p) => p.from);
+  });
 
   // -- Live photometry (W5, imaging/photometry): card, drawer tabs, Field band status ----------
   const phot = app.photometry;
@@ -1194,6 +1207,27 @@
       ></div>
       <!-- One card order in every mode (D10); each mode remembers open / folded / hidden. -->
       <aside class="rail" aria-label="Instrument panels">
+        {#if runShown}
+          <RunCard
+            seq={seqStore.state}
+            now={app.clock / 1000}
+            frameTimes={seqStore.frameTimes}
+            marks={runMarks}
+            bind:open={
+              () => runOpen,
+              (v) => {
+                runOpen = v;
+                savePref('argos.card.observe.run', v);
+              }
+            }
+            onpause={() => seqStore.pause(app.client)}
+            onresume={() => seqStore.resume(app.client)}
+            onstop={() => seqStore.stop(app.client)}
+            onplan={() => app.go('sequencer')}
+            onerror={(m) => app.toast('error', 'Sequence refused', m)}
+            ondismiss={() => seqStore.dismissOutcome()}
+          />
+        {/if}
         {#if visibleCards.includes('camera')}
           <CameraCard bind:open={() => cardOpen('camera'), (v) => ws.setCardOpen('camera', v)} />
         {/if}
@@ -1265,7 +1299,7 @@
         {#if visibleCards.includes('focuser')}
           <FocuserCard bandShowsVCurve={bandVCurve} bind:open={() => cardOpen('focuser'), (v) => ws.setCardOpen('focuser', v)} />
         {/if}
-        {#if visibleCards.length === 0}
+        {#if visibleCards.length === 0 && !runShown}
           <p class="rail-empty">Every card is hidden in this mode: show them again from Arrange at the right of the toolbar.</p>
         {/if}
       </aside>

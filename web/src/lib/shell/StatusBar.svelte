@@ -9,8 +9,9 @@
     (Seestar reachability, internet: three states each, "—" = not
     configured / not checked, Q-G13), the mount's state and RA / Dec (and
     during a slew the angle still to go with an abort button: BRAND 11.1,
-    the Mount card can sit below the fold), the run chip (live view or an
-    exposure).
+    the Mount card can sit below the fold), the run chip (a sequence first,
+    W6a: its progress is shown once, here, on every section, P26; else live
+    view or an exposure).
   - Middle, Observe only: the frame on screen (number, and its file name once
     saved or opened: the Qt context bar, M48), its HFD and star count (the
     server's frame_metrics of THAT frame, A26), display rate and latency. The
@@ -26,7 +27,9 @@
   jitters. Priority, not width, decides what folds: the Log button and the
   device cluster never hide; the activity text shrinks first; Rate /
   Latency fold into their tooltip at 1280 px, or at any width while the
-  server link item or a slew's "to go + Abort" needs the room.
+  server link item or a slew's "to go + Abort" needs the room; at 1280 px
+  with a run chip (W6a) the saved file name folds into the Frame tooltip;
+  last of all the frame segment itself shrinks, never the Log button.
 -->
 <script lang="ts">
   import { formatFps, formatLatency } from '../app/metrics';
@@ -42,6 +45,8 @@
   import { fixed, int, seconds } from '../format/number';
   import { utcClock, utcFull } from '../app/log';
   import { recent } from '../imaging/modes/exposure';
+  import { clockUtc } from '../format/time';
+  import { isEngaged, stripLine } from '../run/run';
 
   const app = useApp();
 
@@ -78,8 +83,30 @@
       ? `The Settings site disagrees with the mount (${fixed(app.siteCheck.separation_deg, 1)}° apart): airmass, BJD and the FITS site would be wrong. Open Settings › Observer & site`
       : 'The Settings site disagrees with the mount: open Settings › Observer & site',
   );
-  const run = $derived.by(() => {
+  const run = $derived.by((): { icon: string; text: string; tip: string; to?: 'imaging' | 'sequencer' } | null => {
     if (app.stale) return null;
+    // W6a: a sequence engaged (or scheduled) leads; its progress appears nowhere else in the bar (P26).
+    const seq = app.sequence.state;
+    if (seq && isEngaged(seq)) {
+      const n = `${seq.frames_done}/${seq.frames_total}`;
+      const line = stripLine(seq, app.clock / 1000);
+      const there = app.section === 'imaging' ? 'open Plan' : 'open Observe (Run card)';
+      const to = app.section === 'imaging' ? 'sequencer' : 'imaging';
+      switch (seq.state) {
+        case 'waiting':
+          return { icon: 'nav-sequencer', text: seq.start_at_t !== null ? `Run at ${clockUtc(seq.start_at_t, false)}` : 'Run scheduled', tip: `${line}: ${there}`, to };
+        case 'paused':
+          return { icon: 'pause', text: `Paused ${n}`, tip: `${line}: ${there}`, to };
+        case 'pausing':
+          return { icon: 'pause', text: `Pausing ${n}`, tip: `${line}: ${there}`, to };
+        case 'autofocus':
+          return { icon: 'autofocus', text: `Run AF ${n}`, tip: `${line}: ${there}`, to };
+        case 'stopping':
+          return { icon: 'stop', text: 'Run stopping', tip: `${line}: ${there}`, to };
+        default:
+          return { icon: 'nav-sequencer', text: `Run ${n}`, tip: `Sequence running: ${line}: ${there}`, to };
+      }
+    }
     // Wave 3: autofocus owns the camera (README 1.2 run chip "AF").
     const af = app.autofocus;
     if (af && (af.state === 'running' || af.state === 'stopping')) {
@@ -241,7 +268,7 @@
       class="run"
       aria-label={run.tip}
       use:tooltip={{ text: run.tip, placement: 'top' }}
-      onclick={() => app.go('imaging')}
+      onclick={() => app.go(run.to ?? 'imaging')}
     >
       <Icon name={run.icon} size="s" />
       <span class="num">{run.text}</span>
@@ -473,6 +500,11 @@
   .item.prev .val {
     color: var(--text-muted);
   }
+  /* The last resort before the Log button would be pushed out: the frame segment shrinks. */
+  .item.frame {
+    flex: 0 1 auto;
+    overflow: hidden;
+  }
   .frame .file {
     max-width: 22ch;
     overflow: hidden;
@@ -589,6 +621,19 @@
        is in the log (L) rather than shown as a cut fragment ("13:18:1"). */
     .observe .activity {
       visibility: hidden; /* keeps its flexible space: Log stays at the right end */
+    }
+    /* A run chip (or a slew, the link item) leaves no room for the file name at 1 280 px
+       (design review W6a): it stays in the Frame item's tooltip. */
+    .crowded .frame .file,
+    .crowded .frame .key {
+      display: none; /* "#8" alone: the number sign names it */
+    }
+    .crowded .val.w6,
+    .crowded .val.w4 {
+      min-width: 0; /* fixed widths give way before the frame number does */
+    }
+    .statusbar.crowded {
+      gap: var(--space-3);
     }
   }
 </style>

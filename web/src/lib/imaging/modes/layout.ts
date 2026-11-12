@@ -13,7 +13,7 @@
  *   (Camera, Mount, Focuser among the cards of wave 3); a mode changes the
  *   states only. D10 is a decision in force; the lab reordered per mode.
  * - Field is available from wave 4 (its band hosts the comparison candidates,
- *   imaging/field); Run (waves 5 and 6) is listed but not available: its band
+ *   imaging/field); Run (wave 6b) is listed but not available: its band
  *   needs live photometry and the sequencer.
  * - Wave 4 adds the Statistics card (D9: hidden by default in every mode, I
  *   shows it), in its D10 place after Camera.
@@ -76,7 +76,7 @@ export const MODES: readonly ModeDef[] = [
     shortcut: 'observe.mode.run',
     task: 'Watch a run',
     band: 'Live light curve',
-    unavailable: 'not in this version: it comes with live photometry and sequences (waves 5 and 6)',
+    unavailable: 'comes in wave 6b with the live curve; meanwhile the Run card follows the run',
   },
 ];
 

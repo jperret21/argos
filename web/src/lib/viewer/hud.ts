@@ -94,6 +94,13 @@ export function frameChips(c: HudContext, fmtSeconds: (s: number) => string): Hu
         ? { id: 'state', text: 'AF', kind: 'state', dot: 'busy', title: 'Autofocus sample frame' }
         : { id: 'state', text: 'AF', kind: 'state', muted: true, title: 'The last autofocus sample frame (the sweep has ended)' },
     );
+  } else if (origin === 'sequence') {
+    // W6a: a sub of the run (saved in its folder), never "Shot"; the dot while the next one exposes.
+    out.push(
+      c.exposing
+        ? { id: 'state', text: 'Run', kind: 'state', dot: 'busy', title: 'A sub of the sequence; the next one is being exposed' }
+        : { id: 'state', text: 'Run', kind: 'state', title: 'A sub of the sequence' },
+    );
   } else if (c.live) {
     out.push({ id: 'state', text: 'Live', kind: 'state', dot: 'live', title: 'Live view' });
   } else if (c.exposing) {

@@ -1554,3 +1554,306 @@ each that fails before the fix (`notes/release_0_5_0.md` S32 extended, S35-S38).
   are unavailable for tens of seconds after each replayed frame.
 - **Bundle** 1 010 kB (330 kB gzip). **WebKitGTK** untested. Gaia, SIMBAD and NASA
   unreachable from this network (Stars 0).
+
+## Wave 6a: Plan and sequences (2026-11-12)
+
+Scope (README section 7, row W6; waves.md §5 W6, owner decisions of 2026-11-09: wave 6 in
+two halves, this is 6a): API rows A42 and A59-A66 (server, `argos/server/protocol.md` "API 2
+routes, wave 6a (Plan)" and "wave 6a: sequences"); the mount-motion interlock with "Pause
+the run and slew" (PROPOSAL §7, D2); the preflight; the server sequence path (one point per
+saved sub through `measure_saved_frame`, apertures by Qt's ApertureTracker plus S35 as
+decision 2 asks, `photometry_quality.json` in the run, geometry locked, identification
+armed, camera owner `sequence`); the Plan screen (mapping rows M68-M77), VisibilityTimeline,
+the Steps table editors, the run strip with transport and readiness chip, RunCard in
+Observe, TargetSetList in Plan (D24), charts/mini RunProgress. Built by five roles
+(sequences backend, plan backend, Qt fix and tracker study, Plan UI, run UI) and integrated
+here. Screenshots: `web/screenshots/2026-11-12_wave6a-plan/` (12 scenes in the three themes
+at 1 440 x 900 and in Observatory at 1 280 x 800, plus the palette: 49 shots at device
+scale 2, with a manifest).
+
+**Status: integrated, exit criterion met through the UI; the design, technical and science
+reviews are still to run; the owner's commit pending.** Wave 6b (Run mode with the live
+curve under the image, Watch, attention with sound, keep-awake, the wrap-up, the W5
+carry-overs) is not built; its hooks are (section 6).
+
+Verification (2026-11-12, server on port 8763 with `--simulator --sim-replay` on 51 copies
+of real raw frames of RR Lyr 2026-09-25 (session `20260925T200453Z_RR_Lyr`, frames 1-51,
+APFS clones, read-only), vite on 5163; temporary `--config-dir`, `--log-dir`, sessions
+folder, `HOME` and `TMPDIR`; the owner's photometry settings and e-/ADU table copied, the
+Settings site replaced by public Paris coordinates (the frames' own site was wrong that
+night), ASTAP as installed, the catalogue and exoplanet caches copied into the temporary
+HOME; `~/.argos/config.json` only read, nothing written to `~/Argos/sessions`;
+`argos/ui`, `argos/workers`, `argos/core` of this tree unchanged; no server file changed by
+the integration):
+
+- Python, whole suite (temporary HOME and TMPDIR): **1 384 passed, 72 skipped** (1 267 / 71
+  at the base `d254b08`).
+- `npm run check` 0 errors, 0 warnings (689 files, `src/lab` included); `npm test` **910
+  passed** (76 files; 821 at the base); `npm run build` OK (JS 1 150 kB, 377 kB gzip; was
+  1 010 / 330); `src/lib` imports nothing from `src/lab`.
+- Screenshots: 49, all read (Observatory one by one, the other variants as contact
+  sheets); `npm run audit:night-red`: the 12 Night Red originals pass (rule A 0 px, rule B
+  0 px). `npm run audit:brass` (Observatory 1 440, device scale 2): 0-4 200 accent px per
+  scene except the focused search field and the brass Start (02: 22 300), the focused row
+  of the issues scene (04: 13 100) and the interlock dialog's primary button with its focus
+  ring (11: 17 700).
+- No console error in any capture except the browser's own "Failed to load resource: 409"
+  line for each refused GoTo (the interlock test, expected); no request left the machine.
+
+### 1. Mapping rows closed by the wave
+
+| Row | Qt element | Web | Status |
+|---|---|---|---|
+| M68 | `SequencerPage` (heading 47) | Plan screen in the rail (F3), built like Observe; heading row dropped | Done |
+| M69 | Panel toolbar (5 chips, Reset panels) | Card folds (remembered per viewer) + Panels popover (`arrange`) + Settings "Reset all layouts" | Done |
+| M70 | Five docks | Fixed regions (Steps, Visibility) and right-rail cards (Source, Run options, Target set); floating dropped | Done |
+| M71 | Steps table + edit row | Steps region: inline editors, Cadence and Duration columns (Dither hidden by default, Q-P5), explicit selection, keys (Insert, Mod+D, Delete, Alt+↑↓, Space), drag reorder, totals, estimate and end time from the server, per-cell issues, locked with per-row progress during a run (Q-P9) | Done |
+| M72 | Scientific source dock (Variable / Exoplanet pages, two completers) | Source card: programme segmented, one search field with token-drawn suggestions, catalogue resolve or exoplanet lookup, transit sub-form (night, baseline, exposure, cadence, gain, filter), prediction with BJD_TDB, coverage, altitudes and skipped transits, Prepare | Done |
+| M73 | Acquisition options dock | Run options card (object shared with Observe, repeat, autofocus every N and on filter change, end of run); each issue under its field | Done |
+| M74 | `TargetVisibilityPlot` (+ pyqtgraph menu) | VisibilityTimeline, centre, full width: twilight washes, altitude dashed below the limit, limit line, planned run band with the neutral coverage fill of the subs, transit hatched with dotted coverage edges, now line, UTC and local rows, hover readout; menu dropped | Done |
+| M75 | Presets dock | Toolbar Presets popover (the server's list, filter, unreadable files with their reason, delete with Undo) + Save popover (Replace? on 409 `file_exists`) | Done |
+| M76 | Sequence control dock | Toolbar transport (Start with "Start at a time…", Pause / Resume, Stop… confirmed) + readiness chip → Preflight popover + run strip | Done |
+| M77 | Save / Load preset dialogs | Presets popover + FilePicker for "Open file…" (A61 import) and "Save as file…" (export) | Done (the FilePicker flows exercised by the Plan UI role; not re-run here) |
+
+API rows A42, A59-A66 are all used by the UI: the draft and its derived totals (A59) on
+every edit (one whole-plan PUT each, strict bodies), presets and files (A60, A61), the
+transport with `start_at_utc` (A62), the `sequence` record from the socket and from
+`GET /api/sequence` after a (re)connection (A63), the preflight (A64) on open and after each
+accepted plan revision, device change and run state change (debounced), visibility (A65),
+exoplanet lookup and suggest (A42), transit predict and plan (A66).
+
+### 2. Exit criterion and its evidence
+
+**A transit plan written by the web UI produces `observation.json` (S5) with the same
+content as Qt's for the same inputs; Start, Pause, Resume, Stop and the outcome are visible;
+no silent clamp; a sequence on replayed real frames gives per-sub points identical to the
+fixed Qt sequence path.**
+
+**(1) Transit plan and `observation.json`.** Through the UI: programme Exoplanet,
+HD 189733 b (from the copied exoplanet cache), night 2027-07-31, baseline 45 min, Prepare
+(the "Replace the current plan?" question answered). The draft: object HD 189733, one Light
+step IR 10 s × 921 at 13 s, 13 metadata keys, start 2027-07-31T21:52:35.188Z (the coverage
+start; mid-transit BJD_TDB 2461618.48592, E = 3454; the server's next observable transit from
+the test site, 117 earlier ones skipped, Q-P10). Start in the UI is correctly blocked: the
+start time is more than 24 h ahead (preflight `start_at` block), and the test disk is short
+of the 15 GB of 921 frames. The count was set to 3 in the Steps table (the metadata kept,
+13 keys) and the draft started through `POST /api/sequence/start` with a start time of now
+(a passed time starts at once); 3 subs, completed. Its `observation.json` (553 bytes) is
+**byte-identical** to (a) the fixed Qt `SequenceWorker._write_observation_metadata` on
+`plan_from_dict` of the same draft and (b) Qt's own editor path on the same inputs
+(`lookup_exoplanet` from the same cache, `predict_next_transit`, `make_transit_sequence`
+with 10 s, gain 80, IR, 13 s cadence, 45 min baseline; Qt plans the same 921 frames).
+Scripts: `scratchpad/w6a/integ/obs_compare.py`, `obs_qt_editor.py`.
+
+**(2) A variable-star sequence on replayed frames, through the UI.** Plan RR Lyr, Light IR
+10 s × 40; target set from the owner's run with the check star 000-BJW-666 assigned on the
+copy; one field identification before the run (real ASTAP). Start in Plan; a new client
+opened mid-run showed within 2 s the Run card (3 / 40, last-frame age, end), "Run 3/40" in
+the status bar, the run strip and the locked table. Pause on the Run card (held after the
+sub in progress: frame 14, paused by the observer), Resume in Plan, Stop… on the Run card
+(the dialog: "The current 10.00 s exposure is discarded. 19 of 40 frames are saved in
+20261112T165841Z_RR_Lyr."), outcome "Stopped by the observer after 19 frames". Qt
+reference: the fixed Qt sequence path (`AcquisitionEngine.start_sequence`, its
+`SequenceWorker` and `_on_seq_frame_saved`) offscreen on the **server's 19 saved subs**,
+with the mount at each original frame's pointing (matched by pixel hash), the server's
+reference solution (`GET /api/field` WCS inverted to green px), the run's own
+`targets.json`, the same settings and a clock returning the server's exposure starts
+(`session.json`, microseconds). Result (`scratchpad/w6a/integ/parity_runB.json`):
+
+| Compared | Result |
+|---|---|
+| Points (7 curves × 19 subs) | 133 points, **2 527 values, 0 differences** (exact) |
+| Photometry CSVs (target, check, 5 comparisons) | 7 of 7 byte-identical |
+| `session.json`, `targets.json` | byte-identical |
+| `photometry_quality.json` | equal except `generated_utc` |
+| Flags | 0 saturated, 0 suspect on both sides; 0 sub skipped by S35 on both |
+
+Numeric sample (web = Qt to the last digit): target first sub 7.3356 ± 0.010035,
+BJD_TDB 2461357.2077108333; last 7.3741 ± 0.016608, 2461357.210521485; check first
+7.8689 ± 0.010245, 2461357.207749374; last 7.8866 ± 0.016804, 2461357.2105600247. The subs
+are dated by today's server clock, so BJD and airmass are not physical (replay).
+
+**(3) No silent clamp** (`scratchpad/w6a/integ/clamp.json`). Typed in the editors:
+exposure 5000 s, count 0, gain 5000, interval −5 s, cadence 5 s (exposure 30 s), dither −1,
+Repeat 0, Autofocus every −2, and the Dark slot on a Light step. Every value is shown and
+stored exactly as typed; the server reports 9 error issues (out_of_range × 7,
+cadence_short, dark_slot), each on its cell, under its row and in the list; Start is
+disabled ("Blocked · plan"). Transit form: a baseline of 300 min is refused in the field
+("must be between 0 and 240 min"), nothing sent; exposure 0 and a cadence shorter than the
+exposure are refused at Prepare with the core's words (400); gain 5000 becomes the plan's
+issue, never changed.
+
+**(4) Interlock.** During a run, GoTo from the Mount card: `409 run_active`, the dialog
+with the server's sentence; "Pause the run and slew" paused the run after the sub in
+progress (frames_done 20, `paused_by: "motion"`, 10.7 s) and the GoTo ran (logged after the
+pause). Jog pad held during a run: refused, the pad says "Jog refused: …" and the dialog
+offers "Pause the run" only (a dead-man jog is never resent after a dialog). Park, Unpark,
+tracking off, tracking rate, Centre and Sync go through the same interlock (unit-tested
+client paths; the server refuses them, protocol.md). Stellarium: the server refuses and
+logs; the client adds a toast on a fresh refused bridge GoTo (not exercised live: no
+Stellarium client here).
+
+**(5) Preflight, scheduling, joining.** The Preflight popover shows ok, note and block
+(scene 06: disk block, calibration note). "Start at a time…" scheduled 17:45 UTC
+(`waiting`; Pause answers `409 not_running`); Cancel start… on the Run card → "Scheduled
+start cancelled". A second schedule (17:34) started by itself at 17:34:00 UTC.
+
+### 3. PROPOSAL section 6, W6 promotions (6a part)
+
+| Promotion | Where |
+|---|---|
+| RunCard: state, n / N, last-frame age vs observed cadence, end time, next autofocus, end-of-run action, Pause, Stop (D2) | `imaging/RunCard.svelte`, head of the Observe rail while a run is engaged or its outcome shown |
+| VisibilityTimeline with the neutral coverage fill | `charts/VisibilityTimeline.svelte` in Plan |
+| Night checklist → Preflight popover (disk, calibration counts per night, lid note) | `run/ReadinessChip.svelte`, `PreflightList.svelte` |
+| Mini chart of the run | `charts/mini/RunProgress.svelte` (Run card) |
+| Interlock with "Pause the run and slew" (D2) | `run/interlock.svelte.ts`, one `InterlockDialog` in `App.svelte` |
+| TargetSetList in Plan (D24) | `plan/TargetSetCard.svelte` |
+| Run mode, Run band, Watch, attention (D3), wrap-up, keep-awake | wave 6b |
+
+### 4. Fixed during the integration (found in the running UI)
+
+- **Wiring**: one `SequenceStore` on the app (`app.sequence`), refreshed with the preflight
+  after each (re)connection; Plan, the Run card, the status bar and the palette read it.
+- **Interlock on every mount control**: GoTo, Park, Unpark, tracking, tracking rate, Centre
+  target and Sync go through `app.interlock`; the jog transport raises the question itself
+  and keeps the pad's own refusal line; the client calls carry `pause_run`.
+- **Status bar** (P26): the run is the run chip, shown once on every section ("Run 7/40",
+  "Paused 16/40", "Run AF n/N", "Run at 17:34", "Run stopping"); a click opens Observe (from
+  Observe, Plan). Sequence subs no longer raise one "Frame saved" toast each.
+- **Observe**: the toolbar Stop (and Escape) never stops a sequence ("the sequence owns the
+  camera: Pause or Stop it on the Run card"); the image HUD tags a sequence sub "Run" (it
+  read "Shot"); the Run card gained Open Plan and Dismiss on its outcome.
+- **Palette**: Start the sequence (asks first), Pause, Resume, Stop (asks first, or Cancel
+  the scheduled start), Open a sequence preset…, Check the run before starting
+  (preflight); no single key starts, pauses or stops a run.
+- **Readiness chip during a run** read "Blocked · run" in the danger tone: it now speaks of
+  the run ("Run · 1 note", "Run checks OK", "Run · camera") and leaves out the run's own line.
+- **Run strip of a scheduled run** showed the last file of the previous run: the store no
+  longer adopts saves of an older run while waiting or idle, nor before the run started.
+- **Visibility**: a run scheduled with "Start at…" is drawn at its start time (it was drawn
+  from now); the peak label moves under the curve, on the plot's surface, when the planned
+  run and "now" labels are above it; tick labels next to the row names ("UTC", the zone)
+  are left out instead of overprinting.
+- **Steps table**: an out-of-range gain or count ("5000") was clipped to "500(" (unit room
+  kept in unitless cells); the issue list grows to 40 % of the region before it scrolls.
+- **Preflight** re-checked after each accepted plan revision, device change and run state
+  change (600 ms debounce); Start shows the draft's own start time ("at 21:52 UTC").
+
+### 5. Qt defect found (reported here; fixed in the review round as S46, section 7)
+
+The automatic completion of the comparison ensemble turns the **check star into a
+comparison** (Qt `acquisition_engine.py` `_auto_select_comparisons`, about lines 1420-1495;
+the server's `targets.py` mirrors it). Seen on the server: with 5 calibrated comparisons and
+`photometry.auto_comparisons` 6 (the owner's value), the field solve before the run logged
+"Photometry: 1 pilot-qualified comparison(s) selected for RR Lyr" and 000-BJW-666 lost its
+check role (`set_role` replaces the star with the same AUID key; `already_present` only
+looks at comparisons). The parity runs used `auto_comparisons` 5 on both sides to keep the
+check. Reported to the fixer as QT DEFECT (fix: skip a candidate that is already in the set
+under another role, by AUID or within 1″; then the same in `argos/server/targets.py`).
+
+### 6. Known gaps and what is left for 6b
+
+- **6b, not built** (owner decision 1): Observe Run mode with the live curve under the
+  image, Watch, the attention system with sound, keep-awake, the end-of-night wrap-up, and
+  the W5 carry-overs (plot tools in the drawer's tab row, the Field band's empty strip).
+  Hooks in place: the `sequence` record carries `last_frame_utc`, `cadence_s`,
+  `observed_cadence_s`, `end_utc`, `next_autofocus`, `autofocus_runs`, `paused_by`,
+  `end_action`; `app.sequence` holds the subs' times and the newest save; the Run card takes
+  autofocus marks (from the app's autofocus periods); the status-bar run chip is the place of
+  the attention chip.
+- **A transit prepared for a night more than 24 h ahead** can only be started on that day:
+  the draft's start time has no editor (re-preparing or "Start at a time…" within 24 h is
+  the way); by design of the preflight, said in the chip.
+- **No sweep progress** for a mid-run autofocus in the run strip (`afStep`); not exercised
+  live (no focuser motion on the replay).
+- ~~**Ends** does not move while paused~~ fixed in the review round (section 7).
+- ~~**Preflight "Output folder"** prints the full path~~ fixed in the review round.
+- **Stellarium refusal toast** not exercised live; **WebKitGTK** untested; NASA, Gaia and
+  SIMBAD not used (caches only).
+- **Bundle** 1 150 kB (377 kB gzip).
+- The tracker study (`notes/tracker_comparison.md`) waits for the owner's choice; the
+  QT DEFECT reports were fixed in the review round (S44-S47, section 7), except the wrong
+  plate solution, an owner decision.
+
+### 7. Review round (2026-11-12): what was fixed
+
+Design, technical and science reviews of 6a, then one fixer (two sessions: the first was
+stopped by a usage limit after its Qt fixes). Nothing committed. Re-captured: scenes 01-12
+in the four variants and three new states (14 Plan paused, 15 the Stop dialog, 16 a failed
+outcome) in `web/screenshots/2026-11-12_wave6a-plan/` (61 shots, manifest updated); the
+palette (13) is the integrator's.
+
+**Science.**
+- Qt fixes in the release worktree, each with a test failing before it (`notes/
+  release_0_5_0.md`): **S44** a run measured its Dark, Flat and Bias subs, and the Light
+  points after them (the server measured Light subs only already: parity now holds for
+  mixed plans too); **S45** a finished run's folder stayed the live photometry's (the
+  server passes the run folder per measurement: not affected); **S46** identifying the field
+  turned the check star into a comparison (ported to `argos/server/targets.py` with a test);
+  **S47** the Plan editor clamped count, interval and dither silently and a transit over
+  9 999 frames was cut (the web already reported them as issues). The S35 "check your old
+  files" advice now also catches a frame measured through a wrong solution.
+- **Tracker study corrected** (`notes/tracker_comparison.md`): the truth now moves each star
+  to the frame's date by its proper motion (`proper_motions.json`, RR Lyr only; checked on
+  the image by `truth_check.py`: 0.96 px catalogue to centroid, 0.20 px moved). The RR Lyr
+  target comparison reverses (Qt 0.59 px, web 0.79 px against the real star; on the
+  comparison stars web 0.26 px, Qt 0.59 px): Qt's apertures carry a +0.50 px y bias on every
+  star that happens to oppose RR Lyr's proper motion. The lag analysis moved to the
+  comparison stars (slope 0.131 Qt, 0.077 web). XX Cyg unchanged. Figures, tables,
+  `results.json` and `details.json` regenerated; the S43 note's RR Lyr numbers updated.
+- Not fixed, owner decisions (open issues of the fixer's report): blank-sky points after a
+  field jump in the sequence path; light curves mixing filters; measuring through a wrong
+  plate solution; Q-P10 strict against Qt. Precession in `sky_geometry` (0.3° in 2026) is
+  stated in its docstrings (release worktree), not changed.
+
+**Technical (server).** Two Starts at once are serialised (the loser 409s, the camera stays
+the run's, and no longer stuck in "exposing"); a failure after the run is registered frees
+the engine (`500`, `last_result.reason "refused"`); the run never exposes while the mount
+slews or a jog moves (scheduled start, Resume after "Pause the run and slew"; waits, logs,
+pauses itself after 300 s); Resume during a mid-run autofocus cancels the pending pause
+(`paused_by` now sent in `autofocus`); transit prediction computes the BJD corrections of
+48 candidates per astropy call (no event-loop stall); preflight ids are unique
+(`plan:<code>:<step>`); plan files get a plain file's mode and export needs an existing
+folder; a `~unknown_user` path is a 400, not a 500. The client waits as long as the server
+may hold a `pause_run` motion (sub + 75 s, 400 s in autofocus) and loads the preflight once
+per change. The wheel-disconnect rule is documented (ends the run). Tests: 9 new server
+tests (the start race checked failing without the reservation), 4 new web test groups.
+
+**Design.** Status bar at 1 280 px with a run: the Log button and the star count stay (file
+name folds, frame number '#n', tighter gaps). Visibility header: the run verdict on its own
+row, never cut; labels with a halo, not a box; "highest at night … (dusk)" when the source
+culminates outside the night. Interlock dialog: hold-to-confirm 'Pause the run and slew'
+(40 px, secondary, no brass fill), 'Keep running', words that do not quote the button
+(brass 17 899 px → 2 248, the focus ring). Steps: narrow columns and no Duration while
+locked (Run column fits at 1 280), an out-of-range interval stays editable under a cadence,
+a hidden column's issue shows the column. Warnings drawn with the attention mark in 4
+components. Numbers: true minus and grouped thousands in the server's issue words, grouped
+sensor size, stars and gain; HFD two decimals; exposures as the HUD in the run UI. One clock:
+UTC first everywhere in Plan. Plan layout: Steps sized to content, the timeline takes the
+rest; empty states with buttons. Preflight: 'Dark frames' (the telescope's lid), a
+'Computer sleep' row, the folder elided, wording. Run card: the end moves while paused,
+word values in the UI font, enabled steps counted, 'Last sub started'. Readiness chip:
+the run's state word ('Paused · 2 notes'), 'Blocked · x and 1 more'. Plan rail dot (active;
+attention on a failed outcome). Lock wording 'Locked while a run is scheduled or running';
+'Scheduled' chip; transit card UTC first, named altitudes; transit notes in words; Run mode
+tooltip; no 'Set of Unknown'; Stop dialog with nothing saved.
+Skipped: the issue list keeps the step issues it also shows under their rows (it is the
+click-to-focus index; it scrolls); a separate Visibility caps header (the timeline's own
+header names the source); a lock glyph (no lock icon in the design set).
+
+**Checks.** Python 1 393 passed / 72 skipped (main tree), 646 / 46 (release worktree);
+ruff and black clean in both; `npm run check` 0 / 0; `npm test` 914 passed; build OK;
+Night Red audit 15 / 15 (rules A and B, 0 px); brass audit pass.
+
+### 8. Known gaps and issues (before 6b)
+
+- Owner decisions (fixer's report): blank-sky points after a field jump in the sequence
+  path (Qt and server, decision 2); filters mixed in one curve; a wrong plate solution
+  measured; the tracker options (study §7).
+- 6b inherits: Run mode, Watch, attention with sound, keep-awake (the preflight's 'Computer
+  sleep' row says it is not there yet), the wrap-up, the W5 carry-overs; the
+  `sequence` record's fields listed in section 6.
+- A wheel disconnected during a run ends it even when no move is needed (documented).
+- Not exercised live: the Stellarium refusal toast, a mid-run autofocus's sweep progress,
+  NASA / Gaia / SIMBAD (caches only).
+

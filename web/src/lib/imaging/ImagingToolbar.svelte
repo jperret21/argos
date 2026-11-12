@@ -91,6 +91,8 @@
   const stopReason = $derived.by(() => {
     if (app.stale) return 'the ARGOS server is not reachable';
     if (owner === 'autofocus' && !app.slewing) return 'autofocus owns the camera: Stop AF returns the focuser to its start, the focuser’s Halt stops it where it is';
+    // W6a: the run owns the camera; Stop here never ends a sequence (spec 06 2.4: it asks first, on the Run card).
+    if (owner === 'sequence' && !app.slewing) return 'the sequence owns the camera: Pause or Stop it on the Run card';
     return stopRunning ? null : 'nothing is running';
   });
   /** The widest face the Take shot split can show: reserved, so the toolbar never reflows. */

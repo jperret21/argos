@@ -35,7 +35,7 @@ import type {
 
 /** The client of api/client.ts, reduced to what the field needs (tests pass a fake). */
 export interface FieldClient {
-  request<T>(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, body?: unknown): Promise<T>;
+  request<T>(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, body?: unknown, options?: { timeoutMs?: number }): Promise<T>;
 }
 
 /** ArgosEvents, reduced to its raw listeners. */
@@ -551,12 +551,13 @@ export class FieldStore {
   }
 
   /** A32: centre the mount on the target (body's, else the set's target, else the last GoTo). */
-  center(client: FieldClient, target?: { ra_hours: number; dec_deg: number; name?: string }): Promise<unknown> {
-    return client.request('POST', '/api/mount/center', target ? { target } : {});
+  center(client: FieldClient, target?: { ra_hours: number; dec_deg: number; name?: string }, pauseRun = false, options?: { timeoutMs?: number }): Promise<unknown> {
+    // W6a interlock: `pause_run` is "Pause the run and slew" (protocol.md "Mount-motion interlock").
+    return client.request('POST', '/api/mount/center', { ...(target ? { target } : {}), ...(pauseRun ? { pause_run: true } : {}) }, options);
   }
 
   /** A33: sync the mount on the current frame's solved centre (no slew). */
-  sync(client: FieldClient): Promise<unknown> {
-    return client.request('POST', '/api/mount/sync', { source: 'solution' });
+  sync(client: FieldClient, pauseRun = false, options?: { timeoutMs?: number }): Promise<unknown> {
+    return client.request('POST', '/api/mount/sync', { source: 'solution', ...(pauseRun ? { pause_run: true } : {}) }, options);
   }
 }

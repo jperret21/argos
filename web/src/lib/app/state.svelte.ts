@@ -34,7 +34,7 @@
  */
 
 import { getContext, setContext, untrack } from 'svelte';
-import { ApiError, ArgosClient } from '../api/client';
+import { ApiError, ArgosClient, type RequestOptions } from '../api/client';
 import { ArgosEvents } from '../api/events.svelte';
 import { type DecodedFrame, FrameStream } from '../api/frames';
 import type { LinkState } from '../api/socket';
@@ -99,7 +99,11 @@ import { type FitMode, isFitMode } from '../viewer/view';
 import { ViewerTools } from '../viewer/tools/tools.svelte';
 import { FieldStore } from '../imaging/field/field.svelte';
 import { PhotometryStore } from '../imaging/photometry/photometry.svelte';
-import type { FieldCommands, PhotometryCommands } from '../shell/commandIndex';
+import { isRunActive } from '../api/sequence';
+import { MountInterlock } from '../run/interlock.svelte';
+import { isActive, isEngaged, pauseRunTimeoutMs, startBlock, stopDialog } from '../run/run';
+import { SequenceStore } from '../run/sequence.svelte';
+import type { FieldCommands, PhotometryCommands, SequenceCommands } from '../shell/commandIndex';
 import { openLayers, setReservedKeys, topModalIndex } from '../components/layers';
 import type { FsLister } from '../components/filepicker';
 import type { BundleRequest, BundleResult } from '../components/supportbundle';
@@ -206,6 +210,9 @@ const ERROR_TITLES: Record<string, string> = {
   internal_error: 'Server error',
   forbidden_origin: 'Refused by the server',
   forbidden_host: 'Refused by the server',
+  run_active: 'A sequence is running',
+  preflight_blocked: 'Sequence not started',
+  not_running: 'No sequence running',
 };
 
 const TOAST_MS: Record<ToastLevel, number> = { info: 4000, warning: 6000, error: 8000 };
@@ -299,6 +306,18 @@ export class ArgosApp {
   readonly field = new FieldStore();
   /** Live photometry (W5, imaging/photometry): curves, leave-one-out report, status, variables. */
   readonly photometry = new PhotometryStore();
+  /**
+   * The run (W6a, lib/run): the server's `sequence` snapshot, this run's saved subs and the
+   * preflight; one store read by Plan, the Run card in Observe, the status bar and the palette.
+   */
+  readonly sequence = new SequenceStore();
+  /**
+   * The mount-motion interlock (W6a, D2): every mount control goes through it; a `409
+   * run_active` becomes the one question "Pause the run and slew" (InterlockDialog in App).
+   */
+  readonly interlock = new MountInterlock();
+  /** The palette asked Plan to open one of its popovers (Plan clears it once shown). */
+  planRequest: 'presets' | 'preflight' | null = $state(null);
   autoStretch = $state(true);
   /** Manual levels; used while autoStretch is off. */
   manual: StretchParams | null = $state.raw(null);
@@ -422,6 +441,8 @@ export class ArgosApp {
     // A star picked before a reload does not come back with the page (W4 leftover).
     this.field.pageLoaded();
     this.photometry.attach(this.events, this.client);
+    this.sequence.attach(this.events, this.client);
+    this.events.on('stellarium', (m) => this.onStellariumGoto(m));
     this.events.on('frame_metrics', (m) => {
       if (typeof m.seq === 'number') this.frameMetrics = m as unknown as FrameMetricsRecord;
     });
@@ -774,6 +795,9 @@ export class ArgosApp {
     void this.conditions.sync().catch(() => undefined);
     // Live photometry and the field's variables (W5): the stream's snapshot.
     void this.photometry.refresh();
+    // The run (W6a): its state, the subs saved while the link was down, the preflight.
+    void this.sequence.refresh();
+    void this.sequence.loadPreflight();
   }
 
   // -- Log v2 ---------------------------------------------------------------------
@@ -1736,11 +1760,24 @@ export class ArgosApp {
     return this.live ? this.stopCamera() : this.startLive();
   }
 
-  goto(raHours: number, decDeg: number): Promise<unknown> {
-    return this.run('goto', 'Slew', async () => {
-      const mount = await this.client.goto({ ra_hours: raHours, dec_deg: decDeg });
-      this.events.applyStatus({ mount });
+  /**
+   * A mount motion through the run interlock (W6a, D2; protocol.md "Mount-motion
+   * interlock"): refused with `409 run_active` while a run is active, it becomes the dialog's
+   * question; "Pause the run and <verb>" sends it again with `pause_run`, waiting as long as
+   * the server may hold it (`pauseRunTimeoutMs`).
+   */
+  private moveMount(action: string, verb: string, call: (pauseRun: boolean, options?: RequestOptions) => Promise<unknown>): Promise<unknown> {
+    return this.interlock.run({ action, verb }, async (pauseRun) => {
+      const mount = await call(pauseRun, pauseRun ? { timeoutMs: pauseRunTimeoutMs(this.sequence.state) } : undefined);
+      if (mount && typeof mount === 'object' && 'state' in mount) this.events.applyStatus({ mount: mount as MountState });
+      return mount;
     });
+  }
+
+  goto(raHours: number, decDeg: number): Promise<unknown> {
+    return this.run('goto', 'Slew', () =>
+      this.moveMount('GoTo', 'slew', (p, o) => this.client.goto({ ra_hours: raHours, dec_deg: decDeg, ...(p ? { pause_run: true } : {}) }, o)),
+    );
   }
 
   stopMount(): Promise<unknown> {
@@ -1751,24 +1788,17 @@ export class ArgosApp {
   }
 
   park(): Promise<unknown> {
-    return this.run('park', 'Park', async () => {
-      const mount = await this.client.park();
-      this.events.applyStatus({ mount });
-    });
+    return this.run('park', 'Park', () => this.moveMount('Park', 'park', (p, o) => this.client.park(o, p)));
   }
 
   unpark(): Promise<unknown> {
-    return this.run('unpark', 'Unpark', async () => {
-      const mount = await this.client.unpark();
-      this.events.applyStatus({ mount });
-    });
+    return this.run('unpark', 'Unpark', () => this.moveMount('Unpark', 'unpark', (p, o) => this.client.unpark(o, p)));
   }
 
   setTracking(enabled: boolean): Promise<unknown> {
-    return this.run('tracking', 'Tracking', async () => {
-      const mount = await this.client.setTracking(enabled);
-      this.events.applyStatus({ mount });
-    });
+    return this.run('tracking', 'Tracking', () =>
+      this.moveMount(enabled ? 'Start tracking' : 'Stop tracking', 'stop tracking', (p, o) => this.client.setTracking(enabled, o, p)),
+    );
   }
 
   // -- Wave 4: field identification, Centre target, Sync (A32, A33, A43, A44) ---------------
@@ -1835,18 +1865,15 @@ export class ArgosApp {
 
   /** A32: sync on the tracked solution, then slew to the target; the field is invalidated. */
   centerTarget(): Promise<unknown> {
-    return this.run('center', 'Centre target', async () => {
-      const mount = (await this.field.center(this.client)) as MountState;
-      if (mount && typeof mount === 'object' && 'state' in mount) this.events.applyStatus({ mount });
-    });
+    return this.run('center', 'Centre target', () => this.moveMount('Centre target', 'centre', (p, o) => this.field.center(this.client, undefined, p, o)));
   }
 
   /** A33 (Q-O3): sync the mount to the current frame's solved centre, without slewing. */
   syncToSolution(): Promise<unknown> {
     return this.run('sync', 'Sync', async () => {
-      const mount = (await this.field.sync(this.client)) as MountState;
-      if (mount && typeof mount === 'object' && 'state' in mount) this.events.applyStatus({ mount });
-      this.toast('info', 'Mount synced', 'The mount now reads the identified centre of the frame on screen');
+      const mount = await this.moveMount('Sync', 'sync', (p, o) => this.field.sync(this.client, p, o));
+      // undefined: refused by the run interlock, the dialog asks (its retry syncs).
+      if (mount !== undefined) this.toast('info', 'Mount synced', 'The mount now reads the identified centre of the frame on screen');
     });
   }
 
@@ -1916,10 +1943,57 @@ export class ArgosApp {
     };
   }
 
+  // -- Wave 6a: the run (A62-A64) from anywhere -----------------------------------------------
+
+  /** Open Plan, and one of its popovers (Presets, the Preflight list). */
+  openPlan(what: 'presets' | 'preflight' | null = null): void {
+    if (this.section !== 'sequencer') this.go('sequencer');
+    this.planRequest = what;
+  }
+
+  /** The command palette's run entries (shell/commandIndex.ts): no key starts, pauses or stops a run. */
+  sequenceCommands(): SequenceCommands {
+    const seq = this.sequence;
+    const s = seq.state;
+    const stop = s && isEngaged(s) ? stopDialog(s) : null;
+    const report = (what: string) => (err: unknown) => this.reportError(what, err);
+    return {
+      state: s?.state ?? null,
+      active: isActive(s),
+      engaged: isEngaged(s),
+      startReason: this.stale ? 'the ARGOS server is not reachable' : startBlock(s, seq.preflight?.checks ?? null),
+      frames: seq.preflight?.frames_total ?? s?.frames_total ?? null,
+      stop: stop ? { question: stop.title, consequence: stop.message, confirm: stop.confirm } : null,
+      start: () => seq.start(null, this.client).catch(report('Start sequence')),
+      pause: () => seq.pause(this.client).catch(report('Pause sequence')),
+      resume: () => seq.resume(this.client).catch(report('Resume sequence')),
+      stopRun: () => seq.stop(this.client).catch(report('Stop sequence')),
+      openPlan: (what) => this.openPlan(what),
+    };
+  }
+
+  /**
+   * A Stellarium GoTo refused by the run interlock (W6a): the bridge has no answer channel
+   * (the server logs a WARN), so the observer sees it here too, once per GoTo.
+   */
+  private lastStellariumGoto: string | null = null;
+  private onStellariumGoto(m: Record<string, unknown>): void {
+    const g = m.last_goto as { t?: string; outcome?: string } | null | undefined;
+    if (!g || typeof g.t !== 'string' || g.t === this.lastStellariumGoto) return;
+    const first = this.lastStellariumGoto === null;
+    this.lastStellariumGoto = g.t;
+    // The snapshot replayed at (re)connection is history, not news.
+    if (first && Date.now() - Date.parse(g.t) > 10_000) return;
+    if (typeof g.outcome === 'string' && /sequence is running/.test(g.outcome)) {
+      this.toast('warning', 'Stellarium GoTo refused', 'A sequence is running: pause it (Run card or Plan), then send the GoTo again from Stellarium.');
+    }
+  }
+
   /** Toolbar Stop: stop whatever is running (exposure or live view, and a slew). */
   stopAll(): void {
     // Autofocus has its own Stop AF (return to the start): plain Stop never ends it half-way.
-    if (this.cameraBusy && this.cameraOwner !== 'autofocus') void this.stopCamera();
+    // A sequence is never stopped here (Escape included): Stop on the Run card or in Plan asks first.
+    if (this.cameraBusy && this.cameraOwner !== 'autofocus' && this.cameraOwner !== 'sequence') void this.stopCamera();
     if (this.slewing) void this.stopMount();
   }
 
@@ -2019,7 +2093,9 @@ export class ArgosApp {
     this.lastSaved = { seq: m.seq, frame_seq: m.frame_seq, name: m.name, path: m.path };
     this.savedCount += 1;
     // The server logs OK "Saved <name>" (topic camera); the toast says it from any section.
-    this.toast('info', 'Frame saved', m.name);
+    // A sequence's subs are not toasted one by one: the run strip, the Run card and the status
+    // bar show the newest (W6a).
+    if (m.source !== 'sequence') this.toast('info', 'Frame saved', m.name);
     if (gap) {
       // Saves missed while the socket was busy: count them, keep the newest (protocol "Backpressure").
       void this.client.savedFrames(after).then(
@@ -2139,10 +2215,7 @@ export class ArgosApp {
   // -- Wave 3: mount geometry, tracking rate, jog (A29-A31) ----------------------------------
 
   setTrackingRate(rate: TrackingRate): Promise<unknown> {
-    return this.run('trackingRate', 'Tracking rate', async () => {
-      const mount = await this.client.setTrackingRate(rate);
-      this.events.applyStatus({ mount });
-    });
+    return this.run('trackingRate', 'Tracking rate', () => this.moveMount('Tracking rate', 'change the rate', (p, o) => this.client.setTrackingRate(rate, o, p)));
   }
 
   /** The jog pad's calls (A30): this page's client id rides on every command for the dead-man. */
@@ -2153,9 +2226,19 @@ export class ArgosApp {
     nextSeq: () => ++this.jogSeq,
     start: async (axis, rate, seq, renew) => {
       const body = { axis, rate_deg_s: rate, client: this.events.clientId, seq, ...(renew ? { renew: true } : {}) };
-      const mount = await this.client.jog(body);
-      this.events.applyStatus({ mount });
-      return mount;
+      try {
+        const mount = await this.client.jog(body);
+        this.events.applyStatus({ mount });
+        return mount;
+      } catch (err) {
+        // W6a interlock: a jog refused during a run asks once; its way through only pauses the
+        // run (a dead-man jog resent after the dialog would move with no hand on the key). The
+        // pad still shows its own "Jog refused" line.
+        if (!renew && isRunActive(err) && !this.interlock.pending) {
+          this.interlock.ask({ action: 'Jog', verb: 'jog', through: () => this.sequence.pause(this.client) }, err.message, () => Promise.resolve());
+        }
+        throw err;
+      }
     },
     stop: async (axis, seq) => {
       const mount = await this.client.jogStop(axis ? { axis, client: this.events.clientId, seq } : { client: this.events.clientId, seq });

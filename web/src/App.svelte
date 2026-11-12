@@ -11,9 +11,11 @@
     answers and /ws/events has sent its first status; a failure stays on
     screen with Retry. It never comes back once the UI started: a later
     link loss shows in the status bar and the Link card.
-  - Sections: Connection (wave 1), Observe and Settings (wave 2) are built;
-    Plan and Review say what they will hold. Every section has the Log
+  - Sections: Connection (wave 1), Observe and Settings (wave 2), Plan (wave 6a)
+    are built; Review says what it will hold. Every section has the Log
     drawer (L).
+  - The mount-motion interlock (wave 6a, D2): one InterlockDialog for every section; every
+    mount control goes through app.interlock.
   - Global overlays (wave 2): the support bundle dialog (Help menu,
     Settings › Privacy & diagnostics, D14), the command palette (Mod+K) and
     the one Undo queue, drawn in the toasts' column.
@@ -25,6 +27,8 @@
   import { ArgosApp, provideApp, type Section } from './lib/app/state.svelte';
   import ConnectionScreen from './lib/connection/ConnectionScreen.svelte';
   import ImagingScreen from './lib/imaging/ImagingScreen.svelte';
+  import PlanScreen from './lib/plan/PlanScreen.svelte';
+  import InterlockDialog from './lib/run/InterlockDialog.svelte';
   import SettingsScreen from './lib/settings/SettingsScreen.svelte';
   import CommandPalette from './lib/shell/CommandPalette.svelte';
   import KeyHintBanner from './lib/shell/KeyHintBanner.svelte';
@@ -80,13 +84,8 @@
     },
   ];
 
-  type Placeholder = Exclude<Section, 'imaging' | 'connection' | 'configuration'>;
+  type Placeholder = Exclude<Section, 'imaging' | 'connection' | 'configuration' | 'sequencer'>;
   const PLACEHOLDERS: Record<Placeholder, { title: string; text: string; items: string[] }> = {
-    sequencer: {
-      title: "The night's sequence",
-      text: 'Planning and running timed FITS sequences, with the target visibility and the expected end of the run.',
-      items: ['Targets, exposures and filters', 'Visibility and meridian timing', 'Progress, ETA and per-frame quality'],
-    },
     analyze: {
       title: 'Review the session',
       text: 'The differential light curve of the session, the frames behind every point, and the AAVSO export.',
@@ -112,6 +111,8 @@
       <ImagingScreen {perf} />
     {:else if app.section === 'connection'}
       <ConnectionScreen />
+    {:else if app.section === 'sequencer'}
+      <PlanScreen />
     {:else if app.section === 'configuration'}
       <div class="placeholder" style:grid-template-rows="minmax(0, 1fr) {app.logOpen ? '216px' : '0px'}">
         <SettingsScreen />
@@ -135,6 +136,8 @@
 <OpenFits />
 <CommandPalette />
 <KeyHintBanner />
+<!-- W6a (D2): a mount command refused during a run asks here, from any section. -->
+<InterlockDialog lock={app.interlock} exposureS={app.sequence.state?.current?.exposure_s ?? app.sequence.state?.step?.exposure_s ?? null} />
 {#if !startupGone}
   <StartupScreen
     stages={app.startup.stages}

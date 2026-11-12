@@ -358,6 +358,28 @@ Keyboard (single keys never fire in a text field; a press on the image ends typi
 Tracking, autofocus and focuser steps keep no single key: they move hardware (BRAND 7);
 the command palette (⌘K) has them, with a confirmation in place.
 
+## The Plan screen (F3, wave 6a)
+
+- One object per plan (Q-P1). Steps table with keyboard editing (Insert, Mod+D, Delete,
+  Alt+arrows, Space); values outside a range are kept as typed and listed as issues, never
+  clamped (the server validates, `GET/PUT /api/sequence/plan`, draft persisted beside the
+  config). Optional columns (Interval, Cadence, Dither for EQ mounts, Duration); an issue in
+  a hidden column shows it. Presets and plan files in Qt's format.
+- Source card: variable star, exoplanet (NASA lookup, cached; transit prediction that skips
+  daylight and below-limit transits, Q-P10; Prepare writes the transit plan and its
+  metadata, `observation.json` as Qt), other. Run options; Target set (shared with Observe,
+  editable during a run, journalled).
+- Visibility timeline: the night's altitude, twilight, the minimum altitude (a site
+  setting), the planned run or the transit; the run check on its own header row.
+- Transport: Start (now, or at a UTC time: the server waits), Pause, Resume, Stop
+  (confirmed); the readiness chip opens the Preflight (disk needed against free, calibration
+  frames tonight, the telescope's lid, the computer's sleep). While a run is engaged the
+  plan is locked and each row shows its progress.
+- Observe: the Run card (state, n / N, last-sub age against the cadence, end time, next
+  autofocus, Pause, Stop) and one run chip in the status bar. A mount motion during a run
+  is refused by the server (409 `run_active`); the dialog offers "Pause the run and slew",
+  a hold-to-confirm control.
+
 ## Architecture
 
 ```
@@ -467,10 +489,10 @@ npm run capture:lab -- controls --out /tmp/lab --only buttons-night-red
 
 ## Known limits
 
-- Connection, Observe (Framing, Focus, Field) and Settings exist; Plan and Review are
-  placeholders (waves 6 and 7). Live photometry runs outside a sequence; sequences, the
-  Run band and the server's per-sub measurement come with wave 6. What is done and what
-  is missing, row by row: `spec/progress.md`.
+- Connection, Observe (Framing, Focus, Field), Plan (wave 6a: plans, sequences, the
+  interlock, the Run card) and Settings exist; Review is a placeholder (wave 7). Observe's
+  Run mode with the live curve, Watch, the attention system, keep-awake and the wrap-up are
+  wave 6b. What is done and what is missing, row by row: `spec/progress.md`.
 - Alpaca mode is wired but has only been exercised against a closed port (the error
   path); the server side was tested against fake devices, not a Seestar.
 - Seestar frames are raw colour mosaics (`channels: 1`, `sensor.bayer` set): they are

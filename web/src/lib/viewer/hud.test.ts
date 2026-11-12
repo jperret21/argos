@@ -34,6 +34,11 @@ describe('image HUD', () => {
     const dark = frameChips({ header: header({ origin: 'single', frame_type: 'dark', filter: 'Dark' }), live: false, exposing: false, stale: false }, seconds);
     expect(dark.find((c) => c.id === 'type')?.text).toBe('Dark frame'); // never 'Dark · Dark' with the filter chip
     expect(dark[0].text).toBe('Shot');
+    // W6a: a sequence sub is the run's, never a "Shot"; the dot while the next one exposes.
+    const sub = (exposing: boolean) => frameChips({ header: header({ origin: 'sequence' }), live: false, exposing, stale: false }, seconds)[0];
+    expect(sub(false)).toMatchObject({ text: 'Run' });
+    expect(sub(false).dot).toBeUndefined();
+    expect(sub(true)).toMatchObject({ text: 'Run', dot: 'busy' });
   });
 
   it('says when the frame is not current, and marks a saved frame and a crop', () => {

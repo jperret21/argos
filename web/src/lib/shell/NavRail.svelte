@@ -32,6 +32,7 @@
   import KeyHint from '../components/KeyHint.svelte';
   import { tooltip } from '../components/tooltip';
   import { settingsAttention } from '../settings/categories';
+  import { isEngaged, outcomeOf } from '../run/run';
   import RailFooter from './RailFooter.svelte';
   import ShortcutSheet from './ShortcutSheet.svelte';
 
@@ -54,7 +55,10 @@
    * - Settings: attention while the observer code or the site is missing
    *   (Q-G11): FITS and AAVSO metadata would be wrong; and (wave 2) while
    *   the Settings site disagrees with where the mount points (site check).
-   * - Plan, Review: nothing to report until their waves ship.
+   * - Plan (W6a): active while a sequence is engaged (scheduled, running, pausing,
+   *   paused, autofocus, stopping); attention while the last run's outcome is a failure or
+   *   a refusal not yet dismissed (Run card / Plan "Dismiss").
+   * - Review: nothing to report until its wave ships.
    */
   function dotFor(id: Section): Dot {
     // Link down: the records are stale, claim nothing but the problem.
@@ -73,6 +77,12 @@
       if (app.cameraBusy || app.slewing) return 'active';
       if (ready('camera')) return 'ready';
       return null;
+    }
+    if (id === 'sequencer') {
+      const seq = app.sequence.state;
+      if (seq && isEngaged(seq)) return 'active';
+      const o = seq?.state === 'idle' && seq.last_result && !app.sequence.dismissed ? outcomeOf(seq.last_result) : null;
+      return o === 'failed' ? 'alert' : null;
     }
     if (id === 'configuration' && app.configValues) {
       // BRAND 8 levels: the upright attention mark when the site is missing or

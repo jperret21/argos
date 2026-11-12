@@ -84,6 +84,33 @@ export interface IndexSource {
   fieldCommands?(): FieldCommands | null;
   // -- Wave 5 (optional, as above): live photometry --
   photometryCommands?(): PhotometryCommands | null;
+  // -- Wave 6a (optional, as above): the run --
+  sequenceCommands?(): SequenceCommands | null;
+}
+
+/**
+ * What the palette needs from the run (W6a, A62-A64). No single key starts, pauses or stops
+ * a run (06 2.4, BRAND 7): Start and Stop ask first, as the hardware entries do.
+ */
+export interface SequenceCommands {
+  /** The server's state word, null before the first record. */
+  state: string | null;
+  /** Running, pausing, paused, in autofocus or stopping. */
+  active: boolean;
+  /** Active, or waiting for its start time. */
+  engaged: boolean;
+  /** Why Start cannot run (null: it can): a preflight block or a run already engaged. */
+  startReason: string | null;
+  /** Frames of the plan (the preflight's count). */
+  frames: number | null;
+  /** The Stop confirmation's words (null: nothing to stop). */
+  stop: { question: string; consequence: string; confirm: string } | null;
+  start(): Promise<unknown>;
+  pause(): Promise<unknown>;
+  resume(): Promise<unknown>;
+  stopRun(): Promise<unknown>;
+  /** Open Plan, and one of its popovers. */
+  openPlan(what: 'presets' | 'preflight' | null): void;
 }
 
 /** What the palette needs from live photometry (W5, A50, A54-A58). */
@@ -418,6 +445,50 @@ export function buildIndex(app: IndexSource, afterMount: AfterMount): Command[] 
       disabled: serverDown ?? phot.recommendReason ?? (phot.running ? 'a run is measuring: use Recommend… on the Photometry card, it asks first' : null),
       run: () => phot.recommend('replace'),
     });
+  }
+
+  // -- The run (W6a): transport, presets, preflight; Start and Stop ask first -----------------
+  const run = app.sequenceCommands?.() ?? null;
+  if (run) {
+    const s = run.state;
+    out.push({
+      id: 'run.start',
+      title: 'Start the sequence',
+      group: 'Actions',
+      icon: 'start',
+      keywords: 'run plan begin acquisition sequencer',
+      hint: 'Plan',
+      hardware: {
+        question: 'Start the sequence?',
+        consequence: `The camera belongs to the run until it ends${run.frames ? ` (${run.frames} frame${run.frames === 1 ? '' : 's'} planned)` : ''}; a start time in the plan schedules it instead. Mount motions are refused while it runs.`,
+        confirm: 'Start',
+      },
+      disabled: serverDown ?? run.startReason,
+      run: () => run.start(),
+    });
+    if (s === 'running' || s === 'autofocus') {
+      out.push({ id: 'run.pause', title: 'Pause the sequence', group: 'Actions', icon: 'pause', keywords: 'run hold break', hint: 'after the frame in progress', disabled: serverDown, run: () => run.pause() });
+    }
+    if (s === 'paused' || s === 'pausing') {
+      out.push({ id: 'run.resume', title: 'Resume the sequence', group: 'Actions', icon: 'start', keywords: 'run continue', hint: 'Plan', disabled: serverDown, run: () => run.resume() });
+    }
+    if (run.stop) {
+      out.push({
+        id: 'run.stop',
+        title: s === 'waiting' ? 'Cancel the scheduled start' : 'Stop the sequence',
+        group: 'Actions',
+        icon: 'stop',
+        keywords: 'run end abort cancel',
+        hint: 'Plan',
+        hardware: run.stop,
+        disabled: serverDown ?? (s === 'stopping' ? 'the run is stopping already' : null),
+        run: () => run.stopRun(),
+      });
+    }
+    out.push(
+      { id: 'run.presets', title: 'Open a sequence preset…', group: 'Actions', icon: 'bookmark', keywords: 'plan load preset saved sequences', hint: 'Plan', run: () => run.openPlan('presets') },
+      { id: 'run.preflight', title: 'Check the run before starting (preflight)', group: 'Actions', icon: 'attention', keywords: 'readiness ready disk calibration altitude lid plan', hint: 'Plan', disabled: serverDown, run: () => run.openPlan('preflight') },
+    );
   }
 
   // -- Actions that work from any section ---------------------------------------------

@@ -97,9 +97,10 @@ export const KEYMAP: readonly ShortcutDef[] = [
     id: 'search.focus',
     keys: ['/'],
     label: 'Focus the search field',
-    scope: ['sequencer', 'analyze.r0'],
+    scope: 'analyze.r0',
     planned: true,
   },
+  { id: 'plan.search', keys: ['/'], label: 'Focus the source search', scope: 'sequencer' },
   { id: 'settings.filter', keys: ['/'], label: 'Filter the settings', scope: 'configuration' },
 
   // -- Observe -------------------------------------------------------------------
@@ -109,7 +110,7 @@ export const KEYMAP: readonly ShortcutDef[] = [
   // physical key (macOS Option+1 types "¡"). The observer chooses; never automatic.
   { id: 'observe.mode.framing', keys: ['Alt+1'], label: 'Framing mode', scope: OBSERVE },
   { id: 'observe.mode.focus', keys: ['Alt+2'], label: 'Focus mode', scope: OBSERVE },
-  // Run (waves 5 and 6): listed in the mode bar, unavailable in this build.
+  // Run (wave 6b): listed in the mode bar, unavailable in this build.
   { id: 'observe.mode.field', keys: ['Alt+3'], label: 'Field mode', scope: OBSERVE },
   { id: 'observe.mode.run', keys: ['Alt+4'], label: 'Run mode', scope: OBSERVE, planned: true },
   // Watch view (owner D3): while it is open only W, Esc, ? and Mod+K act.
@@ -140,14 +141,13 @@ export const KEYMAP: readonly ShortcutDef[] = [
   { id: 'r2.back', keys: ['Alt+ArrowLeft'], label: 'Back to the session', scope: R2, planned: true },
 
   // -- Plan --------------------------------------------------------------------------
-  { id: 'plan.save', keys: ['Mod+S'], label: 'Save preset', scope: 'sequencer', planned: true },
+  { id: 'plan.save', keys: ['Mod+S'], label: 'Save preset', scope: 'sequencer' },
   {
     id: 'plan.steps',
     keys: ['Insert', 'Mod+D', 'Delete', 'Alt+ArrowUp', 'Alt+ArrowDown', 'Space'],
-    label: 'Add, duplicate, remove, move, enable a step',
+    label: 'Add, duplicate, remove, move, enable a step (on a step row)',
     scope: 'sequencer.steps',
     local: true,
-    planned: true,
   },
 
   // -- Components (handled where the focus is) ------------------------------------------

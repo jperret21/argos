@@ -158,6 +158,39 @@ describe('command palette index', () => {
     expect(buildIndex(source({ photometryCommands: () => ({ ...phot, running: true }) }), none).find((c) => c.id === 'act.phot-replace')!.disabled).toMatch(/asks first/);
   });
 
+  it('lists the run (W6a): Start and Stop ask first, Pause / Resume by state, presets and preflight open Plan', async () => {
+    const calls: string[] = [];
+    const run = (state: string | null, over: Record<string, unknown> = {}) => ({
+      state,
+      active: state === 'running' || state === 'paused',
+      engaged: state === 'running' || state === 'paused' || state === 'waiting',
+      startReason: null as string | null,
+      frames: 40,
+      stop: state && state !== 'idle' ? { question: 'Stop the sequence?', consequence: '3 of 40 frames are saved.', confirm: 'Stop' } : null,
+      start: async () => calls.push('start'),
+      pause: async () => calls.push('pause'),
+      resume: async () => calls.push('resume'),
+      stopRun: async () => calls.push('stop'),
+      openPlan: (what: 'presets' | 'preflight' | null) => void calls.push(`plan:${what}`),
+      ...over,
+    });
+    const idle = buildIndex(source({ sequenceCommands: () => run('idle') }), none);
+    const start = idle.find((c) => c.id === 'run.start')!;
+    expect(start.hardware?.confirm).toBe('Start');
+    expect(start.keys).toBeUndefined(); // no single key starts a run (06 2.4)
+    expect(idle.some((c) => c.id === 'run.pause' || c.id === 'run.stop')).toBe(false);
+    await idle.find((c) => c.id === 'run.presets')!.run();
+    await idle.find((c) => c.id === 'run.preflight')!.run();
+    const running = buildIndex(source({ sequenceCommands: () => run('running', { startReason: 'A sequence is running' }) }), none);
+    expect(running.find((c) => c.id === 'run.start')!.disabled).toBe('A sequence is running');
+    await running.find((c) => c.id === 'run.pause')!.run();
+    expect(running.find((c) => c.id === 'run.stop')!.hardware?.consequence).toMatch(/saved/);
+    const paused = buildIndex(source({ sequenceCommands: () => run('paused') }), none);
+    await paused.find((c) => c.id === 'run.resume')!.run();
+    expect(buildIndex(source({ sequenceCommands: () => run('waiting') }), none).find((c) => c.id === 'run.stop')!.title).toBe('Cancel the scheduled start');
+    expect(calls).toEqual(['plan:presets', 'plan:preflight', 'pause', 'resume']);
+  });
+
   it('ranks "park" to the Park command and "latitude" to the field', () => {
     const idx = buildIndex(source(), none);
     expect(rank('park', idx)[0].cmd.id).toBe('hw.park');
