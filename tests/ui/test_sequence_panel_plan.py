@@ -269,3 +269,59 @@ def test_find_planet_reports_the_real_cause_when_coverage_is_unavailable() -> No
         assert "duration" in text
     finally:
         _dispose(page)
+
+
+def test_count_interval_and_dither_clamps_are_reported() -> None:
+    """S47: a plan's count, interval and dither were clamped to the editor's
+    ranges without a note (exposure and gain had one)."""
+    from argos.ui.widgets.sequence_panel import SequencePanel
+
+    panel = SequencePanel()
+    try:
+        panel.set_filter_options(["Dark", "IR", "LP"])
+        notes = panel.load_plan(
+            SequencePlan(
+                steps=[
+                    SequenceStep(
+                        filter_name="IR", count=12000, interval_s=4000.0, dither_every=5000
+                    ),
+                    SequenceStep(filter_name="IR", count=0),
+                ]
+            )
+        )
+        joined = "; ".join(notes)
+        for text in ("count 12000 → 9999", "interval 4000 s → 3600 s", "dither every 5000"):
+            assert text in joined, notes  # only the filter note, or none, before the fix
+        assert "step 2: count 0 → 1" in joined, notes
+    finally:
+        _dispose(panel)
+
+
+def test_a_transit_longer_than_one_step_is_refused() -> None:
+    """S47: 120 min of baseline at a 1 s cadence needs about 21 000 frames; the
+    editor cut it to 9999 (183 min of coverage lost) while the status still
+    said 21 000 and observation.json declared the whole coverage."""
+    page, engine = _page(_SITE)
+    try:
+        page._exoplanet_target = _hd189733()
+        page.panel._transit_baseline_spin.setValue(120)
+        page.panel._transit_exposure_spin.setValue(1.0)
+        page.panel._transit_cadence_spin.setValue(1.0)
+        before = plan_to_dict(page.panel.to_plan())
+
+        page._prepare_transit_plan()
+
+        assert plan_to_dict(page.panel.to_plan()) == before  # 9999 frames before the fix
+        assert page._transit_window is None
+        assert "needs 20978 frames" in page.panel._status_lbl.text()
+        page.panel._on_start()
+        assert not engine.started_plans or engine.started_plans[-1].metadata == {}
+
+        # A coverage that fits: the status reports the frames the plan really holds.
+        page.panel._transit_baseline_spin.setValue(60)
+        page.panel._transit_cadence_spin.setValue(13.0)
+        page._prepare_transit_plan()
+        count = page.panel.to_plan().steps[0].count
+        assert f"{count} light frames" in page.panel._status_lbl.text()
+    finally:
+        _dispose(page)

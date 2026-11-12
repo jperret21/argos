@@ -1,7 +1,7 @@
 # Argos 0.5.0 — data-integrity and hardware-safety fixes
 
 > Branch: `release/0.5.0`, cut from the published `release/0.4.2`.
-> Last updated: 2026-11-08.
+> Last updated: 2026-11-12.
 
 A bug-fix release with no new features. Specifying the web UI meant taking an
 inventory of the Qt code, and that inventory turned up defects that affect
@@ -48,6 +48,15 @@ live curve CSV) and **S41** (a saved frame's errors used the Camera form's
 gain); and **S42**, found while fixing S41 (the header `EGAIN` skipped the gain
 table the photometry uses).
 
+Porting the Plan and the sequences to the web UI (its wave 6a) found five more,
+each with a test that fails on the code before it: **S43** (a batch re-run kept
+measuring on blank sky after a field jump and said "tracked"), **S44** (a run
+measured its Dark, Flat and Bias subs, which also changed the Light points
+after them), **S45** (a live point measured after a run went into that run's
+CSVs), **S46** (identifying the field turned the check star into a comparison)
+and **S47** (the Plan editor cut a count, an interval or a dither to its range
+without a word, and a transit of more than 9999 frames lost its end).
+
 **Several of these defects affect files you already hold.** The table says
 which; *Check your old files* below says how to find them.
 
@@ -93,6 +102,11 @@ which; *Check your old files* below says how to find them.
 | S11 | AAVSO export kept saturated/suspect points, accepted `OBSCODE=XXX` | Flagged points submitted unflagged | **yes** |
 | S12 | Batch re-run looked only for `*.fits` | Never found an Argos session's `.fit` frames | no |
 | S13 | Batch re-run: JD 0 for undated frames, cancelled runs saved | JD 0 rows reaching AAVSO; overwritten CSVs | rarely |
+| S43 | Batch re-run: a field jump left the apertures on blank sky, and the summary said "tracked" | Unflagged blank-sky points; missing points; a run reported tracked | no (none of the owner's runs was re-run) |
+| S44 | A run measured its Dark, Flat and Bias subs | Junk points in the run's CSVs; the Light points after a calibration sub measured with a moved tracker | only runs mixing calibration and Light steps (none of the owner's) |
+| S45 | A finished run's folder stayed the live photometry's | Live points measured after the run appended to its CSVs; its `photometry_quality.json` rewritten | **yes** (one of the owner's runs) |
+| S46 | Identifying the field turned the check star into a comparison | No check-star curve; the check in the ensemble | only with a check star (none in the owner's runs) |
+| S47 | The Plan editor clamped count, interval and dither silently; a transit over 9999 frames was cut | Fewer frames than planned; a transit's end not observed while `observation.json` declared it | possibly (a run shorter than its plan) |
 | S24 | An ASTAP database folder replaced the chosen database set | Slower or failed solves | no |
 | S29 | Two unvalidated-profile warnings, hard-coded IMX585 hint | Contradictory wording | no |
 
@@ -216,8 +230,11 @@ against the day you installed 0.5.0.
   the solve and the measured frame (a pointing jump, or a sequence frame
   measured through the previous frame's solve), every star of that frame was
   measured where it no longer was, and the points were kept with no flag. In
-  the run's `<object>_live_diagnostics.jsonl`, look for frames whose `star`
-  records all have `snr` below 5: drop every star's row at that frame's
+  the run's `<object>_live_diagnostics.jsonl`, look for frames on which the
+  target and most comparisons have `snr` below 5, or on which the target's
+  `snr` falls more than tenfold from the frames around it (a frame measured
+  through a wrong solution can keep a comparison or two above 5): drop every
+  star's row at that frame's
   `jd_utc` in the run's curve CSVs, and recompute `sigma_syst` without them
   (it is estimated from every point of the run, so those rows raised it on
   every row). One real run (RR Lyr, 2026-09-25, 195 frames) had two such
@@ -267,6 +284,40 @@ against the day you installed 0.5.0.
 - **Batch CSVs (S13).** A row with `jd_utc = 0` came from a frame without
   `DATE-OBS`. This only happened with frames from other software, and only in
   `*.fits` folders (S12 kept the re-run from finding Argos frames).
+- **Batch re-runs across a pointing jump (S43).** A re-run's
+  `<object>_diagnostics.jsonl` (written when diagnostics are on) has one
+  `star` record per star and frame: frames on which every comparison has
+  `snr` below 5 were measured on blank sky after the field jumped; drop every
+  star's row at those frames' `jd_utc` from the re-run's CSVs, then re-run with
+  0.5.0. Without the diagnostics file, re-run the folder with 0.5.0 and compare
+  the two CSVs: rows that differ by more than their `mag_err` are the affected
+  ones. 0.4.2 could only re-run `*.fits` folders of other software (S12); the
+  owner's sessions hold no `photometry_rerun_*` folder.
+- **Runs that mixed calibration and Light steps (S44).** A run whose plan had a
+  Dark, Flat or Bias step and a target set wrote a row for each calibration
+  sub: drop the rows whose `jd_utc` is that of a frame in the run's `darks/`,
+  `flats/` or `biases/` folder (`DATE-OBS` plus half `EXPTIME`). The Light rows
+  after a calibration sub were measured with an aperture tracker moved by it
+  (on one replay, a target 1.2 mag off and comparisons up to 2.2 mag off): re-run
+  the batch on the run (0.5.0 leaves calibration frames out) rather than keep
+  them. None of the owner's runs holds a calibration folder.
+- **Live points written into a finished run (S45).** After a sequence, live
+  preview kept writing into the run's `photometry/` CSVs and rewrote its
+  `photometry_quality.json`. In a run's CSVs, rows whose `jd_utc` is after the
+  last saved sub's `DATE-OBS` plus `EXPTIME` (and a minute of margin) are not
+  the run's: drop them, and do not trust the run's `photometry_quality.json`
+  (re-run the batch to rebuild it). One of the owner's runs has them:
+  `20260925T195307Z_RR_Lyr` (5 lights) has 2 rows per star 1.6 and 4.0 min
+  after its last sub, and two comparison CSVs holding only those rows.
+- **Check stars (S46).** If you had assigned a check star before the field was
+  identified, look in the run's `targets.json`: a check star listed as a
+  comparison (same AUID) was used in the ensemble and has no `check_*.csv`.
+  Re-assign it and re-run the batch. The owner's runs have no check star.
+- **Runs shorter than their plan (S47).** A preset or transit whose count was
+  over 9999, interval over 3600 s or dither over 999 ran with those limits
+  instead, with no note. For a transit, compare the run's last frame with the
+  coverage end in its `observation.json`: a coverage over 9999 frames (for
+  example 120 min of baseline at a 1 s cadence) stopped early.
 - **Take shots after a refused filter change (H9).** When the wheel refused a
   move (an ERROR "Filter move: …" in the Activity log, the Filter selector
   greyed), 0.4.2 left the selector on the slot you had asked for, and the Take
@@ -614,6 +665,26 @@ X2 applies everywhere: S26 first required the name, which would have ignored
 coordinates typed without one.
 **How to check.** The four S26 tests in `tests/ui/test_sequence_panel_plan.py`.
 
+### S47 — The Plan editor never cuts a value silently
+
+**What was wrong.** S7 made a preset load report a filter, exposure or gain it
+had to change. Count (1–9999), interval (0–3600 s) and dither (0–999) were
+still cut to the editor's range without a note: a count of 12000 ran 9999
+frames. **Prepare transit** ignored the notes altogether and reported the count
+before the cut: 120 min of baseline at a 1 s cadence on HD 189733 b needs 20978
+frames; the editor held 9999 (about 183 min of coverage lost) while the status
+said 20978 and `observation.json` declared the whole coverage.
+**Who was affected.** Presets with such values; transit plans at a short
+cadence over a long coverage.
+**What changed.** Every cut is reported ("adjusted: step 1: count 12000 → 9999
+(range 1–9999)"). A transit needing more than 9999 frames is not prepared: the
+status says so and gives the shortest cadence that fits; the table is left as
+it was. The status counts the frames the table really holds and lists any
+adjustment. The web UI keeps a typed value and reports it as an issue instead.
+**How to check.** `tests/ui/test_sequence_panel_plan.py::test_count_interval_and_dither_clamps_are_reported`
+and `::test_a_transit_longer_than_one_step_is_refused` (no note, and a
+9999-frame transit, on the code before the fix).
+
 ## Live photometry
 
 ### S14 — A sequence identifies the field even when no WCS exists yet
@@ -882,6 +953,59 @@ finds the object's set and the star (S10). A run's CSVs keep their names.
 (on the code before the fix, three points, an object change and one more
 point left one file holding that last point only).
 
+### S44 — A run measures its Light subs only
+
+**What was wrong.** `_on_seq_frame_saved` measured every saved sub of a run,
+Dark, Flat and Bias included, as soon as the field had a solution. Each
+calibration sub wrote a junk row for every star, and its measurement moved the
+aperture tracker, so the Light points after it were measured elsewhere too. On
+copies of XX Cyg 2026-09-07 frames replayed through a plan of Light IR ×2,
+Dark, Flat LP, Bias, Light LP ×2 and Light IR, the run wrote 8 target points for
+5 Light subs, and on those 5 the target read 12.1958 where the web server
+(which measures Light subs only) read 10.9492, with comparisons up to 2.2 mag
+apart.
+**Who was affected.** Runs whose plan mixed calibration and Light steps with a
+target set and an identified field. None of the owner's runs.
+**What changed.** Only a sub whose `IMAGETYP` is `Light Frame` is measured.
+With this rule the same replay gives the web server's points exactly (40
+points, 760 values, 0 differences; the science review's run).
+**How to check.** `tests/workers/test_acquisition_engine.py::test_a_sequence_measures_only_its_light_subs`
+(all five subs of a Light, Dark, Flat, Bias, Light run measured on the code
+before the fix).
+
+### S45 — A finished run's folder receives no more points
+
+**What was wrong.** The run's folder (`_active_run_root`) was kept after the
+sequence ended, until another run or an opened frame. A live point measured
+afterwards (live preview of the same object) was appended to the run's CSVs,
+and the run's `photometry_quality.json` was rewritten with it.
+**Who was affected.** Anyone who kept live preview running with a target set
+after a sequence. One of the owner's runs (`20260925T195307Z_RR_Lyr`) has 2
+such rows per star.
+**What changed.** The run's folder is closed when the run ends (every sub's
+point is measured before that). Later points go to the live curve's own CSV
+(S40); the flight recorder moves out of the run's `diagnostics/` folder and
+the series keeps its aperture. The web server already behaved this way.
+**How to check.** `tests/workers/test_acquisition_engine.py::test_a_finished_run_keeps_its_folder_closed`
+(the run's folder still active after the run on the code before the fix).
+
+### S46 — Identifying the field keeps the check star
+
+**What was wrong.** When the field is identified, the comparisons are filled
+from the VSP proposal. The proposal can hold the check star (a VSP star too);
+only the existing comparisons were compared with it, so `set_role` replaced the
+check (same AUID) with a comparison. Seen on the web server, which ports the
+same code: a check star assigned on RR Lyr lost its role at the first solve.
+**Who was affected.** Anyone with a check star and fewer calibrated
+comparisons than `photometry.auto_comparisons`. The owner's runs have no check
+star.
+**What changed.** The target and the check star are never offered as
+comparisons (same AUID, or within 1″). The proposal is asked for that many more
+stars, so the number of comparisons picked is unchanged. The web server has
+the same change.
+**How to check.** `tests/workers/test_acquisition_engine.py::test_identifying_the_field_keeps_the_check_star`
+(no check star left on the code before the fix).
+
 ## Review and AAVSO export
 
 ### S9 — Review keeps the check star's role
@@ -960,6 +1084,63 @@ cancelled run writes nothing and is reported as cancelled; CSVs are named
 is not in a session).
 **How to check.** `tests/workers/test_photometry_batch_worker.py` (the S13
 tests) and `tests/ui/test_batch_rerun.py`.
+
+### S43 — A batch re-run re-solves a frame on which the field jumped
+
+**What was wrong.** The batch re-run places every frame's apertures through
+one solution (the solve made before the re-run) moved by the aperture tracker,
+which re-centroids its anchor stars within 15 green px of where it last saw
+them. When the field jumped further than that between two frames, the windows
+found no star, or centroided noise or a neighbour and still reported anchors;
+the tracker kept its old transform and every later frame was measured where
+the stars no longer were. Nothing noticed: no flag on the points, and the
+end-of-run message said "Apertures tracked the field". The batch also kept the
+fallback S35 removed from the live path (every star of the set as an anchor,
+seen or not). Replayed on RR Lyr 2026-09-25, frames 0–79 through frame 0's
+solve (the field jumped 22.8 green px at frame 52): of the 28 frames from 52
+on, 9 got unflagged target points measured 21–127 px from the star (5.58 to
+10.51 mag; the star is at 7.43–7.55 on those frames), 19 got no point, and the
+summary reported 309 px of drift "tracked". Which frames fail depends on
+sub-pixel details: with another valid solve of frame 0, 0.6 px away, it was 7
+points (21–114 px off) and 21 frames without one.
+**Who was affected.** A re-run of frames across a pointing jump, a slew or a
+meridian flip larger than the tracker's search radius. In 0.4.2 only folders of
+`*.fits` frames from other software (S12); the release branch's re-run of an
+Argos session before this fix. None of the owner's files: no session holds a
+`photometry_rerun_*` folder.
+**What changed.** Each frame's lock is checked independently of the tracker:
+at least half of its anchor stars must show a star (SNR ≥ 5) where the tracked
+solution places them. On a frame where the lock is lost, the re-run plate-solves
+that frame with ASTAP (the configured solver, about 0.3 s, near the reference
+solve's centre, no whole-sky retry), rebuilds the tracker on the new solution and
+measures the frame there. Until a solve re-anchors the apertures (no ASTAP, or
+the frame does not solve, clouds), the points are written flagged `suspect`
+(left out of the AAVSO export, of the run's `sigma_syst` and of the check-star
+RMS), and the end of the run says how many frames were re-solved and how many
+were measured without the field, never "tracked" when the field was lost. The
+anchor fallback is S35's (stars of the set seen where the solution places
+them). On the same replay all 80 frames get a point on the star (0.3–0.8 px from
+the star on frames 52–79: each frame's own ASTAP solution, RR Lyr moved by its
+proper motion), with one re-solve at frame 52; frames 0–51
+keep their magnitudes and apertures, and their `mag_err` shrinks because the
+blank-sky points no longer raise the run's `sigma_syst` (target, frame 0:
+0.0147 → 0.0140). Over the whole run (195 frames, second jump of 140 px at
+frame 175): two re-solves, every target point on the star (median 0.58 px,
+1.46 px at most, on the jump frame), against 74 off-star target points
+and 62 frames without one before the fix (`notes/tracker_comparison.md` on the
+web-UI branch). The XX Cyg runs of 2026-08-29 and 2026-09-07 (7 runs, 62
+frames, field rotation up to 16°) lose no frame and re-solve none. The web UI
+has no batch re-run yet; its Review re-run must carry the same rule.
+**How to check.**
+`tests/workers/test_photometry_batch_worker.py::test_batch_re_solves_a_frame_on_which_the_field_jumped`
+(a synthetic jump of 28.6 px, a stubbed solver: 7 points, some on blank sky, on
+the code before the fix),
+`::test_batch_flags_points_until_the_field_is_re_anchored` (unflagged post-jump
+points before the fix) and
+`tests/ui/test_batch_rerun.py::test_batch_summary_never_says_tracked_when_the_field_was_lost`.
+On a copy of the RR Lyr session with ASTAP installed,
+`ARGOS_S43_SESSION=<copy> pytest -k real_rr_lyr` checks every target aperture of
+frames 48–79 against that frame's own ASTAP solve (skipped otherwise).
 
 ## Plate solving
 
@@ -1216,7 +1397,8 @@ patch:
 
 ## State of the branch
 
-- 638 tests pass, 45 skipped (0.4.2: 534 and 45). Every fix carries a test that
+- 646 tests pass, 46 skipped (0.4.2: 534 and 45; the skipped S43 check needs a
+  copy of a real session and ASTAP). Every fix carries a test that
   fails on the code before it, checked commit by commit against its parent; one
   guard test (S3, the wheel cannot be read) pins a fallback 0.4.2 already had.
   Each hardware test was written first and run on the unfixed code (H17
@@ -1228,6 +1410,11 @@ patch:
   S3, S4, S10, S23 and H3) were checked the same way: each new test fails with
   the commit's source change reverted.
 - `ruff` and `black` clean on CI's scope (`argos/`, `tests/`, `main.py`).
+- Documented, not changed: `sky_geometry.altitude_at` / `horizontal_at` use J2000
+  coordinates against the date's sidereal time (no precession): up to 0.3° off in 2026
+  against astropy (the wave 6a science review), so the CSV airmass is about 0.002 low at
+  41° and 0.01-0.02 at 20-30°. The docstrings said about 0.1°; they now say 0.3°.
+  Precessing to the date would change every airmass written: left for the owner.
 - Sphinx builds with `-W` and no warnings. The guide, the photometry reference
   and the install page describe 0.5.0 behaviour (the guide's Connect and
   Observe sections cover the H2, H7, H8, H11 and H12 changes, and the review

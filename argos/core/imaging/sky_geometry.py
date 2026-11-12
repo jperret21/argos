@@ -44,9 +44,11 @@ def altitude_at(
     """Target altitude (degrees) at a JD — fast spherical trig, no astropy.
 
     GMST from the JD (IAU 1982 linear term), LST from the site longitude,
-    then the standard HA→altitude formula. Accurate to ~0.1° (no nutation or
-    refraction), which is far below what airmass needs; exists so a batch of
-    hundreds of frames doesn't pay astropy's ~50 ms per transform.
+    then the standard HA→altitude formula. The J2000 coordinates are used
+    against the date's sidereal time (no precession, nutation or refraction):
+    up to 0.3° off in 2026 (against astropy), an airmass about 0.002 low at 41°
+    and 0.01-0.02 at 20-30°. Exists so a batch of hundreds of frames doesn't
+    pay astropy's ~50 ms per transform.
     """
     gmst_h = (18.697374558 + 24.06570982441908 * (jd_utc - 2451545.0)) % 24.0
     lst_h = (gmst_h + lon_deg / 15.0) % 24.0
@@ -66,8 +68,9 @@ def horizontal_at(
 ) -> tuple[float, float]:
     """Altitude and azimuth (degrees, azimuth north through east) at a JD.
 
-    The same fast spherical trig as :func:`altitude_at` (about 0.1°, no
-    nutation or refraction), for checks that need the whole direction.
+    The same fast spherical trig as :func:`altitude_at` (up to 0.3° in 2026:
+    no precession, nutation or refraction), for checks that need the whole
+    direction.
     """
     gmst_h = (18.697374558 + 24.06570982441908 * (jd_utc - 2451545.0)) % 24.0
     lst_h = (gmst_h + lon_deg / 15.0) % 24.0

@@ -765,6 +765,8 @@ class SequencePanel(QWidget):
         count = QSpinBox()
         count.setRange(1, 9999)
         count.setValue(step.count)
+        if count.value() != step.count:  # S47: never a silent clamp
+            notes.append(f"step {r + 1}: count {step.count} → {count.value()} (range 1–9999)")
         count.valueChanged.connect(self._refresh_estimate)
         self._table.setCellWidget(r, 5, count)
 
@@ -772,6 +774,11 @@ class SequencePanel(QWidget):
         interval.setRange(0.0, 3600.0)
         interval.setDecimals(1)
         interval.setValue(step.interval_s)
+        if abs(interval.value() - step.interval_s) > 0.05:  # S47 (1 decimal shown)
+            notes.append(
+                f"step {r + 1}: interval {step.interval_s:g} s → {interval.value():g} s "
+                "(range 0–3600 s)"
+            )
         interval.setToolTip("Idle delay after each frame of this step")
         interval.valueChanged.connect(self._refresh_estimate)
         self._table.setCellWidget(r, 6, interval)
@@ -779,6 +786,11 @@ class SequencePanel(QWidget):
         dither = QSpinBox()
         dither.setRange(0, 999)
         dither.setValue(step.dither_every)
+        if dither.value() != step.dither_every:  # S47
+            notes.append(
+                f"step {r + 1}: dither every {step.dither_every} → {dither.value()} "
+                "(range 0–999)"
+            )
         dither.setSpecialValueText("off")
         dither.setToolTip("Nudge the mount a few arcminutes every N frames (0 = off)")
         self._table.setCellWidget(r, 7, dither)

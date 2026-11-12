@@ -1348,3 +1348,108 @@ def test_an_opened_frame_uses_its_own_gain_for_errors(shot_rig, tmp_path, monkey
     engine.open_fits_frame(path)
     engine.ingest_frame(_star_frame())  # a camera frame
     assert engine._egain() == pytest.approx(1.4)
+
+
+def test_a_sequence_measures_only_its_light_subs(shot_rig, tmp_path, monkeypatch) -> None:
+    """S44: every saved sub of a run was measured, Dark, Flat and Bias included:
+    junk points in the run's CSVs, and the aperture tracker moved on a dark frame,
+    which changed the Light points after it."""
+    from types import SimpleNamespace
+
+    from argos.core.catalog.targets import ROLE_TARGET, TargetSet, TargetStar
+
+    engine, _session, _form, _logs = shot_rig
+    tset = TargetSet(
+        object_name="V1", stars=[TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0)]
+    )
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    engine.astrometry._wcs = object()
+    measured: list[str] = []
+    run = tmp_path / "20261112T200000Z_V1"
+    kinds = ["Light Frame", "Dark Frame", "Flat Frame", "Bias Frame", "Light Frame"]
+    for i, kind in enumerate(kinds):
+        folder = run / kind.split()[0].lower()
+        folder.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(engine, "_measure_photometry", lambda k=kind: measured.append(k))
+        record = SimpleNamespace(
+            image_type=kind, timestamp=f"2026-11-12T20:0{i}:00Z", exposure_s=10.0
+        )
+        engine._on_seq_frame_saved(str(folder / f"f{i}.fit"), record)
+
+    assert measured == ["Light Frame", "Light Frame"]  # all 5 subs before the fix
+
+
+def test_a_finished_run_keeps_its_folder_closed(shot_rig, tmp_path, monkeypatch) -> None:
+    """S45: after a sequence, the next live point was appended to the finished
+    run's CSV and rewrote its photometry_quality.json."""
+    from types import SimpleNamespace
+
+    from argos.core.catalog.targets import ROLE_TARGET, TargetSet, TargetStar
+
+    engine, _session, _form, _logs = shot_rig
+    star = TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, auid="000-AAA-001")
+    tset = TargetSet(object_name="V1", stars=[star])
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    monkeypatch.setattr(engine, "_measure_photometry", lambda: None)
+    run = tmp_path / "20261112T200000Z_V1"
+    (run / "lights").mkdir(parents=True)
+    record = SimpleNamespace(
+        image_type="Light Frame", timestamp="2026-11-12T20:00:00Z", exposure_s=10.0
+    )
+    engine._on_seq_frame_saved(str(run / "lights" / "f0.fit"), record)
+    assert engine._photometry_csv_path(star).parent == run / "photometry"
+    in_run = engine._diagnostics(tset)
+    engine._phot_fwhm = 3.2
+
+    engine._on_seq_finished(True)
+
+    assert engine._active_run_root is None  # the finished run's folder before the fix
+    assert run not in engine._photometry_csv_path(star).parents
+    live = engine._diagnostics(tset)
+    assert live is not in_run  # the recorder leaves the run's folder ...
+    assert engine._phot_fwhm == 3.2  # ... and the series keeps its aperture
+    engine._write_live_quality_report(tset)
+    assert not (run / "photometry_quality.json").exists()
+
+
+def test_identifying_the_field_keeps_the_check_star(shot_rig, monkeypatch) -> None:
+    """S46: the VSP proposal carries the check star too; set_role() then
+    replaced the check (same AUID) with a comparison, silently."""
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.catalog.targets import (
+        ROLE_CHECK,
+        ROLE_COMPARISON,
+        ROLE_TARGET,
+        TargetSet,
+        TargetStar,
+    )
+
+    engine, _session, _form, _logs = shot_rig
+    target = TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, auid="000-VAR-000")
+    check = TargetStar(role=ROLE_CHECK, ra_deg=10.1, dec_deg=20.0, auid="000-CHK-001")
+    tset = TargetSet(object_name="V1", stars=[target, check])
+    proposal = [
+        TargetStar(role=ROLE_COMPARISON, ra_deg=10.1, dec_deg=20.0, auid="000-CHK-001"),
+    ] + [
+        TargetStar(role=ROLE_COMPARISON, ra_deg=10.0 + k / 50, dec_deg=20.1, auid=f"000-CMP-{k}")
+        for k in range(1, 6)
+    ]
+    asked: list[int] = []
+
+    def fake_auto(*_a, count, **_k):
+        asked.append(count)
+        return proposal[:count]
+
+    monkeypatch.setattr(ae, "auto_comparison_stars", fake_auto)
+    monkeypatch.setattr(engine, "_pilot_comparison_quality", lambda _t: (None, None))
+    engine._comparisons = [object()]
+    engine._config.set("photometry.auto_comparisons", 3)
+
+    assert engine._auto_select_comparisons(tset, target) == 3
+
+    assert [s.auid for s in tset.by_role(ROLE_CHECK)] == ["000-CHK-001"]  # [] before the fix
+    assert [s.auid for s in tset.by_role(ROLE_COMPARISON)] == [
+        "000-CMP-1",
+        "000-CMP-2",
+        "000-CMP-3",
+    ]
