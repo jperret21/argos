@@ -340,7 +340,8 @@ export class ArgosClient {
 
   // -- Mount ----------------------------------------------------------------
 
-  goto(target: { ra_hours: number; dec_deg: number }, options?: RequestOptions): Promise<MountState> {
+  /** `pause_run` (wave 6a interlock): "Pause the run and slew" (protocol.md "Mount-motion interlock"). */
+  goto(target: { ra_hours: number; dec_deg: number; pause_run?: boolean }, options?: RequestOptions): Promise<MountState> {
     return this.request('POST', '/api/mount/goto', target, options);
   }
 
@@ -348,21 +349,21 @@ export class ArgosClient {
     return this.request('POST', '/api/mount/stop', undefined, options);
   }
 
-  park(options?: RequestOptions): Promise<MountState> {
-    return this.request('POST', '/api/mount/park', undefined, options);
+  park(options?: RequestOptions, pauseRun = false): Promise<MountState> {
+    return this.request('POST', '/api/mount/park', pauseRun ? { pause_run: true } : undefined, options);
   }
 
-  unpark(options?: RequestOptions): Promise<MountState> {
-    return this.request('POST', '/api/mount/unpark', undefined, options);
+  unpark(options?: RequestOptions, pauseRun = false): Promise<MountState> {
+    return this.request('POST', '/api/mount/unpark', pauseRun ? { pause_run: true } : undefined, options);
   }
 
-  setTracking(enabled: boolean, options?: RequestOptions): Promise<MountState> {
-    return this.request('POST', '/api/mount/tracking', { enabled }, options);
+  setTracking(enabled: boolean, options?: RequestOptions, pauseRun = false): Promise<MountState> {
+    return this.request('POST', '/api/mount/tracking', pauseRun ? { enabled, pause_run: true } : { enabled }, options);
   }
 
   /** A31: set the ASCOM TrackingRate; the answer is what the driver then reports (H6). */
-  setTrackingRate(rate: TrackingRate, options?: RequestOptions): Promise<MountState> {
-    return this.request('POST', '/api/mount/tracking-rate', { rate }, options);
+  setTrackingRate(rate: TrackingRate, options?: RequestOptions, pauseRun = false): Promise<MountState> {
+    return this.request('POST', '/api/mount/tracking-rate', pauseRun ? { rate, pause_run: true } : { rate }, options);
   }
 
   /** A30: start an axis, or with the same rate renew it (the server's dead-man). */

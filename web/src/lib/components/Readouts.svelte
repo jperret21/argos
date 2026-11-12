@@ -21,6 +21,8 @@
     /** Marked: an icon-free word next to the value carries the state. */
     flag?: string;
     muted?: boolean;
+    /** The value is a word ("off", "nothing"), not a number: UI font, muted (BRAND 5). */
+    word?: boolean;
   }
 </script>
 
@@ -38,7 +40,7 @@
 <div class="wrap">
   <dl class="grid cols-{cols}">
     {#each items as it (it.k)}
-      <div class="cell" class:key={it.key} class:muted={it.muted}>
+      <div class="cell" class:key={it.key} class:muted={it.muted} class:word={it.word}>
         <dt>{it.k}</dt>
         <dd>
           <span class="v">{it.v}</span>{#if it.unit}<span class="u">{it.unit}</span>{/if}
@@ -106,6 +108,11 @@
   }
   .muted dd {
     color: var(--text-muted);
+  }
+  .word dd {
+    color: var(--text-muted);
+    font-family: var(--font-ui);
+    font-size: var(--readout-s);
   }
   .u {
     color: var(--text-muted);

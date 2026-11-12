@@ -97,7 +97,8 @@ export interface FrameSettings {
   filter: string;
   object_name: string;
   light: boolean;
-  origin: 'single' | 'live' | 'autofocus';
+  /** W6a: "sequence" while a run exposes its subs. */
+  origin: 'single' | 'live' | 'autofocus' | 'sequence';
   /** This frame is the one a Take shot saves. */
   save: boolean;
   /** DATE-OBS of the frame. */

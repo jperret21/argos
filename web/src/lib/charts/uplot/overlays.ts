@@ -27,6 +27,12 @@ export interface Label {
   /** Pixel offset from the anchor (CSS px). */
   dy?: number;
   dx?: number;
+  /**
+   * A thin halo of the plot's surface around the glyphs instead of a filled box: the data
+   * under the label stays visible between the letters (BRAND 10: data never hidden; the
+   * visibility timeline's labels sit on the altitude curve).
+   */
+  halo?: boolean;
 }
 
 export type Annotation =
@@ -179,7 +185,36 @@ export function label(
   bx = Math.max(left + dpr, Math.min(left + width - w - 2 * pad - dpr, bx));
   bx += (L.dx ?? 0) * dpr;
   const by = (base === 'top' ? y : y - h) + (L.dy ?? 0) * dpr;
+  if (L.halo) {
+    haloText(ctx, ink, L.text, bx + pad, by + h / 2 + 0.5 * dpr, font, 'left', 'middle', L.color);
+    return;
+  }
   ctx.fillStyle = ink.surface.a(0.88);
   ctx.fillRect(bx, by, w + 2 * pad, h);
   drawText(ctx, L.text, bx + pad, by + h / 2 + 0.5 * dpr, { font, fill: L.color ?? ink.text.a(), align: 'left', baseline: 'middle' });
+}
+
+/** A label with a 3 px halo of the plot's surface (see `Label.halo`). */
+export function haloText(
+  ctx: CanvasRenderingContext2D,
+  ink: ChartInks,
+  text: string,
+  x: number,
+  y: number,
+  font: string,
+  align: CanvasTextAlign,
+  baseline: CanvasTextBaseline,
+  color?: string,
+): void {
+  const dpr = uPlot.pxRatio;
+  ctx.save();
+  ctx.font = font;
+  ctx.textAlign = align;
+  ctx.textBaseline = baseline;
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 3 * dpr;
+  ctx.strokeStyle = ink.surface.a(0.92);
+  ctx.strokeText(text, x, y);
+  ctx.restore();
+  drawText(ctx, text, x, y, { font, fill: color ?? ink.text.a(), align, baseline });
 }

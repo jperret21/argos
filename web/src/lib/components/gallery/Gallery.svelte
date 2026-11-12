@@ -19,6 +19,8 @@
   import LightCurveGallery from '../../charts/lightcurve/gallery/LightCurveGallery.svelte';
   import FieldGallery from '../../imaging/field/gallery/FieldGallery.svelte';
   import PhotometryGallery from '../../imaging/photometry/gallery/PhotometryGallery.svelte';
+  import PlanGallery from '../../plan/gallery/PlanGallery.svelte';
+  import RunGallery from '../../run/gallery/RunGallery.svelte';
   import WorkspaceGallery from '../../imaging/modes/gallery/WorkspaceGallery.svelte';
   import ToolsGallery from '../../viewer/tools/gallery/ToolsGallery.svelte';
   import RailFooter from '../../shell/RailFooter.svelte';
@@ -256,6 +258,12 @@
       onchange={(t: Theme) => saveTheme(t)}
     />
   </header>
+
+  <!-- Wave 6a, the Plan screen: Steps table, issues, Source, Run options, Presets and Save, Target set. -->
+  <PlanGallery />
+
+  <!-- Wave 6a, run controls and visibility: transport, readiness, run strip, Run card, VisibilityTimeline, interlock. -->
+  <RunGallery />
 
   <!-- Wave 5, live photometry: LightCurvePlot in every state. -->
   <LightCurveGallery />
