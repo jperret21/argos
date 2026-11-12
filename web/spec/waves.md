@@ -28,7 +28,9 @@ actually delivered).
 | W4 | Field identification and image tools | **done** 2026-11-08: exit criterion met (roles and Night Red through the UI; tracking on 195 real frames, 0.2-0.9 px, no loss); design, technical and science reviews applied (`progress.md` Wave 4, section 6) | `e3f0b0d` server, `46f1f96` components, `fbf19a4` integration, `3fcbb94` gallery | `web/screenshots/2026-11-08_wave4-field` |
 | — | 0.5.0 fixes S31-S42 merged into the web branch | **done** 2026-11-09 | `17724df` (merge of `release/0.5.0`: `02a53b9` S31-S38, `116488e` S39-S42) | — |
 | W5 | Live photometry | **done** 2026-11-09: exit criterion met through the UI (4 replays of real frames, 1 748 values equal to the fixed Qt engine's, 0 difference; re-run after the review fixes: 360 values, 0 difference; `progress.md` Wave 5, sections 2 and 7); design, technical and science findings fixed except the drawer tool row and band leftover (wave 6); the owner's decisions applied as Qt fixes S39-S42, ported to the server | `abf5431` server, `4655564` components, `ddc176b` integration, this commit gallery | `web/screenshots/2026-11-08_wave5-photometry` |
-| W6 | Plan (and Run, Watch, attention) | to do | — | — |
+| W6a | Plan and sequences | **done** 2026-11-12: exit criterion met through the UI (a run started, paused, resumed and stopped in the UI on replayed real RR Lyr frames, 133 points / 2 527 values equal to the fixed Qt sequence path, 0 difference; `observation.json` of a UI-written transit plan byte-identical to Qt's; no silent clamp; `progress.md` Wave 6a); design, technical and science findings fixed (`progress.md` Wave 6a §7); Qt fixes S43-S47; tracker study `notes/tracker_comparison.md` (corrected for proper motion); the owner's decisions of 2026-11-12 go to 6b (§5 W6) | `29d7370` server, `8314ecb` components, `7e1cbca` integration, `df40e00` tracker study, this commit gallery | `web/screenshots/2026-11-12_wave6a-plan` |
+| — | 0.5.0 fixes S43-S47 merged into the web branch | **done** 2026-11-12 | `67661c2` (merge of `release/0.5.0`: `5340f3c` S43, `a97daf2` S44-S47) | — |
+| W6b | The night: Run mode, Watch, attention, keep-awake, wrap-up; owner decisions S48-S51 | to do | — | — |
 | W7 | Review | to do | — | — |
 | W8 | Desktop app and Qt retirement | to do | — | — |
 
@@ -358,6 +360,32 @@ the science review checks; exit criterion; notes.
     runs, with figures, before any change.
   - Carry over from W5: the plot tools into the drawer's tab row (lift the zoom state out
     of the plot) and the Field band's empty strip between 36 and 150 px.
+- **6a done 2026-11-12** (table above). **Owner decisions (2026-11-12)**, all the
+  recommended options of the 6a fixer (`progress.md` Wave 6a), to apply in **6b** as Qt
+  fixes in the release worktree with tests that fail before, ported to the server:
+  - **S48, lock check in the live and sequence paths:** a frame where fewer than
+    ceil(n/2) anchors show a star (SNR 5 or more) where the tracked solution puts them
+    gets no point (or a flagged one, as S43 does in the batch) and a re-solve is made due
+    at once (Qt `_measure_photometry`; server `photometry.py` plus the field service).
+    Today the sequence path writes unflagged blank-sky points after a field jump while
+    S35's anchors lock on noise (server replay of RR Lyr frames 40-79: 8 points 21-67 px
+    off). Expected cost on the owner's runs: none (0 of 257 good frames flagged by S43).
+  - **S49, one curve per star and filter:** one series and one CSV per (star, filter),
+    the filter in the file name (as S33 does for a role change), S17 vetting per filter,
+    and a plan warning when Light steps use two filters. Qt and the server; the batch
+    re-run too. Review (W7) and its exports read the new names.
+  - **S50, wrong plate solutions refused:** a solution whose scale is more than 1 % from
+    the first good solve of the session is rejected (Qt astrometry controller
+    `_on_worker_solved`; server `field.py`), with S48 as the second guard. Evidence: XX Cyg
+    20260907T045156Z frame 1 solved at 7.093″/px against 7.329-7.348 for the others. The
+    profile's nominal scale is not the reference (it is 1.8 % above every measured solve).
+  - **S51, precession:** sky_geometry precesses J2000 coordinates to the date (IAU 1976),
+    with a test against astropy below 0.05°. Changes AIRMASS and the CSV airmass by about
+    0.002 at 41° and 0.01-0.02 at 20-30°; "check your old files" in the notes.
+  - **Q-P10 stays strict** (the whole transit dark and above the limit; Qt's "next
+    transit whatever the sky" stays available with `observable_only=false`).
+  - **Tracker study options** (`notes/tracker_comparison.md` §7): no change for now;
+    sequences keep Qt's tracker plus S35 (decision 2), with S48 added.
 
 ### W7 — Review
 
