@@ -172,6 +172,10 @@ class TargetService:
         except OSError as exc:
             self._hub.log("error", f"Save targets: {exc}", source="photometry", topic="photometry")
             raise ApiError(500, "io_error", f"Save targets: {exc}") from exc
+        sequence = getattr(self._hub, "sequence", None)
+        if sequence is not None:
+            # Wave 6a (_write_active_selection): an in-run edit is journalled in the run.
+            sequence.on_target_set_saved(tset)
 
     # -- geometry -------------------------------------------------------------------
 
@@ -390,13 +394,9 @@ class TargetService:
         propose" spin (``_on_auto_comparison_count_changed``, 2196-2211).
         Unlike Qt 0.4.2 (S32, extended in the release branch), nothing is removed
         when no comparison can be chosen: none known, or none passing the gate.
+        Allowed during a run (Q-P9, Qt S15: the comparison selection stays
+        available), journalled in the run folder.
         """
-        with self._hub._lock:
-            locked = bool(self._hub.observation.record().get("locked"))
-        if locked:
-            raise ApiError(
-                409, "busy", "A sequence owns the observation.", details={"owner": "sequence"}
-            )
         if not self._hub.field.solved:
             raise ApiError(
                 409,
@@ -520,6 +520,8 @@ class TargetService:
         cfg = self._hub.config.get
         band = str(cfg("photometry.default_band", "TG") or "TG")
         existing = tset.by_role(ROLE_COMPARISON)
+        # S46: the target and the check star are never offered as comparisons.
+        others = [s for s in tset.stars if s.role != ROLE_COMPARISON]
         calibrated = [
             s for s in existing if s.mags.get(band) is not None or s.mags.get("V") is not None
         ]
@@ -537,7 +539,7 @@ class TargetService:
             comparisons,
             wcs=pilot.wcs if pilot is not None else None,
             green_shape=pilot.green_shape if pilot is not None else None,
-            count=wanted + len(existing),
+            count=wanted + len(existing) + len(others),
             candidate_quality=quality,
             target_inst_mag=target_inst_mag,
             min_snr=min_snr,
@@ -545,7 +547,16 @@ class TargetService:
             max_separation_arcmin=max_separation,
         )
 
+        def same_star(a: TargetStar, b: TargetStar) -> bool:
+            if a.auid and b.auid and a.auid == b.auid:
+                return True
+            sep = angular_separation_deg(a.ra_deg / 15.0, a.dec_deg, b.ra_deg / 15.0, b.dec_deg)
+            return sep < 1.0 / 3600.0
+
         def already_present(candidate: TargetStar) -> bool:
+            # S46: set_role(candidate) replaced a check star of the same AUID.
+            if any(same_star(star, candidate) for star in others):
+                return True
             for saved in tuple(existing):
                 if saved.auid and candidate.auid and saved.auid == candidate.auid:
                     return True

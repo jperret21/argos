@@ -322,6 +322,7 @@ class PhotometryService:
         self._tracker_anchors = 0  # anchor stars the tracker was built with
         self._diag: SessionDiagnostics | None = None
         self._diag_object: str | None = None
+        self._diag_root: Path | None = None  # the run folder of the recorder (wave 6a)
         self._diag_frame = 0
         self._last: dict[str, Any] | None = None
         self._outcome: tuple[str, str | None, int | None] | None = None  # state, reason, seq
@@ -437,6 +438,28 @@ class PhotometryService:
         with self._lock:
             self._reset_locked(reason)
         self.refresh_status()
+
+    def begin_run(self) -> None:
+        """Wave 6a: a sequence starts (``start_sequence``: ``clear_lightcurves``; at its
+        first save ``_on_seq_frame_saved`` closes the recorder, so the series FWHM
+        and the frame counter restart with the run)."""
+        with self._lock:
+            self._close_diagnostics()
+            self._reset_locked("sequence_started")
+        self.refresh_status()
+
+    def reset_series_fwhm(self) -> None:
+        """An autofocus ended (Qt ``_on_af_finished``): re-sample the series FWHM (P7)."""
+        with self._lock:
+            self._phot_fwhm = None
+
+    def _close_diagnostics(self) -> None:
+        """Lock held."""
+        if self._diag is not None:
+            self._diag.close()
+        self._diag = None
+        self._diag_object = None
+        self._phot_fwhm = None
 
     def _reset_locked(self, reason: str) -> None:
         self._curves.clear()
@@ -561,6 +584,10 @@ class PhotometryService:
         cfg = self._hub.config.get
         tset = self._hub.targets.snapshot()
         geometry = self._hub.targets.geometry()
+        sequence = getattr(self._hub, "sequence", None)
+        root = sequence.run_root() if sequence is not None else None
+        run_root = str(root) if root is not None else None
+        sequence_running = bool(sequence is not None and sequence.active)
         with self._lock:
             set_keys = {curve_key(s): s.key() for s in tset.stars}
             curves = []
@@ -591,8 +618,8 @@ class PhotometryService:
                 )
             record = {
                 "object_name": tset.object_name or "Unknown",
-                "run_root": None,
-                "sequence_running": False,
+                "run_root": run_root,
+                "sequence_running": sequence_running,
                 "band": str(cfg("photometry.default_band", "TG") or "TG"),
                 "obscode": str(cfg("observer.obscode", "") or ""),
                 "chart_id": comparison_chart_id(tset.by_role(ROLE_COMPARISON)),
@@ -620,7 +647,15 @@ class PhotometryService:
     def _diagnostics(self, tset: TargetSet, run_root: Path | None) -> SessionDiagnostics:
         """``_diagnostics`` (887-913). Lock held."""
         obj = tset.object_name or "Unknown"
-        if self._diag is None or self._diag_object != obj:
+        if self._diag is None or self._diag_object != obj or self._diag_root != run_root:
+            # A new object, or a new run folder (Qt: _on_seq_frame_saved at the run's
+            # first save), restarts the series; a run that ended only moves the
+            # recorder out of its folder (wave 6a).
+            restart = (
+                self._diag is None
+                or self._diag_object != obj
+                or (run_root is not None and run_root != self._diag_root)
+            )
             if self._diag is not None:
                 self._diag.close()
             root = run_root / "diagnostics" if run_root is not None else self._sessions_base()
@@ -631,8 +666,10 @@ class PhotometryService:
                 enabled=bool(self._cfg("diagnostics.enabled", False)),
             )
             self._diag_object = obj
+            self._diag_root = run_root
             self._diag_frame = 0
-            self._phot_fwhm = None  # new object → re-sample the series FWHM (P7)
+            if restart:
+                self._phot_fwhm = None  # new object → re-sample the series FWHM (P7)
         return self._diag
 
     def _csv_path(self, tset: TargetSet, star, run_root: Path | None, key: str) -> Path:

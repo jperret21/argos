@@ -159,12 +159,20 @@ start).
 | 409 | `unsupported` | `DELETE /api/jobs/{id}` on a job kind that cannot be cancelled. |
 | 409 | `file_exists` | (wave 2) A support bundle destination that exists, without `"overwrite": true`. |
 | 409 | `not_ready` | (wave 2) `GET /api/jobs/{id}/download` while the job still runs. |
-| 409 | `run_active` | Reserved: a photometry-geometry config change while a sequence runs (no sequence engine in API 2 yet, never sent). |
+| 409 | `run_active` | (wave 6a, sequences) a mount motion during a run (the interlock: GoTo, Centre, Sync, Park, Unpark, tracking off, tracking rate, jog) or a photometry-geometry config change during a run; `details: {state, run_id, …}`. |
+| 409 | `preflight_blocked` | (wave 6a) `POST /api/sequence/start` refused by a preflight block (`details.checks`). |
+| 409 | `not_running` | (wave 6a) `POST /api/sequence/pause` or `/resume` with no run, or while it waits for its start time. |
 | 500 | `internal_error` | Any unexpected failure; the traceback is in the server log. The answer keeps the CORS headers, so the browser can read it. |
 | 502 | `connection_failed` | The device could not be reached or refused to connect. Its device state becomes `error` with the full text. |
 | 502 | `device_error` | A connected device refused a command or stopped answering. |
 | 404 | `not_found` | (wave 3) `GET /api/catalog/resolve` for a designation the catalogues do not know (the resolver's text). |
-| 502 | `lookup_failed` | (wave 3) `GET /api/catalog/resolve` or `/api/catalog/nearby` with no network answer (the resolver's text). |
+| 502 | `lookup_failed` | (wave 3) `GET /api/catalog/resolve` or `/api/catalog/nearby` with no network answer (the resolver's text). (Wave 6a) `GET /api/exoplanets/lookup` with no answer from the NASA Exoplanet Archive. |
+| 409 | `site_missing` | (wave 6a, plan) `GET /api/visibility`, `POST /api/transit/predict` or `/plan` with no observing site set (X2: never 0/0). |
+| 409 | `run_active` | (wave 6a, plan) `PUT /api/sequence/plan`, `POST /api/sequence/plan/import` or `POST /api/transit/plan` while a sequence runs (Q-P9: the plan is locked). |
+| 409 | `file_exists` | (wave 6a, plan) `PUT /api/sequence/presets/{name}` on an existing preset without `?overwrite=true`; `POST /api/sequence/plan/export` on an existing file without `"overwrite": true`. |
+| 404 | `not_found` | (wave 6a, plan) a missing preset or import file; `GET /api/exoplanets/lookup` for a planet the archive does not know. |
+| 422 | `ephemeris_unusable` | (wave 6a, plan) the archive's planet has no usable transit ephemeris (no BJD_TDB epoch, a missing or invalid column); the core's text. |
+| 422 | `no_observable_transit` | (wave 6a, plan) `POST /api/transit/predict` or `/plan`: no transit is observable (night, minimum altitude) in the next 366 days. |
 
 Codes reserved by `web/spec/README.md` §4.1 for later waves: `not_solved`,
 `no_target`, `no_comparison`, `no_frames`, `site_missing`.
@@ -2415,6 +2423,710 @@ Recommendation = {"added": int, "removed": [TargetStar],
 after the log lines when a client lags; `seq` shows the gap. `photometry`,
 `comparison_quality` and `frame_metrics` are snapshots (newest kept).
 
+## API 2 routes, wave 6a (Plan)
+
+Wave 6a, plan half (`web/spec/README.md` §4.3 rows A42, A59-A61, A65, A66;
+`web/spec/06-plan-sequencer.md` §1.14, §2.5): the sequence plan draft, its
+presets and files, the target's visibility and the transit planner, in
+`argos/server/sequence_plan.py` and `argos/server/planning.py`. The model,
+totals, estimate, transit window and transit plan are the core's
+(`sequencer.py`, `transit.py`, `airmass.py`), called as Qt calls them, so
+the numbers are Qt's by construction. Run control and the `sequence` event
+(A62-A64) are described under the sequences part of wave 6a.
+
+| Method | Path | Body | Returns | Row |
+|---|---|---|---|---|
+| GET | `/api/sequence/plan` | — | PlanRecord | A59 |
+| PUT | `/api/sequence/plan` | Plan | PlanRecord | A59 |
+| POST | `/api/sequence/plan/import` | `{"path"}` or `{"preset"}` | PlanRecord | A61 |
+| POST | `/api/sequence/plan/export` | `{"path", "overwrite"?: false}` | `{"path"}` | A61 |
+| GET | `/api/sequence/presets` | — | PresetList | A60 |
+| GET | `/api/sequence/presets/{name}` | — | Preset | A60 |
+| PUT | `/api/sequence/presets/{name}?overwrite=true` | Plan, or none (the draft) | PresetList | A60 |
+| DELETE | `/api/sequence/presets/{name}` | — | PresetList | A60 |
+| GET | `/api/visibility?ra_hours=&dec_deg=&night=YYYY-MM-DD&step_min=10&min_alt_deg=` | — | Visibility | A65 |
+| GET | `/api/exoplanets/lookup?q=` | — | Exoplanet | A42 |
+| GET | `/api/exoplanets/suggest?q=&limit=8` | — | `{"query", "names": [string]}` | A42 |
+| POST | `/api/transit/predict` | TransitBody | TransitPrediction | A66 |
+| POST | `/api/transit/plan` | TransitPlanBody | `{"plan": PlanRecord, "prediction": TransitPrediction}` | A66 |
+
+New WebSocket snapshot: `{"type": "sequence_plan", …PlanRecord}` after every
+change of the draft (any client, a transit plan, an import, the observation
+object followed, a run starting or ending). New error codes:
+`ephemeris_unusable`, `no_observable_transit`; `site_missing` and
+`run_active` are now sent (see Errors).
+
+### Plan (A59)
+
+```
+Plan = {"schema": 2,                      // optional on PUT; any other value is 400
+        "object_name": string,            // FITS OBJECT, run folder, target set
+        "repeat": int,                    // whole step list replayed
+        "autofocus_every_n": int,         // 0 = off
+        "autofocus_on_filter_change": bool,
+        "on_complete": "Nothing"|"Stop tracking"|"Park mount",
+        "base_dir": string|null,          // run folder root; null = sessions_path
+        "metadata": {string: string|number|bool|null},   // planning hand-off (S5)
+        "start_at_utc": string|null,      // web only: scheduled start (Q-P2)
+        "steps": [Step]}
+Step = {"enabled": bool, "frame_type": "Light"|"Dark"|"Flat"|"Bias",
+        "filter_name": string, "exposure_s": number, "gain": int, "count": int,
+        "interval_s": number, "cadence_s": number|null, "dither_every": int}
+PlanRecord = {"plan": Plan,
+              "derived": {"total_frames": int,       // sequencer.total_frames
+                          "estimate_s": number,      // sequencer.estimated_duration_s
+                          "per_step_s": [number],    // one pass, 0 for a step that does not run
+                          "start_utc": string,       // start_at_utc when in the future, else now
+                          "end_utc": string},        // start_utc + estimate_s
+              "issues": [Issue],
+              "ready": bool,                         // no issue of level "error"
+              "locked": bool, "locked_reason": string|null,   // a run is active (Q-P9)
+              "notes": [string],                     // what the last change did (see below)
+              "filters": {"names": [string], "source": "wheel"|"profile"|"default"},
+              "limits": {"exposure_s": [min, max], "gain": [min, max],
+                         "source": "camera"|"last_camera"|"default"},
+              "path": string|null,                   // sequence_draft.json, null in memory
+              "revision": int}
+Issue = {"step": int|null,     // 0-based step index; null = a plan-level field
+         "field": string,      // "exposure_s", "repeat", "steps", …
+         "code": string, "level": "error"|"warning", "message": string}
+```
+
+The plan is the core `SequencePlan` (`plan_to_dict` keys) plus `schema` and
+`start_at_utc`. A step's missing keys take the `SequenceStep` defaults; a
+missing top-level key its `plan_from_dict` default. The body is strict like
+every other: an unknown key, a wrong type (`"10"`, `80.0` for a gain, `1`
+for a boolean), a non-finite number, more than 200 steps or 64 metadata keys
+is `400 invalid_argument`. A frame type is matched case-insensitively
+(`"dark"` is stored `"Dark"`, as `plan_from_dict`).
+
+**No silent clamp.** The plan is stored exactly as typed; every value the
+Qt editor would clamp or substitute is an issue instead:
+
+| code | level | when (Qt behaviour replaced) |
+|---|---|---|
+| `no_enabled_step` | error | no enabled step with a count (Qt "Add an enabled step", `sequence_panel.py:1150-1156`) |
+| `out_of_range` | error | exposure outside the camera range (`limits`; Qt's 0.01-600 s default without one), gain outside it (0-600 default), count 1-9999, interval 0-3600 s, dither 0-999, cadence 0.01-3600 s, repeat 1-999, autofocus every 0-999 (the Qt spin-box ranges) |
+| `cadence_short` | error | cadence shorter than the exposure (`transit.py:86-89`) |
+| `unknown_frame_type` | error | not Light, Dark, Flat or Bias (Qt: loaded as Light, then refused) |
+| `unknown_on_complete` | error | not one of the three end-of-run actions (Qt: "Nothing") |
+| `base_dir_relative` | error | `base_dir` is not an absolute path |
+| `unknown_filter` | error with the wheel connected, warning from the profile | a Light or Flat filter that is not a slot (Qt: the first light slot, S7) |
+| `dark_slot` | error | a Light or Flat step on the opaque Dark slot: black frames (S7; Qt allows it, the engine refuses it at start, so the plan does too) |
+| `interval_ignored` | warning | an interval on a step with a cadence: the cadence wins (P2) |
+| `no_object` | warning | empty object name (Qt readiness "Object name required"; frames say "Unknown") |
+| `start_in_past` | warning | `start_at_utc` already passed: Start runs at once |
+
+Ranges: the connected camera's limits as Qt's `set_camera_limits`
+(`sequence_panel.py:1016-1041`: exposure from max(min, 0.01 s)); after a
+disconnect the last camera's limits stay (S7: the ranges are not reset); the
+Qt defaults before any camera. Filter names: the wheel's slots when it is
+connected, else the telescope profile's slots (warning only), else Qt's
+defaults `IR`, `LP`, `Dark` (warning only). `derived` is computed on the
+plan as typed, with the core's own `max(1, repeat)` and `count > 0` rules;
+`per_step_s[i]` = count × (cadence, else exposure + interval + 3 s) for an
+enabled step, 0 otherwise.
+
+- **Object** (Q-P1): one object per plan, shared with Observe. A `PUT`
+  whose non-empty `object_name` differs from the observation's sets the
+  observation (`PUT /api/observation` semantics: target set re-keyed, live
+  curves reset), as Qt's Object field does. An empty name never clears the
+  observation (P10). When Observe changes the object, the draft follows it
+  on its next read (`notes` says so).
+- **Metadata** (S5): kept while the object is the one it was prepared for
+  (a transit plan: its host star); a change of object drops it and `notes`
+  says "Planning metadata dropped: it was prepared for <object>." A `PUT`
+  that echoes the stored metadata keeps it; new metadata belongs to the
+  `PUT`'s object.
+- **Draft** (Q-P3): `sequence_draft.json` beside `config.json` (the
+  server's config folder), written atomically (temporary file, fsync,
+  rename) on every change and read back at start-up; with no config folder
+  (tests) it lives in memory. The file is a Plan (plus `metadata_object`, the
+  object its metadata was prepared for), so the Qt app opens it as a preset. An unreadable draft is kept aside as
+  `sequence_draft.json.unreadable-<UTC stamp>` and logged; the server starts
+  from Qt's first row (one enabled Light step, 10 × 10 s, gain 80, on the
+  first slot that passes light, never Dark).
+- **Locked** (Q-P9): `PUT`, `import` and `POST /api/transit/plan` answer
+  `409 run_active` "The plan is locked while the sequence runs." while a run
+  is active. Presets, export, visibility and prediction stay available.
+
+Hooks for the sequence engine (`hub.plan`, a `PlanService`):
+`hub.plan.plan_for_run()` returns the draft as a core `SequencePlan` (the
+object followed, metadata only for its own object) or raises `400
+invalid_argument` "Fix step 2: cadence 5 s is shorter than the 10 s
+exposure." (the first error); `hub.plan.publish()` re-sends `sequence_plan`
+(call it when a run starts or ends, so `locked` follows);
+`sequence_plan.observation_payload(plan)` and `observation_json(plan)` give
+`observation.json` exactly as `SequenceWorker._write_observation_metadata`
+(`sequence_worker.py:462-480`: `schema_version` 1, `object_name`, the
+metadata; `indent=2, sort_keys=True`). The plan service asks
+`hub.sequence.run_active()` (a bool; the sequence engine's), and reads
+"not active" while `hub.sequence` does not exist.
+
+### Presets (A60) and files (A61)
+
+```
+PresetList = {"directory": string,          // data_paths.sequence_presets_directory
+              "presets": [{"name": string, "modified_utc": string,
+                           "object_name": string|null, "steps": int|null,
+                           "total_frames": int|null, "estimate_s": number|null,
+                           "error": string|null}]}     // unreadable file: why
+Preset = {"name", "modified_utc", "path", "plan": Plan, "derived", "issues", "ready"}
+```
+
+A preset is `<directory>/<name>.json` in **Qt's format**: `plan_to_dict`
+with `indent=2` (`sequence_panel.py:973-985`), no `schema`, no
+`start_at_utc`; the Qt app and the server read each other's files. The list
+holds every `*.json` file that is not hidden, by name (case-insensitive).
+A name is 1-100 characters, no `/ \ : * ? " < > |` or control character, no
+leading dot or space, no trailing dot or space (`400 invalid_argument`); a
+trailing `.json` is ignored. `GET` of a missing preset, `DELETE` of one:
+`404 not_found`. `PUT` saves the body (or the draft when there is none) and
+answers `409 file_exists` when the preset exists without `?overwrite=true`;
+saving stays available during a run. A file Qt cannot read (unknown step
+key, unknown frame type, wrong JSON) is listed with its `error` and `GET`
+answers `400 invalid_argument` with the reason.
+
+- **`POST /api/sequence/plan/import`** `{"path": "/abs/file.json"}` (any
+  `.json` inside the folders ARGOS may browse; `403 forbidden_path`
+  outside, `404 not_found` missing) or `{"preset": name}` replaces the draft
+  as Qt's Load preset does (`sequence_panel.py:987-1013`): the planning
+  metadata is **not** restored (a transit window belongs to one night) and
+  `notes` says "Planning metadata not restored: use Prepare transit for
+  tonight's window."; values Qt would adjust are kept and shown as issues.
+  `409 run_active` during a run.
+- **`POST /api/sequence/plan/export`** `{"path", "overwrite"}` writes the
+  draft in Qt's format (metadata included, as Qt's Save preset). A path
+  without a suffix gets `.json` (Qt); another suffix is `400`; an existing
+  file without `"overwrite": true` is `409 file_exists`; a folder that does
+  not exist is `400` "No folder <path>." (nothing is created). Exported
+  files, presets and the draft get a plain file's mode (0644 under the usual
+  umask), and a replaced file keeps its own.
+
+### Visibility (A65)
+
+```
+Visibility = {"site": {"name": string, "latitude_deg", "longitude_deg", "elevation_m"},
+              "target": {"ra_hours", "dec_deg"},
+              "night": {"date": "YYYY-MM-DD",          // the evening's date
+                        "dusk_utc": string|null,      // Sun below −18°
+                        "dawn_utc": string|null},     // Sun above −18° again
+              "twilight": {"sunset_utc", "civil_dusk_utc", "nautical_dusk_utc",
+                           "astronomical_dusk_utc", "astronomical_dawn_utc",
+                           "nautical_dawn_utc", "civil_dawn_utc", "sunrise_utc"},  // string|null
+              "samples": [{"t_utc", "alt_deg", "sun_alt_deg"}],
+              "peak": {"t_utc", "alt_deg"},           // highest in the night (else the span)
+              "window": {"start_utc", "end_utc"}|null, // longest part above min_alt_deg in the night
+              "windows": [{"start_utc", "end_utc"}],
+              "min_alt_deg": number, "min_alt_source": "site"|"query",
+              "step_min": int, "notes": [string]}
+```
+
+`409 site_missing` "Set the observing site in Settings to compute
+altitudes." when no site is set (X2: a name, or coordinates other than 0/0;
+never 0/0). The night of `night=D` runs from local solar noon of D (UTC noon
+minus longitude/15 h) to the next one, so a night spans midnight and an
+02:00 instant belongs to the night of the previous date (S26). Without
+`night`, the night whose dawn has not passed yet. `night` is astronomical
+dusk to dawn (Q-P6): the longest interval with the Sun below −18°; none
+(`dusk_utc`/`dawn_utc` null, `window` null) where the Sun never gets that
+low, with a note. Samples run every `step_min` (1-60) from an hour before
+sunset to an hour after sunrise (solar 16:00 to 08:00 when the Sun does not
+set or rise), on UTC multiples of `step_min`. Altitudes are the core's fast
+spherical trigonometry (`sky_geometry.altitude_at`, ≈0.1°, no refraction);
+the Sun is the Astronomical Almanac low-precision position (≈0.01°); both
+are checked against astropy in the tests. `min_alt_deg` comes from the
+config key `site.min_altitude_deg` (default 30°) unless the query gives one
+(a handle being dragged). The Moon comes later (Q-P6).
+
+### Exoplanets (A42)
+
+```
+Exoplanet = {"planet_name", "host_name", "ra_hours", "dec_deg", "period_days",
+             "epoch_bjd_tdb", "duration_hours": number|null, "depth_percent": number|null,
+             "period_error_days": number|null, "epoch_error_days": number|null,
+             "epoch_system", "source", "retrieved_utc"}
+```
+
+`lookup` is `exoplanets.lookup_exoplanet` (the cache first, then at most two
+NASA Exoplanet Archive queries of 12 s each; a result is cached in
+`data_paths.exoplanet_cache`). Errors, with the core's text: an empty query
+`400 invalid_argument`; no such planet `404 not_found`; no network answer
+`502 lookup_failed`; a planet whose ephemeris cannot be used (no BJD_TDB
+epoch, missing or invalid column) `422 ephemeris_unusable`. `suggest` is
+`cached_exoplanet_suggestions`: offline, names from the cache only. The
+request runs off the event loop; a client that gives up simply ignores the
+answer (the lookup still fills the cache).
+
+### Transit prediction and plan (A66)
+
+```
+TransitBody = {"planet_name": string, "baseline_minutes": number = 60,
+               "date": "YYYY-MM-DD"?,        // search from that night (solar noon)
+               "from_utc": string?,          // or from this instant; default now
+               "epoch_number": int?,         // this transit exactly (plan what was predicted)
+               "observable_only": bool = true}
+TransitPlanBody = TransitBody + {"exposure_s": number = 10, "cadence_s": number = 13,
+                                 "gain": int = 80, "filter_name": string}
+TransitPrediction = {"planet": Exoplanet,
+                     "window": {"epoch_number", "mid_bjd_tdb", "ingress_bjd_tdb",
+                                "egress_bjd_tdb", "coverage_start_bjd_tdb",
+                                "coverage_end_bjd_tdb", "baseline_minutes", "coverage_hours"},
+                     "utc": {"coverage_start", "ingress", "mid", "egress", "coverage_end"},
+                     "altitude_deg": {same keys},
+                     "sun_alt_deg": {same keys},
+                     "night": {"date", "dusk_utc", "dawn_utc"},   // the night of the midpoint
+                     "observable": {"transit": bool,     // ingress → egress dark and above the limit
+                                    "coverage": bool},   // with both baselines
+                     "usable": {"start_utc", "end_utc"}|null,   // part of the coverage dark and above
+                     "skipped": [{"epoch_number", "mid_utc", "reason": "daylight"|"below_limit"}],
+                     "skipped_count": int, "min_alt_deg": number}
+```
+
+`predict_next_transit` (`transit.py:34-68`) from `bjd_tdb(julian_date(from))`
+at the site (`sequencer_page.py:132-145`), the UTC instants by
+`utc_from_bjd_tdb` (`airmass.py:117-148`) as `_local_transit_window`. With
+`observable_only` (Q-P10) the server chooses the date: it steps epoch by
+epoch (366 days at most) and skips every transit whose ingress → egress is
+not entirely in the astronomical night (`daylight`) or not entirely above
+`site.min_altitude_deg` (`below_limit`), sampled every 2 min; `skipped`
+lists the first 20. Without it, the next transit whatever the sky (Qt). A
+given `epoch_number` is taken as is. Errors: `409 site_missing` (X2);
+`400 invalid_argument` with the core's text ("A BJD_TDB transit epoch is
+required for prediction.", "A published transit duration is required to
+prepare coverage.", a negative baseline, a baseline above 240 min, the Qt
+spin-box limit); `422 no_observable_transit` "No transit of <planet> is
+observable from this site above 30° in the next 366 days."; the lookup's
+own errors (A42).
+
+`POST /api/transit/plan` predicts the same way, builds
+`make_transit_sequence` (`transit.py:71-122`: one Light step, the count to
+cover the window at the cadence, autofocus and dither off, the 13 metadata
+keys) and makes it the draft, its object the host star (the observation
+follows, as Qt's `load_plan`; the host becomes the catalogue target with
+programme `exoplanet` unless it already is, as Qt's Find did), its metadata
+kept for that object (S5), its `start_at_utc` the coverage start (Q-P2; Qt
+P7: Start ran at once), said in `notes`. `filter_name` defaults to the first
+slot that passes light. An exposure ≤ 0 or a cadence shorter than the
+exposure is `400` with the core's text; a gain or exposure outside the
+camera range becomes the plan's issue, never clamped. `409 run_active`
+during a run. A run of that draft writes `observation.json` with the same
+keys and values as Qt's. Logs (source `plan`, topic `sequence`): INFO
+"Transit plan: <planet>, E=<n>, <count> frames from <UTC>"; OK "Preset
+saved: <file>", "Plan saved to <path>"; INFO "Preset deleted: <file>".
+
+## API 2 routes, wave 6a: sequences (A62-A64, the mount interlock)
+
+Wave 6a, sequence half: the run of a plan (start now or at a set time,
+pause, resume, stop), the `sequence` event, the preflight and the
+mount-motion interlock of `web/lab/PROPOSAL.md` §7 (owner decision D2). The
+plan itself is the plan half above; the engine runs the plan it holds.
+Still `"api": 2` (additive).
+
+The engine (`argos/server/sequence.py`) is a Qt-free port of the **fixed**
+Qt sequence path (release 0.5.0): `AcquisitionEngine.start_sequence`,
+`stop_sequence`, `pause_sequence`, `resume_sequence_run`,
+`_on_seq_frame_saved`, `_on_seq_autofocus_due`, `_on_seq_finished`,
+`_run_on_complete_action`, `_sequence_frame_context`
+(`acquisition_engine.py:712-945`) and `SequenceWorker._run`, `_set_filter`,
+`_read_back_filter`, `_shoot_one`, `_append_session`,
+`_write_observation_metadata`, `_dither`, `_await_autofocus`
+(`sequence_worker.py:162-503`), over the unchanged core (`expand_plan`,
+`total_frames`, `FITSWriter`, `SessionLog`, `TargetSet`). The run has its
+own thread; the FITS write runs on it (never on the event loop), each
+photometry point on the photometry thread.
+
+| Method | Path | Body | Returns | Row |
+|---|---|---|---|---|
+| GET | `/api/sequence` | — | SequenceState | A63 |
+| POST | `/api/sequence/start` | StartBody | SequenceState | A62 |
+| POST | `/api/sequence/pause` | — | SequenceState | A62 |
+| POST | `/api/sequence/resume` | — | SequenceState | A62 |
+| POST | `/api/sequence/stop` | — | SequenceState | A62 |
+| GET | `/api/sequence/preflight` | `?start_at_utc=` | Preflight | A64 |
+
+New WebSocket event: `sequence` (a **snapshot**, newest kept), sent on
+every state change and after every saved sub, and once to a client that
+connects (with the wave 4 snapshots), so a page opened mid-run shows the run
+at once. `frame_saved` (A24) also carries the subs of a run
+(`"source": "sequence"`). The status record (`GET /api/status`, `status`)
+gains `"sequence": {"state", "active", "run_id", "object_name"}`. New error
+codes: `preflight_blocked`, `not_running`; `run_active` is sent (below).
+
+```
+StartBody     = {"start_at_utc"?: ISO 8601 UTC|null}   // absent: the draft's start_at_utc; null: now
+SequenceState = {"state": "idle"|"waiting"|"running"|"pausing"|"paused"|"autofocus"|"stopping",
+                 "active": bool,                 // state != "idle": the plan is locked (Q-P9)
+                 "run_id": string|null,          // UTC start "YYYYMMDDTHHMMSSZ" (Qt run id)
+                 "run_root": path|null,          // <base>/<run_id>_<OBJECT>, created at the first save
+                 "object_name": string|null,
+                 "plan": Plan|null,              // the plan the run executes, frozen at start
+                 "start_at_utc": ISO|null,       // scheduled start (state "waiting")
+                 "started_utc": ISO|null,        // the run left "waiting"
+                 "step_index": int|null,         // 0-based, in plan.steps
+                 "step": Step|null,              // plan.steps[step_index]
+                 "pass_index": int|null,         // 1-based pass (plan "repeat")
+                 "repeat": int|null,
+                 "frames_done": int, "frames_total": int,
+                 "eta_s": float|null,            // time per frame x frames left (Qt), pauses excluded
+                 "end_utc": ISO|null,            // now + eta_s (waiting: start + estimate)
+                 "current": {"frame_type", "image_type", "filter", "exposure_s", "gain",
+                             "index", "step_index", "started_utc"}|null,   // the sub exposing
+                 "last_frame_utc": ISO|null,     // DATE-OBS of the newest saved sub
+                 "last_saved_utc": ISO|null,     // when it was written
+                 "last_frame_name": string|null,
+                 "cadence_s": float|null,        // planned start-to-start of the current step
+                 "observed_cadence_s": float|null,
+                 "next_autofocus": {"reason": "every_n", "in_frames": int}|null,
+                 "autofocus_runs": int,          // mid-run autofocus passes so far
+                 "paused_by": "observer"|"motion"|null,
+                 "end_action": "Nothing"|"Stop tracking"|"Park mount",
+                 "last_result": RunResult|null,  // the last run's outcome, kept until the next start
+                 "revision": int}
+RunResult     = {"completed": bool,
+                 "reason": "completed"|"stopped"|"cancelled"|"camera_error"|"device_lost"
+                           |"wheel_error"|"save_error"|"autofocus_timeout"|"refused"|"shutdown",
+                 "message": string,              // for the observer, shown verbatim
+                 "frames_saved": int, "frames_total": int,
+                 "run_root": path|null, "started_utc": ISO|null, "ended_utc": ISO}
+Preflight     = {"checks": [Check], "level": "ok"|"note"|"block", "can_start": bool,
+                 "frames_total": int, "estimate_s": float, "start_utc": ISO, "end_utc": ISO,
+                 "bytes_needed": int, "bytes_free": int|null}
+Check         = {"id": string, "level": "ok"|"note"|"block", "message": string,
+                 "details"?: object}
+```
+
+- `Plan` and `Step` are the plan half's records.
+- `cadence_s` is the step's `cadence_s`, else `exposure_s + interval_s + 3`
+  (the 3 s per-frame overhead of `estimated_duration_s`). `observed_cadence_s`
+  is the median start-to-start interval (DATE-OBS) of the last 10 subs of
+  the step, a pause or an autofocus in between excluded; `null` before two
+  subs. RunCard's "last-frame age against cadence" is `now − last_frame_utc`
+  against these.
+- `eta_s` is Qt's (`sequence_worker.py:226-228`: elapsed / done × left),
+  with the time spent paused and in autofocus taken out of "elapsed" (Qt
+  counted it, 06 P16); before the first sub, the plan's estimate.
+- `next_autofocus`: with `autofocus_every_n > 0`, the subs left before the
+  next periodic pass (Qt `frames_since_af`); a pass on a filter change
+  cannot be counted ahead and is not listed.
+
+### In-process interface with the plan half
+
+- `hub.sequence.run_active()` (bool; also the `active` property): a run is
+  waiting, running, pausing, paused, in autofocus or stopping.
+  `hub.refuse_if_run_active(what)` raises `409 run_active` "A sequence is
+  running — <what> is locked until it ends." with `details: {"state",
+  "run_id"}`.
+- At `POST /api/sequence/start` the engine takes the plan from
+  `hub.plan.plan_for_run()` (its `400 invalid_argument` on the first error
+  issue is passed on) and the draft's `start_at_utc` when the body has no
+  `start_at_utc` member; it calls `hub.plan.publish()` when a run starts and
+  ends, and writes `observation.json` with
+  `sequence_plan.observation_json(plan)`. The engine checks again what it
+  relies on, so nothing is ever clamped or remapped: in particular a Light
+  or Flat step on the wheel's opaque slot is **refused** at start (S7, `400
+  invalid_argument`, issue code `dark_slot`).
+
+### Start (A62)
+
+`POST /api/sequence/start` answers at once with the new state (`waiting` or
+`running`). Refusals, in this order:
+
+| HTTP | code | When |
+|---|---|---|
+| 409 | `busy` | A run is active (`details.owner: "sequence"`): "A sequence is already running." Also the second of two Starts sent at once (two clients): one start is prepared at a time, so they never share the camera. |
+| 409 | `not_connected` | No camera: "Connect the camera before running a sequence." (Qt) |
+| 409 | `busy` | Autofocus owns the camera (`owner: "autofocus"`): "Autofocus is running — it owns the camera. Wait for it to finish." (Qt `camera_service`) |
+| 400 | `invalid_argument` | `start_at_utc` not an ISO time with a zone, or more than 24 h ahead; a plan error (the plan half's text; `details.issues` when the engine's own checks find it): no enabled step, a value outside the camera's limits, a cadence shorter than its exposure, a Light or Flat step on the wheel's opaque slot (S7), a filter the wheel does not have (never remapped), a binning other than 1 (FITS `XBINNING` assumes 1×1). A start time already passed starts at once (the plan's `start_in_past` warning). |
+| 409 | `preflight_blocked` | Another `block` of the preflight (`details.checks`): the run folder not writable, not enough free disk space. |
+| 500 | `internal_error` | The run could not begin after it was registered (an OS error opening the run, …): "The sequence could not start: <reason>". The engine is left free: `idle`, camera, focuser and observation released, `last_result.reason: "refused"` with that text. |
+
+Then, as Qt (`start_sequence`, 712-753): the plan is frozen (`plan` in the
+record), the observation's object is the plan's (the plan half keeps them
+one, Q-P1) and is locked (`locked_reason` "A sequence is running
+(<object>)."), the camera owner becomes `sequence` (a live view or a single
+shot in progress is stopped: INFO "Live preview stopped — the sequence owns
+the camera."), the focuser is locked (`locked_by: "sequence"`, manual moves
+`409 busy` "A sequence owns the focuser."; Halt stays allowed), the live
+curves are cleared (`photometry_reset`, reason `sequence_started`; their CSVs
+stay on disk) and the series FWHM and flight recorder restart with the run
+(Qt: at the run's first save, `_on_seq_frame_saved`). Field identification
+is armed for a run with Light frames (S14, `FieldService.arm_for_sequence`;
+WARN "Sequence: ASTAP not found — the field cannot be identified, so no
+live photometry will be measured." without ASTAP) and restored after the
+run. CMD "Sequence started — N frame(s)."
+
+**Scheduled start (Q-P2).** With a start time the state is `waiting` until
+then: the camera, mount and wheel stay free (live view and a slew to the
+target are allowed), the plan is locked. The wait is the server's: it
+survives client disconnects and is cancelled by Stop (`last_result.reason:
+"cancelled"`). At the start time the camera checks are made again; an
+autofocus in progress is waited for (INFO once, at most 300 s, then
+`reason: "refused"`); a camera gone is `reason: "refused"` with the text.
+`run_id` is the moment the run really starts.
+
+### Each sub (`SequenceWorker._run`, `_shoot_one`)
+
+In Qt's order, for each frame of `expand_plan(plan)` (steps, counts,
+repeats; the frame index restarts per (type, filter, exposure, gain) series
+and grows across passes):
+
+1. stop flag and pause gate (a pause holds here);
+2. a new step → INFO "Step <n>/<N>: <count> × <type> <filter> <exposure> s";
+3. wheel (when connected): Light / Flat to the step's filter, Dark / Bias to
+   the opaque slot (`FrameSpec.wheel_filter`); the engine waits for the
+   wheel to settle (≤ 20 s, as Qt; `wheel_error` when it does not); an
+   autofocus on a filter change runs when the new slot passes light
+   (`autofocus_on_filter_change`); without a wheel nothing moves;
+4. periodic autofocus (`autofocus_every_n`), below;
+5. FILTER read back from the wheel before the exposure (Qt
+   `_read_back_filter`: a readable wheel that differs wins, with a WARN;
+   without a wheel, the plan's); gain is the step's (sent with every
+   exposure; the drivers have no read-back, as the Take shot);
+6. the exposure: DATE-OBS just before StartExposure, the end at ImageReady
+   (S36); the camera's own timeout (exposure + its grace) ends the run with
+   `camera_error`;
+7. the frame is published on `/ws/frames` (`origin: "sequence"`,
+   `save: true`), measured for `frame_metrics` and the conditions rows, and,
+   for a Light frame, given to field identification (calibration frames are
+   not: a Dark has no field);
+8. QA metrics on the array (`frame_metrics`, `detect_stars`), then the FITS
+   through `FITSWriter.write` with the headers of Qt's sequence path
+   (`_sequence_frame_context`: pointing of a live mount only, X1; the site
+   only when set, X2; `EGAIN` from `camera.egain_table`, else the driver,
+   else the sensor reference, S42), never overwriting; `session.json`
+   rewritten; `observation.json` written with the first frame when the
+   plan has `metadata` (S5: Qt's bytes, `sequence_plan.observation_json`);
+9. `frame_saved` (`source: "sequence"`, `run_root`, `index`, `record`) and
+   OK "Saved <file>  HFD=<hfd> FWHM=<fwhm>  stars=<n>" (Qt
+   `imaging_page._on_seq_frame_saved`); the first save of the run writes
+   `targets.json`, `photometry_selection.json` and
+   `photometry_selection_history.jsonl` into the run folder;
+10. **one photometry point per saved Light sub** (Qt `_on_seq_frame_saved`,
+    `acquisition_engine.py:837-862`) when the field is identified and the set
+    has a target: `PhotometryService.measure_saved_frame` on that sub's
+    array, through the current **reference** solution with core's
+    `ApertureTracker` plus S35 (owner decision 2: no point and the WARN
+    "Photometry skipped: no star of the set where the solution places it…"
+    when no anchor is found), epoch = DATE-OBS + EXPTIME / 2 (as Qt), CSVs
+    in `<run>/photometry/`, the leave-one-out report rewritten to
+    `<run>/photometry_quality.json` after every measured sub (S17). A fresh
+    solution during the run resets the tracker (Qt `_on_reference_solved`)
+    and is not itself measured;
+11. progress (`frames_done`, `eta_s`), a dither every `dither_every` subs
+    (counted over the run, as Qt: MoveAxis ±0.05 °/s for 1 s on both axes,
+    alternating, 3 s settle; skipped without a mount);
+12. the wait: `cadence_s` start-to-start (acquisition and save use the
+    budget), else `interval_s` after the frame; Stop and a pause interrupt it.
+
+### Run folder (as Qt)
+
+```
+<plan.base_dir or sessions_path>/<run_id>_<OBJECT>/
+  lights/ darks/ flats/ biases/        <OBJECT>_<filter>_<type>_e<ms>ms_g<gain>_<index>.fit
+  session.json                          SessionLog, rewritten after every sub
+  observation.json                      plan metadata (S5), only when the plan has some
+  targets.json  photometry_selection.json  photometry_selection_history.jsonl
+  photometry/<role>_<OBJECT>_<auid or name>.csv
+  photometry_quality.json
+  diagnostics/<OBJECT>_live_diagnostics.jsonl   (diagnostics.enabled)
+```
+
+Two runs started within the same second would share a folder in Qt; the
+server then appends `-2`, `-3`… to the run id. An in-run target-set edit
+(A52, A53, A58: allowed during a run, Q-P9) rewrites
+`photometry_selection.json` and appends to the history in the run folder
+(`_write_active_selection`).
+
+### Pause, resume, stop, end
+
+- **Pause** (Qt `pause_sequence`): the exposure in progress **completes and
+  is saved**; the run holds before the next exposure. The state is
+  `pausing` while a sub is exposing or being saved, `paused` as soon as none
+  is (a cadence or interval wait is cut short). A pause during a cadence
+  step breaks the cadence: WARN "Pausing breaks the <cadence> s cadence of
+  step <n>." (06 P16).
+- **Resume** (`resume_sequence_run`): the run goes on with the next sub.
+  A Pause asked during a mid-run autofocus is pending (state `autofocus`,
+  `paused_by` set): Resume then cancels it (CMD "Pause cancelled: the run
+  goes on after the autofocus.").
+- **Never exposing while the mount moves** (not in Qt, whose Plan page locks
+  the mount controls): before each sub the run stops any jog left running
+  (a jog started while `waiting`) and holds while the mount slews (a
+  scheduled start during a slew, Resume right after "Pause the run and
+  slew"): INFO "Waiting for the slew to end before the next frame…", then
+  "Slew finished — the run goes on.". Stop ends the wait. A slew still
+  reported after 300 s pauses the run (`paused_by: "motion"`, ERROR "The
+  mount still reports a slew after 300 s: the run is paused. Resume once
+  the mount is still.").
+- **Stop** (`stop_sequence`): the exposure in progress is **aborted** and
+  that frame discarded (Qt `_safe_stop_exposure`); waits end; a mid-run
+  autofocus is stopped (the focuser returns to its start, S23: Qt let the
+  sweep finish); every saved frame stays. `stopping` until the run thread
+  ends, then `idle` with `last_result.reason: "stopped"`.
+- `pause` and `resume` answer `409 not_running` "No sequence is running."
+  in `idle`, and in `waiting` ("The sequence has not started yet — Stop
+  cancels it."); pausing a paused run or resuming a running one is a no-op;
+  `stop` in `idle` answers the idle state.
+- **End** (`_on_seq_finished`): camera owner back to `idle`, focuser
+  unlocked, observation unlocked, field identification restored, OK
+  "Sequence complete." or INFO "Sequence stopped: <message>", the outcome in
+  `last_result`. On full completion only, the plan's end action
+  (`on_complete`: "Stop tracking", "Park mount") runs, CMD "Sequence
+  complete → parking the mount (plan option)." (Qt `_run_on_complete_action`).
+- **Device lost.** The camera disconnected or failing ends the run
+  (`device_lost` / `camera_error`, the text); the filter wheel disconnected
+  during a run ends it too (`device_lost`, "The filter wheel was
+  disconnected."), even when no further move is needed: without the wheel
+  the FITS `FILTER` of the next subs could not be verified; a wheel that
+  fails or does not settle when a move is needed ends it (`wheel_error`); a FITS that cannot
+  be written ends it (`save_error`). A lost mount does not: subs are saved
+  without pointing (X1) and dithers are skipped. Without a focuser the
+  autofocus passes are skipped (INFO once; Qt skipped silently).
+- **Server shutdown** during a run: Stop, then the run thread is joined
+  (≤ 15 s); `session.json` is complete; `reason: "shutdown"`.
+- Client disconnects change nothing.
+
+### Mid-run autofocus (`_on_seq_autofocus_due`, `_await_autofocus`)
+
+The run hands the camera to an autofocus sweep (owner `sequence` →
+`autofocus` → `sequence`; state `autofocus`) with the Camera settings' gain
+and `min(exposure, 10 s)` (Qt `_start_autofocus_worker`), ±2 000 steps,
+9 positions (A36 defaults); the `autofocus` events and V-curve are the
+usual ones. The series FWHM is re-sampled on the next measured sub (Qt
+`_on_af_finished`; a manual autofocus outside a run does the same now).
+Bounded: when the sweep has not ended after `9 × (exposure + 10 s) + 120 s`,
+the run ends (`autofocus_timeout`).
+
+### Photometry geometry locked (S15)
+
+While a run is active, `PATCH /api/config` touching
+`photometry.aperture_fwhm_mult`, `photometry.aperture_min_px`,
+`photometry.annulus_in_px` or `photometry.annulus_out_px` answers
+`409 run_active` "The aperture geometry is locked while a sequence runs
+(one curve, one aperture)." with `details.keys`; nothing is written. The
+other photometry settings (comparison selection) stay editable, as Qt.
+
+### Mount-motion interlock (PROPOSAL §7, D2)
+
+While a run is `running`, `pausing`, in `autofocus` or `stopping`, every
+route that moves the mount (or changes where it points) answers
+`409 run_active` with `details: {"state", "run_id", "action"}` and "A
+sequence is running — <action> would move the field under it. Pause the run
+first.":
+
+| Route | Action |
+|---|---|
+| `POST /api/mount/goto` | GoTo |
+| `POST /api/mount/center` (A32) | Centre |
+| `POST /api/mount/sync` (A33) | Sync (changes the pointing model) |
+| `POST /api/mount/park`, `/unpark` | Park, Unpark (the arm moves) |
+| `POST /api/mount/tracking` `{"enabled": false}` | Tracking off (the field drifts); `true` is allowed |
+| `POST /api/mount/tracking-rate` | Tracking rate |
+| `POST /api/mount/jog` (dead-man) | Jog |
+| Stellarium bridge GoTo (A19) | refused with WARN "Stellarium GoTo refused: a sequence is running — pause it first." (the bridge has no answer channel) |
+
+Never refused: `POST /api/mount/stop` and `/mount/jog/stop` (safety). The
+run's own motions (dither, the end action) are not refused. Autofocus and
+field identification never move the mount. In `waiting`, `paused` and `idle`
+the mount is free (a slew while paused drops the solution as usual; the
+armed identification solves again on the next Light sub).
+
+**"Pause the run and slew".** Each body above takes `"pause_run": true`
+(`park`, `unpark` and `center` accept a body with only that member): the run
+is paused (`paused_by: "motion"`, Qt pause semantics: the sub in progress
+completes and is saved), the request waits for `paused` (at most the
+exposure in progress plus 60 s, or a mid-run autofocus's bound), then the
+motion runs and its usual answer is returned; the run stays paused until
+Resume. If the run does not pause in time: `409 run_active` "The run did not
+pause in time — nothing moved." Outside an active run `pause_run` is
+ignored. **A client must wait that long for the answer** (the web client
+waits the exposure in progress + 75 s, or 400 s during a mid-run autofocus:
+`run.ts pauseRunTimeoutMs`): the server moves the mount when the run has
+paused even if the client gave up, so a client timeout shorter than the
+bound would report a failure the mount then belies.
+
+### Preflight (A64)
+
+`GET /api/sequence/preflight[?start_at_utc=]` checks the draft (during a
+run, the running plan) against the devices and folders, worst level first;
+`can_start` is false while one check is `block`, and Start refuses then
+(codes above). Ids are unique within one answer: a plan issue's check is
+`plan:<code>` (`plan:<code>:<step number>` for a step's, e.g.
+`plan:interval_ignored:1`), any other repeated id gets `:<n>`; the base id
+(before the first `:`) names the check. Ids and rules:
+
+| id | ok | note | block |
+|---|---|---|---|
+| `run` | no run active | — | a run is active |
+| `camera` | connected (name, sensor) | — | not connected; autofocus owns it |
+| `plan` | frames and estimate | a plan warning (one note per issue, `plan:<code>[:<step>]`) | a plan error (`plan:<code>[:<step>]`); a Light / Flat step on the opaque slot (S7) |
+| `start_at` | now, or the scheduled time | already passed (starts at once) | not a time, or > 24 h ahead |
+| `object` | the plan's object | no object name (files say "Unknown", as Qt) | — |
+| `mount` | connected, tracking | not connected (no pointing in the FITS); parked, idle or slewing with Light frames | — |
+| `site` | set (name) | not set (X2: no BJD_TDB, the mount's airmass, no altitude check); the site check (X3) disagrees with the mount | — |
+| `wheel` | every step's slot exists | no wheel and Light / Flat steps (FITS `FILTER` unverified) | a slot the wheel does not have |
+| `focuser` | no autofocus planned, or a focuser | autofocus planned and no focuser (the passes are skipped) | — |
+| `altitude` | the target stays above the limit over the run | it dips below the limit during the run (from when) | — |
+| `output` | the run folder's parent is writable | — | not writable (the OS reason) |
+| `disk` | needed against free | needed > 80 % of free | needed > free |
+| `calibration` | darks, flats and biases matching the plan's Light steps that night | "Missing tonight: step 2 (10 s, gain 80, IR): flats and biases." (counts per kind in `details`) | — |
+| `lid` | Dark / Bias steps through the wheel's Dark slot (the telescope's lid; the client names it "Dark frames") | Dark / Bias steps without a wheel with a Dark slot: "put the lid on" | — |
+| `sleep` | always: "Keep the computer awake and its lid open for the whole run: a sleeping computer stops the run." (PROPOSAL §7: lid-closed sleep is out of software reach; keep-awake is wave 6b) | — | — |
+
+- **Altitude**: the target is the observation's target (else the plan's
+  metadata `ra_deg` / `dec_deg`, a transit plan's); altitude from the site
+  (`sky_geometry.horizontal_at`) every 5 min from the start to the planned
+  end; the limit is `site.min_altitude_deg` when that setting exists (Q-P6),
+  else 30°. No site or no coordinates: a note says why.
+- **Disk**: frames × (width × height × 2 bytes + 17 280 bytes of header and
+  padding) for the camera's sensor, against `shutil.disk_usage` of the
+  nearest existing folder of the run root.
+- **Calibration counts per night**: the night is the 24 h from local noon
+  before the run's start; the `session.json` of every run folder of the
+  sessions folder started in it are read (not the FITS headers). Darks match
+  a Light step's exposure and gain, biases its gain, flats its filter; the
+  plan's own Dark / Flat / Bias steps count. `details: {"night_start_utc",
+  "per_step": [{"step", "darks", "flats", "biases"}]}`.
+
+### Simulator replay source
+
+`--sim-replay DIR` (CLI; `SimOptions.replay_dir` in tests) makes the
+`simulator` mode serve a folder of real FITS **copies** (nothing is written
+there):
+
+- **Camera**: each exposure returns the pixels of the next file, in file
+  name order (`.fit`, `.fits`, `.fts`; raw 16-bit as Open FITS), and starts
+  again from the first after the last (WARN once). The exposure time is
+  still waited (Stop interrupts it); exposure, gain, focus and wheel do not
+  change the pixels. The sensor is the first file's (`NAXIS1` × `NAXIS2`,
+  `BAYERPAT`); `fits_readings` give the file's `CCD-TEMP` and `OFFSET`.
+- **Mount**: the simulated mount reports the pointing of the file being
+  exposed (before the first exposure, the first file's): `RA` / `DEC`
+  (else `OBJCTRA` / `OBJCTDEC`), `ALTITUDE` / `AZIMUTH` when present (else
+  computed at the simulator's site), tracking. It starts unparked and
+  tracking; a GoTo or a park behaves as usual, and the replayed pointing
+  comes back once it tracks again.
+- The replay mount is alt-az (as the Seestar that took the frames): the
+  photometry tracker allows the field rotation, no pier side.
+- So field identification (the mount is the hint), tracking and photometry
+  work during a sequence on the simulator. The saved subs are dated by the
+  server clock (today): BJD_TDB and airmass are today's for that field.
+- A folder with no FITS image, or a first file that is not raw 16-bit, stops
+  the server at start-up with the reason.
+
+### Errors (wave 6a, sequences)
+
+| HTTP | code | When |
+|---|---|---|
+| 409 | `run_active` | A mount motion during a run (interlock above); a photometry-geometry change during a run; `details: {"state", "run_id", …}`. |
+| 409 | `preflight_blocked` | Start refused by a preflight `block` other than the camera and plan checks; `details.checks`. |
+| 409 | `not_running` | Pause or resume with no run, or while waiting for the start time. |
+
+`sequence` is a snapshot (newest kept); `frame_saved` stays a stream.
+`GET /api/photometry/live` (A54) now fills `run_root` and
+`sequence_running` while a run is active.
+
 ## State records
 
 ```
@@ -2659,6 +3371,8 @@ wide by 1920 px high, 16-bit, mono.
   0-255 (default 10, it adds 2 ADU per unit to the pedestal of 1600 at
   offset 10), MaxBin 1, sensor temperature 21.0 °C, no driver ElectronsPerADU
   (FITS `EGAIN` comes from the sensor reference) and no readout mode.
+- **Replay** (wave 6a). `--sim-replay DIR` plays a folder of real FITS
+  copies instead of the synthetic sky (see "Simulator replay source").
 - **Mount extras** (wave 3). Alignment `eq_gem`; `MoveAxis` jogs at up to
   5 °/s per axis (primary = RA, positive east; secondary = Dec, positive
   north); tracking rates sidereal, lunar, solar and king (read back, not
@@ -2704,3 +3418,4 @@ wide by 1920 px high, 16-bit, mono.
 | A54-A57 | Wave 5: `GET /api/photometry/live`; `photometry_point` and `photometry_reset` (a stream), `comparison_quality` and `photometry` (snapshots); BJD_TDB per point; leave-one-out status per comparison |
 | A58 | Wave 5: `POST /api/photometry/comparisons/recommend` (`replace` / `complete`, `count`) |
 | — | Wave 5 follow-ups of wave 4: `auto_selected` in the `POST /api/targets` answer and `DELETE /api/targets/{key}?also=` (Undo of a new target); `frame_metrics` replayed to a new client; `GET /api/fs/list` lists a typed file's folder with `selected` |
+| A62-A64 | Wave 6a: `GET /api/sequence`, `POST /api/sequence/start` (`start_at_utc`, Q-P2) / `pause` / `resume` / `stop`, `sequence` event and `status.sequence`, `GET /api/sequence/preflight`; the mount interlock (`409 run_active`, `pause_run`), the geometry lock (S15), `frame_saved` of a run, `--sim-replay` |

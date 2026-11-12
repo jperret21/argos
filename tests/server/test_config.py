@@ -410,3 +410,15 @@ def test_debug_lines_follow_the_log_level(client):
     hub.log("debug", "shown")
     messages = [e["message"] for e in client.get("/api/logs", headers=AUTH).json()["entries"]]
     assert "shown" in messages and "hidden" not in messages
+
+
+def test_a_path_naming_an_unknown_user_s_home_is_refused_not_a_500(client):
+    response = client.patch(
+        "/api/config",
+        json={"astrometry.astap_path": "~argos_no_such_user_x/astap_cli"},
+        headers=AUTH,
+    )
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["fields"] == {
+        "astrometry.astap_path": "names the home folder of an unknown user"
+    }

@@ -37,6 +37,12 @@ POLL_MOVING_S = 0.5
 POLL_IDLE_S = 5.0
 TEMPERATURE_S = 10.0
 AF_BUSY = "Autofocus owns the focuser."
+#: Wave 6a: a sequence locks the focuser for its run (its autofocus passes excepted).
+SEQUENCE_BUSY = "A sequence owns the focuser."
+
+
+def _busy_text(owner: str | None) -> str:
+    return SEQUENCE_BUSY if owner == "sequence" else AF_BUSY
 
 
 def _disconnected() -> dict[str, Any]:
@@ -235,7 +241,9 @@ class FocuserService:
         if handle is None:
             raise ApiError(409, "not_connected", "No focuser connected")
         if self._locked_by is not None:
-            raise ApiError(409, "busy", AF_BUSY, details={"owner": self._locked_by})
+            raise ApiError(
+                409, "busy", _busy_text(self._locked_by), details={"owner": self._locked_by}
+            )
         return handle, self._generation
 
     def _command(self, requested: int, sent: int | None, clamped: bool, queued: bool) -> dict:
@@ -296,7 +304,12 @@ class FocuserService:
                 if generation != self._generation:
                     raise ApiError(409, "not_connected", "Focuser disconnected during the command")
                 if self._locked_by is not None:
-                    raise ApiError(409, "busy", AF_BUSY, details={"owner": self._locked_by})
+                    raise ApiError(
+                        409,
+                        "busy",
+                        _busy_text(self._locked_by),
+                        details={"owner": self._locked_by},
+                    )
                 if moving or self._moving:
                     # D9: no Move while moving; one move when this one ends.
                     self._queued = target
@@ -334,7 +347,7 @@ class FocuserService:
             if handle is None:
                 raise ApiError(409, "not_connected", "No focuser connected")
             locked = self._locked_by
-        if locked is not None and self.on_halt_during_autofocus is not None:
+        if locked == "autofocus" and self.on_halt_during_autofocus is not None:
             self.on_halt_during_autofocus()
             with self._hub._lock:
                 return self._command(self._record["position"] or 0, None, False, False)

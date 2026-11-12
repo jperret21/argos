@@ -117,6 +117,14 @@ class ObservationService:
     def object_name(self) -> str:
         return self._record["object_name"]
 
+    def set_locked(self, reason: str | None) -> None:
+        """Wave 6a: a sequence owns the observation while it runs (``None`` unlocks)."""
+        with self._hub._lock:
+            locked = reason is not None
+            if self._record["locked"] == locked and self._record["locked_reason"] == reason:
+                return
+            self._set(locked=locked, locked_reason=reason)
+
     @property
     def target(self) -> dict[str, Any] | None:
         return self._record["target"]

@@ -45,6 +45,8 @@ from argos.server.events import EventBus
 from argos.server import profiles as profile_records
 from argos.server import runtime
 from argos.server.hub import Hub
+from argos.server.planning import PlanningService, TransitBody, TransitPlanBody
+from argos.server.sequence_plan import ExportBody, ImportBody, PlanBody, PlanService
 from argos.server.settings import Settings
 from argos.server.targets import star_from_pending
 
@@ -130,6 +132,8 @@ class JogBody(_Body):
     seq: int | None = Field(default=None, ge=0)
     #: A periodic renewal: it never restarts an axis the server stopped.
     renew: bool = False
+    #: Wave 6a: "Pause the run and slew" (the interlock, PROPOSAL §7).
+    pause_run: bool = False
 
 
 class JogStopBody(_Body):
@@ -140,6 +144,7 @@ class JogStopBody(_Body):
 
 class TrackingRateBody(_Body):
     rate: Literal["sidereal", "lunar", "solar", "king"]
+    pause_run: bool = False  # wave 6a interlock
 
 
 class FocuserMoveBody(_Body):
@@ -253,10 +258,12 @@ class CenterTargetBody(_Body):
 
 class CenterBody(_Body):
     target: CenterTargetBody | None = None
+    pause_run: bool = False  # wave 6a interlock
 
 
 class SyncBody(_Body):
     source: Literal["solution"]
+    pause_run: bool = False  # wave 6a interlock
 
 
 class OpenFitsBody(_Body):
@@ -266,10 +273,24 @@ class OpenFitsBody(_Body):
 class GotoBody(_Body):
     ra_hours: float = Field(ge=0.0, le=24.0)
     dec_deg: float = Field(ge=-90.0, le=90.0)
+    pause_run: bool = False  # wave 6a interlock
 
 
 class TrackingBody(_Body):
     enabled: bool
+    pause_run: bool = False  # wave 6a interlock
+
+
+class MotionBody(_Body):
+    """Wave 6a: Park / Unpark with "Pause the run and slew"."""
+
+    pause_run: bool = False
+
+
+class SequenceStartBody(_Body):
+    """Wave 6a (A62): absent = the draft's start time; null = now."""
+
+    start_at_utc: str | None = Field(default=None, max_length=64)
 
 
 class DeviceConnectBody(_Body):
@@ -587,6 +608,11 @@ def wire_json(message: Any) -> str:
 def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
     """Build the ASGI app. *hub* is injectable for tests; one is created otherwise."""
     hub = hub or Hub(EventBus(), sim=settings.sim, settings=settings)
+    # Wave 6a, plan: the draft and the planner (sequence_plan.py, planning.py).
+    if getattr(hub, "plan", None) is None:
+        hub.plan = PlanService(hub)  # type: ignore[attr-defined]
+    if getattr(hub, "planning", None) is None:
+        hub.planning = PlanningService(hub)  # type: ignore[attr-defined]
     auth = TokenAuth(settings.token)
 
     @asynccontextmanager
@@ -674,23 +700,23 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
 
     @api.post("/mount/goto")
     def mount_goto(body: GotoBody) -> dict[str, Any]:
-        return hub.mount_goto(body.ra_hours, body.dec_deg)
+        return hub.mount_goto(body.ra_hours, body.dec_deg, pause_run=body.pause_run)
 
     @api.post("/mount/stop")
     def mount_stop() -> dict[str, Any]:
         return hub.mount_stop()
 
     @api.post("/mount/park")
-    def mount_park() -> dict[str, Any]:
-        return hub.mount_park()
+    def mount_park(body: MotionBody | None = None) -> dict[str, Any]:
+        return hub.mount_park(pause_run=bool(body and body.pause_run))
 
     @api.post("/mount/unpark")
-    def mount_unpark() -> dict[str, Any]:
-        return hub.mount_unpark()
+    def mount_unpark(body: MotionBody | None = None) -> dict[str, Any]:
+        return hub.mount_unpark(pause_run=bool(body and body.pause_run))
 
     @api.post("/mount/tracking")
     def mount_tracking(body: TrackingBody) -> dict[str, Any]:
-        return hub.mount_tracking(body.enabled)
+        return hub.mount_tracking(body.enabled, pause_run=body.pause_run)
 
     # -- API 2 (wave 1) -------------------------------------------------------
 
@@ -712,6 +738,7 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
 
     @api.patch("/config")
     def patch_config(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        hub.sequence.guard_config(body)  # wave 6a: geometry locked during a run (S15)
         return hub.config.patch(body, source="api").to_dict()
 
     @api.get("/devices")
@@ -889,7 +916,12 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
     @api.post("/mount/jog")
     def mount_jog(body: JogBody) -> dict[str, Any]:
         return hub.mount_jog(
-            body.axis, body.rate_deg_s, client=body.client, seq=body.seq, renew=body.renew
+            body.axis,
+            body.rate_deg_s,
+            client=body.client,
+            seq=body.seq,
+            renew=body.renew,
+            pause_run=body.pause_run,
         )
 
     @api.post("/mount/jog/stop")
@@ -899,7 +931,7 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
 
     @api.post("/mount/tracking-rate")
     def mount_tracking_rate(body: TrackingRateBody) -> dict[str, Any]:
-        return hub.mount_tracking_rate(body.rate)
+        return hub.mount_tracking_rate(body.rate, pause_run=body.pause_run)
 
     @api.get("/focuser")
     def get_focuser() -> dict[str, Any]:
@@ -1065,11 +1097,105 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
     @api.post("/mount/center")
     def mount_center(body: CenterBody | None = None) -> dict[str, Any]:
         target = body.target.model_dump() if body is not None and body.target else None
-        return hub.mount_center(target)
+        return hub.mount_center(target, pause_run=bool(body and body.pause_run))
 
     @api.post("/mount/sync")
     def mount_sync(body: SyncBody) -> dict[str, Any]:
-        return hub.mount_sync()
+        return hub.mount_sync(pause_run=body.pause_run)
+
+    # -- wave 6a: sequences (A62-A64) -------------------------------------------------
+
+    @api.get("/sequence")
+    def sequence_state() -> dict[str, Any]:
+        return hub.sequence.record()
+
+    @api.post("/sequence/start")
+    def sequence_start(body: SequenceStartBody | None = None) -> dict[str, Any]:
+        given = body is not None and "start_at_utc" in body.model_fields_set
+        return hub.sequence.start(body.start_at_utc if body else None, given=given)
+
+    @api.post("/sequence/pause")
+    def sequence_pause() -> dict[str, Any]:
+        return hub.sequence.pause()
+
+    @api.post("/sequence/resume")
+    def sequence_resume() -> dict[str, Any]:
+        return hub.sequence.resume()
+
+    @api.post("/sequence/stop")
+    def sequence_stop() -> dict[str, Any]:
+        return hub.sequence.stop()
+
+    @api.get("/sequence/preflight")
+    def sequence_preflight(
+        start_at_utc: str | None = Query(default=None, max_length=64),
+    ) -> dict[str, Any]:
+        return hub.sequence.preflight(start_at_utc, given=start_at_utc is not None)
+
+    # -- wave 6a, plan: draft, presets, files, visibility, transits (A42, A59-A61, A65, A66)
+    @api.get("/sequence/plan")
+    def sequence_plan_get() -> dict[str, Any]:
+        return hub.plan.record()
+
+    @api.put("/sequence/plan")
+    def sequence_plan_put(body: PlanBody) -> dict[str, Any]:
+        return hub.plan.put(body)
+
+    @api.post("/sequence/plan/import")
+    def sequence_plan_import(body: ImportBody) -> dict[str, Any]:
+        return hub.plan.import_plan(body)
+
+    @api.post("/sequence/plan/export")
+    def sequence_plan_export(body: ExportBody) -> dict[str, Any]:
+        return hub.plan.export_plan(body)
+
+    @api.get("/sequence/presets")
+    def sequence_presets() -> dict[str, Any]:
+        return hub.plan.list_presets()
+
+    @api.get("/sequence/presets/{name}")
+    def sequence_preset_get(name: str = Path(min_length=1, max_length=120)) -> dict[str, Any]:
+        return hub.plan.get_preset(name)
+
+    @api.put("/sequence/presets/{name}")
+    def sequence_preset_put(
+        name: str = Path(min_length=1, max_length=120),
+        overwrite: bool = False,
+        body: PlanBody | None = None,
+    ) -> dict[str, Any]:
+        return hub.plan.put_preset(name, body, overwrite=overwrite)
+
+    @api.delete("/sequence/presets/{name}")
+    def sequence_preset_delete(name: str = Path(min_length=1, max_length=120)) -> dict[str, Any]:
+        return hub.plan.delete_preset(name)
+
+    @api.get("/visibility")
+    def visibility(
+        ra_hours: float = Query(ge=0.0, le=24.0),
+        dec_deg: float = Query(ge=-90.0, le=90.0),
+        night: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+        step_min: int = Query(default=10, ge=1, le=60),
+        min_alt_deg: float | None = Query(default=None, ge=0.0, le=89.0),
+    ) -> dict[str, Any]:
+        return hub.planning.visibility(ra_hours, dec_deg, night, step_min, min_alt_deg)
+
+    @api.get("/exoplanets/lookup")
+    def exoplanet_lookup(q: str = Query(default="", max_length=120)) -> dict[str, Any]:
+        return hub.planning.lookup_record(q)
+
+    @api.get("/exoplanets/suggest")
+    def exoplanet_suggest(
+        q: str = Query(default="", max_length=120), limit: int = Query(default=8, ge=1, le=50)
+    ) -> dict[str, Any]:
+        return hub.planning.suggest(q, limit=limit)
+
+    @api.post("/transit/predict")
+    def transit_predict(body: TransitBody) -> dict[str, Any]:
+        return hub.planning.predict_record(body)
+
+    @api.post("/transit/plan")
+    def transit_plan(body: TransitPlanBody) -> dict[str, Any]:
+        return hub.planning.plan(body)
 
     @app.websocket("/ws/events")
     async def ws_events(websocket: WebSocket) -> None:

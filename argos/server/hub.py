@@ -139,6 +139,7 @@ from argos.server.logbook import LOG_HISTORY, LogBook
 from argos.server.network import NetworkMonitor
 from argos.server.observation import ObservationService
 from argos.server.photometry import PhotometryService
+from argos.server.sequence import SequenceService
 from argos.server.sessions import SessionIndex, is_session
 from argos.server.settings import Settings, SimOptions
 from argos.server.site_check import SITE_KEYS, SiteCheck
@@ -346,6 +347,12 @@ class Hub:
         #: across park and reconnects; FITS TARGRA / TARGDEC).
         self._goto_target: tuple[float, float] | None = None
         self._sim_optics = SimOptics(best_focus=self._sim.focus_best)
+        #: Wave 6a: the simulator replay source (``--sim-replay``), checked at start-up.
+        self._replay = None
+        if self._sim.replay_dir is not None:
+            from argos.server.devices.sim_replay import ReplaySource
+
+            self._replay = ReplaySource(self._sim.replay_dir)
         self.wheel = FilterWheelService(self)
         self.wheel.on_settled = self._on_wheel_settled
         self.focuser = FocuserService(self)
@@ -375,6 +382,8 @@ class Hub:
         self.photometry = PhotometryService(self)
         #: The newest ``frame_metrics`` record (replayed to a client joining mid-run).
         self._last_frame_metrics: dict[str, Any] | None = None
+        # -- wave 6a (Sequences: run, interlock, preflight) -----------------------
+        self.sequence = SequenceService(self)
 
         self.config.add_listener(self._on_config_changed)
         if self.config.load_error:
@@ -398,6 +407,7 @@ class Hub:
 
     def shutdown(self) -> None:
         """Release everything at server exit."""
+        self.sequence.close()  # wave 6a: stop a run first, its subs complete on disk
         self.field.close()
         self.photometry.close()
         self.jobs.shutdown()
@@ -484,6 +494,12 @@ class Hub:
             "focuser": self.focuser.record(),
             "autofocus": self._autofocus_record(),
             "observation": self.observation.record(),
+            # wave 6a: whether a sequence runs (the full record is the ``sequence`` event)
+            "sequence": (
+                self.sequence.summary()
+                if hasattr(self, "sequence")
+                else {"state": "idle", "active": False, "run_id": None, "object_name": None}
+            ),
         }
 
     def status(self) -> dict[str, Any]:
@@ -521,6 +537,8 @@ class Hub:
             snapshots.extend(self.photometry.snapshots(seq))
             if self._last_frame_metrics is not None:
                 snapshots.append(("frame_metrics", seq, dict(self._last_frame_metrics)))
+            # Wave 6a: the run as it stands (a page opened mid-run).
+            snapshots.extend(self.sequence.snapshots(seq))
             return snapshots
 
     def devices(self) -> dict[str, Any]:
@@ -788,6 +806,18 @@ class Hub:
         """Create and connect one device handle (blocking; never under the lock)."""
         if link.mode == "simulator":
             sim = self._sim
+            if device_id == "camera" and self._replay is not None:
+                from argos.server.devices.sim_replay import ReplayCamera
+
+                return ReplayCamera(self._replay)
+            if device_id == "mount" and self._replay is not None:
+                from argos.server.devices.sim_replay import ReplayMount
+
+                return ReplayMount(
+                    self._replay,
+                    slew_rate_deg_s=sim.slew_rate_deg_s,
+                    poll_interval_s=sim.mount_poll_s,
+                )
             if device_id == "camera":
                 from argos.server.devices.sim_camera import SimCamera
 
@@ -1079,6 +1109,9 @@ class Hub:
         """Stop the device's threads, close it; idempotent (stops the auto-retry too)."""
         label = LABELS[device_id]
         job = cancel = poller = stop = None
+        if hasattr(self, "sequence"):
+            # Wave 6a: a run that needs this device ends now (its exposure aborted).
+            self.sequence.device_lost(device_id)
         if device_id == "mount":
             # H3: a jogging axis is stopped while the handle can still reach the mount.
             self.jog.stop_all_before("Mount disconnected")
@@ -1743,6 +1776,8 @@ class Hub:
             outcome = {
                 "not_connected": "mount not connected",
                 "parked": "mount parked",
+                # wave 6a interlock: the bridge has no answer channel, only this line
+                "run_active": "a sequence is running — pause it first",
             }.get(exc.code, exc.message)
             level = "warning"
         except Exception as exc:  # never kill the bridge's callback thread
@@ -2801,8 +2836,14 @@ class Hub:
         gain: int | None = None,
         half_range: int | None = None,
         num_steps: int | None = None,
+        *,
+        for_sequence: bool = False,
     ) -> dict[str, Any]:
-        """``POST /api/autofocus/start`` (``acquisition_engine.py:923-961``)."""
+        """``POST /api/autofocus/start`` (``acquisition_engine.py:923-961``).
+
+        *for_sequence*: a run hands its camera over (``_on_seq_autofocus_due``,
+        ``begin_sequence_autofocus``); the camera goes back to the run at the end.
+        """
         with self._lock:
             if self._slots["camera"].state != "connected" or self._camera is None:
                 raise ApiError(409, "not_connected", "Autofocus needs the camera connected")
@@ -2817,10 +2858,12 @@ class Hub:
                     else "Autofocus is already running."
                 )
                 raise ApiError(409, "busy", message, details={"owner": "autofocus"})
-            if self._camera_state.owner == "sequence":
+            if self._camera_state.owner == "sequence" and not for_sequence:
                 raise ApiError(
                     409, "busy", "A sequence owns the camera.", details={"owner": "sequence"}
                 )
+            if for_sequence and self._camera_state.owner != "sequence":
+                raise ApiError(409, "busy", "The sequence no longer owns the camera.")
             if self.wheel.has_dark_slot:
                 # A sweep behind the opaque slot only measures hot pixels and
                 # ends "flat HFD curve" without naming the cause (review).
@@ -2855,7 +2898,7 @@ class Hub:
                 half_range=int(half_range) if half_range is not None else 2000,
                 num_steps=int(num_steps) if num_steps is not None else 9,
             )
-            preempt = self._camera_state.owner in ("live", "single")
+            preempt = self._camera_state.owner in ("live", "single") and not for_sequence
         if preempt:
             self._stop_job(join_s=_STOP_JOIN_S)
             with self._lock:
@@ -2991,14 +3034,19 @@ class Hub:
             if self._autofocus is run:
                 self._autofocus = None
                 self._af_record = dict(run.record)
+            # Wave 6a: a mid-run autofocus gives the camera back to the run.
+            back_to_run = self.sequence.holds_camera()
             if self._camera_state.owner == "autofocus":
-                changes: dict[str, Any] = {"owner": "idle"}
+                changes: dict[str, Any] = {"owner": "sequence" if back_to_run else "idle"}
                 if self._camera_state.state in CAMERA_BUSY:
                     changes["state"] = "idle"
                 self._refresh_camera(**changes)
             self._publish_status()
-        self.focuser.lock(None)
+        self.focuser.lock("sequence" if back_to_run else None)
         self.focuser.wake()
+        # Qt _on_af_finished: the focus changed, the series FWHM is sampled again (P7).
+        self.photometry.reset_series_fwhm()
+        self.sequence.on_autofocus_end()
         record = run.record
         message = record.get("message") or ""
         level = {"done": "ok", "rejected": "warning", "cancelled": "info", "failed": "error"}
@@ -3063,7 +3111,26 @@ class Hub:
                 new = dataclasses.replace(new, target=target)
             return self._apply_mount(new, telemetry=False)
 
-    def mount_goto(self, ra_hours: float, dec_deg: float) -> dict:
+    def refuse_if_run_active(self, what: str) -> None:
+        """409 ``run_active`` while a sequence is active (the plan half's lock, Q-P9)."""
+        with self._lock:
+            state = self.sequence.record()
+        if state["active"]:
+            raise ApiError(
+                409,
+                "run_active",
+                f"A sequence is running — {what} is locked until it ends.",
+                details={"state": state["state"], "run_id": state["run_id"]},
+            )
+
+    def _motion_guard(self, action: str, pause_run: bool) -> None:
+        """The interlock (PROPOSAL §7, D2): the mount first, so a pause is never for nothing."""
+        with self._lock:
+            self._require("mount")
+        self.sequence.guard_motion(action, pause_run)
+
+    def mount_goto(self, ra_hours: float, dec_deg: float, pause_run: bool = False) -> dict:
+        self._motion_guard("GoTo", pause_run)  # wave 6a interlock (D2)
         ra = float(ra_hours) % 24.0
         with self._lock:
             self._require("mount")
@@ -3094,9 +3161,10 @@ class Hub:
         self.jog.stop_all_before("Abort")
         return self._mount_command("stop")
 
-    def mount_park(self) -> dict:
+    def mount_park(self, pause_run: bool = False) -> dict:
         with self._lock:
             self._require("mount")
+        self._motion_guard("Park", pause_run)
         self.jog.stop_all_before("Park")
         result = self._mount_command("park", target=None)
         self.log("info", "Parking", source="mount", topic="mount")
@@ -3125,9 +3193,10 @@ class Hub:
         self.log("error", f"{action}: {exc}", source="mount", topic="mount")
         return ApiError(502, "device_error", str(exc) or action)
 
-    def mount_center(self, target: dict[str, Any] | None = None) -> dict:
+    def mount_center(self, target: dict[str, Any] | None = None, pause_run: bool = False) -> dict:
         """``POST /api/mount/center`` (``_center_selected_target``, imaging_page.py:2692-2715;
         ``center_target_from_solution``, device_session.py:734-765)."""
+        self._motion_guard("Centre", pause_run)
         mount, generation = self._require_unblocked_mount()
         # The current frame's centre through the tracked solution (S30).
         solved_ra, solved_dec = self.field.solved_centre()
@@ -3188,9 +3257,10 @@ class Hub:
                 self.set_activity("Slewing", source="mount", topic="mount", log=False)
         return state.to_dict()
 
-    def mount_sync(self) -> dict:
+    def mount_sync(self, pause_run: bool = False) -> dict:
         """``POST /api/mount/sync`` ``{"source": "solution"}`` (Q-O3: Sync to plate
         solution, no slew; ``telescope.py:540-562``)."""
+        self._motion_guard("Sync", pause_run)
         mount, generation = self._require_unblocked_mount()
         ra_h, dec_d = self.field.solved_centre()
         self.jog.stop_all_before("Sync")
@@ -3216,10 +3286,13 @@ class Hub:
         self.field.rebase_mount_reference(state.ra_hours, state.dec_deg)
         return state.to_dict()
 
-    def mount_unpark(self) -> dict:
+    def mount_unpark(self, pause_run: bool = False) -> dict:
+        self._motion_guard("Unpark", pause_run)
         return self._mount_command("unpark")
 
-    def mount_tracking(self, enabled: bool) -> dict:
+    def mount_tracking(self, enabled: bool, pause_run: bool = False) -> dict:
+        if not enabled:  # tracking on keeps the field where it is
+            self._motion_guard("Tracking off", pause_run)
         return self._mount_command("set_tracking", bool(enabled))
 
     # -- wave 3: jog and tracking rate (A29-A31) ---------------------------------
@@ -3231,8 +3304,10 @@ class Hub:
         client: str | None = None,
         seq: int | None = None,
         renew: bool = False,
+        pause_run: bool = False,
     ) -> dict:
         """``POST /api/mount/jog``: start or renew one axis (dead-man in ``jog.py``)."""
+        self._motion_guard("Jog", pause_run)
         return self.jog.jog(axis, rate_deg_s, client=client, seq=seq, renew=renew)
 
     def mount_jog_stop(
@@ -3250,8 +3325,9 @@ class Hub:
         if isinstance(message, dict) and message.get("type") == "jog_stop":
             self.jog.client_gone(client, "the client left the window")
 
-    def mount_tracking_rate(self, rate: str) -> dict:
+    def mount_tracking_rate(self, rate: str, pause_run: bool = False) -> dict:
         """``POST /api/mount/tracking-rate`` (``telescope.py:610-634``), read back (H6)."""
+        self._motion_guard("Tracking rate", pause_run)
         with self._lock:
             mount = self._require("mount")
             generation = self._slots["mount"].generation

@@ -93,7 +93,7 @@ class FrameSettings:
     filter: str
     object_name: str
     light: bool
-    origin: Literal["single", "live", "autofocus"]
+    origin: Literal["single", "live", "autofocus", "sequence"]
     #: Set at arrival: this frame is the one a Take shot saves.
     save: bool = False
     #: DATE-OBS of the frame: taken just before ``StartExposure``.

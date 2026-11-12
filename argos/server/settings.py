@@ -33,6 +33,9 @@ class SimOptions:
     wheel_slot_s: float = 0.6
     #: Wave 3. Speed of the simulated focuser (steps/s).
     focuser_speed_steps_s: float = 2_000.0
+    #: Wave 6a. A folder of real FITS copies the simulated camera plays in
+    #: order, the simulated mount reporting their pointing (``--sim-replay``).
+    replay_dir: Path | None = None
 
 
 @dataclass(frozen=True)

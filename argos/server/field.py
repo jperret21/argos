@@ -469,6 +469,15 @@ class FieldService:
     def solved(self) -> bool:
         return self._wcs is not None
 
+    def reference_solution(self) -> tuple[Any, int] | None:
+        """The reference WCS and its generation, or None (wave 6a: a sequence measures
+        each saved sub through it, as Qt's ``_on_seq_frame_saved`` uses
+        ``self._astrometry.wcs``)."""
+        with self._hub._lock:
+            if self._wcs is None:
+                return None
+            return self._wcs, self._generation
+
     def _tracked_wcs(self):
         """``tracked_wcs`` (``acquisition_engine.py:1584-1593``). Lock held."""
         if self._wcs is None or self._tracker is None:

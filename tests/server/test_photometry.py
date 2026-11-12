@@ -909,6 +909,41 @@ def test_recommend_keeps_the_ensemble_when_no_vsp_star_passes_the_gate(
     )
 
 
+def test_identifying_the_field_keeps_the_check_star(make_client, tmp_path, monkeypatch):
+    """Release S46 (parity): the VSP proposal carries the check star too, and
+    set_role() replaced the check (same AUID) with a comparison."""
+    import argos.server.targets as targets_module
+
+    hub = science_client(make_client, tmp_path, connect=()).app.state.hub
+    target = TargetStar(role="target", ra_deg=10.0, dec_deg=20.0, auid="000-VAR-000")
+    check = TargetStar(role="check", ra_deg=10.1, dec_deg=20.0, auid="000-CHK-001")
+    tset = TargetSet(object_name="V1", stars=[target, check])
+    proposal = [TargetStar(role="comparison", ra_deg=10.1, dec_deg=20.0, auid="000-CHK-001")]
+    proposal += [
+        TargetStar(role="comparison", ra_deg=10.0 + k / 50, dec_deg=20.1, auid=f"000-CMP-{k}")
+        for k in range(1, 6)
+    ]
+    monkeypatch.setattr(
+        targets_module, "auto_comparison_stars", lambda *a, count, **k: proposal[:count]
+    )
+    monkeypatch.setattr(hub.field, "comparisons", lambda: [object()])
+    monkeypatch.setattr(hub.field, "pilot", lambda: None)
+    monkeypatch.setattr(hub.targets, "_pilot_quality", lambda *a: (None, None))
+    real_get = hub.config.get
+    monkeypatch.setattr(
+        hub.config,
+        "get",
+        lambda key, default=None: (
+            3 if key == "photometry.auto_comparisons" else real_get(key, default)
+        ),
+    )
+
+    assert hub.targets._auto_select_comparisons(tset, target) == 3
+
+    assert [s.auid for s in tset.by_role("check")] == ["000-CHK-001"]  # [] before the fix
+    assert [s.auid for s in tset.by_role("comparison")] == ["000-CMP-1", "000-CMP-2", "000-CMP-3"]
+
+
 _BJD_OFFLINE = """
 import json, warnings
 warnings.simplefilter("ignore")

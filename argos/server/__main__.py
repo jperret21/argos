@@ -86,6 +86,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         metavar="S",
         help="TCP pre-check of an Alpaca address before a device connect (default 3 s)",
     )
+    parser.add_argument(
+        "--sim-replay",
+        type=Path,
+        metavar="DIR",
+        help="simulator: play the FITS frames of DIR (copies of real frames) in file-name "
+        "order, the simulated mount reporting their pointing (wave 6a)",
+    )
     parser.add_argument("--version", action="version", version=f"ARGOS {__version__}")
     args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
@@ -94,6 +101,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         parser.error("--dev-token must not be empty")
     if not 0.1 <= args.connect_timeout <= 60:
         parser.error("--connect-timeout must be between 0.1 and 60 seconds")
+    if args.sim_replay is not None:
+        args.sim_replay = args.sim_replay.expanduser()
+        if not args.sim_replay.is_absolute() or not args.sim_replay.is_dir():
+            parser.error("--sim-replay must name an existing folder by its absolute path")
     return args
 
 
@@ -127,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from argos.server.app import create_app
     from argos.server.auth import make_token
-    from argos.server.settings import Settings
+    from argos.server.settings import Settings, SimOptions
 
     token = args.dev_token.strip() if args.dev_token else make_token()
     if args.dev_token and len(token) < _SHORT_TOKEN:
@@ -157,10 +168,15 @@ def main(argv: list[str] | None = None) -> int:
         log_file=log_file,
         manage_process=True,
         connect_timeout_s=args.connect_timeout,
+        sim=SimOptions(replay_dir=args.sim_replay),
     )
     # The hub reads the configuration and applies the log level, the
     # telescope profile and the data paths before the first request.
-    app = create_app(settings)
+    try:
+        app = create_app(settings)
+    except ValueError as exc:  # wave 6a: an unusable --sim-replay folder
+        print(f"argos.server: {exc}", file=sys.stderr)
+        return 2
     logger.info("Configuration %s; log %s", config_dir / "config.json", log_file or "stderr only")
     config = uvicorn.Config(
         app,

@@ -191,6 +191,12 @@ KEYS: tuple[KeyMeta, ...] = (
        "Height above sea level. Written to FITS SITEELEV.",
        "observer_site", used_by=("FITS SITEELEV", "airmass"),
        min=-500.0, max=9000.0, step=0.1, unit="m", personal=True),  # configuration_page.py:179
+    # Wave 6a (Q-P6): new, the web UI's only (the Qt app draws a fixed 30° line).
+    _k("site.min_altitude_deg", "float", 30.0, "Minimum altitude",
+       "Lowest altitude worth observing at this site: Plan's visibility window and the "
+       "transit prediction use it.",
+       "observer_site", used_by=("Plan visibility", "transit prediction"),
+       min=0.0, max=85.0, step=1.0, unit="°"),
     _k("site.favorites", "list", [], "Saved sites",
        "Saved observing sites: name, latitude, longitude, elevation.",
        "observer_site", used_by=("Settings › Observer & site",)),
@@ -583,7 +589,10 @@ def _path(meta: KeyMeta, value: Any) -> tuple[str, str | None]:
         raise InvalidValue("must not be empty")
     if len(text) > 4096 or "\0" in text:
         raise InvalidValue("is not a valid path")
-    path = Path(text).expanduser()
+    try:
+        path = Path(text).expanduser()
+    except RuntimeError as exc:  # "~nosuchuser/…": no such home folder
+        raise InvalidValue("names the home folder of an unknown user") from exc
     if not path.is_absolute():
         raise InvalidValue("must be an absolute path")
     try:
