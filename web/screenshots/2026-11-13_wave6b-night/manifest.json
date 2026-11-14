@@ -1,0 +1,975 @@
+{
+ "title": "Wave 6b: The night",
+ "date": "2026-11-13",
+ "summary": "Wave 6b of web/spec/README.md section 7 at integration: Observe Run mode (the live light curve under the image with the run's mini charts), the drawer's curve tools in its tab row, the Field band without its empty strip, Watch, the attention system (server rules, status-bar chip and list, Run card items, Watch row, Web Audio tones Off / Soft / Normal), keep-awake (caffeinate held only during a run, the preflight row), the end-of-night wrap-up with tonight's calibration, one curve per star and filter (S49) with the plan warning, the draft's start time and the Stellarium refusal toast. Against the headless server in simulator replay mode on APFS clones of real RR Lyr raw frames (2026-09-25, frames 1-20 and 146-152, 146-165 for the fixer's re-captures of 2026-11-14 after the reviews; Settings site replaced by public Paris coordinates; check star 000-BJW-666 assigned on the copies): the HFD rise fires at frame 150 as the science review's replay says, is heard, acknowledged from another client and clears; the Run band equals the server's points. Device scale 1; 23 scenes in the three themes at 1 440 x 900 and in Observatory at 1 280 x 800 (the Stellarium toast and the LP curve in Observatory 1 440 only).",
+ "scale": 1,
+ "shots": [
+  {
+   "file": "observatory-1440x900-01-run-suggested.png",
+   "caption": "A run starts while Observe is in Framing mode: the chip 'Run started · RR Lyr · 40 frames [Run ⌥4] [×]' at the foot of the image proposes Run mode and never switches by itself (D1); the Run card heads the rail ('Last frame', the one name of the age) and the status bar carries the run chip, the frame number never squeezed out. (Observatory, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "run",
+    "framing",
+    "suggestion",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-01-run-suggested.png",
+   "caption": "A run starts while Observe is in Framing mode: the chip 'Run started · RR Lyr · 40 frames [Run ⌥4] [×]' at the foot of the image proposes Run mode and never switches by itself (D1); the Run card heads the rail ('Last frame', the one name of the age) and the status bar carries the run chip, the frame number never squeezed out. (Charcoal, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "run",
+    "framing",
+    "suggestion",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-01-run-suggested.png",
+   "caption": "A run starts while Observe is in Framing mode: the chip 'Run started · RR Lyr · 40 frames [Run ⌥4] [×]' at the foot of the image proposes Run mode and never switches by itself (D1); the Run card heads the rail ('Last frame', the one name of the age) and the status bar carries the run chip, the frame number never squeezed out. (Night Red, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "run",
+    "framing",
+    "suggestion",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-01-run-suggested.png",
+   "caption": "A run starts while Observe is in Framing mode: the chip 'Run started · RR Lyr · 40 frames [Run ⌥4] [×]' at the foot of the image proposes Run mode and never switches by itself (D1); the Run card heads the rail ('Last frame', the one name of the age) and the status bar carries the run chip, the frame number never squeezed out. (Observatory, 1280 x 800.)",
+   "tags": [
+    "observe",
+    "run",
+    "framing",
+    "suggestion",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-02-run-mode-live-curve.png",
+   "caption": "Observe in Run mode (Alt+4) during a replayed RR Lyr run: the image stays the hero; the band under it is the live light curve (target facet, check facet with its ±1σ band) beside the run's mini charts (n / N, last-frame age against the cadence, HFD, star count and sky sparklines). The readouts are the server's points (at integration, Copy data against GET /api/photometry/live: 108 values, 0 difference). The image chip reads RUN between subs: a run's sub is judged against the run's cadence, not 3 × its exposure (design review). (Observatory, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "run",
+    "light-curve",
+    "band",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-02-run-mode-live-curve.png",
+   "caption": "Observe in Run mode (Alt+4) during a replayed RR Lyr run: the image stays the hero; the band under it is the live light curve (target facet, check facet with its ±1σ band) beside the run's mini charts (n / N, last-frame age against the cadence, HFD, star count and sky sparklines). The readouts are the server's points (at integration, Copy data against GET /api/photometry/live: 108 values, 0 difference). The image chip reads RUN between subs: a run's sub is judged against the run's cadence, not 3 × its exposure (design review). (Charcoal, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "run",
+    "light-curve",
+    "band",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-02-run-mode-live-curve.png",
+   "caption": "Observe in Run mode (Alt+4) during a replayed RR Lyr run: the image stays the hero; the band under it is the live light curve (target facet, check facet with its ±1σ band) beside the run's mini charts (n / N, last-frame age against the cadence, HFD, star count and sky sparklines). The readouts are the server's points (at integration, Copy data against GET /api/photometry/live: 108 values, 0 difference). The image chip reads RUN between subs: a run's sub is judged against the run's cadence, not 3 × its exposure (design review). (Night Red, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "run",
+    "light-curve",
+    "band",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-02-run-mode-live-curve.png",
+   "caption": "Observe in Run mode (Alt+4) during a replayed RR Lyr run: the image stays the hero; the band under it is the live light curve (target facet, check facet with its ±1σ band) beside the run's mini charts (n / N, last-frame age against the cadence, HFD, star count and sky sparklines). The readouts are the server's points (at integration, Copy data against GET /api/photometry/live: 108 values, 0 difference). The image chip reads RUN between subs: a run's sub is judged against the run's cadence, not 3 × its exposure (design review). (Observatory, 1280 x 800.)",
+   "tags": [
+    "observe",
+    "run",
+    "light-curve",
+    "band",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-02b-run-band-short.png",
+   "caption": "The Run band dragged below 150 px becomes one summary row (filter, target magnitude, check σ, newest time, run n / N with its age bar): no empty strip under it. (Observatory, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "run",
+    "band",
+    "compact",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-02b-run-band-short.png",
+   "caption": "The Run band dragged below 150 px becomes one summary row (filter, target magnitude, check σ, newest time, run n / N with its age bar): no empty strip under it. (Charcoal, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "run",
+    "band",
+    "compact",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-02b-run-band-short.png",
+   "caption": "The Run band dragged below 150 px becomes one summary row (filter, target magnitude, check σ, newest time, run n / N with its age bar): no empty strip under it. (Night Red, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "run",
+    "band",
+    "compact",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-02b-run-band-short.png",
+   "caption": "The Run band dragged below 150 px becomes one summary row (filter, target magnitude, check σ, newest time, run n / N with its age bar): no empty strip under it. (Observatory, 1280 x 800.)",
+   "tags": [
+    "observe",
+    "run",
+    "band",
+    "compact",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-03-drawer-light-curve-tools.png",
+   "caption": "The drawer's Light curve tab with the plot tools in the tab row (W5 carry-over): the ensemble verdict, the time axis UTC / JD / BJD, zoom, follow, whole run, error bars, relative flux and Copy data. With the drawer open the Run band (78 px) keeps its summary row on top and fills the rest with the target's newest points, not an empty strip (design review); the unselected tabs keep only their icons below 1 000 px. (Observatory, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "drawer",
+    "light-curve",
+    "tools",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-03-drawer-light-curve-tools.png",
+   "caption": "The drawer's Light curve tab with the plot tools in the tab row (W5 carry-over): the ensemble verdict, the time axis UTC / JD / BJD, zoom, follow, whole run, error bars, relative flux and Copy data. With the drawer open the Run band (78 px) keeps its summary row on top and fills the rest with the target's newest points, not an empty strip (design review); the unselected tabs keep only their icons below 1 000 px. (Charcoal, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "drawer",
+    "light-curve",
+    "tools",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-03-drawer-light-curve-tools.png",
+   "caption": "The drawer's Light curve tab with the plot tools in the tab row (W5 carry-over): the ensemble verdict, the time axis UTC / JD / BJD, zoom, follow, whole run, error bars, relative flux and Copy data. With the drawer open the Run band (78 px) keeps its summary row on top and fills the rest with the target's newest points, not an empty strip (design review); the unselected tabs keep only their icons below 1 000 px. (Night Red, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "drawer",
+    "light-curve",
+    "tools",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-03-drawer-light-curve-tools.png",
+   "caption": "The drawer's Light curve tab with the plot tools in the tab row (W5 carry-over): the ensemble verdict, the time axis UTC / JD / BJD, zoom, follow, whole run, error bars, relative flux and Copy data. With the drawer open the Run band (78 px) keeps its summary row on top and fills the rest with the target's newest points, not an empty strip (design review); the unselected tabs keep only their icons below 1 000 px. (Observatory, 1280 x 800.)",
+   "tags": [
+    "observe",
+    "drawer",
+    "light-curve",
+    "tools",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-04-field-band.png",
+   "caption": "Field mode during the run: the comparison candidates band (54 candidates, the ensemble, the variables and the stars) under the identified image. (Observatory, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "field",
+    "band",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-04-field-band.png",
+   "caption": "Field mode during the run: the comparison candidates band (54 candidates, the ensemble, the variables and the stars) under the identified image. (Charcoal, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "field",
+    "band",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-04-field-band.png",
+   "caption": "Field mode during the run: the comparison candidates band (54 candidates, the ensemble, the variables and the stars) under the identified image. (Night Red, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "field",
+    "band",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-04-field-band.png",
+   "caption": "Field mode during the run: the comparison candidates band (54 candidates, the ensemble, the variables and the stars) under the identified image. (Observatory, 1280 x 800.)",
+   "tags": [
+    "observe",
+    "field",
+    "band",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-04b-field-band-short-no-empty-strip.png",
+   "caption": "The Field band dragged below 150 px is one 36 px summary row (ensemble, candidates, measuring status): the empty strip between 36 and 150 px is gone (W5 carry-over). (Observatory, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "field",
+    "band",
+    "compact",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-04b-field-band-short-no-empty-strip.png",
+   "caption": "The Field band dragged below 150 px is one 36 px summary row (ensemble, candidates, measuring status): the empty strip between 36 and 150 px is gone (W5 carry-over). (Charcoal, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "field",
+    "band",
+    "compact",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-04b-field-band-short-no-empty-strip.png",
+   "caption": "The Field band dragged below 150 px is one 36 px summary row (ensemble, candidates, measuring status): the empty strip between 36 and 150 px is gone (W5 carry-over). (Night Red, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "field",
+    "band",
+    "compact",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-04b-field-band-short-no-empty-strip.png",
+   "caption": "The Field band dragged below 150 px is one 36 px summary row (ensemble, candidates, measuring status): the empty strip between 36 and 150 px is gone (W5 carry-over). (Observatory, 1280 x 800.)",
+   "tags": [
+    "observe",
+    "field",
+    "band",
+    "compact",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-05-watch.png",
+   "caption": "Watch (W), the run read from 2 m: state, n / N frames, the last-frame age against the cadence, the target's magnitude with its error and filter, the check's σ, the end time, the live curve drawn at Watch's scale (22 px ticks, 30 px names, the newest point's ring kept clear), stars, HFD (2 decimals, as the status bar) and altitude tiles; the footer says 'All linked', that the computer is kept awake (caffeinate) and the screen wake lock held, and the alert sound level (a click cycles it). Only W, Esc, ? and Mod+K act. (Observatory, 1440 x 900.)",
+   "tags": [
+    "watch",
+    "run",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-05-watch.png",
+   "caption": "Watch (W), the run read from 2 m: state, n / N frames, the last-frame age against the cadence, the target's magnitude with its error and filter, the check's σ, the end time, the live curve drawn at Watch's scale (22 px ticks, 30 px names, the newest point's ring kept clear), stars, HFD (2 decimals, as the status bar) and altitude tiles; the footer says 'All linked', that the computer is kept awake (caffeinate) and the screen wake lock held, and the alert sound level (a click cycles it). Only W, Esc, ? and Mod+K act. (Charcoal, 1440 x 900.)",
+   "tags": [
+    "watch",
+    "run",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-05-watch.png",
+   "caption": "Watch (W), the run read from 2 m: state, n / N frames, the last-frame age against the cadence, the target's magnitude with its error and filter, the check's σ, the end time, the live curve drawn at Watch's scale (22 px ticks, 30 px names, the newest point's ring kept clear), stars, HFD (2 decimals, as the status bar) and altitude tiles; the footer says 'All linked', that the computer is kept awake (caffeinate) and the screen wake lock held, and the alert sound level (a click cycles it). Only W, Esc, ? and Mod+K act. (Night Red, 1440 x 900.)",
+   "tags": [
+    "watch",
+    "run",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-05-watch.png",
+   "caption": "Watch (W), the run read from 2 m: state, n / N frames, the last-frame age against the cadence, the target's magnitude with its error and filter, the check's σ, the end time, the live curve drawn at Watch's scale (22 px ticks, 30 px names, the newest point's ring kept clear), stars, HFD (2 decimals, as the status bar) and altitude tiles; the footer says 'All linked', that the computer is kept awake (caffeinate) and the screen wake lock held, and the alert sound level (a click cycles it). Only W, Esc, ? and Mod+K act. (Observatory, 1280 x 800.)",
+   "tags": [
+    "watch",
+    "run",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-06-watch-dimmed-30.png",
+   "caption": "Watch dimmed to 30 % (Dim 100 / 60 / 30 %): the same layout through a brightness filter. (Observatory, 1440 x 900.)",
+   "tags": [
+    "watch",
+    "dim",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-06-watch-dimmed-30.png",
+   "caption": "Watch dimmed to 30 % (Dim 100 / 60 / 30 %): the same layout through a brightness filter. (Charcoal, 1440 x 900.)",
+   "tags": [
+    "watch",
+    "dim",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-06-watch-dimmed-30.png",
+   "caption": "Watch dimmed to 30 % (Dim 100 / 60 / 30 %): the same layout through a brightness filter. (Night Red, 1440 x 900.)",
+   "tags": [
+    "watch",
+    "dim",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-06-watch-dimmed-30.png",
+   "caption": "Watch dimmed to 30 % (Dim 100 / 60 / 30 %): the same layout through a brightness filter. (Observatory, 1280 x 800.)",
+   "tags": [
+    "watch",
+    "dim",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-07-watch-attention-row.png",
+   "caption": "Watch with an open Attention item: the first row becomes the item (the upright mark and the word ATTENTION, 'HFD 23.6 px · 2.7× baseline', rule, time and frame) with Acknowledge, and keeps the last-frame age and n / N side by side at 48 px (D3); the HFD tile draws the server's rule as the Run band does (dashed, warning tone). (Observatory, 1440 x 900.)",
+   "tags": [
+    "watch",
+    "attention",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-07-watch-attention-row.png",
+   "caption": "Watch with an open Attention item: the first row becomes the item (the upright mark and the word ATTENTION, 'HFD 23.6 px · 2.7× baseline', rule, time and frame) with Acknowledge, and keeps the last-frame age and n / N side by side at 48 px (D3); the HFD tile draws the server's rule as the Run band does (dashed, warning tone). (Charcoal, 1440 x 900.)",
+   "tags": [
+    "watch",
+    "attention",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-07-watch-attention-row.png",
+   "caption": "Watch with an open Attention item: the first row becomes the item (the upright mark and the word ATTENTION, 'HFD 23.6 px · 2.7× baseline', rule, time and frame) with Acknowledge, and keeps the last-frame age and n / N side by side at 48 px (D3); the HFD tile draws the server's rule as the Run band does (dashed, warning tone). (Night Red, 1440 x 900.)",
+   "tags": [
+    "watch",
+    "attention",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-07-watch-attention-row.png",
+   "caption": "Watch with an open Attention item: the first row becomes the item (the upright mark and the word ATTENTION, 'HFD 23.6 px · 2.7× baseline', rule, time and frame) with Acknowledge, and keeps the last-frame age and n / N side by side at 48 px (D3); the HFD tile draws the server's rule as the Run band does (dashed, warning tone). (Observatory, 1280 x 800.)",
+   "tags": [
+    "watch",
+    "attention",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-07b-watch-critical-row.png",
+   "caption": "Watch with a Critical item (the mount disconnected mid-run): filled disc, the word CRITICAL, Acknowledge; the age and n / N stay in the row, '+1 more' for the HFD rise also open. The footer names the link that is down ('Mount not connected') and folds the others into '2 linked' (their names in the tooltip): no word cut at 1 280 px; ALT reads '—', 'mount not connected'. (Observatory, 1440 x 900.)",
+   "tags": [
+    "watch",
+    "attention",
+    "critical",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-07b-watch-critical-row.png",
+   "caption": "Watch with a Critical item (the mount disconnected mid-run): filled disc, the word CRITICAL, Acknowledge; the age and n / N stay in the row, '+1 more' for the HFD rise also open. The footer names the link that is down ('Mount not connected') and folds the others into '2 linked' (their names in the tooltip): no word cut at 1 280 px; ALT reads '—', 'mount not connected'. (Charcoal, 1440 x 900.)",
+   "tags": [
+    "watch",
+    "attention",
+    "critical",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-07b-watch-critical-row.png",
+   "caption": "Watch with a Critical item (the mount disconnected mid-run): filled disc, the word CRITICAL, Acknowledge; the age and n / N stay in the row, '+1 more' for the HFD rise also open. The footer names the link that is down ('Mount not connected') and folds the others into '2 linked' (their names in the tooltip): no word cut at 1 280 px; ALT reads '—', 'mount not connected'. (Night Red, 1440 x 900.)",
+   "tags": [
+    "watch",
+    "attention",
+    "critical",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-07b-watch-critical-row.png",
+   "caption": "Watch with a Critical item (the mount disconnected mid-run): filled disc, the word CRITICAL, Acknowledge; the age and n / N stay in the row, '+1 more' for the HFD rise also open. The footer names the link that is down ('Mount not connected') and folds the others into '2 linked' (their names in the tooltip): no word cut at 1 280 px; ALT reads '—', 'mount not connected'. (Observatory, 1280 x 800.)",
+   "tags": [
+    "watch",
+    "attention",
+    "critical",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-08-settings-alerts.png",
+   "caption": "Settings › Alerts: the alert sound Off / Soft / Normal, a tone for info items, the critical repeat, Test sound per level, keep the computer awake during a run, and the rule thresholds the server evaluates on every frame. (Observatory, 1440 x 900.)",
+   "tags": [
+    "settings",
+    "alerts",
+    "sound",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-08-settings-alerts.png",
+   "caption": "Settings › Alerts: the alert sound Off / Soft / Normal, a tone for info items, the critical repeat, Test sound per level, keep the computer awake during a run, and the rule thresholds the server evaluates on every frame. (Charcoal, 1440 x 900.)",
+   "tags": [
+    "settings",
+    "alerts",
+    "sound",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-08-settings-alerts.png",
+   "caption": "Settings › Alerts: the alert sound Off / Soft / Normal, a tone for info items, the critical repeat, Test sound per level, keep the computer awake during a run, and the rule thresholds the server evaluates on every frame. (Night Red, 1440 x 900.)",
+   "tags": [
+    "settings",
+    "alerts",
+    "sound",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-08-settings-alerts.png",
+   "caption": "Settings › Alerts: the alert sound Off / Soft / Normal, a tone for info items, the critical repeat, Test sound per level, keep the computer awake during a run, and the rule thresholds the server evaluates on every frame. (Observatory, 1280 x 800.)",
+   "tags": [
+    "settings",
+    "alerts",
+    "sound",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-09-plan-preflight-keep-awake.png",
+   "caption": "Plan's preflight before a run: 'Computer sleep — OK: the computer is kept awake during the run (caffeinate). Keep its lid open: a closed lid still sleeps most laptops.' (the site note comes from the test setup, whose Settings site is replaced by public Paris coordinates). (Observatory, 1440 x 900.)",
+   "tags": [
+    "plan",
+    "preflight",
+    "keep-awake",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-09-plan-preflight-keep-awake.png",
+   "caption": "Plan's preflight before a run: 'Computer sleep — OK: the computer is kept awake during the run (caffeinate). Keep its lid open: a closed lid still sleeps most laptops.' (the site note comes from the test setup, whose Settings site is replaced by public Paris coordinates). (Charcoal, 1440 x 900.)",
+   "tags": [
+    "plan",
+    "preflight",
+    "keep-awake",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-09-plan-preflight-keep-awake.png",
+   "caption": "Plan's preflight before a run: 'Computer sleep — OK: the computer is kept awake during the run (caffeinate). Keep its lid open: a closed lid still sleeps most laptops.' (the site note comes from the test setup, whose Settings site is replaced by public Paris coordinates). (Night Red, 1440 x 900.)",
+   "tags": [
+    "plan",
+    "preflight",
+    "keep-awake",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-09-plan-preflight-keep-awake.png",
+   "caption": "Plan's preflight before a run: 'Computer sleep — OK: the computer is kept awake during the run (caffeinate). Keep its lid open: a closed lid still sleeps most laptops.' (the site note comes from the test setup, whose Settings site is replaced by public Paris coordinates). (Observatory, 1280 x 800.)",
+   "tags": [
+    "plan",
+    "preflight",
+    "keep-awake",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-10-attention-chip-list-hfd.png",
+   "caption": "The HFD rise of RR Lyr 2026-09-25 fires at run frame 25 (original frame 150): 'HFD 23.6 px = 2.7× the first 20 frames' (baseline 8.65 px), heard as two rising tones at Soft (measured at integration). The status-bar chip and its list (Off / Soft / Normal; each item with its level by mark and word, its rule and numbers, the suggested view and Acknowledge); the Run band draws the rule read-only (its name leaves the free side to the 'now' label while the episode is near now). The status bar measures itself: at 1 440 px beside the run chip and the site chip the headline ends in an ellipsis rather than pushing Log out; at 1 280 px it folds into the chip's tooltip. (Observatory, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "attention",
+    "status-bar",
+    "sound",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-10-attention-chip-list-hfd.png",
+   "caption": "The HFD rise of RR Lyr 2026-09-25 fires at run frame 25 (original frame 150): 'HFD 23.6 px = 2.7× the first 20 frames' (baseline 8.65 px), heard as two rising tones at Soft (measured at integration). The status-bar chip and its list (Off / Soft / Normal; each item with its level by mark and word, its rule and numbers, the suggested view and Acknowledge); the Run band draws the rule read-only (its name leaves the free side to the 'now' label while the episode is near now). The status bar measures itself: at 1 440 px beside the run chip and the site chip the headline ends in an ellipsis rather than pushing Log out; at 1 280 px it folds into the chip's tooltip. (Charcoal, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "attention",
+    "status-bar",
+    "sound",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-10-attention-chip-list-hfd.png",
+   "caption": "The HFD rise of RR Lyr 2026-09-25 fires at run frame 25 (original frame 150): 'HFD 23.6 px = 2.7× the first 20 frames' (baseline 8.65 px), heard as two rising tones at Soft (measured at integration). The status-bar chip and its list (Off / Soft / Normal; each item with its level by mark and word, its rule and numbers, the suggested view and Acknowledge); the Run band draws the rule read-only (its name leaves the free side to the 'now' label while the episode is near now). The status bar measures itself: at 1 440 px beside the run chip and the site chip the headline ends in an ellipsis rather than pushing Log out; at 1 280 px it folds into the chip's tooltip. (Night Red, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "attention",
+    "status-bar",
+    "sound",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-10-attention-chip-list-hfd.png",
+   "caption": "The HFD rise of RR Lyr 2026-09-25 fires at run frame 25 (original frame 150): 'HFD 23.6 px = 2.7× the first 20 frames' (baseline 8.65 px), heard as two rising tones at Soft (measured at integration). The status-bar chip and its list (Off / Soft / Normal; each item with its level by mark and word, its rule and numbers, the suggested view and Acknowledge); the Run band draws the rule read-only (its name leaves the free side to the 'now' label while the episode is near now). The status bar measures itself: at 1 440 px beside the run chip and the site chip the headline ends in an ellipsis rather than pushing Log out; at 1 280 px it folds into the chip's tooltip. (Observatory, 1280 x 800.)",
+   "tags": [
+    "observe",
+    "attention",
+    "status-bar",
+    "sound",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-11-run-card-attention.png",
+   "caption": "The Run card with the open attention item under its readouts: level, time, frame, headline, 'Focus view' and Acknowledge (shared by every client). (Observatory, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "run-card",
+    "attention",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-11-run-card-attention.png",
+   "caption": "The Run card with the open attention item under its readouts: level, time, frame, headline, 'Focus view' and Acknowledge (shared by every client). (Charcoal, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "run-card",
+    "attention",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-11-run-card-attention.png",
+   "caption": "The Run card with the open attention item under its readouts: level, time, frame, headline, 'Focus view' and Acknowledge (shared by every client). (Night Red, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "run-card",
+    "attention",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-11-run-card-attention.png",
+   "caption": "The Run card with the open attention item under its readouts: level, time, frame, headline, 'Focus view' and Acknowledge (shared by every client). (Observatory, 1280 x 800.)",
+   "tags": [
+    "observe",
+    "run-card",
+    "attention",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-12-attention-list-critical-attention-info.png",
+   "caption": "The attention list with the three levels: Critical (filled disc) 'Mount lost during the run', Attention (upright mark, never a triangle) the HFD rise, Info (hollow ring) 'Run started'. At Normal the Critical plays three descending tones and repeats every 30 s until someone acknowledges it (measured at integration); the rail's Connection entry carries the attention mark while the device is lost. (Observatory, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "attention",
+    "status-bar",
+    "levels",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-12-attention-list-critical-attention-info.png",
+   "caption": "The attention list with the three levels: Critical (filled disc) 'Mount lost during the run', Attention (upright mark, never a triangle) the HFD rise, Info (hollow ring) 'Run started'. At Normal the Critical plays three descending tones and repeats every 30 s until someone acknowledges it (measured at integration); the rail's Connection entry carries the attention mark while the device is lost. (Charcoal, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "attention",
+    "status-bar",
+    "levels",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-12-attention-list-critical-attention-info.png",
+   "caption": "The attention list with the three levels: Critical (filled disc) 'Mount lost during the run', Attention (upright mark, never a triangle) the HFD rise, Info (hollow ring) 'Run started'. At Normal the Critical plays three descending tones and repeats every 30 s until someone acknowledges it (measured at integration); the rail's Connection entry carries the attention mark while the device is lost. (Night Red, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "attention",
+    "status-bar",
+    "levels",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-12-attention-list-critical-attention-info.png",
+   "caption": "The attention list with the three levels: Critical (filled disc) 'Mount lost during the run', Attention (upright mark, never a triangle) the HFD rise, Info (hollow ring) 'Run started'. At Normal the Critical plays three descending tones and repeats every 30 s until someone acknowledges it (measured at integration); the rail's Connection entry carries the attention mark while the device is lost. (Observatory, 1280 x 800.)",
+   "tags": [
+    "observe",
+    "attention",
+    "status-bar",
+    "levels",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-13-run-card-critical.png",
+   "caption": "The Run card with a Critical item (the mount lost mid-run): 'Devices' and Acknowledge. (Observatory, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "run-card",
+    "attention",
+    "critical",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-13-run-card-critical.png",
+   "caption": "The Run card with a Critical item (the mount lost mid-run): 'Devices' and Acknowledge. (Charcoal, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "run-card",
+    "attention",
+    "critical",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-13-run-card-critical.png",
+   "caption": "The Run card with a Critical item (the mount lost mid-run): 'Devices' and Acknowledge. (Night Red, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "run-card",
+    "attention",
+    "critical",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-13-run-card-critical.png",
+   "caption": "The Run card with a Critical item (the mount lost mid-run): 'Devices' and Acknowledge. (Observatory, 1280 x 800.)",
+   "tags": [
+    "observe",
+    "run-card",
+    "attention",
+    "critical",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-14-wrap-up.png",
+   "caption": "The end-of-night wrap-up in the Run card (D2): 40 frames of 40 = 39 target points + 1 frame not measured (the line adds up), 1 critical and 1 attention during the run, 'Tracking is still on', tonight's calibration (20 darks of 1 s ≈ 1m 20s and 30 biases of 0.01 s ≈ 1m 30s at gain 80, lid on: the simulator's wheel has no Dark slot; ≈ 2m 50s in all from the 3 s readout and save measured tonight, the Plan's own durations), Prepare in Plan, Park by hold, the session folder and its size. (Observatory, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "run-card",
+    "wrap-up",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-14-wrap-up.png",
+   "caption": "The end-of-night wrap-up in the Run card (D2): 40 frames of 40 = 39 target points + 1 frame not measured (the line adds up), 1 critical and 1 attention during the run, 'Tracking is still on', tonight's calibration (20 darks of 1 s ≈ 1m 20s and 30 biases of 0.01 s ≈ 1m 30s at gain 80, lid on: the simulator's wheel has no Dark slot; ≈ 2m 50s in all from the 3 s readout and save measured tonight, the Plan's own durations), Prepare in Plan, Park by hold, the session folder and its size. (Charcoal, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "run-card",
+    "wrap-up",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-14-wrap-up.png",
+   "caption": "The end-of-night wrap-up in the Run card (D2): 40 frames of 40 = 39 target points + 1 frame not measured (the line adds up), 1 critical and 1 attention during the run, 'Tracking is still on', tonight's calibration (20 darks of 1 s ≈ 1m 20s and 30 biases of 0.01 s ≈ 1m 30s at gain 80, lid on: the simulator's wheel has no Dark slot; ≈ 2m 50s in all from the 3 s readout and save measured tonight, the Plan's own durations), Prepare in Plan, Park by hold, the session folder and its size. (Night Red, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "run-card",
+    "wrap-up",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-14-wrap-up.png",
+   "caption": "The end-of-night wrap-up in the Run card (D2): 40 frames of 40 = 39 target points + 1 frame not measured (the line adds up), 1 critical and 1 attention during the run, 'Tracking is still on', tonight's calibration (20 darks of 1 s ≈ 1m 20s and 30 biases of 0.01 s ≈ 1m 30s at gain 80, lid on: the simulator's wheel has no Dark slot; ≈ 2m 50s in all from the 3 s readout and save measured tonight, the Plan's own durations), Prepare in Plan, Park by hold, the session folder and its size. (Observatory, 1280 x 800.)",
+   "tags": [
+    "observe",
+    "run-card",
+    "wrap-up",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-15-plan-calibration-prepared.png",
+   "caption": "'Prepare in Plan' replaced the draft by tonight's darks and biases (Dark 1 s × 20, Bias 0.01 s × 30, gain 80) with Undo; '≈ 2m 50s', as the wrap-up said; nothing starts until Start. (Observatory, 1440 x 900.)",
+   "tags": [
+    "plan",
+    "wrap-up",
+    "calibration",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-15-plan-calibration-prepared.png",
+   "caption": "'Prepare in Plan' replaced the draft by tonight's darks and biases (Dark 1 s × 20, Bias 0.01 s × 30, gain 80) with Undo; '≈ 2m 50s', as the wrap-up said; nothing starts until Start. (Charcoal, 1440 x 900.)",
+   "tags": [
+    "plan",
+    "wrap-up",
+    "calibration",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-15-plan-calibration-prepared.png",
+   "caption": "'Prepare in Plan' replaced the draft by tonight's darks and biases (Dark 1 s × 20, Bias 0.01 s × 30, gain 80) with Undo; '≈ 2m 50s', as the wrap-up said; nothing starts until Start. (Night Red, 1440 x 900.)",
+   "tags": [
+    "plan",
+    "wrap-up",
+    "calibration",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-15-plan-calibration-prepared.png",
+   "caption": "'Prepare in Plan' replaced the draft by tonight's darks and biases (Dark 1 s × 20, Bias 0.01 s × 30, gain 80) with Undo; '≈ 2m 50s', as the wrap-up said; nothing starts until Start. (Observatory, 1280 x 800.)",
+   "tags": [
+    "plan",
+    "wrap-up",
+    "calibration",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-16-plan-two-filter-warning.png",
+   "caption": "S49: a plan whose Light steps use IR and LP warns that each star gets one light curve and one CSV per filter. (Observatory, 1440 x 900.)",
+   "tags": [
+    "plan",
+    "s49",
+    "filters",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-16-plan-two-filter-warning.png",
+   "caption": "S49: a plan whose Light steps use IR and LP warns that each star gets one light curve and one CSV per filter. (Charcoal, 1440 x 900.)",
+   "tags": [
+    "plan",
+    "s49",
+    "filters",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-16-plan-two-filter-warning.png",
+   "caption": "S49: a plan whose Light steps use IR and LP warns that each star gets one light curve and one CSV per filter. (Night Red, 1440 x 900.)",
+   "tags": [
+    "plan",
+    "s49",
+    "filters",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-16-plan-two-filter-warning.png",
+   "caption": "S49: a plan whose Light steps use IR and LP warns that each star gets one light curve and one CSV per filter. (Observatory, 1280 x 800.)",
+   "tags": [
+    "plan",
+    "s49",
+    "filters",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-17-plan-start-time-later-night.png",
+   "caption": "The draft's own start time (6a leftover): Start (UTC) takes a later night, 2026-11-17 21:30; the line under it says 'in 3d 10h · Start opens 16 Nov 21:30 UTC'. A deliberate schedule is a note, not a block: the chip reads 'Scheduled · opens 16 Nov 21:30 UTC', and Start and the steps header carry the date (design review). (Observatory, 1440 x 900.)",
+   "tags": [
+    "plan",
+    "start-time",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-17-plan-start-time-later-night.png",
+   "caption": "The draft's own start time (6a leftover): Start (UTC) takes a later night, 2026-11-17 21:30; the line under it says 'in 3d 10h · Start opens 16 Nov 21:30 UTC'. A deliberate schedule is a note, not a block: the chip reads 'Scheduled · opens 16 Nov 21:30 UTC', and Start and the steps header carry the date (design review). (Charcoal, 1440 x 900.)",
+   "tags": [
+    "plan",
+    "start-time",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-17-plan-start-time-later-night.png",
+   "caption": "The draft's own start time (6a leftover): Start (UTC) takes a later night, 2026-11-17 21:30; the line under it says 'in 3d 10h · Start opens 16 Nov 21:30 UTC'. A deliberate schedule is a note, not a block: the chip reads 'Scheduled · opens 16 Nov 21:30 UTC', and Start and the steps header carry the date (design review). (Night Red, 1440 x 900.)",
+   "tags": [
+    "plan",
+    "start-time",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-17-plan-start-time-later-night.png",
+   "caption": "The draft's own start time (6a leftover): Start (UTC) takes a later night, 2026-11-17 21:30; the line under it says 'in 3d 10h · Start opens 16 Nov 21:30 UTC'. A deliberate schedule is a note, not a block: the chip reads 'Scheduled · opens 16 Nov 21:30 UTC', and Start and the steps header carry the date (design review). (Observatory, 1280 x 800.)",
+   "tags": [
+    "plan",
+    "start-time",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-18-two-filter-curves-ir.png",
+   "caption": "After a run through IR then LP: one curve per (star, filter). The Filter control in the drawer's tab row draws IR (3 points); the Run band and the Photometry card follow the newest frame's filter and name it ('Light curve · LP', 'Target · TG · LP · mag'): every label shows the filter as the wheel names it, never the file token. (Observatory, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "drawer",
+    "s49",
+    "filters",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-18-two-filter-curves-ir.png",
+   "caption": "After a run through IR then LP: one curve per (star, filter). The Filter control in the drawer's tab row draws IR (3 points); the Run band and the Photometry card follow the newest frame's filter and name it ('Light curve · LP', 'Target · TG · LP · mag'): every label shows the filter as the wheel names it, never the file token. (Charcoal, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "drawer",
+    "s49",
+    "filters",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-18-two-filter-curves-ir.png",
+   "caption": "After a run through IR then LP: one curve per (star, filter). The Filter control in the drawer's tab row draws IR (3 points); the Run band and the Photometry card follow the newest frame's filter and name it ('Light curve · LP', 'Target · TG · LP · mag'): every label shows the filter as the wheel names it, never the file token. (Night Red, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "drawer",
+    "s49",
+    "filters",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-18-two-filter-curves-ir.png",
+   "caption": "After a run through IR then LP: one curve per (star, filter). The Filter control in the drawer's tab row draws IR (3 points); the Run band and the Photometry card follow the newest frame's filter and name it ('Light curve · LP', 'Target · TG · LP · mag'): every label shows the filter as the wheel names it, never the file token. (Observatory, 1280 x 800.)",
+   "tags": [
+    "observe",
+    "drawer",
+    "s49",
+    "filters",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-19-two-filter-curves-lp.png",
+   "caption": "The same run with LP drawn (4 points). The server wrote target_RR_Lyr_ir_000-BCG-719.csv and target_RR_Lyr_lp_000-BCG-719.csv (one per star and filter), and photometry_quality.json and photometry_quality_lp.json. (Observatory, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "drawer",
+    "s49",
+    "filters",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-20-stellarium-goto-refused-toast.png",
+   "caption": "A Stellarium GoTo sent during the run is refused by the mount interlock; the toast, with the attention mark of its level (bar over dot), says what to do (6a leftover, now exercised). The Run card's end, which the server's estimate had already passed with 3 frames to go, reads 'in ≈ 32 s · from cadence'. (Observatory, 1440 x 900.)",
+   "tags": [
+    "observe",
+    "stellarium",
+    "interlock",
+    "observatory",
+    "1440x900"
+   ]
+  }
+ ]
+}
