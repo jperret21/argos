@@ -670,6 +670,13 @@ It is undefined at or below the horizon — the function returns nothing rather
 than a large number, so a frame taken through the treetops has no airmass rather
 than a fictional one.
 
+The altitude $h$ is the star's own, at the exposure midpoint, from the site in
+Settings: its J2000 position precessed to the date (IAU 1976), then the
+sidereal time. Nutation, aberration and refraction are left out; the altitude
+is within 0.01° of astropy's (without refraction). Before 0.5.0 the precession
+was left out too: up to 0.3° in 2026, an airmass 0.004 low at 41° and 0.03 at
+12°.
+
 ```{warning}
 The header and the light-curve point use the **same formula** but not the same
 instant, and they will not always agree. `AIRMASS` in the FITS header is

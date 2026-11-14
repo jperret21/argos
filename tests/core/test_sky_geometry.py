@@ -171,3 +171,52 @@ def test_angle_between_directions() -> None:
     assert angle_between_directions(90.0, 0.0, 90.0, 123.0) < 1e-6  # zenith, any azimuth
     assert abs(angle_between_directions(0.0, 0.0, 0.0, 90.0) - 90.0) < 1e-9
     assert abs(angle_between_directions(10.0, 350.0, 10.0, 10.0) - 19.70) < 0.01
+
+
+def test_sky_geometry_precesses_j2000_to_the_date_s51() -> None:
+    """S51: J2000 coordinates are precessed to the date (IAU 1976) before the
+    sidereal-time formula. Without it the direction was up to 0.3° off in 2026
+    (0.37° in 2027): the airmass 0.002 low at 41° and 0.01-0.02 at 20-30°.
+    Against astropy (precession, nutation, aberration; no refraction) over a
+    grid of dates, positions and sites: within 0.05° in direction and altitude."""
+    from astropy.coordinates import AltAz, EarthLocation, SkyCoord
+    from astropy.utils import iers
+
+    from argos.core.imaging.sky_geometry import (
+        altitude_at,
+        angle_between_directions,
+        horizontal_at,
+    )
+
+    iers.conf.auto_download = False  # offline: astropy's bundled tables
+    iers.conf.auto_max_age = None
+    dates = [
+        datetime(2000, 1, 1, 12, tzinfo=timezone.utc),
+        datetime(2013, 6, 30, 3, 17, tzinfo=timezone.utc),
+        datetime(2026, 9, 25, 20, 4, 57, tzinfo=timezone.utc),
+        datetime(2027, 3, 21, 23, 45, tzinfo=timezone.utc),
+        datetime(2035, 12, 2, 1, 5, tzinfo=timezone.utc),
+    ]
+    sites = [(46.2, 6.1), (-33.9, 151.2), (19.8, -155.5), (64.1, -21.9)]
+    stars = [
+        (ra_h, dec)
+        for ra_h in (0.3, 5.5, 11.0, 15.2, 19.42, 23.7)
+        for dec in (-60.0, -5.4, 20.0, 42.8, 75.0)
+    ]
+    worst_dir = worst_alt = 0.0
+    for when in dates:
+        t = Time(when)
+        for lat, lon in sites:
+            frame = AltAz(obstime=t, location=EarthLocation(lat=lat * u.deg, lon=lon * u.deg))
+            ras = [ra_h * 15.0 for ra_h, _ in stars] * u.deg
+            decs = [dec for _, dec in stars] * u.deg
+            ref = SkyCoord(ra=ras, dec=decs).transform_to(frame)
+            for (ra_h, dec), ref_alt, ref_az in zip(stars, ref.alt.deg, ref.az.deg):
+                if ref_alt < 0.0:
+                    continue
+                alt, az = horizontal_at(t.jd, ra_h, dec, lat, lon)
+                worst_dir = max(worst_dir, angle_between_directions(alt, az, ref_alt, ref_az))
+                got = altitude_at(t.jd, ra_h, dec, lat, lon)
+                worst_alt = max(worst_alt, abs(got - float(ref_alt)))
+    assert worst_dir < 0.05, worst_dir
+    assert worst_alt < 0.05, worst_alt

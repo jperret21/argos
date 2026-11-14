@@ -219,6 +219,9 @@ def identify_curve_file(
     """
     path = Path(path)
     role, identity, name, auid, matched = _curve_identity(path, targets)
+    token = _curve_filter(path.stem, targets, auid or name) if matched else ""
+    if token:
+        identity = f"{identity}@{token}"  # one curve per (star, filter): S49
     identified: dict[str, LightCurve] = {}
     problems: list[str] = []
     for key, curve in curves.items():
@@ -233,6 +236,7 @@ def identify_curve_file(
             curve.role = role or ROLE_TARGET
             curve.name = name
             curve.auid = auid
+            curve.filter_name = token
             key = identity
         elif not curve.name:
             curve.name = name
@@ -283,6 +287,24 @@ def _curve_identity(path: Path, targets: TargetSet) -> tuple[str | None, str, st
     else:
         identity = star.auid or f"{role}:pos:{star.ra_deg:.5f},{star.dec_deg:.5f}"
     return role, identity, star.display_name, star.auid or "", True
+
+
+def _curve_filter(stem: str, targets: TargetSet, star_tag: str) -> str:
+    """The filter token of a run's ``{role}_{object}_{filter}_{star}`` CSV (S49), or "".
+
+    "" for a file written before S49 (``{role}_{object}_{star}``) and for any
+    name that does not have that shape (preview curves, other software).
+    """
+    prefix = next((prefix for prefix, _role in _ROLE_PREFIXES if stem.startswith(prefix)), None)
+    obj = _safe_component(targets.object_name or "")
+    tag = _safe_component(star_tag)
+    if prefix is None or not obj or not tag or not stem.endswith(f"_{tag}"):
+        return ""
+    middle = stem[len(prefix) : -(len(tag) + 1)]
+    if not middle.startswith(f"{obj}_"):
+        return ""
+    token = middle[len(obj) + 1 :]
+    return token if token and token == token.lower() else ""
 
 
 def _safe_component(value: str) -> str:

@@ -30,7 +30,14 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from argos.core.catalog.targets import ROLE_CHECK, ROLE_COMPARISON, TargetSet
 from argos.core.imaging.green import green_plane
 from argos.core.photometry.airmass import airmass_at, bjd_tdb, julian_date
-from argos.core.photometry.lightcurve import LcPoint, LightCurve
+from argos.core.imaging.fits_writer import filter_token
+from argos.core.photometry.lightcurve import (
+    LcPoint,
+    LightCurve,
+    curve_key,
+    run_curve_csv_name,
+    series_label,
+)
 from argos.core.photometry.params import PhotometryParams, frame_egain, measure_frame
 from argos.core.photometry.tracking import (
     ApertureTracker,
@@ -234,6 +241,7 @@ class PhotometryBatchWorker(QThread):
                 frames_resolved=self._frames_resolved,
                 frames_unanchored=self._frames_unanchored,
             )
+            multi_filter = len({lc.filter_name for lc in curves.values()}) > 1
             for key in sorted(self._check_keys):
                 lc = curves.get(key)
                 if lc is None:
@@ -245,8 +253,14 @@ class PhotometryBatchWorker(QThread):
                     continue
                 mean = sum(mags) / len(mags)
                 k_rms = (sum((m - mean) ** 2 for m in mags) / (len(mags) - 1)) ** 0.5
-                logger.info("Check star %s: RMS %.4f mag over %d frames", key, k_rms, len(mags))
-                diag.record("event", what="check_rms", star=key, rms_mag=k_rms, n=len(mags))
+                star = lc.auid or lc.name
+                # Per filter (S49); a one-filter re-run's record is unchanged.
+                extra = {"filter": lc.filter_name} if multi_filter else {}
+                label = f"{star} [{lc.filter_name}]" if multi_filter else star
+                logger.info("Check star %s: RMS %.4f mag over %d frames", label, k_rms, len(mags))
+                diag.record(
+                    "event", what="check_rms", star=star, **extra, rms_mag=k_rms, n=len(mags)
+                )
             if self._tracker is not None:
                 result.rotation_deg = self._tracker.transform.rotation_deg
                 result.shift_px = self._tracker.transform.shift_px
@@ -341,7 +355,8 @@ class PhotometryBatchWorker(QThread):
                     comps_used=res.diff.comps_used,
                     note=res.diff.note or None,
                 )
-        self._emit_points(results, jd, curves, flagged=not anchored)
+        token = filter_token(self._read_filter(fpath))  # one curve per (star, filter): S49
+        self._emit_points(results, jd, curves, flagged=not anchored, token=token)
         return True
 
     def _lock_holds(self, green, wcs) -> bool:
@@ -469,13 +484,20 @@ class PhotometryBatchWorker(QThread):
         )
 
     def _emit_points(
-        self, results, jd: float | None, curves: dict[str, LightCurve], *, flagged: bool = False
+        self,
+        results,
+        jd: float | None,
+        curves: dict[str, LightCurve],
+        *,
+        flagged: bool = False,
+        token: str = "clear",
     ) -> None:
         """Convert one frame's measurements into curve points + point signals.
 
         ``results`` carry targets, check stars (P2) and leave-one-out
         comparison vetting curves; checks flow into their own curves/CSVs and
-        their keys are remembered for the K-RMS summary (comps are not).
+        their keys are remembered for the K-RMS summary (comps are not). Each
+        (star, filter) has its own curve (S49): ``token`` is the frame's filter.
         """
         for res in results:
             # Keep a point when *either* product exists. Requiring the flux
@@ -486,8 +508,9 @@ class PhotometryBatchWorker(QThread):
             has_ratio = res.relative is not None and res.relative.flux_ratio is not None
             if not (has_mag or has_ratio):
                 continue
+            key = curve_key(res.star, token)
             if res.star.role == ROLE_CHECK:
-                self._check_keys.add(res.star.auid or res.star.display_name)
+                self._check_keys.add(key)  # its K-RMS per filter
             bjd = self._bjd(jd, res.star)
             pt = LcPoint(
                 jd_utc=jd,
@@ -512,20 +535,23 @@ class PhotometryBatchWorker(QThread):
                 relative_flux=res.relative.flux_ratio if res.relative else None,
                 relative_flux_err=res.relative.flux_ratio_err if res.relative else None,
             )
-            key = res.star.auid or res.star.display_name
             lc = curves.setdefault(
                 key,
                 LightCurve(
-                    auid=res.star.auid or "", name=res.star.display_name, role=res.star.role
+                    auid=res.star.auid or "",
+                    name=res.star.display_name,
+                    role=res.star.role,
+                    filter_name=token,
                 ),
             )
             lc.append(pt)
             if flagged:
                 self._flagged.add(id(pt))
+            multi = any(c.filter_name != token for c in curves.values())
             self.point.emit(
                 PhotometryPoint(
                     key=key,
-                    name=res.star.display_name,
+                    name=series_label(lc, multi),
                     jd=pt.jd_utc,
                     mag=pt.mag,
                     mag_err=pt.mag_err,
@@ -620,20 +646,30 @@ class PhotometryBatchWorker(QThread):
                 logger.warning("%s: no EXPTIME — JD is exposure start, not midpoint", fpath.name)
         return arr, jd, frame_egain(header, egain_table)
 
-    def _write_csvs(self, curves: dict[str, LightCurve]) -> None:
-        """Write each curve as ``{role}_{object}_{star}.csv`` beside ``targets.json``.
+    @staticmethod
+    def _read_filter(fpath: Path) -> str:
+        """The frame's ``FILTER`` card ("" when absent or unreadable), S49."""
+        from astropy.io import fits
 
-        The engine's naming, so Review and "Open curve CSV…" recover each
-        curve's role and star from the file name and the saved target set.
+        try:
+            return str(fits.getheader(fpath).get("FILTER", "") or "").strip()
+        except Exception:
+            return ""
+
+    def _write_csvs(self, curves: dict[str, LightCurve]) -> None:
+        """Write each curve as ``{role}_{object}_{filter}_{star}.csv`` beside ``targets.json``.
+
+        The engine's naming (S49: one file per star and filter), so Review and
+        "Open curve CSV…" recover each curve's role and star from the file
+        name and the saved target set.
         """
         for lc in curves.values():
             tag = lc.auid or lc.name or "photometry"
-            safe = "".join(
-                c if c.isalnum() or c in "-_" else "_" for c in f"{self._req.object_name}_{tag}"
+            name = run_curve_csv_name(
+                lc.role or "target", self._req.object_name, lc.filter_name or "clear", tag
             )
-            role = lc.role or "target"
             try:
-                lc.to_csv(self._req.out_dir / f"{role}_{safe or 'photometry'}.csv")
+                lc.to_csv(self._req.out_dir / name)
             except OSError as exc:
                 logger.warning("batch photometry.csv: %s", exc)
         if not curves:

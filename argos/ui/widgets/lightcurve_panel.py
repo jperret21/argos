@@ -14,6 +14,7 @@ import pyqtgraph as pg
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QCheckBox, QLabel, QSplitter, QVBoxLayout, QWidget
 
+from argos.core.photometry.lightcurve import series_label
 from argos.ui import theme
 
 
@@ -291,8 +292,10 @@ class LightCurvePanel(QWidget):
         the others keep following the data.
         """
         self.clear()
+        # S49: one series per (star, filter); with two filters each label says which.
+        multi = len({getattr(lc, "filter_name", "") for lc in curves.values()}) > 1
         for lc in curves.values():
-            label = lc.name or lc.auid or "TARGET"
+            label = series_label(lc, multi)
             role = getattr(lc, "role", "target")
             for p in lc.points:
                 self._append_point(

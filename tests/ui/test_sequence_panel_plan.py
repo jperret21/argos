@@ -325,3 +325,41 @@ def test_a_transit_longer_than_one_step_is_refused() -> None:
         assert f"{count} light frames" in page.panel._status_lbl.text()
     finally:
         _dispose(page)
+
+
+def test_light_steps_through_two_filters_warn_one_curve_per_filter_s49() -> None:
+    """S49: a plan alternating two filters gave each star one curve mixing both
+    bands; the plan now says each filter gets its own curve and CSV."""
+    from argos.core.imaging.sequencer import light_filters_warning
+    from argos.ui.widgets.sequence_panel import SequencePanel
+
+    panel = SequencePanel()
+    try:
+        panel.set_filter_options(["Dark", "IR", "LP"])
+        panel.load_plan(
+            SequencePlan(
+                steps=[
+                    SequenceStep(frame_type="Light", filter_name="IR", count=5),
+                    SequenceStep(frame_type="Dark", filter_name="Dark", count=5),
+                ]
+            )
+        )
+        assert panel._filters_lbl.isHidden()  # one Light filter (a Dark step does not count)
+        panel._add_row(SequenceStep(frame_type="Light", filter_name="LP", count=5))
+        text = panel._filters_lbl.text()
+        assert not panel._filters_lbl.isHidden()
+        assert text == (
+            "Light steps use 2 filters (IR and LP): each star gets one light curve and one "
+            "CSV per filter."
+        )
+        panel._table.cellWidget(2, 2).setCurrentText("IR")  # back to one filter
+        assert panel._filters_lbl.isHidden()
+    finally:
+        _dispose(panel)
+    disabled = SequencePlan(
+        steps=[
+            SequenceStep(frame_type="Light", filter_name="V"),
+            SequenceStep(frame_type="Light", filter_name="B", enabled=False),
+        ]
+    )
+    assert light_filters_warning(disabled) is None

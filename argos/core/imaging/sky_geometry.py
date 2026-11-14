@@ -34,6 +34,29 @@ def compute_airmass(altitude_deg: float) -> Optional[float]:
     return round(1.0 / denom, 4)
 
 
+def precess_j2000_to_date(ra_hours: float, dec_deg: float, jd: float) -> tuple[float, float]:
+    """Mean J2000 coordinates precessed to the mean equator and equinox of ``jd`` (S51).
+
+    IAU 1976 precession (Lieske et al. 1977; Meeus, *Astronomical Algorithms*,
+    eq. 21.2-21.4): the angles ζ, z, θ in Julian centuries from J2000. The JD
+    is UTC (TT − UTC ≈ 69 s moves the angles by 1e-6″). Returns ``(RA hours,
+    Dec degrees)`` of the date, for the date's sidereal time.
+    """
+    t = (jd - 2451545.0) / 36525.0
+    arcsec = math.pi / (180.0 * 3600.0)
+    zeta = (2306.2181 * t + 0.30188 * t * t + 0.017998 * t**3) * arcsec
+    z = (2306.2181 * t + 1.09468 * t * t + 0.018203 * t**3) * arcsec
+    theta = (2004.3109 * t - 0.42665 * t * t - 0.041833 * t**3) * arcsec
+    ra0 = math.radians(ra_hours * 15.0)
+    dec0 = math.radians(dec_deg)
+    a = math.cos(dec0) * math.sin(ra0 + zeta)
+    b = math.cos(theta) * math.cos(dec0) * math.cos(ra0 + zeta) - math.sin(theta) * math.sin(dec0)
+    c = math.sin(theta) * math.cos(dec0) * math.cos(ra0 + zeta) + math.cos(theta) * math.sin(dec0)
+    ra = (math.degrees(math.atan2(a, b) + z) / 15.0) % 24.0
+    dec = math.degrees(math.asin(max(-1.0, min(1.0, c))))
+    return ra, dec
+
+
 def altitude_at(
     jd_utc: float,
     ra_hours: float,
@@ -43,13 +66,15 @@ def altitude_at(
 ) -> float:
     """Target altitude (degrees) at a JD — fast spherical trig, no astropy.
 
-    GMST from the JD (IAU 1982 linear term), LST from the site longitude,
-    then the standard HA→altitude formula. The J2000 coordinates are used
-    against the date's sidereal time (no precession, nutation or refraction):
-    up to 0.3° off in 2026 (against astropy), an airmass about 0.002 low at 41°
-    and 0.01-0.02 at 20-30°. Exists so a batch of hundreds of frames doesn't
-    pay astropy's ~50 ms per transform.
+    The J2000 coordinates are precessed to the date (IAU 1976, S51), then
+    GMST from the JD (IAU 1982 linear term), LST from the site longitude and
+    the standard HA→altitude formula. No nutation, aberration or refraction:
+    within 0.02° of astropy over 2000-2035 (0.05° tested). Before S51 the
+    J2000 coordinates met the date's sidereal time unprecessed: up to 0.3° off
+    in 2026, an airmass about 0.002 low at 41° and 0.01-0.02 at 20-30°. Exists
+    so a batch of hundreds of frames doesn't pay astropy's ~50 ms per transform.
     """
+    ra_hours, dec_deg = precess_j2000_to_date(ra_hours, dec_deg, jd_utc)
     gmst_h = (18.697374558 + 24.06570982441908 * (jd_utc - 2451545.0)) % 24.0
     lst_h = (gmst_h + lon_deg / 15.0) % 24.0
     ha_rad = math.radians((lst_h - ra_hours) * 15.0)
@@ -68,10 +93,11 @@ def horizontal_at(
 ) -> tuple[float, float]:
     """Altitude and azimuth (degrees, azimuth north through east) at a JD.
 
-    The same fast spherical trig as :func:`altitude_at` (up to 0.3° in 2026:
-    no precession, nutation or refraction), for checks that need the whole
-    direction.
+    The same fast spherical trig as :func:`altitude_at` (precessed to the date,
+    S51; no nutation, aberration or refraction: within 0.02° of astropy), for
+    checks that need the whole direction.
     """
+    ra_hours, dec_deg = precess_j2000_to_date(ra_hours, dec_deg, jd_utc)
     gmst_h = (18.697374558 + 24.06570982441908 * (jd_utc - 2451545.0)) % 24.0
     lst_h = (gmst_h + lon_deg / 15.0) % 24.0
     ha = math.radians((lst_h - ra_hours) * 15.0)

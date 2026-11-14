@@ -77,6 +77,9 @@ class LightCurve:
     name: str = ""
     points: list[LcPoint] = field(default_factory=list)
     role: str = "target"
+    #: The filter token of every point (``fits_writer.filter_token``, S49); ""
+    #: for a curve read from a file that does not say.
+    filter_name: str = ""
 
     def append(self, point: LcPoint) -> None:
         self.points.append(point)
@@ -115,6 +118,44 @@ class LightCurve:
                 except (TypeError, ValueError):
                     continue
         return lc
+
+
+def star_curve_key(star) -> str:
+    """The star part of a curve key: its AUID, else its display name."""
+    return star.auid or star.display_name
+
+
+def curve_key(star, token: str) -> str:
+    """One curve per (star, filter) (S49): ``<AUID or name>@<filter token>``.
+
+    Before S49 a star had one curve whatever the filter: a run alternating V
+    and B mixed both bands in one curve, its systematic floor, its leave-one-out
+    vetting and its CSV.
+    """
+    return f"{star_curve_key(star)}@{token}"
+
+
+def curves_of_filter(curves: dict, token: str) -> dict:
+    """The curves of one filter, keyed by star (``star_curve_key``), for the S17 vetting."""
+    return {(lc.auid or lc.name): lc for lc in curves.values() if lc.filter_name == token}
+
+
+def series_label(curve: "LightCurve", multi_filter: bool) -> str:
+    """A curve's plot label: the star, and its filter when the store holds several (S49)."""
+    label = curve.name or curve.auid or "TARGET"
+    return f"{label} [{curve.filter_name}]" if multi_filter and curve.filter_name else label
+
+
+def run_curve_csv_name(role: str, object_name: str, token: str, tag: str) -> str:
+    """A run's per-curve CSV: ``{role}_{object}_{filter}_{star}.csv`` (S49).
+
+    The filter token sits between object and star (as S40's start time does
+    for preview curves): Review still reads the role from the prefix and the
+    star from the AUID or name suffix. One filter, one file per star, the
+    contents unchanged; before S49 the name had no filter.
+    """
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in f"{object_name}_{token}_{tag}")
+    return f"{role or 'target'}_{safe or 'photometry'}.csv"
 
 
 def _row(p: LcPoint) -> list:

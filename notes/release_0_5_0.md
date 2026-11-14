@@ -1,7 +1,7 @@
 # Argos 0.5.0 — data-integrity and hardware-safety fixes
 
 > Branch: `release/0.5.0`, cut from the published `release/0.4.2`.
-> Last updated: 2026-11-12.
+> Last updated: 2026-11-13.
 
 A bug-fix release with no new features. Specifying the web UI meant taking an
 inventory of the Qt code, and that inventory turned up defects that affect
@@ -57,6 +57,18 @@ CSVs), **S46** (identifying the field turned the check star into a comparison)
 and **S47** (the Plan editor cut a count, an interval or a dither to its range
 without a word, and a transit of more than 9999 frames lost its end).
 
+Comparing the Qt sequence tracker with the web one on the owner's runs
+(`notes/tracker_comparison.md` on the web-UI branch) led to four owner
+decisions (2026-11-12), applied in the web UI's wave 6b, each with a test that
+fails on the code before it: **S48** (after a field jump the tracker could
+follow a neighbour or noise and the frame was measured off its stars), **S49**
+(a run through two filters mixed them in one curve per star), **S50** (a wrong
+plate solution replaced the good one) and **S51** (the live and batch airmass
+left out the precession since J2000). The wave's science review found two more:
+**S52** (a target-set change between two solves rebuilt the tracker on the stale
+solution, and S48 passed it with 1 anchor of 1) and **S53** (the AAVSO export
+wrote a two-filter run under one `FILT`).
+
 **Several of these defects affect files you already hold.** The table says
 which; *Check your old files* below says how to find them.
 
@@ -107,6 +119,12 @@ which; *Check your old files* below says how to find them.
 | S45 | A finished run's folder stayed the live photometry's | Live points measured after the run appended to its CSVs; its `photometry_quality.json` rewritten | **yes** (one of the owner's runs) |
 | S46 | Identifying the field turned the check star into a comparison | No check-star curve; the check in the ensemble | only with a check star (none in the owner's runs) |
 | S47 | The Plan editor clamped count, interval and dither silently; a transit over 9999 frames was cut | Fewer frames than planned; a transit's end not observed while `observation.json` declared it | possibly (a run shorter than its plan) |
+| S48 | After a field jump the tracker could follow a neighbour or noise, and the frame was measured | Unflagged points of every star off their stars, in live and sequence runs | no (the owner's runs as shot: only S35's frames) |
+| S49 | A star had one live curve whatever the filter | Two bands in one curve, one CSV, one `sigma_syst`, one comparison vetting | only runs through two filters (none of the owner's) |
+| S50 | A wrong plate solution replaced the good one | The next frame's points measured off every star, unflagged | **yes** (one of the owner's runs) |
+| S51 | The live and batch airmass left out the precession since J2000 | CSV `airmass` / AAVSO `AMASS` off by up to ±0.08 at 10-15° (either sign, by position and hour angle; the owner's runs: low by 0.0008 at 68°, 0.004 at 41°, 0.029 at 12°) | **yes** (0.4.2 live curves, batch re-runs) |
+| S52 | A target-set change between two solves rebuilt the tracker on the stale solution | Unflagged points of every star on blank sky until the next solve, in sequence runs | possibly (the VSP backfill after a run's first solve; check below) |
+| S53 | The AAVSO export wrote every filter's curves under one `FILT` | A two-filter run reported as one band | only runs through two filters (none of the owner's) |
 | S24 | An ASTAP database folder replaced the chosen database set | Slower or failed solves | no |
 | S29 | Two unvalidated-profile warnings, hard-coded IMX585 hint | Contradictory wording | no |
 
@@ -318,6 +336,37 @@ against the day you installed 0.5.0.
   instead, with no note. For a transit, compare the run's last frame with the
   coverage end in its `observation.json`: a coverage over 9999 frames (for
   example 120 min of baseline at a 1 s cadence) stopped early.
+- **Points after a field jump (S48).** On such a frame most anchor comparisons
+  have `snr` below 5 in the run's `<object>_live_diagnostics.jsonl`: the S35
+  check above finds them too. On the owner's runs as shot (a solve before
+  every sub) S48 changes no point; on a replay with one solve for a whole run
+  it refuses 74 RR Lyr frames, all measured 21-395 px from the star.
+- **A wrong plate solution (S50).** The sub after a solve whose scale is not
+  the night's was measured through it. One of the owner's runs has one:
+  `20260907T045156Z_XX_Cyg`, its third sub (measured through the second sub's
+  7.093″ per green px solve): drop every star's row at that sub's `jd_utc`.
+  Elsewhere the S35 check above finds such a sub (the target's `snr` falls more
+  than tenfold from the subs around it).
+- **Airmass of 0.4.2 curves and of batch re-runs (S51).** The CSV `airmass`
+  (and AAVSO `AMASS`) computed from the star's coordinates ignored the
+  precession since J2000: on the owner's runs low by 0.0006-0.0008 at 67-69°,
+  about 0.004 at 41° and up to 0.029 at 12°; elsewhere off by up to ±0.08 at
+  10-15°, either sign, by position and hour angle. Recompute it from `jd_utc`, the
+  star's coordinates and the site (astropy, or a 0.5.0 batch re-run) before
+  any extinction fit or AAVSO export. Curves written by 0.4.1 live (the
+  owner's XX Cyg nights) took the mount's altitude, as the header `AIRMASS`
+  does, and are not affected; the header `AIRMASS` never is.
+- **Points after a set change during a run (S52).** A target-set change between
+  two solves (the VSP comparisons arriving after a run's first solve, a role
+  edit, Recommend) rebuilt the tracker on the last solve's positions while the
+  field had drifted since. In a run's `photometry/` CSVs, look for target rows
+  whose `zero_point` departs by more than 1 mag from the run's median (or whose
+  `snr` falls below 3) in the subs that follow a "comparison(s) selected" or a
+  role edit in the Activity log, until the next solve: drop every star's row at
+  those `jd_utc`. The science review's replay of the owner's RR Lyr 2026-09-25
+  frames 0-79 through the server found five such target points (frames 4, 7,
+  8, 10, 11; SNR 0-2.6); the owner's Qt runs as shot solved before every sub,
+  which limits this to the subs measured before the next solve.
 - **Take shots after a refused filter change (H9).** When the wheel refused a
   move (an ERROR "Filter move: …" in the Activity log, the Filter selector
   greyed), 0.4.2 left the selector on the slot you had asked for, and the Take
@@ -613,6 +662,42 @@ once per connection); `test_site_that_agrees_with_the_mount_is_confirmed`,
 `test_no_site_set_means_no_site_check`. The first three fail on the code
 before the change. `tests/core/test_sky_geometry.py` checks the direction
 against astropy.
+
+### S51 — The live and batch airmass precess J2000 coordinates to the date
+
+**What was wrong.** `sky_geometry.altitude_at` and `horizontal_at` (fast
+spherical trigonometry, so a batch of hundreds of frames does not pay astropy's
+50 ms per transform) put the J2000 RA/Dec against the date's sidereal time,
+without precession: 26 years of it is 0.36° on the sky, and the directions were
+up to 0.51° from astropy's over 2000-2035 (0.3° typical in 2026). The live and
+batch airmass of every point (CSV `airmass`, AAVSO `AMASS`) comes from
+`altitude_at`; the X3 site check and the Plan visibility curves use the same
+functions.
+**Who was affected.** Every live point with a site set since 0.4.2 (which
+introduced `airmass_at`; 0.4.1 live curves took the mount's altitude) and every
+batch re-run, a little. On the owner's runs, at the site their frames record:
+the RR Lyr target CSVs of 2026-09-25 (0.4.2; 201 rows, altitude 41° down to 12°
+at that night's Settings site, which was not where the telescope was: X3) are
+reproduced exactly by the old code and change by +0.004 to +0.029; the XX Cyg
+curves of 2026-08-29 and 2026-09-07 (0.4.1) hold the mount's airmass and are not
+affected, but a batch re-run of them changes by +0.0006 to +0.0008 (altitude
+67-69°). After the change the airmass is within 0.0007 of astropy's on every
+one of those 286 rows (before: up to 0.028 low). The FITS header `AIRMASS` is
+not affected: it is the mount's own altitude (Pickering), not this
+computation. The X3 site check's angles move by 0.35° at most on the owner's
+sessions (right site: 2.0–3.3° instead of 1.9–3.1°; the wrong site's 88.5°
+unchanged). For other users the old airmass can be high or low: over 4 000
+random dates (2000-2040), all-sky positions and sites (latitude −65° to +70°)
+the change at 10-40° of altitude in 2026 is −0.067 to +0.081 (the science
+review, against astropy).
+**What changed.** The coordinates are precessed from J2000 to the mean equator
+and equinox of the date (IAU 1976: Lieske et al. 1977, the ζ, z, θ angles)
+before the sidereal time (`precess_j2000_to_date`). Nutation, aberration and
+refraction are still left out: within 0.008° of astropy (no refraction) over
+the 341 directions of the test grid.
+**How to check.** `tests/core/test_sky_geometry.py::test_sky_geometry_precesses_j2000_to_the_date_s51`
+(5 dates from 2000 to 2035, 30 positions, 4 sites, against astropy within
+0.05°; 0.51° on the code before the fix).
 
 ## Plan
 
@@ -1006,7 +1091,130 @@ the same change.
 **How to check.** `tests/workers/test_acquisition_engine.py::test_identifying_the_field_keeps_the_check_star`
 (no check star left on the code before the fix).
 
+### S48 — A frame whose anchors show no star where the tracker puts them gets no point
+
+**What was wrong.** After a field jump larger than the tracker's search
+radius (15 green px), a tracker window could centroid a neighbour or noise:
+the tracker reported that anchor and moved every aperture by its offset. S35
+only fires when no anchor at all is found, so such a frame was measured off
+its stars, with no flag, and the next frames could follow the wrong star. The
+batch re-run has had the independent check since S43; the live and sequence
+paths had none.
+**Who was affected.** Live and sequence photometry after a jump or a slew
+larger than the search radius when a window still found something, and frames
+on which clouds hid most anchors. On the owner's runs as shot (a solve before
+every sub) S48 changes no point: replaying the Qt sequence path on the 257
+frames of the tracker study (8 runs, Argos's live solves) gives 254 frames
+with a target point before and after. With one solve for a whole run (a run
+whose re-solves fail), the same replay gives 188 frames with a target point
+before, 83 of them more than 2 px from the star (RR Lyr 2026-09-25: 67 frames
+at 21-395 px), and 114 after: the 74 refused frames are those 67 and 7 frames
+between them without a truth solve. No frame within 2 px of its star is
+refused. The 16 XX Cyg points 2.1-4.4 px off (the tracker's lag in field
+rotation) keep their point: their anchors still show a star.
+**What changed.** After the tracker update, at least ceil(n/2) of the
+tracker's n anchors must show a star (aperture SNR ≥ 5, S35's threshold) where
+the tracked solution puts them (the batch's S43 rule, `anchors_seen`).
+Otherwise the frame gets no point: a WARN "Photometry skipped: fewer than half
+the anchor stars show a star where the solution places them — the field moved
+since the solve, or clouds. Re-solving.", a `frame_skipped` event
+(`reason: lock_lost`) in the flight recorder, and a solve is due at once
+(`AstrometryController.make_due`): in a run the sub in hand is solved now, its
+solution serving the next sub; outside a run the next frame is solved (a live
+point follows each solve). S35's skipped frames make the solve due the same
+way. On a replay of RR Lyr frames 40-79 through frame 40's solve alone, frame
+52 (the 22.8 px jump) was measured 22.6 px from the star and frame 53 skipped;
+now frame 52 is refused and, re-solved, frame 53 is measured 0.65 px from it.
+S48 does not catch a wrong plate solution: a new solution rebuilds the tracker
+from the stars seen where it puts them, so they pass (S50 refuses the observed
+one by its scale). The web server's port has the same change and gives the
+same points on these frames.
+**How to check.** `tests/workers/test_acquisition_engine.py::test_a_frame_whose_anchors_show_no_star_gets_no_point_s48`
+(a point written on the code before the fix),
+`::test_a_run_re_solves_the_frame_whose_lock_was_lost_s48`,
+`::test_the_lock_check_costs_no_good_frame_s48` and
+`tests/workers/test_astrometry_controller.py::test_a_lost_lock_makes_a_solve_due_at_once_s48`.
+
+### S49 — One live curve per star and filter
+
+**What was wrong.** A star's live curve was keyed by the star alone. A run
+alternating filters (V and B steps, or IR and LP) put both bands' points in one
+curve: one series on the plot, one CSV, one systematic floor (`sigma_syst`
+from the scatter of both bands together) and one leave-one-out vetting of each
+comparison, which a band difference makes look unstable. A batch re-run of
+such a folder did the same.
+**Who was affected.** Runs and live previews through two filters. None of the
+owner's: every run used one filter (IR, or LP for single frames), and so did
+their live-preview curves.
+**What changed.** One curve per (star, filter). The filter is the frame's: a
+sub's read-back `FILTER`, a live frame's settled wheel slot (else the Camera
+form's filter), an opened or re-run file's `FILTER` card; spelled as frame
+file names spell it (`filter_token`: `ir`, `lp`, `v`, `clear` for none). It sits
+in the CSV name, as the start time does (S40): a run's
+`photometry/{role}_{object}_{filter}_{star}.csv`, a preview curve's
+`<object>_<start>_{filter}_{star}.csv`, a batch re-run's
+`{role}_{object}_{filter}_{star}.csv`. The comparisons are vetted per filter:
+the run's first filter in `photometry_quality.json`, each other one in
+`photometry_quality_<filter>.json`; a re-run's check-star RMS is per filter.
+With two filters every series label names its filter ("RR Lyr [v]"). The
+sequence editor warns when the enabled Light steps use two filters: "Light
+steps use 2 filters (V and B): each star gets one light curve and one CSV per
+filter." A one-filter run's files keep their contents byte for byte; only the
+names gain the filter (XX Cyg 2026-09-07 `040723Z`, no site set: its 9 sequence
+CSVs and 9 batch CSVs, 216 rows each, identical; with a site, S51 changes their
+`airmass` column only). Review reads both names: a new name's curve is the
+star's in that filter; an old name's is the star's, as before. The AAVSO export
+refuses curves of two filters (S53): export one filter's CSV from Analyze.
+**How to check.** `tests/workers/test_acquisition_engine.py::test_each_filter_has_its_own_curve_csv_and_vetting_s49`
+(one curve for both filters on the code before the fix),
+`tests/workers/test_photometry_batch_worker.py::test_a_re_run_keeps_one_curve_per_star_and_filter_s49`,
+`tests/core/test_session_review.py::test_review_keeps_one_curve_per_star_and_filter_s49`
+and `tests/ui/test_sequence_panel_plan.py::test_light_steps_through_two_filters_warn_one_curve_per_filter_s49`.
+
+### S52 — A set change between two solves never re-anchors the tracker on a stale solution
+
+**What was wrong.** A target-set change (the VSP comparisons auto-selected when
+the catalogue answers after a run's first solve, a role change, Remove,
+Recommend, a new comparison count) dropped the tracker, and the next sub rebuilt
+it on the last raw solve although the field had drifted since. Only the stars
+that happened to show at the stale positions qualified as anchors: on the
+owner's RR Lyr field, one neighbour 30 px from a comparison. The S48 check
+needs ceil(1/2) = 1 anchor, and the anchor that moved the solution is always
+"seen", so it passed; every aperture then sat on blank sky until the next solve,
+with no flag, no re-solve due, and the points in the CSV and the AAVSO export.
+**Who was affected.** Sequence runs in which the set changed between two solves
+(live points follow each solve and are not affected). The science review's
+replay of RR Lyr 2026-09-25 frames 0-79 (one solve every 20 s) found five
+unflagged target points on frames 4, 7, 8, 10 and 11 (SNR 0-2.6, 30-37 px from
+an independent ASTAP solve), identical in Qt and the server; without the set
+change, none.
+**What changed.** A set change freezes the solution as tracked so far (the solve
+with the tracker's shift and rotation) and the next tracker is built on it until
+the next solve; a slew or a new solve starts from the raw solution as before. In
+a run a set change also makes the next sub's solve due at once. The web
+server's port (`PhotometryService.on_targets_changed`) has the same change. Left to
+an owner decision: with fewer than 3 anchors the S48 check is met by
+the anchor that moved the solution.
+**How to check.** `tests/workers/test_acquisition_engine.py::test_a_set_change_never_re_anchors_on_a_stale_solution_s52`
+(the target 26 px off and no re-solve due on the code before the fix).
+
 ## Review and AAVSO export
+
+### S53 — The AAVSO export refuses curves of two filters
+
+**What was wrong.** Since S49 a run through two filters keeps one curve per
+(star, filter). The AAVSO export took every target curve with points under the
+one `FILT` code of Settings (`photometry.default_band`), and `KMAG` from the
+first check curve whatever its filter: a two-filter run reported as one band.
+**Who was affected.** AAVSO exports of a run or live preview through two
+filters. None of the owner's (one filter per run).
+**What changed.** When the target and check curves span two filters or more,
+the export says so ("These curves are in 2 filters (ir, lp), and an AAVSO
+report has one band. Open one filter's target CSV in Analyze
+(target_<object>_<filter>_<star>.csv) and export it from there.") and writes
+nothing. A one-filter export is unchanged.
+**How to check.** `tests/ui/test_photometry_window.py::test_aavso_export_refuses_curves_of_two_filters_s53`
+(a two-row file under one `FILT` on the code before the fix).
 
 ### S9 — Review keeps the check star's role
 
@@ -1153,6 +1361,42 @@ fail; a successful solve is still a real ASTAP solution.
 **What changed.** ASTAP gets `-D <set> -d <folder>`, the pair it already got when
 the folder was auto-detected (`astap_cli -h`: `-d path`, `-D abbreviation`).
 **How to check.** `tests/core/test_astrometry_session.py::test_database_folder_keeps_the_database_set`.
+
+### S50 — A plate solution off the session's scale is refused
+
+**What was wrong.** Any solution ASTAP returned replaced the last good one.
+On XX Cyg 2026-09-07 (`045156Z`) the auto-solve of the run's second frame
+matched at 7.093″ per green pixel where every other solve of the night gave
+7.341-7.343: a wrong match (its solves at other downsamples do not agree with
+it). The next frame was measured through it: apertures 21-26 px off every
+star, and the run's target CSV holds that row, unflagged (SNR 0.91, 26 px from
+the star; `notes/tracker_comparison.md` §4.4 on the web-UI branch).
+**Who was affected.** Live and sequence photometry after a wrong match; one
+frame of the owner's 270 solves. Batch re-runs are not affected (they solve
+once, then re-solve only on a lost lock, S43).
+**What changed.** A camera frame's solution whose plate scale (from its CD
+matrix) is more than 1 % from the session's first good solve is refused: the
+previous solution is kept, as after a failed solve, and the log says why
+("Solve: solution refused — plate scale 3.547″/px is 3.4 % below this
+session's 3.671″/px (a wrong match); the previous solution is kept"). The
+reference is the first accepted solve; another camera (a disconnect) or
+another frame geometry starts a new one. The profile's nominal scale is not
+used: it is 1.8 % above every measured solve. An opened FITS (another
+instrument, another night) is neither held to the reference nor sets it. The
+S48 lock check does not catch a wrong solution: a new solution rebuilds the
+tracker from the stars seen where it puts them (on the wrong solve above it
+kept 1 anchor of 6, which passed). A guard for a wrong solution at the right
+scale is left to the owner (web-UI wave 6b report).
+Over every solve of the owner's sessions (the 257 frames of the tracker study,
+Argos's live settings, and the 11 other runs: 15 frames, 13 solved: 270
+solves), the good
+ones lie within 0.3 % of their night's first solve; the gate refuses the one
+wrong solve and no other (0 false rejections). Two frames did not solve at
+all (2026-06-18, 2026-09-25 `194741Z`).
+**How to check.** `tests/workers/test_astrometry_controller.py::test_a_solution_off_the_session_scale_is_refused_s50`
+(the wrong solution replaced the good one on the code before the fix),
+`::test_the_scale_reference_restarts_with_the_camera_or_geometry_s50` and
+`::test_an_opened_frame_is_not_held_to_the_camera_scale_s50`.
 
 ## Wording
 
@@ -1410,11 +1654,9 @@ patch:
   S3, S4, S10, S23 and H3) were checked the same way: each new test fails with
   the commit's source change reverted.
 - `ruff` and `black` clean on CI's scope (`argos/`, `tests/`, `main.py`).
-- Documented, not changed: `sky_geometry.altitude_at` / `horizontal_at` use J2000
-  coordinates against the date's sidereal time (no precession): up to 0.3° off in 2026
-  against astropy (the wave 6a science review), so the CSV airmass is about 0.002 low at
-  41° and 0.01-0.02 at 20-30°. The docstrings said about 0.1°; they now say 0.3°.
-  Precessing to the date would change every airmass written: left for the owner.
+- `sky_geometry.altitude_at` / `horizontal_at` used J2000 coordinates against the
+  date's sidereal time (no precession): up to 0.3° off in 2026 against astropy (the
+  wave 6a science review). The owner chose to precess to the date (S51).
 - Sphinx builds with `-W` and no warnings. The guide, the photometry reference
   and the install page describe 0.5.0 behaviour (the guide's Connect and
   Observe sections cover the H2, H7, H8, H11 and H12 changes, and the review
