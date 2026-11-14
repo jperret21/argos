@@ -21,8 +21,10 @@
   import PhotometryGallery from '../../imaging/photometry/gallery/PhotometryGallery.svelte';
   import PlanGallery from '../../plan/gallery/PlanGallery.svelte';
   import RunGallery from '../../run/gallery/RunGallery.svelte';
+  import RunModeGallery from '../../imaging/run/gallery/RunModeGallery.svelte';
   import WorkspaceGallery from '../../imaging/modes/gallery/WorkspaceGallery.svelte';
   import ToolsGallery from '../../viewer/tools/gallery/ToolsGallery.svelte';
+  import NightGallery from '../../shell/attention/gallery/NightGallery.svelte';
   import RailFooter from '../../shell/RailFooter.svelte';
   import ShortcutSheet from '../../shell/ShortcutSheet.svelte';
   import StartupScreen from '../../shell/StartupScreen.svelte';
@@ -259,8 +261,14 @@
     />
   </header>
 
+  <!-- Wave 6b, Observe Run mode: the Run band, the drawer's tab row with the curve tools, the Run suggestion. -->
+  <RunModeGallery />
+
   <!-- Wave 6a, the Plan screen: Steps table, issues, Source, Run options, Presets and Save, Target set. -->
   <PlanGallery />
+
+  <!-- Wave 6b, the night: attention levels, chip and list, Run card items, Watch, the wrap-up. -->
+  <NightGallery />
 
   <!-- Wave 6a, run controls and visibility: transport, readiness, run strip, Run card, VisibilityTimeline, interlock. -->
   <RunGallery />

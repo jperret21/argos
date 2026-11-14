@@ -97,6 +97,10 @@ export interface TimeAxisOptions {
   jd0?: number;
   /** BJD − JD in seconds near unix time t (BJD axis). */
   bjdOffsetS?: (t: number) => number;
+  /** Tick label size, CSS px (default 10; Watch: 22, read from 2 m). */
+  fontPx?: number;
+  /** Least room per tick, CSS px (default 90). */
+  pxPerTick?: number;
 }
 
 /** The time axis of a mode: UTC clock ticks, or JD / BJD offsets from jd0. */
@@ -113,12 +117,12 @@ export function timeAxis(ink: ChartInks, o: TimeAxisOptions): uPlot.Axis {
     splits: (u) => {
       const { min, max } = u.scales.x;
       if (min == null || max == null) return [];
-      return jdSplits(min, max, u.bbox.width / uPlot.pxRatio, offset(u));
+      return jdSplits(min, max, u.bbox.width / uPlot.pxRatio, offset(u), o.pxPerTick);
     },
     values: (u, splits) => {
       if (!o.labels) return splits.map(() => '');
       const span = (u.scales.x.max ?? 0) - (u.scales.x.min ?? 0);
-      return jdLabels(splits, span, u.bbox.width / uPlot.pxRatio, o.jd0 ?? 0, offset(u));
+      return jdLabels(splits, span, u.bbox.width / uPlot.pxRatio, o.jd0 ?? 0, offset(u), o.pxPerTick);
     },
   };
 }
@@ -126,7 +130,7 @@ export function timeAxis(ink: ChartInks, o: TimeAxisOptions): uPlot.Axis {
 export function utcAxis(ink: ChartInks, o: TimeAxisOptions): uPlot.Axis {
   return {
     stroke: ink.text.a(),
-    font: `400 10px ${ink.mono}`,
+    font: `400 ${o.fontPx ?? 10}px ${ink.mono}`,
     size: o.labels ? (o.size ?? 22) : 2,
     gap: 3,
     ticks: { stroke: ink.axis.a(), width: 1, size: o.labels ? 3 : 0 },
@@ -135,7 +139,7 @@ export function utcAxis(ink: ChartInks, o: TimeAxisOptions): uPlot.Axis {
     splits: (u) => {
       const { min, max } = u.scales.x;
       if (min == null || max == null) return [];
-      return utcSplits(min, max, u.bbox.width / uPlot.pxRatio);
+      return utcSplits(min, max, u.bbox.width / uPlot.pxRatio, o.pxPerTick);
     },
     values: (u, splits) => {
       if (!o.labels) return splits.map(() => '');

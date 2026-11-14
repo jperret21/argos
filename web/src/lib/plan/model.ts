@@ -119,6 +119,7 @@ export const FIELD_LABELS: Record<string, string> = {
   on_complete: 'End of run',
   steps: 'Steps',
   metadata: 'Transit ephemeris',
+  start_at_utc: 'Start (UTC)',
 };
 
 export interface IssueIndex {

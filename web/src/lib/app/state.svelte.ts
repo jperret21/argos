@@ -72,7 +72,7 @@ import type {
 } from '../api/types';
 import { type ArgosConfig, loadConfig } from '../config';
 import { ConditionsStore } from '../charts/conditions.svelte';
-import type { ConditionsPage, TimelinePeriod } from '../charts/conditions';
+import { overdueAfter, type ConditionsPage, type TimelinePeriod } from '../charts/conditions';
 import { clockUtc } from '../format/time';
 import { ConditionsView } from '../charts/conditionsView.svelte';
 import type { AutofocusRecord } from '../charts/vcurve';
@@ -103,7 +103,12 @@ import { isRunActive } from '../api/sequence';
 import { MountInterlock } from '../run/interlock.svelte';
 import { isActive, isEngaged, pauseRunTimeoutMs, startBlock, stopDialog } from '../run/run';
 import { SequenceStore } from '../run/sequence.svelte';
-import type { FieldCommands, PhotometryCommands, SequenceCommands } from '../shell/commandIndex';
+import { WrapUpStore } from '../run/wrapup/store.svelte';
+import type { AttentionTarget } from '../api/attention';
+import { AttentionStore } from '../shell/attention/attention.svelte';
+import { ALERT_KEYS, prefsFrom, type SoundLevel } from '../shell/attention/model';
+import { checkKeepAwake } from '../shell/watch';
+import type { FieldCommands, NightCommands, PhotometryCommands, SequenceCommands } from '../shell/commandIndex';
 import { openLayers, setReservedKeys, topModalIndex } from '../components/layers';
 import type { FsLister } from '../components/filepicker';
 import type { BundleRequest, BundleResult } from '../components/supportbundle';
@@ -316,6 +321,16 @@ export class ArgosApp {
    * run_active` becomes the one question "Pause the run and slew" (InterlockDialog in App).
    */
   readonly interlock = new MountInterlock();
+  /** Wave 6b (D3): the server's attention items, the shared acknowledgement and the tones. */
+  readonly attention = new AttentionStore({ by: 'web' });
+  /** Wave 6b (D2): the last run's end-of-night wrap-up (`sequence.wrapup`). */
+  readonly wrapup = new WrapUpStore();
+  /** Wave 6b (D3): the Watch view is shown (W, the palette, an item's "Watch"). */
+  watchOpen = $state(false);
+  /** Wave 6b: the status bar's attention list is open (the chip, the Run card's "n more"). */
+  attentionListOpen = $state(false);
+  /** Wave 6b: the server's keep-awake record (status.keep_awake); null from an older server. */
+  keepAwake: ReturnType<typeof checkKeepAwake> = $state.raw(null);
   /** The palette asked Plan to open one of its popovers (Plan clears it once shown). */
   planRequest: 'presets' | 'preflight' | null = $state(null);
   autoStretch = $state(true);
@@ -442,6 +457,10 @@ export class ArgosApp {
     this.field.pageLoaded();
     this.photometry.attach(this.events, this.client);
     this.sequence.attach(this.events, this.client);
+    this.wrapup.attach(this.events, this.client);
+    this.events.on('status', (m) => {
+      if ('keep_awake' in m) this.keepAwake = checkKeepAwake(m.keep_awake);
+    });
     this.events.on('stellarium', (m) => this.onStellariumGoto(m));
     this.events.on('frame_metrics', (m) => {
       if (typeof m.seq === 'number') this.frameMetrics = m as unknown as FrameMetricsRecord;
@@ -653,6 +672,13 @@ export class ArgosApp {
     if (!this.canCamera) return true;
     const t = Date.parse(h.timestamp);
     if (!Number.isFinite(t)) return false;
+    // A run's sub is held against the run's limit, max(2 × cadence, cadence + 60 s): the Run
+    // card, the band's AgeMeter, Watch and the "No new frame" rule agree. With an interval
+    // (1 s subs every 10 s) the live-view limit called a healthy run "Last frame" half the
+    // time (wave 6b design review).
+    if (isActive(this.sequence.state)) {
+      return this.clock - t > 1000 * overdueAfter(this.sequence.cadence);
+    }
     const exposure = Math.max(h.exposure_s, this.cameraBusy ? (this.camera?.exposure_s ?? 0) : 0);
     return this.clock - t > Math.max(5000, 3000 * exposure);
   }
@@ -694,6 +720,9 @@ export class ArgosApp {
     this.frames.start();
     this.frameStats ??= new FrameStatsWorker();
     this.readHealth();
+    // Wave 6b: listening before the link opens (the server sends the attention snapshot on
+    // connect); the first press or key arms the sound, a 5 s timer repeats open Critical tones.
+    const stopAttention = this.attention.attach(this.events, this.client, typeof window === 'undefined' ? null : window);
     const tick = setInterval(() => (this.clock = Date.now()), 1000);
     const statusTimer = setTimeout(() => (this.firstStatusTimedOut = true), FIRST_STATUS_TIMEOUT_MS);
     const stopEffects = $effect.root(() => {
@@ -721,10 +750,16 @@ export class ArgosApp {
       $effect(() => {
         if (this.startup.ready) untrack(() => (this.started = true));
       });
+      // Wave 6b: the alert sound follows Settings › Alerts (alerts.sound, sound_info, repeat_critical_s).
+      $effect(() => {
+        const v = this.configValues;
+        if (v) untrack(() => this.attention.setPrefs(prefsFrom(v)));
+      });
     });
     const stopKeys = this.bindShortcuts();
     return () => {
       clearInterval(tick);
+      stopAttention();
       clearTimeout(statusTimer);
       clearTimeout(this.healthTimer);
       stopEffects();
@@ -798,6 +833,47 @@ export class ArgosApp {
     // The run (W6a): its state, the subs saved while the link was down, the preflight.
     void this.sequence.refresh();
     void this.sequence.loadPreflight();
+    // Wave 6b: the attention list and history (a client joining mid-run reads them quietly).
+    // A new server process numbers its items again. The wrap-up rides on the `sequence`
+    // record the server sends on connect (no GET: a 404 before the first end).
+    if (restarted) this.attention.clear();
+    void this.attention.refresh();
+  }
+
+  // -- Wave 6b: attention, Watch, wrap-up ------------------------------------------------
+
+  /** An attention item's suggested next step (the list, the Run card, Watch). */
+  attentionAction(to: AttentionTarget): void {
+    if (to === 'watch') {
+      this.watchOpen = true;
+      return;
+    }
+    this.watchOpen = false;
+    if (to === 'devices') this.go('connection');
+    else if (to === 'plan') this.go('sequencer');
+    else if (to === 'settings') this.openSettings('alerts');
+    else {
+      this.go('imaging');
+      this.observe.setMode(to);
+    }
+  }
+
+  /** The chip's Off / Soft / Normal (config key alerts.sound, shared with Settings › Alerts). */
+  setAlertSound(level: SoundLevel): void {
+    void this.commitConfig({ [ALERT_KEYS.sound]: level });
+  }
+
+  /** The wrap-up's "Prepare in Plan" (D2): the draft takes tonight's darks and biases; Undo puts the old draft back. */
+  async prepareCalibration(): Promise<void> {
+    const { replaced } = await this.wrapup.prepare();
+    this.go('sequencer');
+    if (replaced) {
+      this.undo.push({
+        title: 'Plan draft replaced by tonight\'s calibration',
+        detail: 'Darks and biases for the last run; nothing starts until you press Start',
+        undo: () => this.client.request('PUT', '/api/sequence/plan', replaced),
+      });
+    }
   }
 
   // -- Log v2 ---------------------------------------------------------------------
@@ -1099,6 +1175,8 @@ export class ArgosApp {
       this.shortcuts.handle('log.toggle', () => this.toggleLog()),
       this.shortcuts.handle('nav.settings.mod', () => this.go('configuration')),
       this.shortcuts.handle('palette.open', () => (this.paletteOpen = !this.paletteOpen)),
+      // Wave 6b (D3): W opens Watch; inside it, Watch's own keys close it (only W, Esc, ?, Mod+K act).
+      this.shortcuts.handle('observe.watch', () => (this.watchOpen = !this.watchOpen)),
       this.shortcuts.handle('motion.abort', () => this.abortMotion()),
       // D19: Open FITS image opens into Observe from every section (Review's inspector is wave 7).
       this.shortcuts.handle('file.open-fits', () => {
@@ -1969,6 +2047,19 @@ export class ArgosApp {
       resume: () => seq.resume(this.client).catch(report('Resume sequence')),
       stopRun: () => seq.stop(this.client).catch(report('Stop sequence')),
       openPlan: (what) => this.openPlan(what),
+    };
+  }
+
+  /** The palette's night entries (W6b, D3): Watch, acknowledge all, the alert sound. */
+  nightCommands(): NightCommands {
+    const att = this.attention;
+    return {
+      watchOpen: this.watchOpen,
+      toggleWatch: () => (this.watchOpen = !this.watchOpen),
+      unacked: att.open.length,
+      ackAll: () => att.ackAll().catch((err) => this.reportError('Acknowledge all alerts', err)),
+      sound: att.prefs.level,
+      setSound: (level) => this.setAlertSound(level),
     };
   }
 

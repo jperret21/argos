@@ -115,6 +115,10 @@ export interface SequenceState {
   /** Subs before the next periodic autofocus (null: none planned or countable). */
   next_autofocus_in: number | null;
   autofocus_runs: number;
+  /** Wave 6b: the mid-run autofocus sweep in progress (`autofocus.step` of `.total`), the run strip's and Run band's afStep. */
+  af_step?: { done: number; total: number } | null;
+  /** Wave 6b: start times of the run's mid-run autofocus passes (`autofocus_passes`, unix s, oldest first). */
+  af_marks?: number[];
   paused_by: 'observer' | 'motion' | null;
   /** "Nothing" | "Stop tracking" | "Park mount". */
   on_complete: string | null;
@@ -143,6 +147,14 @@ function checkResult(v: unknown, onComplete: string | null): SequenceResult | nu
  * The `sequence` record (the WS message, `{"sequence": …}`, or `GET /api/sequence`). Null when
  * it is not one: unknown state, missing counts (the status record's summary has none).
  */
+/** The record's `autofocus` (a mid-run pass in progress, wave 6b) as afStep: step of total, null without a total. */
+function afStepOf(v: unknown): { done: number; total: number } | null {
+  if (!isObj(v)) return null;
+  const total = int(v.total);
+  const step = int(v.step);
+  return total !== null && total > 0 ? { done: Math.max(0, Math.min(step ?? 0, total)), total } : null;
+}
+
 export function checkSequence(m: unknown): SequenceState | null {
   if (!isObj(m)) return null;
   const v = isObj(m.sequence) ? m.sequence : m;
@@ -186,6 +198,8 @@ export function checkSequence(m: unknown): SequenceState | null {
     autofocus_every_n: plan ? plan.autofocus_every_n : int(v.autofocus_every_n),
     next_autofocus_in: af ? int(af.in_frames) : null,
     autofocus_runs: int(v.autofocus_runs) ?? 0,
+    af_step: afStepOf(v.autofocus),
+    af_marks: Array.isArray(v.autofocus_passes) ? v.autofocus_passes.map((p) => (isObj(p) ? unixOf(p.started_utc) : null)).filter((t): t is number => t !== null) : [],
     paused_by: paused,
     on_complete: onComplete,
     last_result: checkResult(v.last_result, onComplete),

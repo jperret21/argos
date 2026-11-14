@@ -30,6 +30,16 @@
   max(2 x cadence, cadence + 60 s) the gap after the newest point is
   hatched and the now-line says "no frame for …" (BRAND 10).
 
+  Tools (wave 6b): the view state lives in a CurveView (view.svelte.ts) so the tools can
+  sit outside the plot: in the drawer's tab row and the Run band's header (CurveTools).
+  Without a `view` the plot keeps its own tool row (the gallery; Review in wave 7). The
+  readout of the newest or selected frame sits in each facet's title row, beside its curve.
+  Attention rules (wave 6b, BRAND 10): a rule the server holds is drawn read-only, its
+  period hatched from the frame where it fired, a dashed line and its name at the start;
+  "Change rule…" lives with the host (Settings › Alerts), never on the plot.
+  S49: one series per star and filter; the filter drawn is the display's (default: the
+  newest frame's), named in the target's title.
+
   Zoom states named by a chip (Whole run, Following, Zoom kept): drag = box
   zoom, wheel / pinch = zoom time about the pointer, Shift+wheel or a
   horizontal swipe = pan, double-click or F = fit, + / − zoom, End follows,
@@ -64,14 +74,13 @@
 </script>
 
 <script lang="ts">
+  import { filterLabel } from '../../format/filter';
   import uPlot from 'uplot';
   import 'uplot/dist/uPlot.min.css';
   import '../plot-host.css';
   import { onMount, untrack } from 'svelte';
   import Icon from '../../components/Icon.svelte';
   import { reducedMotion } from '../../components/motion.svelte';
-  import IconButton from '../../components/IconButton.svelte';
-  import Segmented from '../../components/Segmented.svelte';
   import { tooltip } from '../../components/tooltip';
   import { fixed, int } from '../../format/number';
   import { clockUtc, duration, utcDate } from '../../format/time';
@@ -84,16 +93,42 @@
   import { TimeZoom, type ZoomMode } from '../uplot/zoom';
   import NumText from '../../components/NumText.svelte';
   import CurveKey from './CurveKey.svelte';
+  import CurveTools from './CurveTools.svelte';
+  import { CurveView, ZOOM_STEP, type CurveDisplayLike } from './view.svelte';
   import { CHECK_RUNGS, FACET_MIN_SPAN, FACET_SHAPE, alignedOf, checkRung, checkSigma, facetData, flagCounts, niceSplits, padPixels, visibleRange, type FacetData, type FacetId, type YMode } from './facets';
   import { curveTsv, readoutAt, type PointReadout } from './readout';
   import type { LiveCurveStore } from './store';
 
+  /** An attention rule's period on the curve (read-only; the server's rule, BRAND 10). */
+  export interface CurveRule {
+    id: string;
+    /** Unix s: the frame where it fired, and where it stopped holding (null: still holds). */
+    from: number;
+    to: number | null;
+    /** "HFD rise" (the time is added). */
+    label: string;
+  }
+
   interface Props {
     store: LiveCurveStore;
+    /**
+     * The view state shared with tools outside the plot (the drawer's tab row, the Run band's
+     * header): the plot then draws no tool row of its own, and reads the axis, error bars,
+     * flux view and filter from `view.display`.
+     */
+    view?: CurveView;
+    /** Draw the plot's own tool row (default: only without a `view`). */
+    toolbar?: boolean;
+    /** Attention rules to draw (read-only). */
+    rules?: readonly CurveRule[];
     /** Facets top to bottom. Observe band: target + check (D25); drawer and Review add the ensemble. */
     facets?: FacetId[];
-    /** 'band': one compact toolbar row (Observe Run band); 'drawer': the full toolbar. */
-    variant?: 'band' | 'drawer';
+    /**
+     * 'band': one compact toolbar row (Observe Run band); 'drawer': the full toolbar;
+     * 'watch': the band read from 2 m (Watch, D3): 22 px ticks (--watch-tick), about four
+     * y ticks, the facet name and its newest value at 30 px, no secondary header text.
+     */
+    variant?: 'band' | 'drawer' | 'watch';
     /** Time axis (bindable: the host persists it). */
     axis?: TimeAxisMode;
     /** Error bars shown (bindable). */
@@ -123,6 +158,9 @@
 
   let {
     store,
+    view,
+    toolbar,
+    rules = [],
     facets = ['target', 'check'],
     variant = 'drawer',
     axis = $bindable('utc'),
@@ -141,8 +179,44 @@
     wheel = 'zoom',
   }: Props = $props();
 
-  const compact = $derived(variant === 'band');
-  const ymode: YMode = $derived(flux ? 'flux' : 'mag');
+  const watchView = $derived(variant === 'watch');
+  const compact = $derived(variant === 'band' || variant === 'watch');
+  /** Watch: what the axes and the facet titles need to be read from 2 m. */
+  const TICK_PX = $derived(watchView ? 22 : 10);
+
+  // The view state: the host's (tools outside the plot), or the plot's own over its props.
+  let ownFilter = $state<string | null>(null);
+  const propDisplay: CurveDisplayLike = {
+    get axis() {
+      return axis;
+    },
+    set axis(a) {
+      axis = a;
+    },
+    get errors() {
+      return errors;
+    },
+    set errors(e) {
+      errors = e;
+    },
+    get flux() {
+      return flux;
+    },
+    set flux(f) {
+      flux = f;
+    },
+    get filter() {
+      return ownFilter;
+    },
+    set filter(f) {
+      ownFilter = f;
+    },
+  };
+  const own = new CurveView(propDisplay);
+  const cv: CurveView = $derived(view ?? own);
+  const disp: CurveDisplayLike = $derived(cv.display);
+  const showBar = $derived(toolbar ?? !view);
+  const ymode: YMode = $derived(disp.flux ? 'flux' : 'mag');
 
   // -- Plot state (outside the reactive graph) -------------------------------------
   let root: HTMLDivElement;
@@ -157,20 +231,26 @@
   let cache = new Map<FacetId, FacetData | null>();
   let cacheKey = '';
   function dataOf(id: FacetId): FacetData | null {
-    const key = `${store.version}|${ymode}|${targetKey}|${checkKey}`;
+    const f = filterNow();
+    const key = `${store.version}|${ymode}|${targetKey}|${checkKey}|${f}`;
     if (key !== cacheKey) {
       cache = new Map();
       cacheKey = key;
     }
-    if (!cache.has(id)) cache.set(id, facetData(store, id, ymode, { target: targetKey, check: checkKey }));
+    if (!cache.has(id)) cache.set(id, facetData(store, id, ymode, { target: targetKey, check: checkKey, filter: f }));
     return cache.get(id) ?? null;
+  }
+
+  /** S49: the filter drawn: the display's while the curves have it, else the newest frame's. */
+  function filterNow(): string | null {
+    const want = disp.filter;
+    return want && store.filters().includes(want) ? want : store.newestFilter();
   }
 
   // -- Reactive state (small values only) --------------------------------------------
   let version = $state(0);
   let now = $state(untrack(() => clock()));
   let mode = $state<ZoomMode>('fit');
-  let viewSpan = $state(0);
   /** The shown time range, unix s ("a,b"): `data-lc-view` for scripted checks (a kept zoom never moves). */
   let viewRange = $state('');
   let hover = $state.raw<{ t: number; left: number; top: number } | null>(null);
@@ -217,8 +297,8 @@
     reducedMotion,
     onChange: (m, v) => {
       mode = m;
-      viewSpan = v ? v[1] - v[0] : 0;
       viewRange = v ? `${v[0]},${v[1]}` : '';
+      cv.setZoom(m, v);
     },
   });
 
@@ -235,7 +315,8 @@
 
   // JD / BJD axes: an integer day from the run's first point, BJD only when every point has one.
   function anchorCols() {
-    return store.primary('target', targetKey)?.cols ?? store.primary('check', checkKey)?.cols ?? null;
+    const f = filterNow();
+    return store.primary('target', targetKey, f)?.cols ?? store.primary('check', checkKey, f)?.cols ?? null;
   }
   const timeInfo = $derived.by(() => {
     void version;
@@ -246,7 +327,7 @@
     return { jd0: Math.floor(c.jd[0]), bjd0: bjdOk ? Math.floor(c.bjd[0]) : 0, bjdOk, date: utcDate(c.t[0]) };
   });
   $effect(() => {
-    if (axis === 'bjd' && !timeInfo.bjdOk && version > 0) untrack(() => (axis = 'jd'));
+    if (disp.axis === 'bjd' && !timeInfo.bjdOk && version > 0) untrack(() => (disp.axis = 'jd'));
   });
 
   function bjdOffsetS(t: number): number {
@@ -440,13 +521,54 @@
       const zero = ymode === 'mag' ? 0 : 1;
       out.push({ kind: 'hline', y: zero, color: ink.reference.a(0.55), dash: [2, 3], layer: 'under' });
     }
+    const nowLabel = first && !watchView && expecting && live.lastT !== null;
+    const nowSide = nowLabel && live.lastT !== null ? freeSide(id, live.lastT) : null;
     if (expecting && live.lastT !== null) {
       if (live.overdue) out.push({ kind: 'vspan', from: live.lastT, to: now, hatch: ink.warning.a(0.45), edge: ink.warning.a(0.8), layer: 'over' });
       const text = `now ${clockUtc(now)}${live.overdue && live.age !== null ? ` · no frame for ${duration(live.age)}` : ''}`;
-      out.push({ kind: 'vline', x: now, color: ink.highlight.a(0.85), label: first ? { text, at: 'top', color: live.overdue ? ink.fg.a() : undefined } : undefined });
+      // On the side away from the newest point: never over its ring (design review).
+      // Watch says the age at 66 px above the curve: its line alone here (a 10 px label is unread from 2 m).
+      out.push({ kind: 'vline', x: now, color: ink.highlight.a(0.85), label: nowLabel && nowSide ? { text, at: nowSide, color: live.overdue ? ink.fg.a() : undefined } : undefined });
     }
     if (selectedT !== null) out.push({ kind: 'vline', x: selectedT, color: ink.highlight.a(0.9), dash: [4, 3] });
+    // Attention rules (read-only): the period hatched under the data, a dashed line where it fired;
+    // its name only where the plot is tall enough to keep it off the points (else the host says it).
+    const tall = ((hosts.get(id)?.u?.bbox.height ?? 0) / uPlot.pxRatio) >= 90;
+    for (const r of rules) {
+      const end = r.to ?? (expecting ? now : (live.lastT ?? r.from));
+      out.push({ kind: 'vspan', from: r.from, to: Math.max(end, r.from), hatch: ink.warning.a(0.32), layer: 'under' });
+      // A halo, not a box, on the side away from the points at its start: the data stays visible.
+      // An episode that began near now leaves the free side to the "now" label (they were drawn
+      // over each other, "HFD rise · 10:49" under "now 10:49:54"; on the other side it covered
+      // the points): its name comes back once the now-line has moved on; the hatch, the dashed
+      // line, the Run card and the minis say it meanwhile.
+      const side = freeSide(id, r.from);
+      const named = first && tall && !(nowSide === side && nearNow(id, r.from));
+      out.push({ kind: 'vline', x: r.from, color: ink.warning.a(0.9), dash: [3, 3], label: named ? { text: `${r.label} · ${clockUtc(r.from, false)}`, at: side, halo: true } : undefined });
+    }
     return out;
+  }
+
+  /** Whether `t` lies within a label's width (200 px) of the now-line. */
+  function nearNow(id: FacetId, t: number): boolean {
+    const u = hosts.get(id)?.u;
+    if (!u) return false;
+    const a = u.valToPos(t, 'x');
+    const b = u.valToPos(now, 'x');
+    return Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) < 200;
+  }
+
+  /** The plot's half (top or bottom) without the point nearest `t`: where a label goes. */
+  function freeSide(id: FacetId, t: number): 'top' | 'bottom' {
+    const u = hosts.get(id)?.u;
+    const d = dataOf(id);
+    if (!u || !d || !d.n) return 'top';
+    let k = d.n - 1;
+    while (k > 0 && d.x[k] > t) k--;
+    while (k >= 0 && !Number.isFinite(d.y[k])) k--;
+    if (k < 0) return 'top';
+    const py = u.valToPos(d.y[k], 'y');
+    return Number.isFinite(py) && py < u.bbox.height / uPlot.pxRatio / 2 ? 'bottom' : 'top';
   }
 
   function selectedIdx(id: FacetId): number | null {
@@ -477,7 +599,9 @@
   }
 
   /** Pixels kept free inside the plot edges: a marker's radius (its ring may spill past the edge). */
-  const MARGIN_PX = 5;
+  // 8 px: the newest point's ring (radius 6.5 px) stays inside the plot, off the title row
+  // and its readout (wave 6b design review: the check's readout ran into the ring).
+  const MARGIN_PX = 8;
 
   function rungView(id: FacetId): boolean {
     return id === 'check' && ymode === 'mag' && deltaView(id);
@@ -503,9 +627,14 @@
       const px = u.bbox.height / uPlot.pxRatio;
       // The ticks label the data part, not the pixel margins; labels stay 13 px apart.
       const dataPx = Math.max(0, px - 2 * MARGIN_PX);
+      // Watch's 22 px ticks need about 40 px each: the rung and zero, or the rung alone.
+      if (rungView(id) && rung !== null && watchView) return dataPx >= 88 ? [-rung, 0, rung] : [-rung, rung];
       if (rungView(id) && rung !== null) return dataPx >= 52 ? [-rung, -rung / 2, 0, rung / 2, rung] : dataPx >= 26 ? [-rung, 0, rung] : [-rung, rung];
       const m = ((max - min) * MARGIN_PX) / Math.max(1, px);
-      return niceSplits(min + m, max - m, dataPx).splits;
+      // A band strip under 52 px of data (the Run band's summary row and its curve): two
+      // ticks 13 px apart or more rather than a third step's labels on top of each other.
+      if (watchView) return niceSplits(min + m, max - m, dataPx, 40, 2).splits;
+      return niceSplits(min + m, max - m, dataPx, 13, compact && dataPx < 52 ? 2 : 3).splits;
     };
   }
 
@@ -535,7 +664,7 @@
   function options(id: FacetId, first: boolean, last: boolean): uPlot.Options {
     const ink = inks!;
     const role = colorOf(id);
-    const font = `400 10px ${ink.mono}`;
+    const font = `400 ${TICK_PX}px ${ink.mono}`;
     const d = dataOf(id);
     const hasBand = !!d?.band;
     const series: uPlot.Series[] = [{}, { stroke: role.a(), paths: () => null, points: { show: false }, show: seriesShown(id) }];
@@ -545,7 +674,7 @@
       width: 100,
       height: 100,
       // The top margin holds the facet's title (an in-plot label, as Conditions).
-      padding: [TITLE_PX, 18, last ? 0 : 3, 0],
+      padding: [TITLE_PX, watchView ? 24 : 18, last ? 0 : 3, 0],
       legend: { show: false },
       cursor: {
         sync: { key: syncKey, setSeries: false },
@@ -568,11 +697,11 @@
         y: { dir: ymode === 'mag' && id !== 'ensemble' ? -1 : 1, range: (u, min, max) => yRange(u, id, min, max) },
       },
       axes: [
-        timeAxis(ink, { mode: axis, labels: last, suffix: true, jd0: axis === 'bjd' ? timeInfo.bjd0 : timeInfo.jd0, bjdOffsetS }),
+        timeAxis(ink, { mode: disp.axis, labels: last, suffix: true, jd0: disp.axis === 'bjd' ? timeInfo.bjd0 : timeInfo.jd0, bjdOffsetS, ...(watchView ? { fontPx: TICK_PX, size: TIME_AXIS_PX, pxPerTick: 260 } : {}) }),
         {
           stroke: ink.text.a(),
           font,
-          size: 50,
+          size: Y_AXIS_PX,
           gap: 5,
           ticks: { show: false },
           grid: { stroke: ink.grid.a(), width: 1 },
@@ -592,10 +721,11 @@
           carets: () => rungView(id),
           color: () => colorOf(id).a(),
           errors: () => dataOf(id)?.err ?? null,
-          showErrors: () => errors,
+          showErrors: () => disp.errors,
           errorAlpha: () => inks?.errorAlpha ?? 0.55,
           flags: () => dataOf(id)?.flags ?? null,
           latest: () => (id === 'ensemble' ? null : (inks?.highlight.a() ?? null)),
+          latestGrow: watchView ? 1.5 : 1,
           selected: () => {
             const i = selectedIdx(id);
             return i !== null && inks ? { idx: i, color: inks.highlight.a() } : null;
@@ -661,9 +791,11 @@
   // the check 35-45 px of plot: its ±1σ band (D10, the stability check) was unreadable (wave 5).
   const share = (id: FacetId) => (id === 'target' ? 3 : 2);
   /** The time axis rows the last facet carries (timeAxis size 22): its basis, so the plots share the rest. */
-  const TIME_AXIS_PX = 22;
+  const TIME_AXIS_PX = $derived(watchView ? 36 : 22);
   /** The facet title's line, in the plot's top margin. */
-  const TITLE_PX = 16;
+  const TITLE_PX = $derived(watchView ? 40 : 16);
+  /** The y tick labels' column (Watch: "7.39" at 22 px). */
+  const Y_AXIS_PX = $derived(watchView ? 96 : 50);
   /** Least plot height (px) a facet is drawn with; below, it is left out (the check: in the target's title). */
   const FLOOR: Record<FacetId, number> = { target: 48, check: 32, ensemble: 32 };
 
@@ -766,7 +898,7 @@
   // Theme, time axis and view live in the options: rebuild (the zoom view is kept).
   $effect(() => {
     void theme;
-    void axis;
+    void disp.axis;
     void ymode;
     void timeInfo.jd0;
     untrack(() => {
@@ -783,9 +915,10 @@
     void hidden.ensemble;
     void hidden.checkBand;
     void hidden.ensBand;
-    void errors;
+    void disp.errors;
     void selectedT;
     void live.overdue;
+    void rules;
     untrack(() => {
       for (const [id, h] of hosts) {
         const u = h.u;
@@ -793,6 +926,53 @@
         if (u.series[1] && u.series[1].show !== seriesShown(id)) u.setSeries(1, { show: seriesShown(id) });
         u.redraw(false, false);
       }
+    });
+  });
+
+  // S49: another filter drawn is another run of points: fit it again.
+  let lastFilter: string | null | undefined;
+  $effect(() => {
+    void version;
+    const f = filterNow();
+    untrack(() => {
+      if (lastFilter !== undefined && f !== lastFilter) {
+        zoom.reset();
+        selectedT = null;
+        schedule();
+      }
+      lastFilter = f;
+    });
+  });
+
+  // The tools outside the plot act on this plot while it is mounted.
+  $effect(() => {
+    const c = cv;
+    return untrack(() =>
+      c.attach({
+        fit: () => zoom.fit(true),
+        follow: () => zoom.follow(true),
+        zoomBy: (f) => zoom.zoomBy(f, undefined, true),
+        copy: () => void copyTsv(),
+      }),
+    );
+  });
+
+  // What the tools need to know (small values, published once per change).
+  $effect(() => {
+    const c = cv;
+    const any = anyData;
+    const ok = timeInfo.bjdOk;
+    const nw = newer;
+    void version;
+    const fs = store.filters();
+    const f = filterNow();
+    untrack(() => {
+      if (c.anyData !== any) c.anyData = any;
+      if (c.bjdOk !== ok) c.bjdOk = ok;
+      if (c.newer !== nw) c.newer = nw;
+      if (fs.join('\u0000') !== c.filters.join('\u0000')) c.filters = fs;
+      if (c.shownFilter !== f) c.shownFilter = f;
+      c.setZoom(zoom.mode, zoom.view);
     });
   });
 
@@ -848,22 +1028,22 @@
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key;
     if (k === 'f' || k === 'F') zoom.fit(true);
-    else if (k === '+' || k === '=') zoom.zoomBy(1 / 1.6, undefined, true);
-    else if (k === '-' || k === '_') zoom.zoomBy(1.6, undefined, true);
+    else if (k === '+' || k === '=') zoom.zoomBy(1 / ZOOM_STEP, undefined, true);
+    else if (k === '-' || k === '_') zoom.zoomBy(ZOOM_STEP, undefined, true);
     else if (k === 'ArrowLeft' && e.shiftKey) zoom.panBy(-0.25, true);
     else if (k === 'ArrowRight' && e.shiftKey) zoom.panBy(0.25, true);
     else if (k === 'ArrowLeft') step(-1);
     else if (k === 'ArrowRight') step(1);
     else if (k === 'End') zoom.follow(true);
-    else if (k === 'u' || k === 'U') errors = !errors;
-    else if (k === 'm' || k === 'M') flux = !flux;
+    else if (k === 'u' || k === 'U') disp.errors = !disp.errors;
+    else if (k === 'm' || k === 'M') disp.flux = !disp.flux;
     else return;
     e.preventDefault();
   }
 
   // -- Copy data (TSV) ------------------------------------------------------------------------
   async function copyTsv(): Promise<void> {
-    const { text, rows } = curveTsv(store, { target: targetKey, check: checkKey });
+    const { text, rows } = curveTsv(store, keys);
     const name = `lightcurve-${(store.object ?? 'run').replace(/[^\w.-]+/g, '_')}.tsv`;
     try {
       await navigator.clipboard.writeText(text);
@@ -880,7 +1060,10 @@
   }
 
   // -- Words ------------------------------------------------------------------------------------
-  const keys = $derived({ target: targetKey, check: checkKey });
+  const keys = $derived.by(() => {
+    void version;
+    return { target: targetKey, check: checkKey, filter: filterNow() };
+  });
   const hoverRead: PointReadout | null = $derived.by(() => {
     void version;
     return hover ? readoutAt(store, hover.t, ymode, keys, tolerance()) : null;
@@ -903,13 +1086,13 @@
   });
   const sigma = $derived.by(() => {
     void version;
-    return checkSigma(store, checkKey);
+    return checkSigma(store, checkKey, keys.filter);
   });
   const stars = $derived.by(() => {
     void version;
-    const t = store.primary('target', targetKey);
-    const c = store.primary('check', checkKey);
-    const comps = store.comparisons().length;
+    const t = store.primary('target', targetKey, keys.filter);
+    const c = store.primary('check', checkKey, keys.filter);
+    const comps = store.comparisons(keys.filter).length;
     // The comparisons behind the newest zero point (the target's comps_used).
     const tc = t?.cols;
     const last = tc && tc.n ? tc.comps[tc.n - 1] : NaN;
@@ -924,7 +1107,6 @@
   const anyData = $derived(plotted.length > 0);
   const band = $derived(store.band ?? 'mag');
 
-  const modeText = $derived(mode === 'fit' ? 'Whole run' : mode === 'follow' ? `Following · ${duration(viewSpan)}` : 'Zoom kept');
   /** Frames newer than a kept zoom's right edge (they never move it). */
   const newer = $derived.by(() => {
     void version;
@@ -935,8 +1117,8 @@
     return ts.n - 1 - visibleRange(ts.t, ts.n, -Infinity, v[1])[1];
   });
   /** The x axis named in a few words, in the last facet's title row (mid-exposure times). */
-  const axisShort = $derived(axis === 'utc' ? `mid-exposure · ${timeInfo.date || '—'}` : axis === 'jd' ? `JD − ${timeInfo.jd0} · UTC` : `BJD_TDB − ${timeInfo.bjd0}`);
-  const axisTip = $derived(axis === 'bjd' ? 'Exposure midpoints, BJD_TDB from the server (per star)' : 'Exposure midpoints (UTC)');
+  const axisShort = $derived(disp.axis === 'utc' ? `mid-exposure · ${timeInfo.date || '—'}` : disp.axis === 'jd' ? `JD − ${timeInfo.jd0} · UTC` : `BJD_TDB − ${timeInfo.bjd0}`);
+  const axisTip = $derived(disp.axis === 'bjd' ? 'Exposure midpoints, BJD_TDB from the server (per star)' : 'Exposure midpoints (UTC)');
   /** The check left out for room: its σ and newest check − V in the target's title. */
   const checkLine = $derived.by(() => {
     if (!withData.includes('check') || plotted.includes('check') || ymode !== 'mag') return null;
@@ -945,14 +1127,9 @@
     if (fixedRead?.check) parts.push(`check − V ${fixedRead.check.value}`);
     return parts.length ? parts.join(' · ') : null;
   });
-  const AXES = $derived([
-    { value: 'utc' as const, label: 'UTC' },
-    { value: 'jd' as const, label: 'JD' },
-    { value: 'bjd' as const, label: 'BJD', disabledReason: timeInfo.bjdOk ? null : 'BJD_TDB needs the observing site (Settings › Site) on every point' },
-  ]);
 
   function sub(id: FacetId): string {
-    if (id === 'target') return ymode === 'mag' ? `${band} · differential mag` : 'relative flux · median-normalised';
+    if (id === 'target') return `${keys.filter ? `filter ${filterLabel(keys.filter)} · ` : ''}${ymode === 'mag' ? `${band} · differential mag` : 'relative flux · median-normalised'}`;
     if (id === 'check') {
       if (ymode === 'flux') return 'relative flux · median-normalised';
       return stars.checkCat !== null ? `check − V ${fixed(stars.checkCat, 3)}${rung !== null ? ` · ±${rung} mag` : ''}` : 'no catalogue magnitude: drawn as measured';
@@ -988,42 +1165,10 @@
 
 <!-- A focusable chart region: its keys are listed in the header comment and on each tool's tooltip. -->
 <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
-<div class="lc" class:compact bind:this={root} role="region" aria-label="{label}: {stars.target}" tabindex="0" onkeydown={onKey} data-lc-mode={mode} data-lc-view={viewRange}>
-  <div class="bar">
-    <Segmented label="Time axis" size="s" options={AXES} bind:value={axis} />
-    <span class="sep"></span>
-    <span class="steps">
-      <IconButton icon="zoom-out" label="Zoom out time" shortcut="-" size="s" variant="ghost" tooltip="top" onclick={() => zoom.zoomBy(1.6, undefined, true)} disabled={!anyData} />
-      <IconButton icon="zoom-in" label="Zoom in time" shortcut="+" size="s" variant="ghost" tooltip="top" onclick={() => zoom.zoomBy(1 / 1.6, undefined, true)} disabled={!anyData} />
-    </span>
-    <IconButton icon="zoom-fit" label="Fit the whole run" shortcut="F" size="s" variant="ghost" tooltip="top" onclick={() => zoom.fit(true)} disabled={!anyData} />
-    <IconButton icon="live" label="Follow the newest frame" shortcut="End" size="s" variant="ghost" tooltip="top" pressed={mode === 'follow'} layoutToggle onclick={() => zoom.follow(true)} disabled={!anyData} />
-    <span class="chip" class:kept={mode === 'manual'} data-zoom-state={mode} aria-live="polite" use:tooltip={{ text: mode === 'fit' ? 'The whole run is in view; new frames widen it' : mode === 'follow' ? 'The right edge follows the newest frame' : 'New frames never move this view', shortcut: ['F', 'End'] }}>
-      {modeText}{#if mode !== 'fit'}<span class="hint">· <kbd>F</kbd></span>{/if}
-    </span>
-    {#if newer > 0}
-      <button type="button" class="newer num" onclick={() => zoom.follow(true)} use:tooltip={{ text: 'Frames after this view: follow the newest', shortcut: ['End'] }}>{newer} newer ›</button>
-    {/if}
-    <span class="sep"></span>
-    <IconButton icon="error-bars" label="Error bars" shortcut="U" size="s" variant="ghost" tooltip="top" pressed={errors} layoutToggle onclick={() => (errors = !errors)} />
-    <IconButton icon="relative-flux" label="Relative flux (median-normalised)" shortcut="M" size="s" variant="ghost" tooltip="top" pressed={flux} layoutToggle onclick={() => (flux = !flux)} />
-    {#if !compact}
-      <IconButton icon="copy" label="Copy data (TSV)" size="s" variant="ghost" tooltip="top" onclick={copyTsv} disabledReason={anyData ? null : 'No point to copy yet'} />
-    {/if}
-    <span class="grow"></span>
-    {#if fixedRead}
-      <!-- Items in priority order: what does not fit wraps out of sight whole, never cut inside a number. -->
-      <span class="readout num" class:sel={selectedT !== null}>
-        <span class="kind" use:tooltip={{ text: selectedT !== null ? 'The selected frame (← / → step, a click elsewhere clears)' : 'The newest frame' }}>
-          <span class="ring" aria-hidden="true"></span><span class="word">{selectedT !== null ? 'Selected' : 'Latest'}</span>
-        </span>
-        {#if fixedRead.target}<span class="v"><CurveKey shape="circle" color="var(--chart-1)" />{fixedRead.target.value}</span>{/if}
-        {#if sigma && ymode === 'mag'}<span class="v sig" use:tooltip={{ text: `Scatter of the check star over its last ${sigma.count} points (the trailing band)` }}>σ<sub>{sigma.count}</sub>&nbsp;{Number.isFinite(sigma.sigma) ? fixed(sigma.sigma, 3) : '—'}</span>{/if}
-        {#if fixedRead.check}<span class="v chk"><CurveKey shape="triangle" color="var(--chart-3)" />{fixedRead.check.value}</span>{/if}
-        <span class="v utc">{fixedRead.utc}</span>
-      </span>
-    {/if}
-  </div>
+<div class="lc" class:compact class:watch={watchView} class:nobar={!showBar} bind:this={root} role="region" aria-label="{label}: {stars.target}" tabindex="0" onkeydown={onKey} data-lc-mode={mode} data-lc-view={viewRange}>
+  {#if showBar}
+    <div class="bar"><CurveTools view={cv} variant={compact ? 'band' : 'drawer'} align="start" /></div>
+  {/if}
 
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="wall" bind:this={wall} bind:clientHeight={wallH} onpointerleave={() => (hover = null)}>
@@ -1058,7 +1203,27 @@
                   {/if}
                 </span>
               {/if}
-              {#if has && id === plotted[plotted.length - 1]}<span class="axis-name num" use:tooltip={{ text: axisTip }}>{axisShort}</span>{/if}
+              {#if has}
+                <!-- The newest (or selected) frame's values beside their curve, in priority order: what does not fit wraps out of sight whole, never cut inside a number. -->
+                <span class="rd num" class:sel={selectedT !== null}>
+                  {#if id === 'target' && fixedRead?.target}
+                    <span class="v" aria-label="{selectedT !== null ? 'Selected' : 'Latest'} target value">{fixedRead.target.value}</span>
+                  {:else if id === 'check' && fixedRead?.check}
+                    <span class="v" aria-label="{selectedT !== null ? 'Selected' : 'Latest'} check value">{fixedRead.check.value}</span>
+                  {:else if id === 'ensemble' && fixedRead?.ensemble}
+                    <span class="v">{fixedRead.ensemble.value}</span>
+                  {/if}
+                  {#if id === 'check' && sigma && ymode === 'mag'}
+                    <span class="v sig" use:tooltip={{ text: `Scatter of the check star over its last ${sigma.count} points (the trailing band)` }}>σ<sub>{sigma.count}</sub>&nbsp;{Number.isFinite(sigma.sigma) ? fixed(sigma.sigma, 3) : '—'}</span>
+                  {/if}
+                  {#if id === plotted[0] && fixedRead}
+                    <span class="kind" use:tooltip={{ text: selectedT !== null ? 'The selected frame (← / → step, a click elsewhere clears)' : 'The newest frame (its ring on the curve)' }}>
+                      <span class="ring" aria-hidden="true"></span>{fixedRead.utc}<span class="word">{selectedT !== null ? 'selected' : 'latest'}</span>
+                    </span>
+                  {/if}
+                  {#if id === plotted[plotted.length - 1]}<span class="axis-name" use:tooltip={{ text: axisTip }}>{axisShort}</span>{/if}
+                </span>
+              {/if}
             </header>
             {#if has}
               <div class="plot-host plot" {@attach facetHost(id)}></div>
@@ -1114,6 +1279,10 @@
   .lc:focus-visible .bar {
     box-shadow: inset 0 calc(-1 * var(--focus-ring-w)) 0 var(--focus-ring);
   }
+  /* No tool row (the tools sit in the host's row): the line along the plot's top edge. */
+  .lc.nobar:focus-visible {
+    box-shadow: inset 0 var(--focus-ring-w) 0 var(--focus-ring);
+  }
 
   .bar {
     display: flex;
@@ -1134,129 +1303,62 @@
   .compact .bar {
     padding: 0 var(--space-2);
   }
-  .sep {
-    width: 1px;
-    height: 16px;
-    margin: 0 var(--space-1);
-    background: var(--border-soft);
-    flex: none;
-  }
-  .grow {
-    flex: 1;
-    min-width: var(--space-2);
-  }
-  /* A label (the zoom state's name), not a button. */
-  .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    height: 20px;
-    margin-left: var(--space-1);
-    padding: 0 var(--space-1);
-    color: var(--text-muted);
-    font-size: var(--text-xs);
-    white-space: nowrap;
-    flex: none;
-  }
-  .chip.kept {
-    color: var(--fg);
-    font-weight: var(--weight-medium);
-  }
-  .newer {
-    height: 20px;
-    padding: 0 var(--space-2);
-    border: var(--border-w) solid var(--border-soft);
-    border-radius: var(--radius-s);
-    background: transparent;
-    color: var(--fg);
-    font-size: var(--text-xs);
-    white-space: nowrap;
-    flex: none;
-    cursor: pointer;
-  }
-  .newer:hover {
-    background: var(--hover-bg);
-  }
-  .newer:focus-visible {
-    outline: var(--focus-ring-w) solid var(--focus-ring);
-    outline-offset: -1px;
-  }
-  .chip .hint {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    color: var(--text-muted);
-  }
-  kbd {
-    padding: 0 3px;
-    border: var(--border-w) solid var(--border);
-    border-radius: 3px;
-    font-family: var(--font-mono);
-    font-size: var(--text-2xs);
-    line-height: 13px;
-  }
-  /* Wraps instead of cutting: an item that does not fit goes whole to a hidden second line,
-     the last (least needed) first. */
-  .readout {
+  /* The readout in a facet's title row: items in priority order wrap whole out of sight. */
+  .rd {
     display: flex;
+    flex: 0 1 auto;
     flex-wrap: wrap;
     align-items: center;
     align-content: flex-start;
     justify-content: flex-end;
     column-gap: var(--space-3);
-    height: 20px;
+    min-width: 0;
+    height: 16px;
+    margin-left: auto;
+    overflow: hidden;
     color: var(--text-muted);
     font-size: var(--text-xs);
     white-space: nowrap;
-    overflow: hidden;
-    min-width: 0;
-    flex: 0 1 auto;
+    pointer-events: auto;
   }
-  .readout > span {
-    flex: none;
-    height: 20px;
+  .rd > span {
     display: inline-flex;
+    flex: none;
     align-items: center;
+    gap: 4px;
+    height: 16px;
   }
-  .steps {
-    display: contents;
+  .rd .v {
+    color: var(--fg);
   }
-  .readout sub {
+  .rd sub {
     font-size: 0.8em;
     vertical-align: -0.15em;
   }
-  .axis-name {
-    margin-left: auto;
-    padding-right: var(--space-2);
+  .rd .kind .word {
     color: var(--text-muted);
     font-size: var(--text-2xs);
-    white-space: nowrap;
-  }
-  .readout .kind {
-    gap: 4px;
-    font-size: var(--text-2xs);
-    text-transform: uppercase;
     letter-spacing: var(--tracking-caps);
+    text-transform: uppercase;
+  }
+  .rd.sel .kind {
+    color: var(--fg);
   }
   /* The newest point's ring; filled for a selected frame. Never hidden. */
-  .readout .ring {
+  .rd .ring {
     width: 9px;
     height: 9px;
     border: 1.5px solid var(--chart-highlight);
     border-radius: 50%;
     box-sizing: border-box;
   }
-  .readout.sel .ring {
+  .rd.sel .ring {
     background: var(--chart-highlight);
   }
-  .readout .v {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    color: var(--fg);
-  }
-  .readout.sel .kind {
-    color: var(--fg);
+  .axis-name {
+    color: var(--text-muted);
+    font-size: var(--text-2xs);
+    white-space: nowrap;
   }
 
   .wall {
@@ -1310,6 +1412,29 @@
   .compact header {
     gap: var(--space-1);
   }
+  /* Watch (read from 2 m): the facet's name and its newest value at the 30 px label size;
+     the secondary words (band, "differential mag", keys, the axis name) stay at the table. */
+  .watch header.over {
+    left: 96px;
+    right: 24px;
+    height: 40px;
+    gap: var(--space-3);
+  }
+  .watch h3 {
+    font-size: var(--watch-s);
+    font-weight: var(--weight-medium);
+  }
+  .watch .sub,
+  .watch .legend,
+  .watch .rd .kind,
+  .watch .axis-name {
+    display: none;
+  }
+  .watch .rd,
+  .watch .rd > span {
+    height: 40px;
+    font-size: var(--watch-s);
+  }
   h3 {
     margin: 0;
     font-size: var(--text-xs);
@@ -1327,10 +1452,15 @@
     align-items: center;
     gap: 4px;
   }
+  /* Keys wrap out of sight whole (never cut inside a word) when the title row is full. */
   .legend {
     display: inline-flex;
+    flex: 0 4 auto;
+    flex-wrap: wrap;
+    align-content: flex-start;
     align-items: center;
-    gap: 2px;
+    gap: 0 2px;
+    height: 16px;
     margin-left: var(--space-2);
     min-width: 0;
     overflow: hidden;
@@ -1441,16 +1571,9 @@
     color: var(--fg);
   }
 
-  /* Narrow plots drop words first, then the less used tools (BRAND 7: symbols stay); the
-     readout drops whole items by itself (it wraps). */
+  /* Narrow plots drop words first (BRAND 7: symbols stay); the readouts drop whole items. */
   @container (max-width: 1000px) {
-    .readout .word,
-    .chip .hint {
-      display: none;
-    }
-  }
-  @container (max-width: 820px) {
-    .steps {
+    .rd .kind .word {
       display: none;
     }
   }

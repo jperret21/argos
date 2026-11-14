@@ -279,6 +279,15 @@ describe('live curve store (A54-A56)', () => {
     expect(niceSplits(0, 1, 200).splits.length).toBeLessThanOrEqual(Math.floor(200 / 13) + 1);
   });
 
+  it('a short band strip (fewest 2) keeps two ticks 13 px apart or more, never labels on top of each other', () => {
+    // The Run band's curve under its summary row: 35 px of data for 0.2 mag.
+    const three = niceSplits(11.22, 11.42, 35);
+    expect(three.splits.length).toBeGreaterThanOrEqual(3);
+    const two = niceSplits(11.22, 11.42, 35, 13, 2);
+    expect(two.splits.length).toBeGreaterThanOrEqual(2);
+    expect(((two.splits[1] - two.splits[0]) / 0.2) * 35).toBeGreaterThanOrEqual(13);
+  });
+
   it('pads the y range in pixels so a marker and its ring stay inside the plot', () => {
     const [lo, hi] = padPixels(0, 1, 50, 5);
     expect(((0 - lo) / (hi - lo)) * 50).toBeCloseTo(5, 9);

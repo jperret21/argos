@@ -112,6 +112,20 @@ export function endAt(s: SequenceState, now: number): number | null {
   return (s.last_frame_t ?? s.started_t ?? now) + s.eta_s;
 }
 
+/**
+ * The end from the cadence when the server's has passed while frames remain (null otherwise).
+ * The server's estimate (elapsed ÷ frames × frames left, from the newest save) lags the first
+ * frames of a run with an interval: at 1 / 4 it read "in 0 s" with 3 frames to go (wave 6b
+ * design review). The frames left × the cadence, from the newest frame's start; never before now.
+ */
+export function cadenceEnd(s: SequenceState, now: number, cadence: number | null, lastAt: number | null): number | null {
+  if (s.state === 'paused' || cadence === null || !(cadence > 0)) return null;
+  const end = endAt(s, now);
+  const remaining = Math.max(0, s.frames_total - s.frames_done);
+  if (end === null || end > now || remaining === 0) return null;
+  return Math.max(now, (lastAt ?? now) + remaining * cadence);
+}
+
 /** Time left until the end, from now (never negative: a late run says "overdue" elsewhere). */
 export function timeLeft(s: SequenceState, now: number): number | null {
   const e = endAt(s, now);
@@ -262,12 +276,18 @@ export function runChecks(items: readonly PreflightItem[] | null, running = fals
  * UTC"; `true` reads "Running"), never "Blocked · run": "Running" | "Paused · 1 note" |
  * "Running · camera".
  */
-export function readiness(items: readonly PreflightItem[] | null, running: boolean | string = false): Readiness {
+export function readiness(items: readonly PreflightItem[] | null, running: boolean | string = false, draftStart: { t: number; now: number } | null = null): Readiness {
   const engaged = running !== false && running !== '';
   const word = typeof running === 'string' ? running : 'Running';
   const list = runChecks(items, engaged);
   if (!list) return { level: 'unknown', label: 'Not checked' };
   const blocks = list.filter((i) => i.level === 'block');
+  // A deliberate start more than 24 h ahead is a schedule, not a fault (wave 6b design
+  // review): a note, with when Start opens. Any other block still says "Blocked".
+  if (!engaged && draftStart && draftStart.t - draftStart.now > START_AHEAD_MAX_S && blocks.length && blocks.every((i) => i.id === 'start_at')) {
+    const open = draftStart.t - START_AHEAD_MAX_S;
+    return { level: 'note', label: `Scheduled · opens ${dayTime(open)} UTC` };
+  }
   const more = blocks.length > 1 ? ` and ${blocks.length - 1} more` : '';
   if (blocks.length) return { level: 'block', label: `${engaged ? word : 'Blocked'} · ${checkName(blocks[0]).toLowerCase()}${more}` };
   const notes = list.filter((i) => i.level === 'note').length;
@@ -315,6 +335,54 @@ export function parseStartAt(text: string, now: number): StartAt {
   if (tomorrow) t += 86400;
   return { ok: true, t, tomorrow, text: `${tomorrow ? `${utcDate(t)} ` : ''}${clockUtc(t, false)} UTC, in ${duration(t - now)}` };
 }
+
+/** The server refuses a start more than this far ahead (sequence.py START_AHEAD_MAX_S). */
+export const START_AHEAD_MAX_S = 86400;
+
+export type DraftStart = { ok: true; t: number | null; text: string } | { ok: false; error: string };
+
+/**
+ * The plan draft's own start time (W6b; 6a gap "a transit prepared for a night more than
+ * 24 h ahead"): "YYYY-MM-DD hh:mm" (UTC) for any day, "hh:mm" for the next such time, empty
+ * for none (Start then runs at once). A time already passed is refused in words; one more
+ * than 24 h ahead is kept in the draft and Start opens 24 h before (said under the field).
+ */
+export function parseDraftStart(text: string, now: number): DraftStart {
+  const s = text.trim();
+  if (!s) return { ok: true, t: null, text: 'No start time: Start runs at once' };
+  const d = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2})[:h.]?(\d{2})(?::00)?Z?$/i.exec(s);
+  let t: number;
+  if (d) {
+    const [y, mo, da, h, mi] = d.slice(1).map(Number);
+    if (h > 23 || mi > 59) return { ok: false, error: `${d[4]}:${d[5]} is not a time: hours 00 to 23, minutes 00 to 59.` };
+    t = Date.UTC(y, mo - 1, da, h, mi) / 1000;
+    if (!Number.isFinite(t) || new Date(t * 1000).getUTCDate() !== da || new Date(t * 1000).getUTCMonth() !== mo - 1) {
+      return { ok: false, error: `${d[1]}-${d[2]}-${d[3]} is not a date.` };
+    }
+    if (t <= now) return { ok: false, error: `${utcDate(t)} ${clockUtc(t, false)} UTC has passed: type a later time, or clear the field to start at once.` };
+  } else {
+    const r = parseStartAt(s, now);
+    if (!r.ok) return { ok: false, error: 'Type a UTC start as YYYY-MM-DD hh:mm (or hh:mm for the next one); empty starts at once.' };
+    t = r.t;
+  }
+  const ahead = t - now;
+  const days = Math.floor(Math.round(ahead) / 86400);
+  const span = days >= 2 ? `${days}d ${Math.floor((Math.round(ahead) % 86400) / 3600)}h` : duration(ahead);
+  // The field shows the date and time: the line under it says how far, and when Start opens.
+  const open = t - START_AHEAD_MAX_S;
+  return { ok: true, t, text: ahead > START_AHEAD_MAX_S ? `in ${span} · Start opens ${dayTime(open)} UTC` : `in ${span}` };
+}
+
+/** "21:30" today (UTC), "16 Nov 21:30" another day: a time is never read as tonight's. */
+export function dayTime(t: number, now: number | null = null): string {
+  const d = new Date(Math.round(t) * 1000);
+  const today = now !== null && Math.floor(t / 86400) === Math.floor(now / 86400);
+  return today ? clockUtc(t, false) : `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${clockUtc(t, false)}`;
+}
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** The draft's start for its field: "YYYY-MM-DD hh:mm" (UTC), '' for none. */
+export const draftStartText = (t: number | null): string => (t === null ? '' : `${utcDate(t)} ${clockUtc(t, false)}`);
 
 /** "hh:mm" of unix seconds, for prefilling the field (a transit's coverage start). */
 export const hhmm = (t: number): string => clockUtc(t, false);

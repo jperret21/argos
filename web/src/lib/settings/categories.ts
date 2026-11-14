@@ -24,6 +24,7 @@ export const SETTINGS_CATEGORIES = [
   'plate_solving',
   'catalogues',
   'photometry',
+  'alerts',
   'data_storage',
   'privacy_diagnostics',
   'appearance',
@@ -74,6 +75,13 @@ export const CATEGORIES: readonly CategoryDef[] = [
     label: 'Photometry',
     icon: 'photometry',
     intro: 'Apertures, comparison selection and the error model of the live and re-run photometry.',
+  },
+  {
+    // Wave 6b (functional-spaces 4.10, owner decision): the attention rules of a run and their sound.
+    id: 'alerts',
+    label: 'Alerts',
+    icon: 'attention',
+    intro: 'The attention rules the server evaluates on every frame of a run, their thresholds, and the alert sound.',
   },
   {
     id: 'data_storage',

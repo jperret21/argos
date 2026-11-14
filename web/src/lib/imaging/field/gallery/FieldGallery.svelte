@@ -237,7 +237,8 @@
     <figure class="wide"><div class="band-demo"><FieldBand field={store(SOLVED)} tab="variables" /></div><figcaption>variables (VSX, virtual rows)</figcaption></figure>
   </div>
   <div class="row top">
-    <figure class="wide"><div class="band-demo short"><FieldBand field={store(SOLVED)} compact /></div><figcaption>below 150 px: one row</figcaption></figure>
+    <figure class="wide"><div class="band-demo short"><FieldBand field={store(SOLVED)} compact /></div><figcaption>below 150 px, 36 px: the summary row</figcaption></figure>
+    <figure class="wide" data-gallery="w6b-field-compact"><div class="band-demo mid"><FieldBand field={store(SOLVED)} compact /></div><figcaption>below 150 px, 112 px (wave 6b): the summary row, then the list (no empty strip)</figcaption></figure>
     <figure class="wide"><div class="band-demo"><FieldBand field={unsolvedStore} tab="candidates" /></div><figcaption>field not identified</figcaption></figure>
   </div>
 </section>
@@ -336,6 +337,9 @@
   }
   .band-demo.short {
     height: 40px;
+  }
+  .band-demo.mid {
+    height: 112px;
   }
   .wide {
     width: 640px;

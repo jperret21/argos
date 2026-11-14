@@ -86,6 +86,20 @@ export interface IndexSource {
   photometryCommands?(): PhotometryCommands | null;
   // -- Wave 6a (optional, as above): the run --
   sequenceCommands?(): SequenceCommands | null;
+  // -- Wave 6b (optional, as above): Watch, the attention list, the alert sound --
+  nightCommands?(): NightCommands | null;
+}
+
+/** What the palette needs from the night (W6b, D3): Watch, acknowledge all, the sound level. */
+export interface NightCommands {
+  watchOpen: boolean;
+  toggleWatch(): void;
+  /** Open Critical and Attention items nobody acknowledged. */
+  unacked: number;
+  ackAll(): Promise<unknown>;
+  /** alerts.sound: 'off' | 'soft' | 'normal'. */
+  sound: string;
+  setSound(level: 'off' | 'soft' | 'normal'): void;
 }
 
 /**
@@ -180,6 +194,8 @@ const ICON: Record<string, string> = {
   'field.labels': 'labels',
   'field.catalogue': 'catalogue',
   'observe.mode.field': 'plate-solve',
+  'observe.mode.run': 'light-curve',
+  'observe.watch': 'watch',
   'log.toggle': 'log',
   'observe.live': 'live',
   'observe.capture': 'capture',
@@ -491,6 +507,33 @@ export function buildIndex(app: IndexSource, afterMount: AfterMount): Command[] 
     );
   }
 
+  // -- The night (W6b, D3): acknowledge all, the alert sound (Watch is in the registry below) --
+  const night = app.nightCommands?.() ?? null;
+  if (night) {
+    out.push({
+      id: 'attention.ack-all',
+      title: night.unacked ? `Acknowledge all alerts (${night.unacked} open)` : 'Acknowledge all alerts',
+      group: 'Actions',
+      icon: 'attention',
+      keywords: 'attention alert alarm acknowledge ack silence critical',
+      hint: 'every client',
+      disabled: serverDown ?? (night.unacked ? null : 'no alert is waiting for you'),
+      run: () => night.ackAll(),
+    });
+    for (const [level, word] of [['off', 'Off'], ['soft', 'Soft'], ['normal', 'Normal']] as const) {
+      out.push({
+        id: `attention.sound.${level}`,
+        title: `Alert sound: ${word}`,
+        group: 'Actions',
+        icon: 'attention',
+        keywords: 'alert sound tone volume mute quiet beep audio',
+        hint: night.sound === level ? 'in force' : 'Settings › Alerts',
+        disabled: serverDown ?? (night.sound === level ? 'already in force' : null),
+        run: () => night.setSound(level),
+      });
+    }
+  }
+
   // -- Actions that work from any section ---------------------------------------------
   const cameraReason = serverDown ?? (app.canCamera ? null : 'connect the camera first (Connection, F1)');
   const direct: Record<string, Pick<Command, 'disabled' | 'run'> & { title?: string }> = {
@@ -504,6 +547,16 @@ export function buildIndex(app: IndexSource, afterMount: AfterMount): Command[] 
       disabled: cameraReason ?? (!app.live && app.cameraBusy ? 'the camera is busy' : app.live ? null : app.exposureProblem()),
       run: () => app.toggleLive(),
     },
+    // W6b (D3): Watch from any section (the key W acts in Observe).
+    ...(night
+      ? {
+          'observe.watch': {
+            title: night.watchOpen ? 'Close the Watch view' : 'Open the Watch view (read the run from 2 m)',
+            disabled: null,
+            run: () => night.toggleWatch(),
+          },
+        }
+      : {}),
     'help.shortcuts': {
       disabled: null,
       run: () => {

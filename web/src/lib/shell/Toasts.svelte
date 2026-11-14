@@ -15,6 +15,7 @@
   import { useApp } from '../app/state.svelte';
   import IconButton from '../components/IconButton.svelte';
   import UndoToast from '../components/UndoToast.svelte';
+  import AttentionMark from './attention/AttentionMark.svelte';
 
   const app = useApp();
 </script>
@@ -32,7 +33,9 @@
   {/each}
   {#each app.toasts as t (t.id)}
     <div class="toast level-{t.level}" role={t.level === 'error' ? 'alert' : 'status'}>
-      <span class="mark" aria-hidden="true"></span>
+      <!-- The attention vocabulary's shapes (BRAND §8): error = filled disc, warning = bar over
+           dot, info = hollow ring; Night Red tells them apart without hue. -->
+      <span class="mark"><AttentionMark level={t.level === 'error' ? 'critical' : t.level === 'warning' ? 'attention' : 'info'} size={10} /></span>
       <div class="text">
         <p class="title">
           {t.title}
@@ -102,11 +105,9 @@
   }
 
   .mark {
-    width: 8px;
-    height: 8px;
-    margin-top: 5px;
-    border-radius: var(--radius-round);
-    background: var(--mark);
+    display: inline-flex;
+    margin-top: 4px;
+    color: var(--mark, var(--fg-muted));
   }
 
   .text {

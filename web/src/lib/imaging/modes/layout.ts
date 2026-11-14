@@ -13,8 +13,9 @@
  *   (Camera, Mount, Focuser among the cards of wave 3); a mode changes the
  *   states only. D10 is a decision in force; the lab reordered per mode.
  * - Field is available from wave 4 (its band hosts the comparison candidates,
- *   imaging/field); Run (wave 6b) is listed but not available: its band
- *   needs live photometry and the sequencer.
+ *   imaging/field); Run from wave 6b (its band is the live light curve with
+ *   the run's mini charts, imaging/run). The app proposes Run with a chip
+ *   when a run starts (ModeSuggestion), never switches to it.
  * - Wave 4 adds the Statistics card (D9: hidden by default in every mode, I
  *   shows it), in its D10 place after Camera.
  * - The band turns into its one-row summary below 150 px (BRAND 11.1,
@@ -74,9 +75,9 @@ export const MODES: readonly ModeDef[] = [
     label: 'Run',
     icon: 'light-curve',
     shortcut: 'observe.mode.run',
-    task: 'Watch a run',
+    task: 'Follow a run',
     band: 'Live light curve',
-    unavailable: 'comes in wave 6b with the live curve; meanwhile the Run card follows the run',
+    unavailable: null,
   },
 ];
 

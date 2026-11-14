@@ -7,7 +7,8 @@
   A 28 px header (--band-header-h) names it and says how it is sized ("fits the image" or
   "set by you" with [Fit to image]); H hides it in every mode. Below 150 px it becomes one
   summary row of the same facts (the drawer took the space). Field (wave 4) shows the
-  comparison candidates (imaging/field); Run never reaches here in this version.
+  comparison candidates (imaging/field); Run (wave 6b) the live light curve and the run's
+  mini charts (imaging/run/RunBand), its curve tools in this header (CurveTools).
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte';
@@ -87,6 +88,7 @@
   }
   .tools {
     display: inline-flex;
+    flex: 1 1 auto;
     align-items: center;
     gap: var(--space-2);
     margin-left: var(--space-2);

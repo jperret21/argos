@@ -39,6 +39,7 @@
   import NavRail, { type NavEntry } from './lib/shell/NavRail.svelte';
   import StartupScreen from './lib/shell/StartupScreen.svelte';
   import StatusBar from './lib/shell/StatusBar.svelte';
+  import WatchHost from './lib/shell/WatchHost.svelte';
   import Toasts from './lib/shell/Toasts.svelte';
 
   const app = provideApp(new ArgosApp());
@@ -138,6 +139,10 @@
 <KeyHintBanner />
 <!-- W6a (D2): a mount command refused during a run asks here, from any section. -->
 <InterlockDialog lock={app.interlock} exposureS={app.sequence.state?.current?.exposure_s ?? app.sequence.state?.step?.exposure_s ?? null} />
+<!-- W6b (D3): Watch, the run read from 2 m; a modal layer over every section. -->
+{#if app.watchOpen}
+  <WatchHost attention={app.attention} keepAwake={app.keepAwake} onclose={() => (app.watchOpen = false)} />
+{/if}
 {#if !startupGone}
   <StartupScreen
     stages={app.startup.stages}

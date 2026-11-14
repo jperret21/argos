@@ -54,19 +54,21 @@ const BERKELEY: SiteCheck = {
 };
 
 describe('Settings categories', () => {
-  it('has the nine canonical categories of D13, in order', () => {
+  it('has the nine canonical categories of D13 and Alerts (wave 6b), in order', () => {
     expect(CATEGORIES.map((c) => c.label)).toEqual([
       'Observer & site',
       'Instrument',
       'Plate solving',
       'Catalogues',
       'Photometry',
+      'Alerts',
       'Data & storage',
       'Privacy & diagnostics',
       'Appearance',
       'About',
     ]);
     expect(isSettingsCategory('about')).toBe(true);
+    expect(isSettingsCategory('alerts')).toBe(true);
     expect(isSettingsCategory('connection')).toBe(false);
   });
 

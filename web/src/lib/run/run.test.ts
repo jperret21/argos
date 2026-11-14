@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { checkSequence, type PreflightItem, type SequenceResult, type SequenceState } from '../api/sequence';
-import { endAt, folderName, nextAutofocus, nextAutofocusParts, outcomeOf, outcomeText, parseStartAt, readiness, startBlock, stateChip, stepText, stopDialog, stripLine } from './run';
+import { cadenceEnd, dayTime, draftStartText, endAt, folderName, nextAutofocus, nextAutofocusParts, outcomeOf, outcomeText, parseDraftStart, parseStartAt, readiness, startBlock, stateChip, stepText, stopDialog, stripLine } from './run';
 
 const T = Date.UTC(2026, 10, 1, 21, 45, 0) / 1000;
 
@@ -181,6 +181,41 @@ describe('readiness (spec 2.3.5) and Start', () => {
   });
 });
 
+describe('A start more than 24 h ahead is a schedule, not a block (wave 6b design review)', () => {
+  it('reads "Scheduled · opens …" when the start time is the only block', () => {
+    const at = { id: 'start_at', level: 'block', message: 'The start time 21:05 is more than 24 h ahead.' } as PreflightItem;
+    const t = Date.UTC(2026, 10, 4, 21, 5) / 1000;
+    expect(readiness([at], false, { t, now: T })).toEqual({ level: 'note', label: 'Scheduled · opens 3 Nov 21:05 UTC' });
+    expect(readiness([at], false)).toMatchObject({ level: 'block' }); // no draft start known: as before
+    const cam = { id: 'camera', level: 'block', message: 'No camera.' } as PreflightItem;
+    expect(readiness([at, cam], false, { t, now: T }).level).toBe('block');
+    expect(dayTime(t, T)).toBe('4 Nov 21:05');
+    expect(dayTime(T + 600, T)).toBe(new Date((T + 600) * 1000).toISOString().slice(11, 16));
+  });
+});
+
+describe('The draft start time (W6b, a transit prepared for a later night)', () => {
+  it('takes any future UTC date and says when Start can schedule it', () => {
+    const t = Date.UTC(2026, 10, 4, 21, 5) / 1000;
+    const r = parseDraftStart('2026-11-04 21:05', T);
+    expect(r.ok && r.t).toBe(t);
+    expect(r.ok && r.text).toBe('in 2d 23h · Start opens 3 Nov 21:05 UTC');
+    expect(parseDraftStart('2026-11-04T21:05Z', T)).toEqual(r);
+    expect(draftStartText(t)).toBe('2026-11-04 21:05');
+    // Within 24 h: no word about the limit; hh:mm is the next such time.
+    expect(parseDraftStart('23:30', T)).toEqual({ ok: true, t: Date.UTC(2026, 10, 1, 23, 30) / 1000, text: 'in 1h 45m' });
+    expect(parseDraftStart('  ', T)).toEqual({ ok: true, t: null, text: 'No start time: Start runs at once' });
+    expect(draftStartText(null)).toBe('');
+  });
+
+  it('refuses a passed time, a wrong date or words, never clamped', () => {
+    expect(parseDraftStart('2026-10-31 20:00', T)).toEqual({ ok: false, error: '2026-10-31 20:00 UTC has passed: type a later time, or clear the field to start at once.' });
+    expect(parseDraftStart('2026-02-30 20:00', T)).toEqual({ ok: false, error: '2026-02-30 is not a date.' });
+    expect(parseDraftStart('2026-11-04 25:00', T).ok).toBe(false);
+    expect(parseDraftStart('tomorrow', T).ok).toBe(false);
+  });
+});
+
 describe('Start at hh:mm (Q-P2)', () => {
   it('takes today when still ahead, else the next UTC date, written out', () => {
     const r = parseStartAt('23:30', T);
@@ -219,6 +254,18 @@ describe('fixer W6a: pause_run wait, preflight words, paused end', () => {
     const paused = seq({ state: 'paused', end_t: null, eta_s: 600 });
     expect(endAt(paused, T)).toBe(T + 600);
     expect(endAt(paused, T + 60)).toBe(T + 660);
+  });
+
+  it('takes the end from the cadence when the server estimate has passed with frames to go', () => {
+    // 1 / 4 at a 13 s cadence: the server's end (elapsed ÷ 1 × 3) was already behind the clock.
+    const iso = (t: number) => new Date(t * 1000).toISOString();
+    const s = seq({ frames_done: 1, frames_total: 4, end_utc: iso(T - 5), eta_s: null });
+    expect(cadenceEnd(s, T, 13, T - 7)).toBe(T - 7 + 3 * 13);
+    expect(cadenceEnd(s, T, 13, T - 60)).toBe(T); // never before now
+    expect(cadenceEnd(s, T, null, T - 7)).toBeNull(); // no cadence: "after this frame"
+    expect(cadenceEnd(seq({ frames_done: 1, frames_total: 4, end_utc: iso(T + 30), eta_s: null }), T, 13, T - 7)).toBeNull();
+    expect(cadenceEnd(seq({ frames_done: 4, frames_total: 4, end_utc: iso(T - 5), eta_s: null }), T, 13, T - 7)).toBeNull();
+    expect(cadenceEnd(seq({ state: 'paused', frames_done: 1, frames_total: 4, end_utc: iso(T - 5), eta_s: null }), T, 13, T - 7)).toBeNull();
   });
 
   it('says nothing is saved yet when Stop comes before the first frame', () => {

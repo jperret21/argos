@@ -332,6 +332,8 @@ export class PhotometryStore {
         mags: {},
         catalogue_v: null,
         sigma_syst: sigma,
+        // S49: kept, so a plot fed later from the held curves draws it under its filter.
+        filter: str(ev.filter),
         points: [point],
       };
       // Its catalogue V comes with the next snapshot; the set star's mags have it meanwhile.

@@ -58,6 +58,8 @@ export interface Curve {
   sigma_syst: number | null;
   /** The CSV the server rewrites after every point. */
   csv?: string | null;
+  /** S49: the frames' filter token (one curve per star and filter); absent before S49. */
+  filter?: string | null;
   points: LcPoint[];
 }
 
@@ -157,6 +159,8 @@ export interface PointEvent {
   point: LcPoint;
   /** The curve's floor after this point: every earlier bar is hypot(formal, it) (S19). */
   sigma_syst: number | null;
+  /** S49: the filter token of its curve (one curve per star and filter); absent before S49. */
+  filter?: string | null;
 }
 
 /** A56 WS `photometry_reset`. */

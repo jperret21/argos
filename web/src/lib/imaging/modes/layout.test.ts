@@ -83,9 +83,9 @@ describe('band layout (BRAND 11.1, stripLayout unchanged)', () => {
 });
 
 describe('modes and presets', () => {
-  it('Framing, Focus and Field are available; Run says why not', () => {
-    expect(AVAILABLE_MODES).toEqual(['framing', 'focus', 'field']);
-    for (const m of MODES.filter((d) => d.unavailable)) expect(m.unavailable).toMatch(/wave/);
+  it('every mode is available from wave 6b (Run: the live light curve)', () => {
+    expect(AVAILABLE_MODES).toEqual(['framing', 'focus', 'field', 'run']);
+    expect(MODES.filter((d) => d.unavailable)).toEqual([]);
     expect(isMode('focus')).toBe(true);
     expect(isMode('watch')).toBe(false);
   });

@@ -83,6 +83,8 @@ export interface MarkerOptions {
   flags?: () => ArrayLike<number> | null;
   /** Ring colour of the newest point, or null for none. */
   latest?: () => string | null;
+  /** Scale of that ring's gap around the marker (Watch: 1.5, read from 2 m). */
+  latestGrow?: number;
   /** A selected point (index in the series) and its ring colour. */
   selected?: () => { idx: number; color: string } | null;
   /** Marker diameter in CSS px for `visible` points. */
@@ -303,7 +305,7 @@ export function markers(o: MarkerOptions): uPlot.Plugin {
             // The newest point with a value (a ratio-only frame has no magnitude).
             let k = n - 1;
             while (k >= 0 && (ys[k] == null || !Number.isFinite(ys[k] as number))) k--;
-            if (k >= 0) ring(k, latest, 3.5);
+            if (k >= 0) ring(k, latest, 3.5 * (o.latestGrow ?? 1));
           }
           const sel = o.selected?.();
           if (sel) ring(sel.idx, sel.color, 5.5);

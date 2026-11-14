@@ -20,10 +20,24 @@ const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFi
 
 /** The curve of a set star: by its key, else Qt's key (AUID, else the display name). */
 export function curveFor(curves: readonly Curve[], star: Pick<TargetStar, 'key' | 'auid' | 'display_name' | 'name'>): Curve | null {
-  const byKey = curves.find((c) => c.star_key && c.star_key === star.key);
-  if (byKey) return byKey;
+  const byKey = curves.filter((c) => c.star_key && c.star_key === star.key);
+  if (byKey.length) return newestCurve(byKey);
   const qtKey = star.auid || star.display_name || star.name;
-  return curves.find((c) => c.key === qtKey || c.key === star.key) ?? null;
+  return newestCurve(curves.filter((c) => c.key === qtKey || c.key === star.key || c.key.startsWith(`${qtKey}@`)));
+}
+
+/** S49: a star has one curve per filter; the one with the newest point is the frame's filter (ties: the first). */
+export function newestCurve(curves: readonly Curve[]): Curve | null {
+  let best: Curve | null = null;
+  let t = -Infinity;
+  for (const c of curves) {
+    const last = c.points.length ? c.points[c.points.length - 1].jd_utc : -Infinity;
+    if (best === null || last > t) {
+      best = c;
+      t = last;
+    }
+  }
+  return best;
 }
 
 /** The newest point with a magnitude (a ratio-only point has none). */

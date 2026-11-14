@@ -37,7 +37,7 @@
   import { duration } from '../format/time';
   import type { TargetStar } from '../imaging/field/types';
   import ReadinessChip from '../run/ReadinessChip.svelte';
-  import { endAt, isEngaged, startBlock, stateChip } from '../run/run';
+  import { dayTime, endAt, isEngaged, startBlock, stateChip } from '../run/run';
   import RunStrip from '../run/RunStrip.svelte';
   import RunTransport from '../run/RunTransport.svelte';
   import LogDrawer from '../shell/LogDrawer.svelte';
@@ -151,9 +151,10 @@
       steps: `${steps.length} step${steps.length === 1 ? '' : 's'}${enabled !== steps.length ? ` (${enabled} on)` : ''}`,
       frames: `${d.total_frames} ${frameWord(d.total_frames)}`,
       estimate: `≈ ${duration(d.estimate_s)}`,
-      start: scheduled ? `${utcHm(d.start_utc)} UTC` : null,
+      // Dated when not today (UTC): a start 3 days away never reads as tonight's.
+      start: scheduled ? `${dayTime(Date.parse(d.start_utc!) / 1000, now)} UTC` : null,
       startTitle: scheduled ? timeTitle(d.start_utc) : '',
-      end: d.end_utc && d.total_frames ? `${utcHm(d.end_utc)} UTC` : null,
+      end: d.end_utc && d.total_frames ? `${scheduled ? dayTime(Date.parse(d.end_utc) / 1000, now) : utcHm(d.end_utc)} UTC` : null,
       endTitle: d.end_utc ? `${timeTitle(d.end_utc)} · a floor: filter moves and autofocus are not counted` : '',
     };
   });
@@ -219,6 +220,14 @@
       }
       store.selected = i.step;
       focusRequest = { step: i.step, field: i.field, n: (focusRequest?.n ?? 0) + 1 };
+    } else if (i.field === 'filter_name') {
+      // S49 light_filters (step null): the first Light step in a filter other than the first one's.
+      const lights = steps.map((s, k) => ({ s, k })).filter(({ s }) => s.enabled && s.frame_type === 'Light');
+      const other = lights.find(({ s }) => s.filter_name !== lights[0]?.s.filter_name) ?? lights[0];
+      if (other) {
+        store.selected = other.k;
+        focusRequest = { step: other.k, field: 'filter_name', n: (focusRequest?.n ?? 0) + 1 };
+      }
     } else if (i.field && i.field !== 'steps') {
       optionsOpen = true;
       layout.setVisible('options', true);
@@ -503,7 +512,7 @@
       }}
     />
     <span class="grow"></span>
-    <ReadinessChip bind:open={preflightOpen} running={engaged ? stateChip(seq).label : false} items={run.preflight?.checks ?? null} error={run.preflightError} onrefresh={() => void run.loadPreflight(app.client)} />
+    <ReadinessChip bind:open={preflightOpen} running={engaged ? stateChip(seq).label : false} items={run.preflight?.checks ?? null} error={run.preflightError} onrefresh={() => void run.loadPreflight(app.client)} draftStart={plan?.start_at_utc ? { t: Date.parse(plan.start_at_utc) / 1000, now } : null} />
     <RunTransport
       {seq}
       {now}
@@ -529,7 +538,7 @@
   </div>
 
   <div class="strip">
-    <RunStrip {seq} {now} frameTimes={run.frameTimes} lastSaved={run.lastSaved} showOutcome={run.outcomeVisible} ondismiss={() => run.dismissOutcome()} onlog={() => app.setLogOpen(true)} />
+    <RunStrip {seq} {now} frameTimes={run.frameTimes} lastSaved={run.lastSaved} marks={seq?.af_marks ?? []} afStep={seq?.af_step ?? null} showOutcome={run.outcomeVisible} ondismiss={() => run.dismissOutcome()} onlog={() => app.setLogOpen(true)} />
   </div>
 
   <div class="workspace">
@@ -645,7 +654,7 @@
         />
       {/if}
       {#if shown('options')}
-        <RunOptionsCard bind:open={optionsOpen} {plan} {issues} {lockedReason} focuser={app.devices?.focuser?.state === 'connected' || app.devices?.focuser?.state === 'busy'} onset={(p) => store.setOptions(p)} />
+        <RunOptionsCard bind:open={optionsOpen} {plan} {issues} {lockedReason} focuser={app.devices?.focuser?.state === 'connected' || app.devices?.focuser?.state === 'busy'} {now} onset={(p) => store.setOptions(p)} />
       {/if}
       {#if shown('targets')}
         <TargetSetCard

@@ -11,15 +11,17 @@
   interface Props {
     verdict: Verdict | null;
     minPoints?: number;
+    /** Beside the curve tools in the tab row (wave 6b): the icon names it, the word "Ensemble" goes to the tooltip. */
+    compact?: boolean;
   }
 
-  let { verdict, minPoints = 10 }: Props = $props();
+  let { verdict, minPoints = 10, compact = false }: Props = $props();
   const title = $derived(verdict ? verdict.line : `Ensemble: no assessment yet. The leave-one-out check runs after every measured frame (needs ${minPoints} points per comparison).`);
 </script>
 
 <span class="ev" class:ok={verdict?.tone === 'ok'} class:warn={verdict?.tone === 'warn'} {title}>
   <Icon name="comparison-quality" size={14} />
-  <span class="k">Ensemble</span>
+  {#if compact}<span class="sr">Ensemble</span>{:else}<span class="k">Ensemble</span>{/if}
   <span class="w"><NumText text={verdict ? (verdict.counts ?? verdict.words) : 'no assessment yet'} /></span>
   <!-- The verdict's word always: "4 of 5 stable" alone read as a usable ensemble. -->
   {#if verdict}<span class="s"><NumText text={`· ${verdict.tone === 'ok' ? 'consistent' : verdict.tone === 'warn' ? 'not ready' : `waiting for ${minPoints} points`}`} /></span>{/if}
@@ -27,7 +29,9 @@
 
 <style>
   .ev {
+    position: relative;
     display: inline-flex;
+    flex: none;
     align-items: center;
     gap: var(--space-1);
     min-width: 0;
@@ -39,6 +43,14 @@
   .ev :global(.icon) {
     flex: none;
     color: var(--fg-muted);
+  }
+  .sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
   .w {
     color: var(--fg);

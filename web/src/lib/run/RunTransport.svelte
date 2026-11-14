@@ -19,8 +19,7 @@
   import IconButton from '../components/IconButton.svelte';
   import type { MenuChoice } from '../components/menu';
   import SplitButton from '../components/SplitButton.svelte';
-  import { clockUtc } from '../format/time';
-  import { isActive, stopDialog } from './run';
+  import { dayTime, isActive, stopDialog } from './run';
   import StartAtPopover from './StartAtPopover.svelte';
 
   interface Props {
@@ -92,7 +91,7 @@
       text="Start sequence"
       variant="primary"
       size="s"
-      detail={at !== null ? `at ${clockUtc(at, false)} UTC` : undefined}
+      detail={at !== null ? `at ${dayTime(at, now)} UTC` : undefined}
       {items}
       menuLabel="Start options"
       busy={busy === 'start'}

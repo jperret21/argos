@@ -289,7 +289,7 @@ The observer thinks in these states; every space should make the current one obv
 | T9 | per run | **1-7** (7 on 2026-09-25 **[data]**) | 0.5 m | focused | any | laptop |
 | T10 | during the run | 2-6 h; a glance every 5-20 min **[assumption]**, i.e. 10-50 glances | **1-3 m**, sometimes another room (the Seestar is on Wi-Fi) | glance, under 2 s | Night Red outside; Charcoal indoors | laptop on a table; external monitor indoors; tablet later |
 | T11 | any time | rare, minutes | from 3 m back to 0.5 m | interrupted, then focused | Night Red | laptop |
-| T12 | end | once, 20-40 min (20 darks at tonight's 51.5 s cadence: about 17 min) | 0.5-2 m | focused, then glance | Night Red | laptop |
+| T12 | end | once, 10-40 min (20 darks of 10 s at tonight's measured 11.4 s start-to-save overhead: about 7 min; corrected in wave 6b, the 51.5 s cadence counted Qt's waits between subs) | 0.5-2 m | focused, then glance | Night Red | laptop |
 | T13 | next day | once per session, 15-60 min | 0.6 m | focused, analytical | Observatory / Charcoal | laptop or external monitor |
 
 Two consequences. First, **T10 dominates the night by duration** and is the task the spec
@@ -880,15 +880,17 @@ When a run ends, the Run card (and Plan's outcome strip, 06 §2.4) turns into th
 |   Tracking is still on.                                              |
 |   CALIBRATION FOR TONIGHT'S LIGHTS                                   |
 |   [start Take 20 darks]   10 s . gain 80 . Dark slot                 |
-|                           about 17 min at tonight's 51 s cadence     |
+|                           about 7 min (10 s + 11.4 s per frame)      |
 |   [start Take 30 biases]  shortest exposure . gain 80 . Dark slot    |
 |   [park Park]  (hold)          [disconnect Disconnect]               |
 |   Session 20260925T200453Z_RR_Lyr . 3.0 GB      [browse Reveal]      |
 ```
 
 - The dark and bias buttons start a one-step sequence prefilled from the run (same exposure
-  and gain, Dark slot, the guide's counts 15-20 and 20-30); the estimate uses the observed
-  cadence, not the exposure alone (finding 1).
+  and gain, Dark slot, the guide's counts 15-20 and 20-30); the estimate uses the exposure
+  plus the measured start-to-save overhead, not the exposure alone (finding 1). Corrected in
+  wave 6b (science review): the night's 51 s cadence included Qt's waits between subs, which a
+  calibration plan (interval 0) does not make, so "17 min" was 7 min.
 - Park keeps the hold pattern; Disconnect has no confirmation once nothing runs (Q-C5).
 
 ### 4.15 Review the morning after (W11, P12)

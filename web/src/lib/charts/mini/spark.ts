@@ -29,6 +29,8 @@ export interface SparkSpec {
   invert?: boolean;
   /** Dashed reference line (threshold, limit). */
   ref?: number;
+  /** Its ink (default --chart-reference; an attention rule's threshold: --warning, BRAND 10). */
+  refColor?: string;
   /** Values above `ref` are "out" (or below, with refBelow). */
   refBelow?: boolean;
   /** Mark the out-of-range part (heavier stroke + rug). */
@@ -127,7 +129,7 @@ export function drawSpark(ctx: CanvasRenderingContext2D, w: number, h: number, s
 
   if (s.ref !== undefined) {
     const y = Math.round(Y(s.ref)) + 0.5;
-    ctx.strokeStyle = ink.reference.a(0.8);
+    ctx.strokeStyle = s.refColor ?? ink.reference.a(0.8);
     ctx.lineWidth = 1;
     ctx.setLineDash([2, 2]);
     ctx.beginPath();

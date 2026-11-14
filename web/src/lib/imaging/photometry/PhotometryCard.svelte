@@ -16,6 +16,7 @@
   Folded, the header says target · comparisons · verdict (W6).
 -->
 <script lang="ts">
+  import { filterLabel } from '../../format/filter';
   import Card from '../../components/Card.svelte';
   import IconButton from '../../components/IconButton.svelte';
   import NumText from '../../components/NumText.svelte';
@@ -105,7 +106,8 @@
   // in the key, so a value that gains a digit never reflows the grid.
   const items = $derived.by((): ReadoutItem[] => [
     {
-      k: `Target · ${bandText} · mag`,
+      // S49: the newest point's filter named beside its magnitude (the band may show another).
+      k: `Target · ${bandText}${tCurve?.filter ? ` · ${filterLabel(tCurve.filter)}` : ''} · mag`,
       v: tLast ? mag(tLast.mag, tLast.mag_err) : '—',
       note: tLast ? `newest point · frame #${tLast.frame_seq ?? '—'}` : 'no point yet',
       key: true,

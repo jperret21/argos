@@ -13,7 +13,7 @@
 import { DASH, fixed, mag, signed } from '../../format/number';
 import { clockUtc, julian } from '../../format/time';
 import { FLAG_SATURATED, FLAG_SUSPECT } from '../uplot/markers';
-import { baselineOf, type YMode } from './facets';
+import { baselineOf, type CurveKeys, type YMode } from './facets';
 import type { LiveCurveStore, StarCurve } from './store';
 
 export interface SeriesReadout {
@@ -66,11 +66,11 @@ export function readoutAt(
   store: LiveCurveStore,
   t: number,
   mode: YMode,
-  keys: { target?: string | null; check?: string | null } = {},
+  keys: CurveKeys = {},
   tol = 1,
 ): PointReadout | null {
-  const tgt = store.primary('target', keys.target);
-  const chk = store.primary('check', keys.check);
+  const tgt = store.primary('target', keys.target, keys.filter);
+  const chk = store.primary('check', keys.check, keys.filter);
   const it = rowAt(tgt, t, tol);
   const ic = rowAt(chk, t, tol);
   const anchor = it >= 0 ? tgt!.cols : ic >= 0 ? chk!.cols : null;
@@ -109,7 +109,7 @@ export function readoutAt(
   if (it >= 0 && Number.isFinite(tgt!.cols.zp[it])) {
     // The target's ensemble zero point on that frame, and the comparisons it used.
     const c = tgt!.cols;
-    const total = store.comparisons().length;
+    const total = store.comparisons(keys.filter).length;
     const used = Number.isFinite(c.comps[it]) ? `${c.comps[it]}${total ? ` of ${total}` : ''} comparisons` : 'comparisons';
     const rms = Number.isFinite(c.zpRms[it]) ? ` · σ ${fixed(c.zpRms[it], 3)}` : '';
     ensemble = { value: `ZP ${fixed(c.zp[it], 3)}${rms}`, what: used, flags: [] };
@@ -170,9 +170,9 @@ export function isoMs(t: number): string {
  * frame measured twice (two solutions) has two rows, its k-th target point
  * beside its k-th check point, as the CSVs keep both.
  */
-export function curveTsv(store: LiveCurveStore, keys: { target?: string | null; check?: string | null } = {}): { text: string; rows: number } {
-  const tgt = store.primary('target', keys.target);
-  const chk = store.primary('check', keys.check);
+export function curveTsv(store: LiveCurveStore, keys: CurveKeys = {}): { text: string; rows: number } {
+  const tgt = store.primary('target', keys.target, keys.filter);
+  const chk = store.primary('check', keys.check, keys.filter);
   const jds = new Set<number>();
   for (const s of [tgt, chk]) if (s) for (let i = 0; i < s.n; i++) jds.add(s.cols.jd[i]);
   const lines: string[] = [TSV_HEADER.join('\t')];

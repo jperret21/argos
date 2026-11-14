@@ -32,6 +32,7 @@
   last of all the frame segment itself shrinks, never the Log button.
 -->
 <script lang="ts">
+  import { tick, untrack } from 'svelte';
   import { formatFps, formatLatency } from '../app/metrics';
   import { useApp } from '../app/state.svelte';
   import { connectionStatus, mountStatus } from '../app/status';
@@ -47,6 +48,7 @@
   import { recent } from '../imaging/modes/exposure';
   import { clockUtc } from '../format/time';
   import { isEngaged, stripLine } from '../run/run';
+  import AttentionCenter from './attention/AttentionCenter.svelte';
 
   const app = useApp();
 
@@ -125,6 +127,59 @@
 
   // Wave 3: an autofocus or wheel chip (wider than LIVE, and the rate means little then) folds them too.
   const crowded = $derived(linkDown || toGo !== null || siteAlert || (!!run && run.icon !== 'live' && run.icon !== 'capture'));
+  /** 1 280 px class (≤ 1 400): the attention chip folds its headline beside a run chip there only;
+   * at 1 440 it keeps "count and newest" (BRAND §13; wave 6b design review). */
+  let narrow = $state(typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 1400px)').matches);
+  $effect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia('(max-width: 1400px)');
+    const on = () => (narrow = mq.matches);
+    on();
+    mq.addEventListener?.('change', on);
+    return () => mq.removeEventListener?.('change', on);
+  });
+
+  /* Measured, not guessed by width: at 1 440 px a run chip, the site chip and the mount's
+     RA / Dec left no room for the headline (the bar was 1 491 px wide, Log pushed out; wave
+     6b design review). The headline is first drawn and the bar measured; when it would
+     overflow the headline ends in an ellipsis, or folds into the chip's tooltip when less
+     than 96 px would be left. Both steps land before the paint. */
+  let bar = $state<HTMLElement | null>(null);
+  let overflowFold = $state(false);
+  /** The headline's room when it is cut short, not folded (at least 96 px: "HFD 23.6 px · 2.…"). */
+  let headMax = $state<number | null>(null);
+  let fitting = false;
+  async function fit(): Promise<void> {
+    if (!bar || fitting) return;
+    fitting = true;
+    overflowFold = false;
+    headMax = null;
+    await tick();
+    const over = bar ? bar.scrollWidth - bar.clientWidth : 0;
+    if (bar && over > 1) {
+      const text = bar.querySelector('.chip .text');
+      const room = text ? Math.floor(text.getBoundingClientRect().width - over - 2) : 0;
+      if (room >= 96) headMax = room;
+      else overflowFold = true;
+    }
+    fitting = false;
+  }
+  $effect(() => {
+    // what widens the bar: the headline, the chips before it, the mount's coordinates
+    void app.attention.chip.text;
+    void app.attention.chip.level;
+    void run?.text;
+    void crowded;
+    void narrow;
+    void app.mountReady;
+    untrack(() => void fit());
+  });
+  $effect(() => {
+    if (!bar || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => void fit());
+    ro.observe(bar);
+    return () => ro.disconnect();
+  });
 
   const seestarTip = $derived(
     net.seestar.word === 'not configured'
@@ -161,7 +216,7 @@
 
 </script>
 
-<footer class="statusbar" class:crowded class:observe>
+<footer bind:this={bar} class="statusbar" class:crowded class:observe class:attn={app.attention.open.length > 0}>
   {#if linkDown}
     <span
       class="item server"
@@ -274,6 +329,16 @@
       <span class="num">{run.text}</span>
     </button>
   {/if}
+  <!-- W6b (D3): the attention chip and its list (nothing drawn before the first item). -->
+  <AttentionCenter
+    store={app.attention}
+    compact={(crowded && narrow) || overflowFold}
+    textMax={headMax}
+    bind:open={app.attentionListOpen}
+    onsound={(v) => app.setAlertSound(v)}
+    onaction={(to) => app.attentionAction(to)}
+    onsettings={() => app.openSettings('alerts')}
+  />
 
   {#if observe}
     <span class="sep" aria-hidden="true"></span>
@@ -290,14 +355,14 @@
       class="item"
       class:prev={metricsNow !== null && metricsNow.seq !== frameSeq}
       use:tooltip={{
-        text: `Measured by the server on the full frame (green plane): half-flux diameter of the brightest star, stars above 5 σ${metricsNow ? ` · frame #${metricsNow.seq}` : ''}`,
+        text: `Measured by the server on the full frame (green plane): half-flux diameter of the brightest star, stars above 5 σ${metricsNow ? ` · frame #${metricsNow.seq}` : ''}${frameStars !== null ? ` · ${int(frameStars)} stars` : ''}`,
         placement: 'top',
       }}
     >
       <span class="key">HFD</span>
       <span class="num val" class:w6={frameHfd !== null}>{frameHfd !== null ? `${fixed(frameHfd, 2)} px` : '—'}</span>
-      <span class="key">Stars</span>
-      <span class="num val" class:w4={frameStars !== null}>{frameStars !== null ? int(frameStars) : '—'}</span>
+      <span class="key stars">Stars</span>
+      <span class="num val stars" class:w4={frameStars !== null}>{frameStars !== null ? int(frameStars) : '—'}</span>
     </span>
 
     <span class="sep rate-sep" aria-hidden="true"></span>
@@ -505,6 +570,11 @@
     flex: 0 1 auto;
     overflow: hidden;
   }
+  /* The number never gives way before the file name (it read "Frame" with no number, or
+     "#41 R", at 1 440 px with a run chip: wave 6b design review). */
+  .item.frame .val {
+    flex: none;
+  }
   .frame .file {
     max-width: 22ch;
     overflow: hidden;
@@ -612,6 +682,24 @@
   .crowded .rate-sep {
     display: none;
   }
+  /* A run chip (or a slew, the link item) leaves no room for the file name at any width
+     (design review W6a at 1 280, W6b at 1 440): it stays in the Frame item's tooltip. */
+  .crowded .frame .file,
+  .crowded .frame .key {
+    display: none; /* "#8" alone: the number sign names it */
+  }
+  .crowded .item.frame {
+    flex: none; /* "#8" alone: it is never squeezed under its own number */
+  }
+  .crowded .val.w6,
+  .crowded .val.w4 {
+    min-width: 0; /* fixed widths give way before the frame number does */
+  }
+  /* An open attention item (the chip with its word, count and headline) beside a run chip:
+     the star count goes to the HFD tooltip (the Run band and Watch show it). */
+  .crowded.attn .stars {
+    display: none;
+  }
   @media (max-width: 1400px) {
     .rate,
     .rate-sep {
@@ -621,16 +709,6 @@
        is in the log (L) rather than shown as a cut fragment ("13:18:1"). */
     .observe .activity {
       visibility: hidden; /* keeps its flexible space: Log stays at the right end */
-    }
-    /* A run chip (or a slew, the link item) leaves no room for the file name at 1 280 px
-       (design review W6a): it stays in the Frame item's tooltip. */
-    .crowded .frame .file,
-    .crowded .frame .key {
-      display: none; /* "#8" alone: the number sign names it */
-    }
-    .crowded .val.w6,
-    .crowded .val.w4 {
-      min-width: 0; /* fixed widths give way before the frame number does */
     }
     .statusbar.crowded {
       gap: var(--space-3);

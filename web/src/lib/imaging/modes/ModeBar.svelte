@@ -12,9 +12,10 @@
     same neutral cap as every Control: the modes are icon-only at 1280 and need teaching
     most); no inline hint on hover (it would move the segments under the pointer). The app
     never switches mode by itself.
-  - Run is listed but unavailable in this version (Field arrived with wave 4): it stays
-    focusable, and a press says which wave brings it (tooltip v2 press-to-explain); arrows skip nothing,
-    so the observer can read why.
+  - A mode that would be unavailable stays focusable, and a press says why (tooltip v2
+    press-to-explain); arrows skip nothing. Every mode is available from wave 6b (Run: the
+    live light curve); the app proposes Run when a run starts (ModeSuggestion), never
+    switches to it.
 -->
 <script lang="ts">
   import Icon from '../../components/Icon.svelte';

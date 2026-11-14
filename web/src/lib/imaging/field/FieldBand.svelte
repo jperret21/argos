@@ -185,17 +185,74 @@
     { id: 'bprp', label: 'BP−RP', numeric: true, value: (m) => (m.bp_mag != null && m.rp_mag != null ? m.bp_mag - m.rp_mag : null), format: (m) => (m.bp_mag != null && m.rp_mag != null ? fixed(m.bp_mag - m.rp_mag, 2) : '—'), width: '80px', title: 'Gaia colour' },
     { id: 'det', label: 'On frame', value: (m) => (m.detected === undefined ? '' : m.detected ? 'detected' : ''), width: '90px', title: 'A source was detected there on the solved frame' },
   ];
+  // -- Below 150 px ---------------------------------------------------------------------------
+  /** The compact band's height: under the summary row, the list when a header and a row fit. */
+  let compactH = $state(0);
+  const COMPACT_ROW_H = 34;
+  const tableBelow = $derived(field.layersAvailable && (tab === 'candidates' || tab === 'ensemble') && rows.length > 0 && compactH - COMPACT_ROW_H >= 48);
+
   let varSel: string | null = $state(null);
   let starSel: string | null = $state(null);
 </script>
 
+{#snippet table(list: CandidateRow[])}
+  <div class="scroll">
+    <table role="grid" aria-label={tab === 'ensemble' ? 'Ensemble: comparisons and check' : 'Comparison candidates'} aria-rowcount={list.length + 1}>
+      <thead>
+        <tr>
+          {#each COLS as c (c.key)}
+            <th class:num={c.num} aria-sort={sortKey === c.key ? (asc ? 'ascending' : 'descending') : 'none'}>
+              <button type="button" tabindex="-1" onclick={() => sortBy(c.key)} title={c.title}>
+                {c.label}{#if sortKey === c.key}<svg class="arrow" class:up={asc} viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 3.75 5 6.25 7.5 3.75" /></svg>{/if}
+              </button>
+            </th>
+          {/each}
+        </tr>
+      </thead>
+      <tbody onpointerleave={() => hover(null)}>
+        {#each list as r, i (r.key)}
+          <tr
+            animate:flip={{ duration: dur }}
+            class:hov={hotKey === r.key || (field.hover?.source === 'candidates' && field.hover.key === r.key)}
+            class:sel={field.inspected === r.key}
+            class:flag={r.flags.length > 0}
+            tabindex={r.key === focusKey ? 0 : -1}
+            aria-selected={field.inspected === r.key}
+            onpointerenter={() => hover(r)}
+            onfocus={() => hover(r)}
+            onblur={() => hover(null)}
+            onclick={() => pick(r)}
+            onkeydown={(e) => rowKey(e, i, r)}
+          >
+            <td class="role"><RoleGlyph role={r.role} label={r.role ?? 'candidate'} /></td>
+            <td class="name">{r.name}</td>
+            <td class="num">{r.v === null ? '—' : fixed(r.v, 2)}</td>
+            <td class="num">{r.bv === null ? '—' : fixed(r.bv, 2)}</td>
+            <td class="num" class:warn={warn(r, 'colour')}>{r.dbv === null ? '—' : signed(r.dbv, 2)}</td>
+            <td class="num" class:warn={warn(r, 'far')}>{r.sep === null ? '—' : fixed(r.sep, 1)}</td>
+            <td class="num" class:warn={warn(r, 'clipped') || warn(r, 'non-linear')}>{r.peak === null ? '—' : r.clipped ? 'clipped' : int(r.peak)}</td>
+            <td class="num">{r.snr === null ? '—' : int(r.snr)}</td>
+            <td class="num" class:warn={warn(r, 'blend risk')}>{r.nbr === null ? '—' : r.nbr}</td>
+            <td class="status">{r.status}</td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+  </div>
+{/snippet}
+
 {#if compact}
-  <div class="row-compact">
-    <span class="k">Ensemble</span>
-    <span class="grp"><NumText text={`${summary.comparisons} comparison${summary.comparisons === 1 ? '' : 's'}${summary.check ? ` · check ${summary.check}` : ' · no check star'}${summary.flagged ? ` · ${summary.flagged} flagged` : ''}`} /></span>
-    <span class="div" aria-hidden="true"></span>
-    <span class="k">Candidates</span><span class="num">{summary.candidates}</span>
-    {#if live}<span class="live-slot">{@render live(true)}</span>{/if}
+  <!-- Below 150 px (BRAND 11.1): the summary row, then as many rows of the list as the band
+       holds: the band is used, never an empty strip above or under the summary (W5 carry-over). -->
+  <div class="compact" bind:clientHeight={compactH}>
+    <div class="row-compact" class:alone={!tableBelow}>
+      <span class="k">Ensemble</span>
+      <span class="grp"><NumText text={`${summary.comparisons} comparison${summary.comparisons === 1 ? '' : 's'}${summary.check ? ` · check ${summary.check}` : ' · no check star'}${summary.flagged ? ` · ${summary.flagged} flagged` : ''}`} /></span>
+      <span class="div" aria-hidden="true"></span>
+      <span class="k">Candidates</span><span class="num">{summary.candidates}</span>
+      {#if live}<span class="live-slot">{@render live(true)}</span>{/if}
+    </div>
+    {#if tableBelow}{@render table(rows)}{/if}
   </div>
 {:else}
   <div class="wrap">
@@ -250,49 +307,7 @@
           : 'No VSP comparison star detected in this frame. Choose comparisons on the image, or check Settings ▸ Catalogues (VSP).'}
       </p>
     {:else}
-      <div class="scroll">
-        <table role="grid" aria-label={tab === 'ensemble' ? 'Ensemble: comparisons and check' : 'Comparison candidates'} aria-rowcount={rows.length + 1}>
-          <thead>
-            <tr>
-              {#each COLS as c (c.key)}
-                <th class:num={c.num} aria-sort={sortKey === c.key ? (asc ? 'ascending' : 'descending') : 'none'}>
-                  <button type="button" tabindex="-1" onclick={() => sortBy(c.key)} title={c.title}>
-                    {c.label}{#if sortKey === c.key}<svg class="arrow" class:up={asc} viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 3.75 5 6.25 7.5 3.75" /></svg>{/if}
-                  </button>
-                </th>
-              {/each}
-            </tr>
-          </thead>
-          <tbody onpointerleave={() => hover(null)}>
-            {#each rows as r, i (r.key)}
-              <tr
-                animate:flip={{ duration: dur }}
-                class:hov={hotKey === r.key || (field.hover?.source === 'candidates' && field.hover.key === r.key)}
-                class:sel={field.inspected === r.key}
-                class:flag={r.flags.length > 0}
-                tabindex={r.key === focusKey ? 0 : -1}
-                aria-selected={field.inspected === r.key}
-                onpointerenter={() => hover(r)}
-                onfocus={() => hover(r)}
-                onblur={() => hover(null)}
-                onclick={() => pick(r)}
-                onkeydown={(e) => rowKey(e, i, r)}
-              >
-                <td class="role"><RoleGlyph role={r.role} label={r.role ?? 'candidate'} /></td>
-                <td class="name">{r.name}</td>
-                <td class="num">{r.v === null ? '—' : fixed(r.v, 2)}</td>
-                <td class="num">{r.bv === null ? '—' : fixed(r.bv, 2)}</td>
-                <td class="num" class:warn={warn(r, 'colour')}>{r.dbv === null ? '—' : signed(r.dbv, 2)}</td>
-                <td class="num" class:warn={warn(r, 'far')}>{r.sep === null ? '—' : fixed(r.sep, 1)}</td>
-                <td class="num" class:warn={warn(r, 'clipped') || warn(r, 'non-linear')}>{r.peak === null ? '—' : r.clipped ? 'clipped' : int(r.peak)}</td>
-                <td class="num">{r.snr === null ? '—' : int(r.snr)}</td>
-                <td class="num" class:warn={warn(r, 'blend risk')}>{r.nbr === null ? '—' : r.nbr}</td>
-                <td class="status">{r.status}</td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
+      {@render table(rows)}
     {/if}
   </div>
 {/if}
@@ -485,14 +500,29 @@
     color: var(--text-muted);
     font-size: var(--text-s);
   }
+  .compact {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
   .row-compact {
     display: flex;
+    flex: none;
     align-items: center;
     gap: var(--space-3);
-    height: 100%;
+    height: 34px;
     padding: 0 var(--space-3);
     color: var(--fg);
     font-size: var(--text-s);
+  }
+  /* Alone, the summary takes the band's whole height (BRAND 11.1). */
+  .row-compact.alone {
+    flex: 1;
+    height: auto;
+  }
+  .compact .row-compact:not(.alone) {
+    border-bottom: var(--border-w) solid var(--border-soft);
   }
   /* Between the summary's key-value groups (the rest of the row's rule). */
   .row-compact .div {

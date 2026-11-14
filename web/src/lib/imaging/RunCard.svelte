@@ -18,6 +18,7 @@
   The attention items and the wrap-up are wave 6b (the record already carries what they need).
 -->
 <script lang="ts">
+  import type { Snippet } from 'svelte';
   import type { SequenceState } from '../api/sequence';
   import AgeMeter from '../charts/mini/AgeMeter.svelte';
   import RunProgress from '../charts/mini/RunProgress.svelte';
@@ -30,7 +31,7 @@
   import StatusBadge from '../components/StatusBadge.svelte';
   import { fixed, seconds } from '../format/number';
   import { clockUtc, duration } from '../format/time';
-  import { endAction, endAt, folderName, isActive, nextAutofocusParts, outcomeOf, outcomeText, stateChip, stopDialog, timeLeft } from '../run/run';
+  import { cadenceEnd, endAction, endAt, folderName, isActive, nextAutofocusParts, outcomeOf, outcomeText, stateChip, stopDialog, timeLeft } from '../run/run';
 
   interface Props {
     seq: SequenceState | null;
@@ -51,8 +52,12 @@
     ondismiss?: () => void;
     /** Gallery: the Stop dialog drawn in place. */
     previewStop?: boolean;
+    /** Wave 6b: the run's open attention items (RunAttention), under the readouts. */
+    attention?: Snippet;
+    /** Wave 6b (D2): the end-of-night wrap-up (WrapUp), in place of the outcome line. */
+    ended?: Snippet;
   }
-  let { seq, now, frameTimes = [], marks = [], open = $bindable(true), onpause, onresume, onstop, onplan, onerror, ondismiss, previewStop = false }: Props = $props();
+  let { seq, now, frameTimes = [], marks = [], open = $bindable(true), onpause, onresume, onstop, onplan, onerror, ondismiss, previewStop = false, attention, ended }: Props = $props();
 
   let busy = $state<'pause' | 'resume' | null>(null);
   let failure = $state<string | null>(null);
@@ -78,6 +83,7 @@
   const expecting = $derived(st === 'running' || st === 'pausing');
   const end = $derived(seq ? endAt(seq, now) : null);
   const left = $derived(seq ? timeLeft(seq, now) : null);
+  const late = $derived(seq ? cadenceEnd(seq, now, cadence, lastAt) : null);
   const pct = $derived(seq && seq.frames_total > 0 ? Math.round((seq.frames_done / seq.frames_total) * 100) : 0);
   const dialog = $derived(seq ? stopDialog(seq) : null);
   const result = $derived(seq && st === 'idle' ? seq.last_result : null);
@@ -87,9 +93,20 @@
       ? [
           {
             k: 'Ends',
-            v: end !== null ? clockUtc(end, false) : '—',
-            unit: end !== null ? 'UTC' : undefined,
-            note: st === 'paused' && left !== null ? `if resumed now · ${duration(left)} left` : left !== null ? `in ${duration(left)} · server estimate` : 'after the first frames',
+            v: late !== null ? clockUtc(late, false) : end !== null ? clockUtc(end, false) : '—',
+            unit: end !== null || late !== null ? 'UTC' : undefined,
+            // Never "in 0 s" while frames remain: the server's estimate lags the first frames;
+            // the frames left × the cadence then.
+            note:
+              st === 'paused' && left !== null
+                ? `if resumed now · ${duration(left)} left`
+                : late !== null
+                  ? `in ≈ ${duration(late - now)} · from cadence`
+                  : left !== null && left <= 0 && seq.frames_done < seq.frames_total
+                  ? 'after this frame · server estimate passed'
+                  : left !== null
+                    ? `in ${duration(left)} · server estimate`
+                    : 'after the first frames',
             key: true,
           },
           (() => {
@@ -150,6 +167,8 @@
     {#if !seq || (st === 'idle' && !result)}
       <p class="idle">No sequence is running. Plan one, then start it from Plan.</p>
       {#if onplan}<div class="actions"><Button label="Open Plan" size="s" onclick={onplan} /></div>{/if}
+    {:else if result && ended}
+      {@render ended()}
     {:else if result}
       <p class="outcome o-{outcomeOf(result)}"><span class="mark" aria-hidden="true"></span>{outcomeText(result)}</p>
       {#if result.run_root ?? seq.run_root}
@@ -177,12 +196,13 @@
           <span class="pct num">{pct} %</span>
         </div>
         <div class="age">
-          <span class="k" title="Since the newest sub started (DATE-OBS)">Last sub started</span>
+          <span class="k" title="Since the newest sub started (its DATE-OBS)">Last frame</span>
           <AgeMeter age={lastAt !== null ? Math.max(0, now - lastAt) : null} {cadence} {expecting} width={120} />
           {#if st === 'paused'}<span class="meta">paused: no frame expected</span>{:else if st === 'autofocus'}<span class="meta">autofocus pass in progress</span>{/if}
         </div>
         <Readouts {items} cols={2} />
       {/if}
+      {#if attention}{@render attention()}{/if}
 
       <div class="actions">
         {#if st === 'waiting'}

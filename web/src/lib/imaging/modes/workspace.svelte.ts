@@ -10,8 +10,9 @@
  *   brings the presets back (ImagingScreen calls it on app.layoutGeneration).
  * - A mode marks itself when its layout differs from its preset (`modified`,
  *   `changedKeys`), and Arrange resets it (with Undo, through `onreset`).
- * - The mode never changes by itself; an unavailable mode (Run in this
- *   version) is refused with its reason.
+ * - The mode never changes by itself; an unavailable mode is refused with
+ *   its reason. The app may PROPOSE one (`suggest`: "Run started · Run" on
+ *   the image, ModeSuggestion); only the observer's choice switches.
  * - The switch cross-fades through a View Transition when the engine has one
  *   and motion is allowed (BRAND 9: task-mode switches only, `--duration-base`);
  *   otherwise it is instant.
@@ -57,6 +58,8 @@ export class ObserveWorkspace {
   dragReadout: string | null = $state(null);
   /** The Arrange popover is open. */
   arrangeOpen = $state(false);
+  /** A mode the app proposes (D1: a chip on the image, never a switch). */
+  suggestion: { mode: Mode; text: string } | null = $state(null);
 
   readonly layout: ModeLayout = $derived(this.layouts[this.mode]);
   readonly changed: string[] = $derived(changedKeys(this.mode, this.layouts[this.mode]));
@@ -104,13 +107,28 @@ export class ObserveWorkspace {
   setMode(mode: Mode): string | null {
     const why = this.reason(mode);
     if (why) return why;
+    if (this.suggestion?.mode === mode) this.suggestion = null;
     if (mode === this.mode) return null;
     this.transition(() => {
       this.mode = mode;
       this.dragReadout = null;
+      this.suggestion = null;
       savePref(MODE_KEY, mode, this.storeArg());
     });
     return null;
+  }
+
+  /** Propose a mode (a run started: Run). Nothing when it is the mode already or unavailable. */
+  suggest(mode: Mode, text: string): void {
+    if (mode === this.mode || this.reason(mode)) {
+      this.suggestion = null;
+      return;
+    }
+    this.suggestion = { mode, text };
+  }
+
+  dismissSuggestion(): void {
+    this.suggestion = null;
   }
 
   /** Change the current mode's layout and remember it. */

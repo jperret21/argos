@@ -56,6 +56,24 @@ describe('the sequence record (A63)', () => {
     expect([s.cadence_s, s.observed_cadence_s, s.next_autofocus_in, s.autofocus_every_n, s.autofocus_runs]).toEqual([33, 32.4, 3, 20, 1]);
     expect(s.on_complete).toBe('Park mount');
     expect(s.revision).toBe(41);
+    // A 6a record has no mid-run autofocus fields: none shown.
+    expect([s.af_step, s.af_marks]).toEqual([null, []]);
+  });
+
+  it('reads the mid-run autofocus sweep and the run’s passes (wave 6b: afStep, the marks)', () => {
+    const s = checkSequence({
+      ...RUNNING,
+      state: 'autofocus',
+      autofocus: { started_utc: '2026-11-01T21:46:00Z', stage: 'sweep', step: 4, total: 9, position: 12010 },
+      autofocus_passes: [
+        { started_utc: '2026-11-01T21:10:00Z', ended_utc: '2026-11-01T21:12:30Z', state: 'done', position: 12000, hfd_px: 2.1, message: null, frames_done: 20 },
+        { started_utc: '2026-11-01T21:46:00Z', ended_utc: null, state: 'not_started', position: null, hfd_px: null, message: null, frames_done: 37 },
+        { started_utc: 'not a time' },
+      ],
+    })!;
+    expect(s.af_step).toEqual({ done: 4, total: 9 });
+    expect(s.af_marks).toEqual([Date.UTC(2026, 10, 1, 21, 10, 0) / 1000, Date.UTC(2026, 10, 1, 21, 46, 0) / 1000]);
+    expect(checkSequence({ ...RUNNING, autofocus: { step: 2, total: 0 } })!.af_step).toBeNull();
   });
 
   it('keeps the wire state of a scheduled start (Q-P2)', () => {

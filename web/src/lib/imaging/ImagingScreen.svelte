@@ -1,6 +1,6 @@
 <!--
   Observe (imaging) screen: toolbar with the task modes (owner decision D1:
-  Framing, Focus; Field and Run listed, unavailable in this version); the
+  Framing, Focus, Field and Run; a run that starts proposes Run, never switches); the
   16-bit image viewer with its HUD (frame chips, cursor readout, D6); the task
   band under the image, whose content follows the mode (Framing: levels and
   exposure check; Focus: V-curve and HFD trend), sized by bandLayout (BRAND
@@ -76,16 +76,18 @@
   import type { LayerId, Marker, Role } from '../viewer/overlay/layers';
   import { applyTransform, placeRing, type ScreenMap } from '../viewer/overlay/project';
   import { candidateRows, ensembleRows as fieldEnsembleRows, type CandidateRow } from './field/candidates';
+  import CurveTools from '../charts/lightcurve/CurveTools.svelte';
   import LightCurvePlot from '../charts/lightcurve/LightCurvePlot.svelte';
+  import { CurveDisplay, CurveView } from '../charts/lightcurve/view.svelte';
   import { LiveCurveStore } from '../charts/lightcurve/store';
   import type { TimeAxisMode } from '../charts/uplot/axes';
   import { loadPref, savePref } from '../app/prefs';
   import EnsembleTable from './photometry/EnsembleTable.svelte';
-  import EnsembleVerdict from './photometry/EnsembleVerdict.svelte';
+  import LightCurveTools from './photometry/LightCurveTools.svelte';
   import LightCurveTab from './photometry/LightCurveTab.svelte';
   import LiveStatus from './photometry/LiveStatus.svelte';
   import PhotometryCard from './photometry/PhotometryCard.svelte';
-  import { countLine, curveFor, ensembleRows, ensembleTsv, filterVariables, measuredCount, minPoints, statusLine, verdict as verdictOf, type EnsembleRow } from './photometry/present';
+  import { countLine, curveFor, ensembleRows, ensembleTsv, filterVariables, measuredCount, minPoints, PICK_TARGET, statusLine, verdict as verdictOf, type EnsembleRow } from './photometry/present';
   import type { FieldVariable, RecommendMode } from './photometry/types';
   import RecommendPopover from './photometry/RecommendPopover.svelte';
   import VariablesTab from './photometry/VariablesTab.svelte';
@@ -105,8 +107,15 @@
   import FocusBand from './modes/FocusBand.svelte';
   import FramingBand from './modes/FramingBand.svelte';
   import { BAND, bandLayout, bandMax, DRAWER_TABS, drawerHeight, layoutCost, RAIL, type CardId, type DrawerTab } from './modes/layout';
+  import ModeSuggestion from './modes/ModeSuggestion.svelte';
   import MountCard from './MountCard.svelte';
   import RunCard from './RunCard.svelte';
+  import WrapUp from '../run/wrapup/WrapUp.svelte';
+  import RunAttention from '../shell/attention/RunAttention.svelte';
+  import { computerLine } from '../shell/watch';
+  import RunBand from './run/RunBand.svelte';
+  import { ruleKey, runStarted, runSuggestion } from './run/runband';
+  import type { SequenceState } from '../api/sequence';
   import { isEngaged } from '../run/run';
 
   interface Props {
@@ -439,6 +448,19 @@
     const from = seqStore.state?.started_t ?? null;
     return from === null ? [] : app.afPeriods.filter((p) => p.from >= from).map((p) => p.from);
   });
+  /** The run's autofocus passes: the server's (a client joining mid-run has them), else those this client saw. */
+  const afMarks = $derived(seqStore.state?.af_marks?.length ? seqStore.state.af_marks : runMarks);
+  // D1: a run that starts proposes Run mode with a chip on the image (never a switch); the chip
+  // goes when the run is no longer engaged.
+  let prevRun: SequenceState | null = null;
+  $effect(() => {
+    const s = seqStore.state;
+    untrack(() => {
+      if (s && runStarted(prevRun, s)) ws.suggest('run', runSuggestion(s));
+      else if (ws.suggestion?.mode === 'run' && !isEngaged(s)) ws.dismissSuggestion();
+      prevRun = s;
+    });
+  });
 
   // -- Live photometry (W5, imaging/photometry): card, drawer tabs, Field band status ----------
   const phot = app.photometry;
@@ -555,13 +577,23 @@
   function copyEnsemble(): void {
     copyText(ensembleTsv(ensRows, { ra: formatRA, dec: (d) => formatDec(d) }), ensRows.length === 1 ? 'row' : 'rows', ensRows.length);
   }
-  /** The plot's time axis, error bars and flux view, remembered per viewer (README 3.11). */
-  let lcAxis = $state<TimeAxisMode>(loadPref('argos.lightcurve.axis', (v): v is TimeAxisMode => v === 'utc' || v === 'jd' || v === 'bjd', 'utc'));
-  let lcErrors = $state(loadPref('argos.lightcurve.errors', (v): v is boolean => typeof v === 'boolean', true));
-  let lcFlux = $state(loadPref('argos.lightcurve.flux', (v): v is boolean => typeof v === 'boolean', false));
-  $effect(() => savePref('argos.lightcurve.axis', lcAxis));
-  $effect(() => savePref('argos.lightcurve.errors', lcErrors));
-  $effect(() => savePref('argos.lightcurve.flux', lcFlux));
+  /**
+   * The curve's time axis, error bars and flux view, remembered per viewer (README 3.11) and
+   * shared by the drawer's Light curve tab and the Run band (one CurveDisplay); each keeps its
+   * own zoom (a CurveView), whose tools sit in the drawer's tab row and the band's header.
+   */
+  const curveDisplay = new CurveDisplay({
+    axis: loadPref('argos.lightcurve.axis', (v): v is TimeAxisMode => v === 'utc' || v === 'jd' || v === 'bjd', 'utc'),
+    errors: loadPref('argos.lightcurve.errors', (v): v is boolean => typeof v === 'boolean', true),
+    flux: loadPref('argos.lightcurve.flux', (v): v is boolean => typeof v === 'boolean', false),
+  });
+  const drawerCurve = new CurveView(curveDisplay);
+  const bandCurve = new CurveView(curveDisplay);
+  $effect(() => savePref('argos.lightcurve.axis', curveDisplay.axis));
+  $effect(() => savePref('argos.lightcurve.errors', curveDisplay.errors));
+  $effect(() => savePref('argos.lightcurve.flux', curveDisplay.flux));
+  /** The target's curve: its set key names it in every filter (S49: one curve per star and filter). */
+  const curveTargetKey = $derived(photTarget ? (curveFor(phot.curves, photTarget)?.key ?? photTarget.key) : null);
   /** The plot's own store (charts/lightcurve), fed by the validated stream. */
   const curveStore = new LiveCurveStore();
   // The wire types are shared (types.ts records are assignable to the plot store's): no cast.
@@ -705,6 +737,7 @@
       r.handle('observe.mode.framing', () => ws.setMode('framing')),
       r.handle('observe.mode.focus', () => ws.setMode('focus')),
       r.handle('observe.mode.field', () => ws.setMode('field')),
+      r.handle('observe.mode.run', () => ws.setMode('run')),
       r.handle('field.solve', () => void app.identifyField()),
       r.handle('field.grid', () => {
         if (field.solved) field.toggle('grid');
@@ -943,6 +976,9 @@
           oncopied={(what, text) => app.toast('info', `${what} copied`, text)}
         />
 
+        <!-- D1: "Run started · [Run ⌥4] [×]" at the bottom of the image when a run starts. -->
+        <ModeSuggestion {ws} keyFor={(id) => app.shortcuts.keyFor(id)} />
+
         {#if header}
           <!-- A frame on screen but no equipment: the prompt sits at the bottom, off the image centre. -->
           {#if app.linkOpen && !app.cameraReady}
@@ -1004,6 +1040,9 @@
             {#snippet tools()}
               {#if ws.mode === 'framing'}
                 <DisplayTools mode={app.levels?.mode ?? 'linear'} disabled={!app.levels} onmode={(mode) => app.setLevel({ mode })} />
+              {:else if ws.mode === 'run'}
+                <!-- The live curve's tools (time axis, zoom and its state, U, M), so the plot keeps the band's height. -->
+                <CurveTools view={bandCurve} variant="band" />
               {/if}
               <ViewOptions
                 tools={app.viewTools}
@@ -1023,6 +1062,28 @@
                     <LiveStatus line={photLine} status={phot.status} compact={small} onopen={() => ws.setDrawer({ drawerOpen: true, drawerTab: 'light-curve' })} />
                   {/snippet}
                 </FieldBand>
+              {:else if ws.mode === 'run'}
+                <!-- Run mode (W6b): the live curve under the image (target and check, D25), the run's mini charts, the rules drawn read-only. -->
+                <RunBand
+                  store={curveStore}
+                  view={bandCurve}
+                  {height}
+                  {compact}
+                  theme={app.theme}
+                  expecting={seqStore.state?.state === 'running' || (field.field?.auto === true && app.live)}
+                  targetKey={curveTargetKey}
+                  notify={(title, message) => app.toast('info', title, message ?? '')}
+                  seq={seqStore.state}
+                  now={app.clock / 1000}
+                  frameTimes={seqStore.frameTimes}
+                  marks={afMarks}
+                  afStep={seqStore.state?.af_step ?? null}
+                  conditions={app.conditions}
+                  items={app.attention.items}
+                  thresholds={app.configValues}
+                  onrule={(rule) => app.openSettings('alerts', ruleKey(rule))}
+                  emptyText={photTarget ? photLine.text : PICK_TARGET}
+                />
               {:else if ws.mode === 'focus'}
                 <FocusBand
                   {height}
@@ -1093,8 +1154,8 @@
               {#if id === 'conditions'}
                 <ConditionsTools store={app.conditions} view={app.conditionsView} expecting={app.live} />
               {:else if id === 'light-curve'}
-                <!-- No target: no verdict (the empty state says what to do; a report of a previous set may still be held). -->
-                {#if photTarget}<EnsembleVerdict verdict={photVerdict} minPoints={minPoints(phot.quality)} />{/if}
+                <!-- The verdict's word, then the curve's tools (the plot keeps the drawer's height). No target: no verdict (the empty state says what to do). -->
+                <LightCurveTools view={drawerCurve} verdict={photVerdict} minPoints={minPoints(phot.quality)} showVerdict={!!photTarget} />
               {:else if id === 'ensemble'}
                 <RecommendPopover
                   count={cfgNum('photometry.auto_comparisons') ?? 5}
@@ -1126,16 +1187,14 @@
                   {#snippet plot()}
                     <LightCurvePlot
                       store={curveStore}
+                      view={drawerCurve}
                       facets={drawerH >= 300 ? ['target', 'check', 'ensemble'] : ['target', 'check']}
                       variant="drawer"
-                      expecting={field.field?.auto === true && app.live}
+                      expecting={seqStore.state?.state === 'running' || (field.field?.auto === true && app.live)}
                       theme={app.theme}
-                      targetKey={photTarget ? (curveFor(phot.curves, photTarget)?.key ?? null) : null}
+                      targetKey={curveTargetKey}
                       notify={(title, message) => app.toast('info', title, message ?? '')}
                       label="Live light curve"
-                      bind:axis={lcAxis}
-                      bind:errors={lcErrors}
-                      bind:flux={lcFlux}
                     />
                   {/snippet}
                 </LightCurveTab>
@@ -1212,7 +1271,7 @@
             seq={seqStore.state}
             now={app.clock / 1000}
             frameTimes={seqStore.frameTimes}
-            marks={runMarks}
+            marks={afMarks}
             bind:open={
               () => runOpen,
               (v) => {
@@ -1226,7 +1285,30 @@
             onplan={() => app.go('sequencer')}
             onerror={(m) => app.toast('error', 'Sequence refused', m)}
             ondismiss={() => seqStore.dismissOutcome()}
-          />
+          >
+            {#snippet attention()}
+              <RunAttention items={app.attention.items} pending={app.attention.pending} onack={(id) => app.attention.ack(id)} onaction={(to) => app.attentionAction(to)} onlist={() => (app.attentionListOpen = true)} />
+              {@const pc = computerLine(app.keepAwake)}
+              {#if pc?.warn && isEngaged(seqStore.state)}<p class="sleep-warn"><span class="mark" aria-hidden="true"></span>{pc.text}</p>{/if}
+            {/snippet}
+            {#snippet ended()}
+              {@const r = seqStore.state?.last_result}
+              {#if r}
+                <WrapUp
+                  result={r}
+                  wrap={app.wrapup.view}
+                  objectName={seqStore.state?.object_name ?? null}
+                  mount={app.mountReady && app.events.mount ? { state: app.events.mount.state, tracking: app.events.mount.tracking } : null}
+                  onprepare={() => app.prepareCalibration()}
+                  onpark={() => app.park()}
+                  parkReason={app.canMount ? null : 'The mount is not connected'}
+                  oncopy={(path) => void navigator.clipboard?.writeText(path).then(() => app.toast('info', 'Session folder path copied'))}
+                  onplan={() => app.go('sequencer')}
+                  ondismiss={() => seqStore.dismissOutcome()}
+                />
+              {/if}
+            {/snippet}
+          </RunCard>
         {/if}
         {#if visibleCards.includes('camera')}
           <CameraCard bind:open={() => cardOpen('camera'), (v) => ws.setCardOpen('camera', v)} />
@@ -1322,6 +1404,22 @@
 </div>
 
 <style>
+  /* W6b: the run's keep-awake failed or is off (status.keep_awake): the attention mark and the words. */
+  .sleep-warn {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    margin: var(--space-1) 0 0;
+    color: var(--fg);
+    font-size: var(--text-xs);
+    line-height: var(--leading-tight);
+  }
+  .sleep-warn .mark {
+    flex: none;
+    width: 3px;
+    height: 9px;
+    background: linear-gradient(var(--warning) 0 5px, transparent 5px 7px, var(--warning) 7px 9px);
+  }
   .imaging {
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);

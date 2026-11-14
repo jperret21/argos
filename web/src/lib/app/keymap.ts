@@ -110,11 +110,11 @@ export const KEYMAP: readonly ShortcutDef[] = [
   // physical key (macOS Option+1 types "¡"). The observer chooses; never automatic.
   { id: 'observe.mode.framing', keys: ['Alt+1'], label: 'Framing mode', scope: OBSERVE },
   { id: 'observe.mode.focus', keys: ['Alt+2'], label: 'Focus mode', scope: OBSERVE },
-  // Run (wave 6b): listed in the mode bar, unavailable in this build.
+  // Run (wave 6b): the live light curve under the image; proposed when a run starts, never automatic.
   { id: 'observe.mode.field', keys: ['Alt+3'], label: 'Field mode', scope: OBSERVE },
-  { id: 'observe.mode.run', keys: ['Alt+4'], label: 'Run mode', scope: OBSERVE, planned: true },
+  { id: 'observe.mode.run', keys: ['Alt+4'], label: 'Run mode', scope: OBSERVE },
   // Watch view (owner D3): while it is open only W, Esc, ? and Mod+K act.
-  { id: 'observe.watch', keys: ['W'], label: 'Watch view on / off', scope: OBSERVE, planned: true },
+  { id: 'observe.watch', keys: ['W'], label: 'Watch view on / off', scope: OBSERVE },
   ...VIEWER,
   // D23: J arms the arrow keys (it moves nothing by itself); the jog pad handles the arrows.
   { id: 'observe.jog-arm', keys: ['J'], label: 'Arm / disarm keyboard jogging', scope: OBSERVE },

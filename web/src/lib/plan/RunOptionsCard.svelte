@@ -6,6 +6,9 @@
     never clears it (P10) and is a warning.
   - Repeat ×, Autofocus every N frames (0 = off; says when no focuser is connected: the run
     would skip it, P17), on filter change, End of run (Nothing, Stop tracking, Park mount).
+  - Start (UTC) (W6b): the draft's own start time, any day ("YYYY-MM-DD hh:mm"; empty: Start
+    runs at once). A transit prepared for a later night keeps its time; Start schedules it
+    from 24 h before (the server's limit), and the line under the field says when.
   - Every value goes to the server as typed (one PUT per commit); what is wrong with it comes
     back as an issue shown under the field, never a silent clamp. Locked while a run is
     active (Q-P9): the reason is said once, under the object; the other fields are disabled.
@@ -19,6 +22,7 @@
   import NumberField from '../components/NumberField.svelte';
   import Segmented from '../components/Segmented.svelte';
   import type { IssueIndex } from './model';
+  import { draftStartText, parseDraftStart } from '../run/run';
 
   interface Props {
     plan: SequencePlan | null;
@@ -28,9 +32,11 @@
     focuser: boolean;
     onset: (patch: Partial<Omit<SequencePlan, 'steps'>>) => Promise<unknown>;
     open?: boolean;
+    /** Unix s (the app clock): the start field says when its time is. */
+    now?: number | null;
   }
 
-  let { plan, issues, lockedReason = null, focuser, onset, open = $bindable(true) }: Props = $props();
+  let { plan, issues, lockedReason = null, focuser, onset, open = $bindable(true), now = null }: Props = $props();
 
   const END = [
     { value: 'Nothing', label: 'Nothing' },
@@ -45,6 +51,17 @@
       : '',
   );
   const reason = $derived(lockedReason ?? (plan ? null : 'the plan is not loaded yet'));
+  const startT = $derived(plan?.start_at_utc ? Date.parse(plan.start_at_utc) / 1000 : null);
+  const startHint = $derived.by(() => {
+    if (startT === null || now === null) return 'Empty: Start runs at once. YYYY-MM-DD hh:mm for a later night';
+    const p = parseDraftStart(draftStartText(startT), now);
+    return p.ok ? p.text : 'This time has passed: Start runs at once';
+  });
+  function sendStart(v: string | null): Promise<unknown> {
+    const p = parseDraftStart(v ?? '', now ?? Date.now() / 1000);
+    if (!p.ok) return Promise.reject(new Error(p.error));
+    return onset({ start_at_utc: p.t === null ? null : new Date(p.t * 1000).toISOString().replace('.000Z', 'Z') });
+  }
 </script>
 
 {#snippet issuesOf(field: string)}
@@ -77,6 +94,20 @@
     <div>
       <NumberField label="Autofocus every" value={plan?.autofocus_every_n ?? 0} unit={plan?.autofocus_every_n ? 'frames' : undefined} integer format={(v) => (v === 0 ? 'off' : String(v))} disabled={!!lockedReason} disabledReason={lockedReason ? null : reason} appliedWord="Saved" dirtyWord="Not saved" commitVerb="saves" send={(v: number) => onset({ autofocus_every_n: v })} />
       {@render issuesOf('autofocus_every_n')}
+    </div>
+    <div class="wide">
+      <CommitTextField
+        label="Start (UTC)"
+        value={draftStartText(startT)}
+        placeholder="at once"
+        mono
+        nullable
+        maxlength={20}
+        disabledReason={reason}
+        hint={startHint}
+        send={sendStart}
+      />
+      {@render issuesOf('start_at_utc')}
     </div>
     <div class="wide">
       <Checkbox label="Autofocus on filter change" size="s" checked={plan?.autofocus_on_filter_change ?? false} disabled={!!lockedReason} disabledReason={lockedReason ? null : reason} onchange={(v) => void onset({ autofocus_on_filter_change: v }).catch(() => undefined)} />

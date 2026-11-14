@@ -8,6 +8,7 @@ import {
   comparisonSplit,
   countLine,
   curveFor,
+  newestCurve,
   ensembleRows,
   ensembleTsv,
   ENSEMBLE_TSV_HEADERS,
@@ -276,6 +277,18 @@ describe('present (Qt texts, D10)', () => {
     ];
     expect(curveFor(curves, star({ key: 'auid:000-AAA', auid: '000-AAA' }))?.key).toBe('000-AAA');
     expect(curveFor(curves, star({ key: 'pos:1,2', auid: null, display_name: 'other' }))?.key).toBe('XX Cyg');
+  });
+
+  it('S49: a star with one curve per filter gives the curve of the newest frame (card, Watch)', () => {
+    const pt = (jd: number) => ({ jd_utc: jd, t: '', mag: 7.3, mag_err: 0.01 }) as Curve['points'][number];
+    const ir: Curve = { key: '000-BCG-719@ir', star_key: 'auid:000-BCG-719', role: 'target', name: 'RR Lyr', auid: '000-BCG-719', catalogue_v: null, sigma_syst: null, filter: 'ir', points: [pt(10), pt(11)] };
+    const lp: Curve = { ...ir, key: '000-BCG-719@lp', filter: 'lp', points: [pt(12)] };
+    const s = star({ key: 'auid:000-BCG-719', auid: '000-BCG-719' });
+    expect(curveFor([ir, lp], s)?.key).toBe('000-BCG-719@lp');
+    expect(curveFor([ir, { ...lp, points: [] }], s)?.key).toBe('000-BCG-719@ir');
+    // Without star_key (an older record): Qt's key with the filter suffix.
+    expect(curveFor([{ ...ir, star_key: null }, { ...lp, star_key: null }], s)?.key).toBe('000-BCG-719@lp');
+    expect(newestCurve([])).toBeNull();
   });
 
   it('builds the ensemble rows: report entry, leave-one-out residual, field flags, check last', () => {

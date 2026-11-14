@@ -1857,3 +1857,385 @@ Night Red audit 15 / 15 (rules A and B, 0 px); brass audit pass.
 - Not exercised live: the Stellarium refusal toast, a mid-run autofocus's sweep progress,
   NASA / Gaia / SIMBAD (caches only).
 
+
+## Wave 6b: The night (2026-11-13)
+
+Scope (README section 7, row W6; waves.md §5 W6 with the owner decisions of 2026-11-09 and
+2026-11-12; PROPOSAL §2.3, §3.1, §6 W6 rows, §7): Observe Run mode with the Run band (the
+live LightCurvePlot `variant="band"` under the image, the run's mini charts); the W5
+carry-overs (plot tools in the drawer's tab row with the zoom state lifted out of the plot,
+the Field band's empty strip removed); Watch (`shell/Watch.svelte`, W, wake lock); the
+attention system (server rules per frame with hysteresis, WS `attention`, acknowledgement
+shared by every client, the list and history replayed to a client joining mid-run,
+thresholds and sound level in Settings › Alerts; status-bar chip and list, Run card items,
+Watch row, Web Audio tones Off / Soft / Normal armed by a gesture); keep-awake held by the
+server only during a run; the end-of-night wrap-up; the 6a leftovers (mid-run autofocus
+times and sweep progress in the `sequence` record, the draft's start time editable, the
+Stellarium refusal toast); the owner decisions S48-S51 fixed in Qt (release worktree) and
+ported to the server. Built by four roles (night backend, decisions S48-S51, Run mode UI,
+Watch / attention / wrap-up UI) and integrated here. Screenshots:
+`web/screenshots/2026-11-13_wave6b-night/` (23 scenes in the three themes at 1 440 x 900
+and Observatory at 1 280 x 800, the Stellarium toast and the LP curve in Observatory 1 440
+only: 86 shots at device scale 1, with a manifest).
+
+**Status: done, exit criterion met through the UI (section 2); the design, technical and
+science reviews ran on 2026-11-13 and their findings are fixed or answered (section 7,
+with the Qt fixes S52 and S53); the owner's commit pending; S48-S53 reach this tree's
+`argos/core` with the release/0.5.0 merge (the GUARD list, section 6); the attention
+thresholds wait for the owner's marks in `wave6b-attention-replay.md`.**
+
+Verification (2026-11-13, server on port 8763 with `--simulator --sim-replay` on 27 APFS
+clones of real raw frames of RR Lyr 2026-09-25 (session `20260925T200453Z_RR_Lyr`, frames
+1-20 then 146-152, so the replay crosses the night's HFD rise; read-only sources), vite on
+5163, one headless Chrome; temporary `--config-dir`, `--log-dir`, sessions folder, `HOME`
+and `TMPDIR`; the Settings site replaced by public Paris coordinates; the owner's saved
+RR Lyr target set copied with 000-BJW-666 made the check star; `~/.argos/config.json` only
+read; nothing written to `~/Argos/sessions` or `~/.argos`; each replay's run folder deleted
+after its numbers were read):
+
+- Python, whole suite (temporary HOME and TMPDIR, `ARGOS_TEST_REAL_FRAME` on a clone):
+  **1 460 passed, 76 skipped** (1 401 / 73 at the base `212e1a4`); the skips are the
+  absent Alpaca and seestar_alp simulators, `ARGOS_S43_SESSION`, and the 4 S49 guards of
+  section 6 (they run after the merge). ruff and black clean on the touched server files.
+- `npm run check` 0 errors, 0 warnings (724 files, `src/lab` included); `npm test` **992
+  passed** (82 files; 916 at the base); `npm run build` OK (JS 1 233 kB, 404 kB gzip; was
+  1 150 / 377); `src/lib` imports nothing from `src/lab` outside tests.
+- Screenshots: 86, every scene read (2 x 2 contact sheets and originals); the findings
+  were re-captured (focus tooltips, the 1 280 px status bar, a window-sized first shot); `npm run audit:night-red`: the 21 Night Red originals pass
+  (rule A 0 px, rule B 0 px); `npm run audit:brass` (Observatory 1 440): 0-4 640 accent px
+  per scene except Watch's Attention row (8 116 px: its warning-toned border and the mark
+  at 2 m size, intended).
+- No console error in any capture; no request left the machine.
+
+### 1. Rows closed by the wave
+
+| Row | Web | Status |
+|---|---|---|
+| Run mode (D1) | ModeBar Run enabled, Alt+4, palette "Run mode"; a run that starts proposes Run with a chip on the image (`imaging/modes/ModeSuggestion.svelte`), never switches; `imaging/run/RunBand.svelte` (live curve, target and check facets, rules drawn read-only with "Change rule…") and `RunMinis.svelte` (RunProgress with autofocus marks and afStep, AgeMeter, HFD / stars / sky sparklines) | Done |
+| W5 carry-overs | Curve tools in the drawer's tab row (`imaging/photometry/LightCurveTools.svelte`, one `CurveDisplay` and a `CurveView` per plot, `charts/lightcurve/view.svelte.ts`); a band dragged below 150 px is one 36 px summary row (Field and Run) | Done |
+| Watch (D3) | `shell/Watch.svelte` promoted with the pulse fix, `WatchHost.svelte` on the app's stores, W (Observe) and the palette (any section), wake lock while shown, Dim 100 / 60 / 30 %, Pause by hold, only W, Esc, ?, Mod+K act; attention row keeps the last-frame age and n / N | Done |
+| Attention (D3, PROPOSAL §7) | Server `argos/server/attention.py` (rules, hysteresis, history of 200, snapshot to a joining client); `shell/attention/*` (chip, list popover with Off / Soft / Normal and Acknowledge all, Run card items, Watch row, tones); Settings › Alerts (`settings/pages/Alerts.svelte`); palette "Acknowledge all alerts", "Alert sound: Off / Soft / Normal" | Done |
+| Keep-awake (PROPOSAL §3.1) | Server `keepawake.py` (caffeinate / systemd-inhibit / SetThreadExecutionState), `status.keep_awake`, preflight "Computer sleep" row; Watch footer; a Run card line when it failed or is off during a run | Done (macOS checked live; Linux and Windows with fakes) |
+| Wrap-up (D2) | Server `wrapup.py`, `sequence.wrapup`, `POST /api/sequence/calibration-plan`; `run/wrapup/WrapUp.svelte` in the Run card's outcome (tracking state, darks and biases with a time estimate, Prepare in Plan with Undo, Park by hold, the session folder) | Done |
+| S49 in the UI | One curve per (star, filter) in the store; Filter control in the curve tools; the card, the Light curve tab, the Run band and Watch follow the newest frame's filter; the plan's `light_filters` warning (a press selects the second filter's Light step) | Done |
+| 6a leftovers | Run strip and Run card take the server's `af_step` and `autofocus_passes`; Run options "Start (UTC)" edits the draft's start time (any day; passed refused in words; more than 24 h ahead says when Start opens); the Stellarium refusal toast exercised live | Done (afStep not exercised live, section 6) |
+
+### 2. Exit criterion and its evidence
+
+**During a replayed run, Run mode shows the live curve under the image with values
+identical to the server's points; Watch shows state, n / N and the last-frame age; the
+attention rules fire on the owner's session as the science review's replay says, are
+acknowledged and heard at the chosen level; the computer stays awake during a run; the
+wrap-up appears at the end; S48-S51 are fixed in Qt with tests and ported to the server.**
+
+**(1) Run mode equals the server.** Run of 40 subs (Light IR 1 s, 9 s interval) on the 27
+clones: Alt+4 from the "Run started · RR Lyr · 40 frames" chip (the chip then left). At
+frame 13 the band read target 7.394 ± 0.025 and check −0.032 ± 0.021 (σ 12 0.023);
+`GET /api/photometry/live` gave 7.3944 ± 0.0251 for the same frame. Copy data (the drawer's
+Light curve tab, the same store) against the server's points: **108 values, 0 difference**
+(mag, error, formal error, relative flux, zero point, airmass, BJD_TDB, check mag and
+error); the first replay of the day: 117 values, 0 difference.
+
+**(2) Watch.** W in Observe: "RUNNING · RR Lyr · 17 / 40 frames · 6 s last frame · every
+10 s", the target 7.386 ± 0.025 ir, the check σ, the end time, the curve and the tiles;
+headline type 56 / 48 px at 1 440 x 900 (the clamp of the 88 / 66 / 48 / 30 scale);
+"Computer awake (caffeinate) · screen on"; W closes it.
+
+**(3) Attention.** The HFD rise of the 2026-09-25 night fired at run frame 25 = original
+frame 150, "HFD 23.6 px = 2.7× the first 20 frames", baseline 8.65 px, factor 1.5, as in
+`web/lab/research/functional-spaces.md` §4.10; the client heard it at Soft (two tones 660
+and 880 Hz, peak gain 0.06, logged from the page's Web Audio calls after a key armed the
+sound); it cleared by itself ("resolved") three frames after the replay went back to good
+frames. Then at Normal the mount was disconnected mid-run: Critical "Mount lost during the
+run", three descending tones 880 / 740 / 587 Hz at 0.16, **repeated 35 s later** (30 s
+repeat, 5 s check) while open; acknowledged from another client (HTTP, `acked_by`
+"client-b"): the page's chip went to "nothing needs you" at once, the Run card item left,
+and **no tone in the next 35 s**. Acknowledged from Watch in a later run: `acked_by` "web",
+Watch's first row moved to the next open item. Status bar at 1 280 px with the run chip
+and an open item: no overflow (scroll width 1 280 = client width, measured in three states).
+
+**(4) Keep-awake.** During the run `pmset -g assertions` listed
+"PreventUserIdleSystemSleep named: caffeinate command-line tool … caffeinate asserting on
+behalf of Process ID <the server's pid>" and `status.keep_awake` was `held` (reason "A
+sequence is running (RR Lyr)."); after the run, nothing in `pmset` and `keep_awake.state`
+`off`; after each server stop, 0 caffeinate assertions. The preflight row read "Computer
+sleep — OK: … (caffeinate). Keep its lid open: a closed lid still sleeps most laptops."
+
+**(5) Wrap-up.** At the end the Run card showed "Sequence complete · 40 frames", 37 target
+points and "frames without a point: 2 lock lost" (the replay's jump back to frame 1, S48
+working as decided), "1 critical, 1 attention during the run", "Tracking is still on", 20
+darks of 1 s and 30 biases of 0.01 s at gain 80 through the Dark slot (about 3 min at the
+night's 10 s cadence). "Prepare in Plan" replaced the draft by Dark 1 s × 20 and Bias
+0.01 s × 30 with an Undo toast; nothing started.
+
+**(6) Two filters (S49).** Plan Light IR × 4 then LP × 4: the plan warns "Light steps use 2
+filters (IR and LP): each star gets one light curve and one CSV per filter." After the run
+the server held 16 curves (8 stars × 2 filters, 4 points each), wrote
+`target_RR_Lyr_ir_000-BCG-719.csv` and `target_RR_Lyr_lp_000-BCG-719.csv` (and so on for
+each star), `photometry_quality.json` and `photometry_quality_lp.json`; the Filter control
+draws either.
+
+**(7) S48-S51** in Qt with tests failing before the fix (release worktree: 659 passed, 45
+skipped) and ported to the server; server ≡ fixed Qt on 8 runs × 2 schedules (3 464
+points, every CSV byte-identical): the decisions role's report (notes/release_0_5_0.md
+S48-S51). The guarded tests of this tree pass on a post-merge snapshot (section 6).
+
+**Stellarium.** A GoTo sent to the bridge (127.0.0.1:10763, started and stopped for the
+check) during a run: `last_goto.outcome` "a sequence is running — pause it first" and the
+toast "Stellarium GoTo refused · A sequence is running: pause it (Run card or Plan), then
+send the GoTo again from Stellarium."
+
+### 3. PROPOSAL section 6, W6 promotions (6b part)
+
+| Promotion | Where |
+|---|---|
+| WatchView with the pulse fix | `shell/Watch.svelte`, `WatchHost.svelte`, `wakelock.ts` |
+| AttentionPopover, `model/sound.ts` (`model/rules.ts` the server's oracle) | `shell/attention/*`; rules in `argos/server/attention.py` (tests against the lab's cases) |
+| `charts/mini/*` for the run | `imaging/run/RunMinis.svelte` (RunProgress, AgeMeter, Sparkline) |
+| LightCurve band variant | `imaging/run/RunBand.svelte` on `charts/lightcurve/LightCurvePlot.svelte` |
+
+### 4. Fixed during the integration (found in the running UI)
+
+- **Wiring**: the Run mode role's ImagingScreen patch and the night role's six-file patch
+  (its ImagingScreen hunks applied by hand over the first). The Run card takes the
+  server's autofocus passes; Plan's run strip gets `af_step` and the marks; the Run card's
+  "n more" opens the status bar's list.
+- **Palette**: Watch from any section (key W shown), "Acknowledge all alerts (n open)",
+  "Alert sound: Off / Soft / Normal"; Run mode and Watch get their icons.
+- **Run band rule line** (the Run role's open issue): drawn from the server's item
+  (`baseline_px` × `factor` for the HFD rise, `baseline` × `factor` for the star drop), not
+  recomputed from the client's columns.
+- **The draft's start time** had no editor: Run options "Start (UTC)" (`parseDraftStart`);
+  a `start_at_utc` issue is titled "Start (UTC)"; the `light_filters` warning selects the
+  second filter's first Light step.
+- **S49 in the views**: the Photometry card, the Light curve tab and Watch showed the first
+  filter's curve after a filter change; they follow the newest frame's filter.
+- **Status bar at 1 280 px** overflowed by 46 px with the run chip and an open attention
+  item ("Log" cut): the star count folds into the HFD tooltip then; the chip keeps its
+  word and count and shows its headline only when the bar is not crowded.
+- **Server (integration bugs, with tests)**: (a) a run's last sub whose field solve ended
+  after "Run ended" was measured again by the live path under no filter (a one-point
+  `@clear` curve and CSV, the Run role's report): `PhotometryService.on_solved` never
+  measures a sequence sub (`test_a_run_sub_solved_after_the_run_ended_is_not_measured_again`,
+  fails before); (b) the run's sub costs for the wrap-up used one more call of the
+  injectable clock per sub, which would have broken the guarded Qt parity test after the
+  merge: timed with `time.monotonic()` (the parity test passes on the post-merge snapshot).
+
+### 5. Owner decisions reported by the roles (not implemented)
+
+- **S48 is not a second guard against a wrong plate solution** (decisions role): a new
+  solution rebuilds the tracker from its own stars. Options A (count the lock over every
+  comparison: loses 23 good XX Cyg frames), B (refuse a new solution on which fewer than
+  half of the previous tracker's anchors show a star: only the wrong solve refused, 0 false
+  refusals on 257 frames × 2 schedules), C (S50 alone). Recommendation: B.
+- **S50's reference** is the session's first good solve; a wrong first solve would refuse
+  every later good one until the camera reconnects. Recommendation: move the reference when
+  3 consecutive solves agree within 0.3 %.
+- **AAVSO export with two filters**: Qt now refuses curves of two filters (S53, section 7);
+  the web Review (W7) needs the same rule (one filter's curves per export).
+- **S48 with fewer than 3 anchors** (science review, with S52): ceil(n/2) for n = 1 or 2 is
+  met by the very anchor that moved the solution. Recommendation: treat fewer than 3
+  anchors as unverified, make a re-solve due and flag those points suspect until it lands.
+  Not implemented (it changes which points are flagged).
+- **Attention baselines per run** (science review): a run shorter than 23 subs is never
+  judged for HFD rise or star drop; the owner restarts runs after trouble (7 of the 9 runs
+  of the three nights had at most 24 subs), so the degraded 2026-09-07 045626Z run fires
+  nothing. Options: A, carry the baseline over the runs of one server session when object,
+  filter, exposure and gain match (else per run); B, a shorter baseline (5 subs) for short
+  runs; C, keep per-run baselines and correct functional-spaces §4.10. Recommendation: A.
+- **The vetting file's filter** (science review, file format): `photometry_quality.json`
+  vets the run's first filter and does not say which. Recommendation: an additive `filter`
+  key (the token) in every vetting file, Qt and server.
+- **The alert thresholds**: the owner marks each row of `wave6b-attention-replay.md` true
+  or false before the defaults are kept or moved.
+
+### 6. Known gaps, and the guards to check after the merge
+
+GUARD (tests that need the fixed core; they skip before the release/0.5.0 merge and run
+after it; all 114 tests of these four files passed on a post-merge snapshot built in the
+integration scratch, release worktree core over this tree, and again with the review fixes
+on a new snapshot, section 7; no guard was added by the fixes):
+
+- `tests/server/test_photometry.py::test_live_points_csvs_and_report_are_identical_to_the_qt_engine`
+  (`requires_s49_core`: `argos.core.photometry.lightcurve.curve_key`).
+- `tests/server/test_photometry.py::test_the_filter_token_is_the_cores_s49`
+  (`argos.core.imaging.fits_writer.filter_token`).
+- `tests/server/test_sequence_parity.py::test_a_sequence_gives_the_qt_files_and_points`
+  (`requires_s49_core`; passes after the merge with fix (b) of section 4).
+- `tests/server/test_sequence_plan.py::test_the_two_filter_warning_is_the_qt_editors_s49`
+  (`argos.core.imaging.sequencer.light_filters_warning`).
+- `tests/server/test_site_check.py::test_horizontal_at_sweep_against_astropy` and the
+  `PARIS_APART` tests (branch on `sky_geometry.precess_j2000_to_date`: of-date before the
+  merge, J2000 after; pass both ways).
+
+Gaps:
+
+- Not exercised live: a mid-run autofocus's sweep progress (afStep; unit-tested), the
+  `no_frame`, `comps_low`, `tracker_lost` and altitude rules (unit-tested; the backend's
+  offline pass of the whole 195-frame night fires only the HFD rise), Linux and Windows
+  keep-awake, the wake lock in WKWebView / WebKitGTK / Safari, audible output (the Web
+  Audio calls are logged, headless Chrome plays nothing).
+- Run mode draws one filter at a time with a selector (design choice of the Run role, for
+  the reviews); a two-filter Watch shows the newest frame's filter.
+- The attention list keeps the server's last 200 items across runs (earlier runs' items
+  stay listed).
+- The preflight's Altitude row says "No target coordinates" when the plan has no source
+  even though the target set has the target's coordinates (6a behaviour, for the reviews).
+- Screenshots at device scale 1 (6a used 2).
+- Bundle 1 233 kB (404 kB gzip) at integration; see section 7 for the final build.
+
+### 7. Reviews and fixes (2026-11-13 and 2026-11-14)
+
+Three reviews read the integrated wave: design (every shared shot, Watch measured from
+2 m), technical (two whole suites, the protocol, an in-process attack on the attention
+service, keep-awake under SIGTERM / SIGKILL, live runs) and science (each claim re-run on
+clones of the owner's frames with the fixed Qt code; the attention rules replayed on the
+owner's nine Qt runs: `wave6b-attention-replay.md`, for the owner to mark). One fixer
+applied the findings in two attempts (the first stopped by an API error before it
+reported; its edits were kept and checked again). Science first.
+
+**Qt fixes in the release worktree** (`notes/release_0_5_0.md`, tests failing before the
+fix, ported to the server where it applies):
+
+- **S52, a target-set change between two solves re-anchored the tracker on a stale
+  solution** (science review): the VSP backfill after a run's first solve, a role edit or
+  Recommend dropped the tracker and the next sub rebuilt it on the last raw solve; one
+  coincidental anchor passed the S48 check (ceil(1/2) = 1) and every aperture sat on blank
+  sky until the next solve (RR Lyr 0-79 through the server: 5 unflagged target points,
+  SNR 0-2.6, 30-37 px off; the same frames in fixed Qt). Now a set change freezes the
+  solution as tracked so far, the next tracker is built on it, and in a run the next sub's
+  solve is due at once. Tests: release
+  `test_acquisition_engine.py::test_a_set_change_never_re_anchors_on_a_stale_solution_s52`,
+  server `test_photometry.py::test_a_set_change_never_re_anchors_on_a_stale_solution_s52`.
+  "Check your old files" in the notes (zero point more than 1 mag off the run's median
+  after a "comparison(s) selected").
+- **S53, the AAVSO export wrote two filters under one `FILT`**: refused with what to do
+  (`test_photometry_window.py::test_aavso_export_refuses_curves_of_two_filters_s53`); the
+  web Review (W7) takes the same rule.
+- Notes: S51's summary row and "check your old files" say the old airmass was off by up
+  to ±0.08 at 10-15°, of either sign elsewhere (the owner's runs: low).
+
+**Server, attention and keep-awake** (tests in `tests/server/test_attention.py` and
+`test_night.py`):
+
+- "No new frame" counts from the newest **save** and takes the cadence from save-to-save
+  intervals (before the second save, F × floor + M): the false critical alarm at the start
+  of all nine of the owner's runs is gone, the real freeze still fires (the replay table's
+  last section).
+- A reopened item needs a new acknowledgement (an acknowledged "Mount lost" that came back
+  was silent); a non-critical item flapping within 15 min of its last tone neither sounds
+  nor logs again (its count says how often).
+- Altitude: only for a run with Light frames; "now" is the mount's altitude when it points
+  at the target, and with the X3 site check in disagreement the Settings site gives no
+  verdict (the RR Lyr night's two false altitude items).
+- Disk: the run's remaining frames when they need less than 30 min.
+- Alert texts follow `format/number.ts` (U+202F groups, U+2212, ranges "23 … 25"), checked
+  against the web's formatter; "Run stopped: Run stopped:" is logged once.
+- Keep-awake: a close during the OS acquire keeps no assertion; switching
+  `alerts.keep_awake` applies to the run in progress.
+- The S50 reset on a camera disconnect sits in its own block (the focuser's `run.halt()`
+  no longer hangs off it).
+- The start-time refusal and preflight name the day of a start more than 24 h ahead
+  (`test_sequence.py::test_a_start_days_ahead_names_its_day`).
+
+**Web** (tests beside each module):
+
+- Watch: a `watch` variant of the curve (22 px ticks, 30 px names, the newest point's ring
+  kept clear, no secondary header text); the attention row keeps the age and n / N side by
+  side at 48 px, the state word when not running and "+n more"; the footer names the links
+  that are down and folds the others ("2 linked", the names in the tooltip), Pause at
+  18 px, and shows the sound level (a click cycles Off / Soft / Normal; "not armed"
+  otherwise); a run that ended reads COMPLETE / STOPPED / FAILED with its end time (the
+  ENDS tile says "ended", never "after the first frames"); the HFD rule drawn as the Run
+  band draws it; HFD at 2 decimals with a space before "px"; ALT "—" with "mount not
+  connected"; the wake lock asks once at a time; W follows the layout (Z on AZERTY no
+  longer closes Watch).
+- Status bar during a run: the crowded rules hold at every width and the frame number is
+  never squeezed; the attention headline is measured: drawn whole when it fits, cut with an
+  ellipsis when at least 96 px are left (1 440 px with the run chip and the site chip),
+  else folded into the chip's tooltip (1 280 px). Measured on the live page: scroll width
+  = client width at 1 440 and 1 280 with the run chip, the site chip and an Attention
+  item, and with a Critical and an Attention item.
+- Filters (S49): every label names the filter as the wheel does (IR, LP), never the file
+  token (`format/filter.ts`); the Photometry card names the filter of its magnitude; the
+  Run band follows the newest frame's filter unless the observer picked one.
+- The image chip's stale state uses the run's limit (max(2 × cadence, cadence + 60 s)) for
+  a run's sub: no "Last frame" between the subs of a healthy run.
+- Run band: the "now" label and the rule episode label are placed clear of the points
+  (halo, free side), the newest point's ring has its room, and an episode that began near
+  the now-line leaves the free side to the "now" label (they were drawn over each other in
+  the fixer's first re-capture of shot 13); with the drawer open (60-150 px)
+  the summary row is on top and the target's newest points fill the rest.
+- Plan: a start more than 24 h ahead is "Scheduled · opens 16 Nov 21:30 UTC" (a note, not a
+  block); Start and the steps header carry the date.
+- Wrap-up: the frame line adds up ("39 target points · 1 not measured" for 40 frames); the
+  darks and biases show the Plan's own durations and "3 s readout and save per frame,
+  measured tonight"; the gallery fixture uses the measured overhead (11.4 s), and
+  functional-spaces T12 and §4.14 say about 7 min, not 17.
+- Run card: "Last frame" is the age's one name; when the server's end estimate has passed
+  with frames to go, the end is the frames left × the cadence ("in ≈ 32 s · from cadence").
+- Rail: Connection carries the attention mark while a "Device lost" item is open (not for
+  a deliberate disconnect); toasts draw their level with the attention marks (disc, bar
+  over dot, ring); the sound plays only on a running audio context (a suspended one is
+  asked to resume and the tone is tried again).
+- Capture artefacts re-captured (a rail tooltip over the image, focus boxes on clicked
+  controls).
+
+**Skipped, with the reason:**
+
+- HFD in the server's alert texts stays at 1 decimal ("HFD 23.6 px = 2.7×"): the strings
+  follow the lab oracle `src/lab/workspace/model/rules.ts`, whose cases the server's tests
+  pin; the readouts (status bar, Run band, Watch) use the 2 decimals of `frame_metrics`.
+- "One home per value in Run mode" (design, low): the age has one name; folding the Run
+  card's progress and age rows into its header in Run mode is a layout change of the card
+  in every mode, left for the owner's look at the shots.
+- The `attention` event still carries the history (technical, low): the 15 min quiet
+  window removes the flapping storm; sending the history only on connect would change the
+  event's contract mid-wave.
+
+**Verification of the fixes** (2026-11-14, server on port 8768 with `--simulator
+--sim-replay` on 40 APFS clones of RR Lyr 2026-09-25, frames 1-20 and 146-165, same
+temporary folders and Paris site as section 2; vite on 5168; one headless Chrome): the HFD
+rise fired again at run frame 25 (original frame 150), "HFD 23.6 px = 2.7× the first 20
+frames", baseline 8.65 px; the mount lost mid-run raised the Critical and the rail's
+Connection read "needs attention"; the wrap-up read 40 of 40 = 39 points + 1 not measured,
+≈ 1m 20s + 1m 30s = ≈ 2m 50s, and Prepare in Plan gave "≈ 2m 50s" in the Plan; the
+two-filter run gave 16 curves (`@ir` 3 points, `@lp` 4) and the labels IR / LP; the
+Stellarium GoTo was refused with the toast (bridge on 127.0.0.1:10768, stopped after);
+`pmset -g assertions` showed no caffeinate assertion after the server stopped.
+Suites after the fixes: Python whole suite **1 472 passed, 76 skipped** (temporary HOME and
+TMPDIR, `ARGOS_TEST_REAL_FRAME` on a clone; the skips are the absent Alpaca and
+seestar_alp simulators, `ARGOS_S43_SESSION` and the 4 S49 guards); release worktree **660
+passed, 46 skipped** (646 / 46 at the base); ruff and black clean in both trees;
+`npm run check` 0 errors, 0 warnings (726 files); `npm test` **999 passed** (83 files);
+`npm run build` OK (JS 1 241.5 kB, 407 kB gzip; the existing > 500 kB chunk warning). On a
+post-merge snapshot (the release worktree's `argos/core`, `workers`, `ui` and their tests
+over this tree), `test_photometry.py`, `test_sequence_parity.py`, `test_sequence_plan.py`,
+`test_site_check.py`, `test_field.py`, `test_attention.py` and `test_sequence.py`: 229
+passed, 1 skipped (no real frame in that run), the S49 guards included.
+
+Screenshots: the scenes the fixes changed were re-captured into
+`web/screenshots/2026-11-13_wave6b-night/` under the same names (01, 02, 02b, 03, 05, 06,
+07, 07b, 08, 10-15, 17-20; 04, 04b, 09 and 16 are unchanged), the captions updated in
+`manifest.json`, the gallery rebuilt; every re-captured scene was read. Night Red audit:
+21 of 21 pass (rule A 0 px, rule B 0 px); brass audit (Observatory 1 440): 23 of 23 pass.
+
+### 8. What W7 (Review) inherits
+
+- **S49 file names** (one curve and one CSV per star and filter): a run's CSV is
+  `{role}_{object}_{filter}_{star}.csv` (`target_RR_Lyr_ir_000-BCG-719.csv`), the live
+  preview's `<object>_<start>_<filter>_<star>.csv`; the vetting is
+  `photometry_quality.json` for the run's first filter and `photometry_quality_<filter>.json`
+  for the others (no `filter` key yet: owner decision, section 5). The filter token is the
+  core's `fits_writer.filter_token` ("ir", "lp", "irc", "clear"); curves are keyed
+  `<AUID or name>@<token>`. Review reads both names: a new name's curve is the star's in
+  that filter, an old name has no filter (Qt `review._curve_filter`). Label a series
+  "Name [filter]" only when more than one filter is loaded, with the wheel's name
+  (`format/filter.ts`).
+- **AAVSO export**: one filter at a time (S53); `FILT` and `KMAG` from that filter's
+  target and check curves.
+- **S52 "check your old files"**: target rows whose zero point departs by more than 1 mag
+  from the run's median after a set change, until the next solve; Review could flag them.
+- **The attention history**: the server keeps 200 items and the items of the last 20 runs
+  (`run_summary`), which a run's review can show beside its curve.
+- The owner decisions of section 5 and the replay marks.

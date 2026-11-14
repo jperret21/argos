@@ -107,9 +107,9 @@
 </script>
 
 <section data-gallery="w3-modes" id="w3-modes">
-  <h2>Observe task modes <span>D1: Framing, Focus and Field (wave 4) in this version; Run (waves 5, 6) listed, unavailable with the reason; a dot marks a mode whose layout changed</span></h2>
+  <h2>Observe task modes <span>D1: Framing, Focus, Field and Run (wave 6b: the live light curve); a dot marks a mode whose layout changed; Run mode itself in the Run mode section</span></h2>
   <div class="row top">
-    <figure><ModeBar {ws} {keyFor} /><figcaption>live: click, arrows, Alt+1 / Alt+2</figcaption></figure>
+    <figure><ModeBar {ws} {keyFor} /><figcaption>live: click, arrows, Alt+1 … Alt+4</figcaption></figure>
     <figure><ModeBar ws={wsChanged} {keyFor} /><figcaption>Framing changed (dot)</figcaption></figure>
     <figure><ArrangePopover ws={wsChanged} preview /><figcaption>Arrange, Framing changed</figcaption></figure>
   </div>

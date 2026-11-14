@@ -86,7 +86,34 @@ describe('command palette index', () => {
     expect(idx.find((c) => c.id === 'set.site.latitude')).toMatchObject({ title: 'Observer & site › Latitude', hint: '+48.82770°' }); // ° against the number (BRAND 5)
     expect(idx.find((c) => c.id === 'set.alpaca.host')?.title).toBe('Connection › Seestar address');
     // Planned keys are not offered; Escape and the palette itself are not commands.
-    expect(idx.some((c) => c.id === 'km.observe.watch' || c.id === 'km.motion.abort' || c.id === 'km.palette.open')).toBe(false);
+    expect(idx.some((c) => c.id === 'km.review.sessions' || c.id === 'km.motion.abort' || c.id === 'km.palette.open')).toBe(false);
+    // W6b: Run mode and Watch are built and keep their keys.
+    expect(idx.find((c) => c.id === 'km.observe.mode.run')).toMatchObject({ keys: 'Alt+4', icon: 'light-curve' });
+    expect(idx.find((c) => c.id === 'km.observe.watch')).toMatchObject({ keys: 'W', icon: 'watch' });
+  });
+
+  it('offers Watch from any section, acknowledge all and the alert sound (W6b, D3)', async () => {
+    const calls: string[] = [];
+    const night = (unacked: number, sound = 'normal') => ({
+      watchOpen: false,
+      toggleWatch: () => void calls.push('watch'),
+      unacked,
+      ackAll: async () => calls.push('ack-all'),
+      sound,
+      setSound: (l: string) => void calls.push(`sound:${l}`),
+    });
+    const quiet = buildIndex(source({ section: 'sequencer', nightCommands: () => night(0) }), none);
+    const watch = quiet.find((c) => c.id === 'km.observe.watch')!;
+    expect(watch).toMatchObject({ keys: 'W', disabled: null });
+    await watch.run();
+    expect(quiet.find((c) => c.id === 'attention.ack-all')!.disabled).toBe('no alert is waiting for you');
+    expect(quiet.find((c) => c.id === 'attention.sound.normal')!.disabled).toBe('already in force');
+    const busy = buildIndex(source({ nightCommands: () => night(2, 'off') }), none);
+    const ack = busy.find((c) => c.id === 'attention.ack-all')!;
+    expect(ack.title).toBe('Acknowledge all alerts (2 open)');
+    await ack.run();
+    await busy.find((c) => c.id === 'attention.sound.soft')!.run();
+    expect(calls).toEqual(['watch', 'ack-all', 'sound:soft']);
   });
 
   it('opens Settings at a key, and runs an Observe key after opening Observe', async () => {

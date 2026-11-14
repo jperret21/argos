@@ -49,10 +49,18 @@ function divided(a: Float64Array, n: number, base: number): Float64Array {
   return out;
 }
 
+/** Which curves a plot draws: the target and check by key (default: the first of the role), and the filter (S49). */
+export interface CurveKeys {
+  target?: string | null;
+  check?: string | null;
+  /** S49: only the curves of this filter (null: every curve, as before S49). */
+  filter?: string | null;
+}
+
 /** The series a facet draws, or null when the run has none (no check star, no comparison). */
-export function facetData(store: LiveCurveStore, id: FacetId, mode: YMode, keys: { target?: string | null; check?: string | null } = {}): FacetData | null {
+export function facetData(store: LiveCurveStore, id: FacetId, mode: YMode, keys: CurveKeys = {}): FacetData | null {
   if (id === 'ensemble') {
-    const t = store.primary('target', keys.target);
+    const t = store.primary('target', keys.target, keys.filter);
     if (!t || !t.n) return null;
     const c = t.cols;
     const n = c.n;
@@ -80,7 +88,7 @@ export function facetData(store: LiveCurveStore, id: FacetId, mode: YMode, keys:
     }
     return { n, x: c.view('t'), y, err: null, flags: null, band: { mean: y, hi, lo } };
   }
-  const s = store.primary(id, id === 'target' ? keys.target : keys.check);
+  const s = store.primary(id, id === 'target' ? keys.target : keys.check, keys.filter);
   if (!s || !s.n) return null;
   const c = s.cols;
   const n = c.n;
@@ -155,8 +163,8 @@ export function yExtent(d: FacetData, a: number, b: number): [number, number] | 
 }
 
 /** The check star's scatter: the trailing band's sigma at its newest valid row (BRAND 10: in the readout). */
-export function checkSigma(store: LiveCurveStore, key?: string | null): { sigma: number; count: number } | null {
-  const s = store.primary('check', key);
+export function checkSigma(store: LiveCurveStore, key?: string | null, filter?: string | null): { sigma: number; count: number } | null {
+  const s = store.primary('check', key, filter);
   if (!s || !s.n) return null;
   s.derive();
   for (let i = s.n - 1; i >= 0; i--) {
@@ -204,9 +212,11 @@ function stepSplits(min: number, max: number, step: number): number[] {
  * Y ticks of a facet on a 1 / 2 / 5 × 10^n step, as many as fit `minGap` px
  * apart: three or more labelled values (top, middle, bottom) from 26 px of
  * data height, never fewer than two (the old default gave short facets one
- * tick, so a facet had no readable scale).
+ * tick, so a facet had no readable scale). `fewest` 2 (the Run band's one-curve strip
+ * under its summary row, wave 6b) keeps two readable ticks rather than squeezing a third
+ * step's labels on top of each other.
  */
-export function niceSplits(min: number, max: number, plotPx: number, minGap = 13): { splits: number[]; step: number } {
+export function niceSplits(min: number, max: number, plotPx: number, minGap = 13, fewest = 3): { splits: number[]; step: number } {
   if (!(max > min) || !Number.isFinite(min) || !Number.isFinite(max)) return { splits: [], step: 0 };
   const span = max - min;
   const most = Math.max(2, Math.floor(plotPx / minGap) + 1);
@@ -217,7 +227,7 @@ export function niceSplits(min: number, max: number, plotPx: number, minGap = 13
       const step = m * 10 ** e;
       const splits = stepSplits(min, max, step);
       if (splits.length <= most) {
-        if (splits.length >= Math.min(3, most) || !prev) return { splits, step };
+        if (splits.length >= Math.min(fewest, most) || !prev) return { splits, step };
         return prev;
       }
       prev = { splits, step };

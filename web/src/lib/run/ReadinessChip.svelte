@@ -30,11 +30,13 @@
     open?: boolean;
     /** Gallery: the popover drawn in place under the chip. */
     preview?: boolean;
+    /** The draft's own start (unix s) and the clock: a start more than 24 h ahead reads "Scheduled". */
+    draftStart?: { t: number; now: number } | null;
   }
-  let { preflight = null, items: given = null, error = null, checking = false, onrefresh, running = false, open = $bindable(false), preview = false }: Props = $props();
+  let { preflight = null, items: given = null, error = null, checking = false, onrefresh, running = false, open = $bindable(false), preview = false, draftStart = null }: Props = $props();
 
   const items = $derived(runChecks(given ?? preflight?.checks ?? null, running !== false && running !== ''));
-  const r = $derived(readiness(items, running));
+  const r = $derived(readiness(items, running, draftStart));
   const gb = (b: number) => `${(b / 1e9).toFixed(1)} GB`;
   /** The run the checks were made for: frames, duration, disk. */
   const facts = $derived.by(() => {

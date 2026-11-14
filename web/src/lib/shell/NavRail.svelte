@@ -69,6 +69,9 @@
     const ready = (d: 'mount' | 'camera') => devices?.[d]?.state === 'connected' || devices?.[d]?.state === 'busy';
     if (id === 'connection') {
       if (app.equipment.anyError) return 'blocked';
+      // A device lost during a run (an open "Device lost" item), never a deliberate
+      // disconnect (P18): the upright attention mark, as the item's own (design review W6b).
+      if (app.attention.open.some((a) => a.rule === 'device_lost' && a.active)) return 'alert';
       if (app.discovering || app.equipment.anyConnecting) return 'active';
       if (ready('mount') && ready('camera')) return 'ready';
       return null;

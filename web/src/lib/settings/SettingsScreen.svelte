@@ -50,6 +50,7 @@
     settingsAttention,
   } from './categories';
   import About from './pages/About.svelte';
+  import Alerts from './pages/Alerts.svelte';
   import Appearance from './pages/Appearance.svelte';
   import Catalogues from './pages/Catalogues.svelte';
   import DataStorage from './pages/DataStorage.svelte';
@@ -306,6 +307,7 @@
             {:else if c.id === 'plate_solving'}<PlateSolving {query} />
             {:else if c.id === 'catalogues'}<Catalogues {query} />
             {:else if c.id === 'photometry'}<Photometry {query} />
+            {:else if c.id === 'alerts'}<Alerts {query} />
             {:else if c.id === 'data_storage'}<DataStorage {query} />
             {:else if c.id === 'privacy_diagnostics'}<Privacy {query} />
             {:else if c.id === 'appearance'}<Appearance {query} />{/if}
@@ -327,6 +329,7 @@
       {:else if category === 'plate_solving'}<PlateSolving />
       {:else if category === 'catalogues'}<Catalogues />
       {:else if category === 'photometry'}<Photometry />
+      {:else if category === 'alerts'}<Alerts />
       {:else if category === 'data_storage'}<DataStorage />
       {:else if category === 'privacy_diagnostics'}<Privacy />
       {:else if category === 'appearance'}<Appearance />

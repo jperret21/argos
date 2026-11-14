@@ -31,15 +31,30 @@ describe('Observe workspace (D1)', () => {
     expect(again.layouts.framing.bandH).toBe(320);
   });
 
-  it('refuses the modes this version does not have, with the reason', () => {
+  it('offers Run from wave 6b, restores it, and never switches to it by itself (D1)', () => {
     const ws = new ObserveWorkspace({ store: memory() });
-    expect(ws.setMode('run')).toMatch(/wave 6b/);
+    expect(ws.setMode('run')).toBeNull();
+    expect(ws.mode).toBe('run');
+    expect(new ObserveWorkspace({ store: memory({ [MODE_KEY]: '"run"' }) }).mode).toBe('run');
+    // A stored value that is no mode is not restored.
+    expect(new ObserveWorkspace({ store: memory({ [MODE_KEY]: '"watch"' }) }).mode).toBe('framing');
+  });
+
+  it('proposes a mode with a chip, which only a choice acts on (D1)', () => {
+    const ws = new ObserveWorkspace({ store: memory() });
+    ws.suggest('run', 'Run started');
     expect(ws.mode).toBe('framing');
-    // Field arrived with wave 4.
-    expect(ws.setMode('field')).toBeNull();
+    expect(ws.suggestion).toEqual({ mode: 'run', text: 'Run started' });
+    // Already in that mode: nothing to propose.
+    ws.setMode('run');
+    expect(ws.suggestion).toBeNull();
+    ws.suggest('run', 'Run started');
+    expect(ws.suggestion).toBeNull();
+    ws.setMode('field');
+    ws.suggest('run', 'Run started');
+    ws.dismissSuggestion();
+    expect(ws.suggestion).toBeNull();
     expect(ws.mode).toBe('field');
-    // A stored unavailable mode is not restored.
-    expect(new ObserveWorkspace({ store: memory({ [MODE_KEY]: '"run"' }) }).mode).toBe('framing');
   });
 
   it('folds cards, toggles the band, rail and drawer, and keeps the rail in its D8 range', () => {

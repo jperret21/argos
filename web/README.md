@@ -489,10 +489,16 @@ npm run capture:lab -- controls --out /tmp/lab --only buttons-night-red
 
 ## Known limits
 
-- Connection, Observe (Framing, Focus, Field), Plan (wave 6a: plans, sequences, the
-  interlock, the Run card) and Settings exist; Review is a placeholder (wave 7). Observe's
-  Run mode with the live curve, Watch, the attention system, keep-awake and the wrap-up are
-  wave 6b. What is done and what is missing, row by row: `spec/progress.md`.
+- Connection, Observe (Framing, Focus, Field, Run), Plan (wave 6a: plans, sequences, the
+  interlock, the Run card), Watch (W), the attention system (server rules, status-bar chip
+  and list, tones Off / Soft / Normal; Settings › Alerts), keep-awake during a run and the
+  end-of-night wrap-up (wave 6b) and Settings exist; Review is a placeholder (wave 7). What
+  is done and what is missing, row by row: `spec/progress.md`. The attention thresholds
+  wait for the owner's marks in `spec/wave6b-attention-replay.md`.
+- Keep-awake was checked live on macOS only (`caffeinate`, `pmset -g assertions`); Linux
+  (`systemd-inhibit`) and Windows (`SetThreadExecutionState`) are tested with fakes. A
+  closed lid still sleeps most laptops: the preflight says so. Audible tones were checked
+  through the page's Web Audio calls (headless Chrome plays nothing).
 - Alpaca mode is wired but has only been exercised against a closed port (the error
   path); the server side was tested against fake devices, not a Seestar.
 - Seestar frames are raw colour mosaics (`channels: 1`, `sensor.bayer` set): they are

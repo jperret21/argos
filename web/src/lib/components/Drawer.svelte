@@ -5,7 +5,12 @@
   never covers the image.
 
   - Tabs: WAI-ARIA tabs (← → Home End move between tabs, the panel follows),
-    a problem badge per tab (count of unseen warnings and errors).
+    a problem badge per tab (count of unseen warnings and errors). In a header
+    narrower than 1 000 px (wave 6b: the Observe drawer with the rail open,
+    948 px at 1 440 and 788 px at 1 280, where the Light curve tab's tools
+    share the row and Copy data, which has no key, must keep its place) the
+    tabs that are not selected show their icon only, the label in the tooltip
+    and the accessible name (BRAND 7: symbols first; the selected tab keeps it).
   - Height: drag the handle, or focus it and use ↑ ↓ (16 px, Shift 64 px),
     Home / End (min / max). Between `minHeight` (160 px) and `maxHeight`
     (half the section, given by the parent). `resizable={false}` hides the
@@ -28,6 +33,7 @@
   import { clampDrawerHeight, DRAWER_MIN_HEIGHT } from '../app/panels';
   import Icon from './Icon.svelte';
   import IconButton from './IconButton.svelte';
+  import { tooltip } from './tooltip';
 
   interface Props {
     /** Accessible name of the region ("Observe drawer"). */
@@ -68,6 +74,10 @@
   const uid = `drw-${Math.random().toString(36).slice(2, 9)}`;
   const current = $derived(tabs.find((t) => t.id === tab) ?? tabs[0]);
   let tabList: HTMLElement | undefined = $state();
+  /** The header's width: below NARROW_PX the unselected tabs keep their icon only. */
+  let headerW = $state(0);
+  const NARROW_PX = 1000;
+  const narrow = $derived(headerW > 0 && headerW < NARROW_PX);
 
   function setTab(id: string, focus = false): void {
     if (id !== tab) {
@@ -147,7 +157,7 @@
       onpointerdown={onHandleDown}
     ></div>
   {/if}
-  <header>
+  <header bind:clientWidth={headerW}>
     <div class="tabs" role="tablist" aria-label="{label} tabs" bind:this={tabList}>
       {#each tabs as t (t.id)}
         {@const selected = t.id === current?.id}
@@ -161,11 +171,13 @@
           aria-selected={selected}
           aria-controls="{uid}-panel"
           tabindex={selected ? 0 : -1}
+          class:iconic={narrow && !selected && !!t.icon}
           onclick={() => setTab(t.id)}
           onkeydown={onTabKey}
+          use:tooltip={{ text: t.label, placement: 'top', disabled: !(narrow && !selected && t.icon) }}
         >
           {#if t.icon}<Icon name={t.icon} size="s" />{/if}
-          <span>{t.label}</span>
+          <span class="label">{t.label}</span>
           {#if t.badge}
             <span class="badge num" aria-label="{t.badge} new warnings or errors">{t.badge}</span>
           {/if}
@@ -258,6 +270,18 @@
   }
   .tab :global(.icon) {
     color: var(--fg-muted);
+  }
+  .tab.iconic {
+    padding: 0 var(--space-3);
+  }
+  /* The label stays the accessible name; the icon carries the tab. */
+  .tab.iconic .label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
   .tab:hover {
     background: var(--hover-bg);

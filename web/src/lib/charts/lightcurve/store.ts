@@ -51,6 +51,8 @@ export interface CurveWire {
   catalogue_v?: number | null;
   /** The curve's current systematic floor. */
   sigma_syst?: number | null;
+  /** S49: the frames' filter (one curve per star and filter); absent before S49. */
+  filter?: string | null;
   points: LcPoint[];
 }
 
@@ -81,6 +83,8 @@ export interface PointEvent {
   point: LcPoint;
   /** The curve's floor after this point. */
   sigma_syst?: number | null;
+  /** S49: the filter of the curve this point belongs to. */
+  filter?: string | null;
 }
 
 /** A56 WS `photometry_reset` (protocol `PhotometryReset`). */
@@ -107,6 +111,9 @@ export function catalogueMag(mags: Record<string, number | null> | null | undefi
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
+/** A curve shown under a filter: one of that filter, or one that names none (before S49). */
+const inFilter = (s: StarCurve, filter: string | null | undefined): boolean => !filter || s.filter === null || s.filter === filter;
+
 const asRole = (r: string): Role => (r === 'target' || r === 'check' || r === 'comparison' ? r : 'target');
 const finiteOrNull = (v: number | null | undefined): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
@@ -128,6 +135,8 @@ export class StarCurve {
   sigma: number | null = null;
   /** Its TargetStar key in the set, when the server says. */
   starKey: string | null = null;
+  /** S49: the filter of its frames (null: not said; matches any filter). */
+  filter: string | null = null;
   /** Catalogue magnitude (D10 offset), null when unknown. */
   catalogue: number | null = null;
   /** Points received for this curve (the server's index of the next one), drawn or not. */
@@ -210,26 +219,52 @@ export class LiveCurveStore {
     for (const fn of this.listeners) fn();
   }
 
-  /** The first star of a role (measurement order), or a named one. */
-  primary(role: Role, key?: string | null): StarCurve | null {
+  /**
+   * The first star of a role (measurement order), or a named one; with `filter` (S49: one
+   * curve per star and filter) only a curve of that filter, or one that names none.
+   */
+  primary(role: Role, key?: string | null, filter?: string | null): StarCurve | null {
+    const ok = (s: StarCurve) => s.role === role && inFilter(s, filter);
     if (key) {
-      const s = this.stars.get(key) ?? [...this.stars.values()].find((c) => c.starKey === key);
-      if (s && s.role === role) return s;
+      const named = [...this.stars.values()].filter((c) => c.key === key || c.starKey === key);
+      const s = named.find(ok);
+      if (s) return s;
+      // S49: a curve key names one filter's curve ("AUID@ir"); the same star in the filter asked.
+      const same = new Set(named.map((c) => c.starKey).filter((k): k is string => !!k));
+      for (const c of this.stars.values()) if (c.starKey && same.has(c.starKey) && ok(c)) return c;
     }
-    for (const s of this.stars.values()) if (s.role === role) return s;
+    for (const s of this.stars.values()) if (ok(s)) return s;
     return null;
   }
 
-  comparisons(): StarCurve[] {
-    return [...this.stars.values()].filter((s) => s.role === 'comparison');
+  comparisons(filter?: string | null): StarCurve[] {
+    return [...this.stars.values()].filter((s) => s.role === 'comparison' && inFilter(s, filter));
   }
 
-  private star(key: string, role: Role, name?: string, auid?: string | null, starKey?: string | null): StarCurve {
+  /** S49: the filters the curves name, in the order they first came (empty before S49). */
+  filters(): string[] {
+    const out: string[] = [];
+    for (const s of this.stars.values()) if (s.filter !== null && !out.includes(s.filter)) out.push(s.filter);
+    return out;
+  }
+
+  /** The filter of the newest target point (what a run measures now), null when none is named. */
+  newestFilter(): string | null {
+    let best: StarCurve | null = null;
+    for (const s of this.stars.values()) {
+      if (s.role !== 'target' || s.filter === null || !s.n) continue;
+      if (!best || s.cols.t[s.n - 1] > best.cols.t[best.n - 1]) best = s;
+    }
+    return best?.filter ?? null;
+  }
+
+  private star(key: string, role: Role, name?: string, auid?: string | null, starKey?: string | null, filter?: string | null): StarCurve {
     let s = this.stars.get(key);
     if (!s) {
       s = new StarCurve(key, role, name || key, auid ?? '');
       this.stars.set(key, s);
       if (starKey !== undefined) s.starKey = starKey;
+      if (typeof filter === 'string' && filter) s.filter = filter;
       const t = this.matchTarget(s);
       if (t) s.catalogue = offsetMag(role, { mags: t.mags }, this.band);
     } else {
@@ -238,6 +273,7 @@ export class LiveCurveStore {
       if (auid != null) s.auid = auid;
     }
     if (starKey !== undefined) s.starKey = starKey;
+    if (typeof filter === 'string' && filter) s.filter = filter;
     return s;
   }
 
@@ -256,7 +292,7 @@ export class LiveCurveStore {
     this.seq = snap.seq ?? null;
     for (const c of snap.curves ?? []) {
       const role = asRole(c.role);
-      const s = this.star(c.key, role, c.name, c.auid, c.star_key);
+      const s = this.star(c.key, role, c.name, c.auid, c.star_key, c.filter);
       // A curve the stream created has no catalogue magnitudes yet: keep what the set gave.
       const mag = c.catalogue_v !== undefined || c.mags ? offsetMag(role, c, this.band) : null;
       if (mag !== null) s.catalogue = mag;
@@ -308,7 +344,7 @@ export class LiveCurveStore {
       if (known) known.received++;
       return 'skipped';
     }
-    const s = this.star(ev.key, asRole(ev.role), ev.name, ev.auid, ev.star_key);
+    const s = this.star(ev.key, asRole(ev.role), ev.name, ev.auid, ev.star_key, ev.filter);
     s.received++;
     const { how } = s.cols.put(p);
     let edit = how !== 'appended';
