@@ -344,6 +344,26 @@ def _issue(step: int | None, field: str, code: str, level: str, message: str) ->
     return {"step": step, "field": field, "code": code, "level": level, "message": message}
 
 
+def light_filters_warning(plan: dict[str, Any]) -> str | None:
+    """S49 (release ``sequencer.light_filters_warning``): the enabled Light steps use
+    two filters or more (two names of one filter token count once), or None."""
+    from argos.server.photometry import filter_token
+
+    seen: dict[str, str] = {}
+    for step in plan["steps"]:
+        if step["enabled"] and step["count"] > 0 and step["frame_type"] == "Light":
+            name = str(step["filter_name"] or "")
+            seen.setdefault(filter_token(name), name or "no filter")
+    names = list(seen.values())
+    if len(names) < 2:
+        return None
+    listed = ", ".join(names[:-1]) + f" and {names[-1]}"
+    return (
+        f"Light steps use {len(names)} filters ({listed}): each star gets one light curve "
+        "and one CSV per filter."
+    )
+
+
 def plan_issues(
     plan: dict[str, Any],
     *,
@@ -458,6 +478,9 @@ def plan_issues(
                         f"{where}a {frame_type} step on the opaque Dark slot gives black frames.",
                     )
                 )
+    filters_note = light_filters_warning(plan)  # S49: one light curve per filter
+    if filters_note is not None:
+        issues.append(_issue(None, "filter_name", "light_filters", "warning", filters_note))
     if not REPEAT_RANGE[0] <= plan["repeat"] <= REPEAT_RANGE[1]:
         out_of_range(None, "repeat", "Repeat", plan["repeat"], *REPEAT_RANGE, "")
     if not AUTOFOCUS_EVERY_RANGE[0] <= plan["autofocus_every_n"] <= AUTOFOCUS_EVERY_RANGE[1]:

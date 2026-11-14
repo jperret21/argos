@@ -26,6 +26,7 @@ import json
 import math
 import os
 import statistics
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -49,6 +50,27 @@ from tests.server.conftest import (  # noqa: E402
     wait_for,
 )
 from tests.server.test_field import FakeAstap  # noqa: E402
+
+
+def _core_has_s49() -> bool:
+    """GUARD (pending merge of release/0.5.0): the Qt core keeps one curve per (star,
+    filter) (S49: ``lightcurve.curve_key``). The Qt parity tests compare the server
+    with that core; before the merge they skip, after it they run."""
+    from argos.core.photometry import lightcurve
+
+    return hasattr(lightcurve, "curve_key")
+
+
+requires_s49_core = pytest.mark.skipif(
+    not _core_has_s49(), reason="the core has no S49 yet (release/0.5.0 not merged)"
+)
+
+
+def _star(curves, star_key: str):
+    """The one curve of a star (S49: keys are ``<star>@<filter>``)."""
+    (curve,) = [c for c in curves if c["key"].rpartition("@")[0] == star_key]
+    return curve
+
 
 GH, GW = 160, 200  # green plane
 SCALE = 7.35 / 3600.0  # deg per green px
@@ -282,6 +304,7 @@ def _same(a, b) -> bool:
 # -- PARITY --------------------------------------------------------------------------
 
 
+@requires_s49_core
 def test_live_points_csvs_and_report_are_identical_to_the_qt_engine(
     phot_client, tmp_path, monkeypatch
 ):
@@ -296,7 +319,8 @@ def test_live_points_csvs_and_report_are_identical_to_the_qt_engine(
     assert [c["key"] for c in live["curves"]] == list(qt["curves"])  # Qt's dict order
     roles = {c["key"]: c["role"] for c in live["curves"]}
     assert sorted(roles.values()).count("comparison") == 5
-    assert roles[OBJECT] == "target" and roles["000-SYN-K"] == "check"
+    # S49: the opened frames have no FILTER card: one curve per star, filter "clear".
+    assert roles[f"{OBJECT}@clear"] == "target" and roles["000-SYN-K@clear"] == "check"
     compared = 0
     for curve in live["curves"]:
         reference = qt["curves"][curve["key"]]
@@ -426,9 +450,10 @@ def test_points_stream_on_the_socket_with_seq_bjd_and_the_floor(phot_client, tmp
             assert p["mag_err"] == final, (key, p)
     statuses = [m for m in seen if m["type"] == "photometry"]
     assert statuses[-1]["state"] == "measured" and statuses[-1]["points"] == 7 * 11
-    assert statuses[-1]["last"]["target"]["key"] == OBJECT
+    assert statuses[-1]["last"]["target"]["key"] == f"{OBJECT}@clear"  # S49
     quality = [m for m in seen if m["type"] == "comparison_quality"]
-    assert quality[-1]["report"]["comparison_stars"][0]["key"] == "000-SYN-C1"
+    assert quality[-1]["filter"] == "clear"  # the filter it vets (S49)
+    assert quality[-1]["report"]["comparison_stars"][0]["key"] == "000-SYN-C1@clear"
     # A client that joins now gets the status, the report and the newest metrics.
     with phot_client.websocket_connect(f"/ws/events?token={TOKEN}") as ws:
         first = []
@@ -502,6 +527,7 @@ def test_leave_one_out_matches_a_hand_computation(phot_client):
             transform = hub.photometry._tracker.transform  # frame 0's fit
     live = phot_client.get("/api/photometry/live", headers=AUTH).json()
     curves = {c["key"]: c for c in live["curves"]}
+    curves.update({k.rpartition("@")[0]: c for k, c in curves.items()})  # by star (S49)
     params = hub.targets.params(EGAIN)
     r_ap = params.aperture_px(2.4)
     r_in = max(params.annulus_in_px, r_ap + 1.0)
@@ -772,6 +798,24 @@ def test_a_solution_measures_one_point_through_the_whole_path(make_client, tmp_p
     assert live["status"]["last"]["anchors"] is not None
 
 
+def test_a_run_sub_solved_after_the_run_ended_is_not_measured_again(phot_client):
+    """Wave 6b integration: a run's last sub whose solve ends after "Run ended" (the
+    camera has no owner by then) gets no second point from the live path: the sequence
+    measured it (one curve per star and filter, S49, not a one-point curve under no
+    filter). A live frame's solution still measures it once."""
+    hub = phot_client.hub
+    submitted: list = []
+    hub.photometry.submit = submitted.append  # type: ignore[method-assign]
+    with hub._lock:
+        assert hub._camera_state.owner not in ("sequence", "autofocus")
+    sub = MeasureRequest(31, synthetic_raw(0), GREEN_WCS, T0, 1, origin="sequence")
+    hub.photometry.on_solved(sub)
+    assert submitted == []
+    live = MeasureRequest(32, synthetic_raw(1), GREEN_WCS, T0, 2, origin="camera")
+    hub.photometry.on_solved(live)
+    assert [(r.frame_seq, r.reset_tracker) for r in submitted] == [(32, True)]
+
+
 def test_a_role_change_starts_a_new_curve(phot_client):
     """S33: Qt appended a check star's points to its leave-one-out comparison curve."""
     tset = target_set()
@@ -798,7 +842,7 @@ def test_a_role_change_starts_a_new_curve(phot_client):
         reset = receive_until(ws, lambda m: m["type"] == "photometry_reset")
     assert reset["reason"] == "role_changed"
     live = phot_client.get("/api/photometry/live", headers=AUTH).json()
-    curve = next(c for c in live["curves"] if c["key"] == check.auid)
+    curve = _star(live["curves"], check.auid)
     assert curve["role"] == "comparison" and len(curve["points"]) == 1
     rows = list(csv.DictReader(open(curve["csv"], encoding="utf-8")))
     assert len(rows) == 1  # outside a run the file is rewritten from the new curve
@@ -826,8 +870,9 @@ def test_an_opened_frame_never_takes_the_mount_airmass(make_client, tmp_path):
     hub = client.app.state.hub
     wait_for(lambda: hub._pointing() is not None and hub._pointing().alt_deg is not None)
     raw = synthetic_raw(0)
-    hub.photometry.measure(MeasureRequest(1, raw, GREEN_WCS, T0, 1, fwhm=2.4, origin="file"))
-    hub.photometry.measure(MeasureRequest(2, raw, GREEN_WCS, T0, 1, fwhm=2.4, origin="live"))
+    for seq, origin in ((1, "file"), (2, "live")):  # one filter: one curve (S49)
+        request = MeasureRequest(seq, raw, GREEN_WCS, T0, 1, fwhm=2.4, origin=origin)
+        hub.photometry.measure(replace(request, filter_name="IR"))
     live = client.get("/api/photometry/live", headers=AUTH).json()
     target = next(c for c in live["curves"] if c["role"] == "target")["points"]
     assert target[0]["airmass"] is None
@@ -873,9 +918,9 @@ def test_live_star_key_is_null_once_the_star_left_the_set(phot_client, monkeypat
     check = next(s for s in tset.stars if s.role == "check")
     assert phot_client.delete(f"/api/targets/{check.key()}", headers=AUTH).status_code == 200
     live = phot_client.get("/api/photometry/live", headers=AUTH).json()
-    curve = next(c for c in live["curves"] if c["key"] == check.auid)
+    curve = _star(live["curves"], check.auid)
     assert curve["star_key"] is None  # its old key before the fix
-    others = [c for c in live["curves"] if c["key"] != check.auid]
+    others = [c for c in live["curves"] if c is not curve]
     assert all(c["star_key"] is not None for c in others)
     # The status no longer reports the previous set's measurement.
     assert live["status"]["state"] == "waiting"  # "measured" before the fix
@@ -1070,9 +1115,10 @@ def test_measuring_an_object_again_keeps_its_earlier_csv(phot_client, monkeypatc
         with (folder / name).open() as fh:
             return sum(1 for _ in csv.DictReader(fh))
 
-    assert rows("SYN_Var_20261109T201500Z_000-SYN-K.csv") == 2  # kept: one file per curve
-    assert rows("SYN_Var_20261109T202500Z_000-SYN-K.csv") == 1
-    assert rows("Other_20261109T202000Z_000-SYN-K.csv") == 1
+    # The filter between start time and star (S49): the Camera form's, no wheel.
+    assert rows("SYN_Var_20261109T201500Z_ir_000-SYN-K.csv") == 2  # kept: one file per curve
+    assert rows("SYN_Var_20261109T202500Z_ir_000-SYN-K.csv") == 1
+    assert rows("Other_20261109T202000Z_ir_000-SYN-K.csv") == 1
 
 
 def test_an_opened_frame_uses_its_own_gain_for_errors(phot_client, tmp_path, monkeypatch):
@@ -1111,3 +1157,195 @@ def test_an_opened_frame_uses_its_own_gain_for_errors(phot_client, tmp_path, mon
     plain = write_frame(tmp_path / "plain.fit", synthetic_raw(3), 1)
     open_and_solve(phot_client, plain)
     assert seen[-1] == pytest.approx(EGAIN)  # nothing recorded: the live chain at gain 80
+
+
+# -- 0.5.0 S48, S49 (release branch; ported) -----------------------------------------
+
+
+def _add_star(raw: np.ndarray, gx: float, gy: float, mag: float) -> np.ndarray:
+    """``raw`` with one more star at green (gx, gy) (each green value over its 2x2 tile)."""
+    yy, xx = np.mgrid[0:GH, 0:GW]
+    flux = 10 ** (-0.4 * (mag - 21.0))
+    star = (
+        flux / (2 * math.pi * SIGMA**2) * np.exp(-((xx - gx) ** 2 + (yy - gy) ** 2) / 2 / SIGMA**2)
+    )
+    out = raw.astype(np.float64) + np.kron(star, np.ones((2, 2)))
+    return np.clip(out, 0, 65535).astype(np.uint16)
+
+
+def test_a_sub_whose_anchors_show_no_star_gets_no_point_s48(phot_client, monkeypatch):
+    """Release S48: after a 30 px jump one tracker window centroided a neighbour
+    5 px from where comparison C1 was; the tracker moved every aperture by that
+    offset, S35 (no anchor at all) did not fire and the sub was measured on the
+    wrong stars, unflagged (the 6a review's replay of RR Lyr 40-79: 8 points
+    21-67 px off). Now: no point, status ``lock_lost``, a re-solve due at once."""
+    tset = target_set()
+    tset.save(phot_client.sessions_path / "targets" / "SYN_Var.json")
+    set_object(phot_client)
+    hub = phot_client.hub
+    monkeypatch.setattr(type(hub.field), "solved", property(lambda self: True))
+    raw = synthetic_raw(0, drift=False)
+    first = MeasureRequest(1, raw, GREEN_WCS, T0, 1, fwhm=2.4, origin="sequence")
+    assert hub.photometry.measure(first) == 7
+    lock = phot_client.get("/api/photometry/live", headers=AUTH).json()["status"]["lock"]
+    assert lock["held"] and lock["seen"] == lock["anchors"] >= 2
+    jumped = _add_star(_add_star(np.roll(raw, 60, axis=1), 46.0, 41.0, 10.0), 104.0, 83.0, 10.5)
+    later = T0 + timedelta(minutes=1)
+    lost = MeasureRequest(2, jumped, GREEN_WCS, later, 1, fwhm=2.4, origin="sequence")
+    assert hub.photometry.measure(lost) == 0  # 2 points, on the wrong stars, before the fix
+    assert hub.photometry._tracker.anchors_used >= 1  # S35 alone would have measured it
+    live = phot_client.get("/api/photometry/live", headers=AUTH).json()
+    assert all(len(c["points"]) == 1 for c in live["curves"])
+    status = live["status"]
+    assert status["state"] == "skipped" and status["reason"] == "lock_lost"
+    assert "#2" in status["message"]
+    assert status["lock"]["frame_seq"] == 2 and not status["lock"]["held"]
+    assert status["lock"]["seen"] < status["lock"]["needed"]
+    assert any("fewer than half the anchor stars" in m for m in log_messages(phot_client))
+    assert hub.field._resolve_due_flag  # the next frame is solved whatever the cadence
+
+
+def test_the_lock_check_keeps_every_drifting_frame_s48(phot_client):
+    tset = target_set()
+    tset.save(phot_client.sessions_path / "targets" / "SYN_Var.json")
+    set_object(phot_client)
+    hub = phot_client.hub
+    for i in range(6):  # drift 0.35, -0.22 px and 0.04° per frame (the fixture's)
+        request = MeasureRequest(i + 1, synthetic_raw(i), GREEN_WCS, T0 + timedelta(minutes=i), 1)
+        assert hub.photometry.measure(replace(request, fwhm=2.4)) == 7
+    assert not hub.field._resolve_due_flag
+
+
+def test_a_set_change_never_re_anchors_on_a_stale_solution_s52(phot_client, monkeypatch):
+    """Release S52: a set change between two solves (the VSP backfill, a role
+    edit) dropped the tracker and the next sub rebuilt it on the raw solution,
+    30 px behind the drifting field. Only a neighbour near C1's solved position
+    was seen there: 1 anchor of 1 passed the S48 check and the apertures sat on
+    blank sky until the next solve (the science review's replay of RR Lyr
+    0-79: five unflagged target points 30-37 px off). The tracker is now rebuilt
+    on the solution as tracked so far, and in a run the next sub is solved."""
+    import dataclasses
+
+    import argos.server.photometry as photometry
+
+    placed: list = []
+    real = photometry.measure_frame
+
+    def spy(green, wcs, tset, params, **kwargs):
+        placed.append(wcs.world_to_pixel_deg(*sky(100.0, 80.0)))  # the target's aperture
+        return real(green, wcs, tset, params, **kwargs)
+
+    monkeypatch.setattr(photometry, "measure_frame", spy)
+    full = target_set()
+    fewer = TargetSet(object_name=OBJECT, stars=[s for s in full.stars if s.name != "C5"])
+    path = phot_client.sessions_path / "targets" / "SYN_Var.json"
+    fewer.save(path)
+    set_object(phot_client)
+    hub = phot_client.hub
+    monkeypatch.setattr(
+        hub, "_camera_state", dataclasses.replace(hub._camera_state, owner="sequence")
+    )
+    raw = synthetic_raw(0, drift=False)
+
+    def sub(i: int, dx: float) -> int:
+        # The field drifts east; a field star rides along 30 px west of C1, so it
+        # sits 5 px from C1's solved position once the field has moved 30 px.
+        frame = _add_star(np.roll(raw, int(2 * dx), axis=1), 16.0 + dx, 41.0, 10.0)
+        when = T0 + timedelta(minutes=i)
+        request = MeasureRequest(i + 1, frame, GREEN_WCS, when, 1, fwhm=2.4, origin="sequence")
+        return hub.photometry.measure(request)
+
+    for i, dx in enumerate((0.0, 10.0, 20.0, 30.0)):  # the tracker follows the drift
+        assert sub(i, dx) == 6
+    assert not hub.field._resolve_due_flag
+
+    full.save(path)
+    hub.targets.reload()  # the set changes between solves: C5 added
+    assert hub.field._resolve_due_flag  # in a run, the next sub is solved at once
+
+    assert sub(4, 30.0) == 7
+    x, y = placed[-1]
+    # True position (130, 80): about (104, 83), on blank sky, before the fix.
+    assert math.hypot(x - 130.0, y - 80.0) < 5.0
+    assert hub.photometry._tracker.anchors_used >= 3
+
+
+def test_each_filter_has_its_own_curve_csv_and_vetting_s49(phot_client, tmp_path):
+    """Release S49: a run alternating two filters mixed both in one curve per star
+    (one CSV, one floor, one leave-one-out vetting). Now one per (star, filter)."""
+    tset = target_set()
+    tset.save(phot_client.sessions_path / "targets" / "SYN_Var.json")
+    set_object(phot_client)
+    hub = phot_client.hub
+    run = tmp_path / "20260925T200000Z_SYN_Var"
+    (run / "photometry").mkdir(parents=True)
+    with phot_client.websocket_connect(f"/ws/events?token={TOKEN}") as ws:
+        for i, filt in enumerate(["V", "B", "V", "B", "V"]):
+            request = MeasureRequest(
+                i + 1,
+                synthetic_raw(i),
+                GREEN_WCS,
+                T0 + timedelta(minutes=i),
+                1,
+                fwhm=2.4,
+                run_root=run,
+                origin="sequence",
+                filter_name=filt,
+            )
+            assert hub.photometry.measure(request) == 7
+        seen: list[dict] = []
+        receive_until(ws, lambda m: m["type"] == "photometry" and m["points"] == 35, seen=seen)
+    live = phot_client.get("/api/photometry/live", headers=AUTH).json()
+    by_key = {c["key"]: c for c in live["curves"]}
+    assert len(by_key[f"{OBJECT}@v"]["points"]) == 3 and len(by_key[f"{OBJECT}@b"]["points"]) == 2
+    assert by_key[f"{OBJECT}@b"]["filter"] == "b" and by_key[f"{OBJECT}@b"]["star_key"]
+    assert len(live["curves"]) == 14  # 7 stars x 2 filters
+    names = sorted(p.name for p in (run / "photometry").iterdir())
+    assert "target_SYN_Var_v_SYN_Var.csv" in names and "target_SYN_Var_b_SYN_Var.csv" in names
+    assert "comparison_SYN_Var_b_000-SYN-C1.csv" in names and len(names) == 14
+    assert (run / "photometry_quality.json").exists()  # the run's first filter
+    assert (run / "photometry_quality_b.json").exists()
+    points = [m for m in seen if m["type"] == "photometry_point"]
+    assert {m["filter"] for m in points} == {"v", "b"}
+    assert all(m["key"].endswith("@" + m["filter"]) for m in points)
+    quality = [m for m in seen if m["type"] == "comparison_quality"]
+    assert quality[-1]["filter"] == "v"  # the last sub's filter
+    assert all(e["key"].endswith("@v") for e in quality[-1]["report"]["comparison_stars"])
+    assert live["status"]["last"]["filter"] == "v"
+
+
+def _core_filter_token():
+    """GUARD (pending merge of release/0.5.0): the core's S49 ``filter_token``, or None."""
+    from argos.core.imaging import fits_writer
+
+    return getattr(fits_writer, "filter_token", None)
+
+
+@pytest.mark.skipif(
+    _core_filter_token() is None, reason="the core has no S49 yet (release/0.5.0 not merged)"
+)
+def test_the_filter_token_is_the_cores_s49():
+    """Curve keys and CSV names spell the filter as the Qt frame names do."""
+    from argos.server.photometry import filter_token
+
+    core = _core_filter_token()
+    names = [None, "", "  ", "IR", "LP", "V", "B", "Ha", "ha", "OIII", " SII ", "IR-cut"]
+    names += ["LRGB", "Clear", "Dark", "Sloan r'", "Hα", "R/G", "L-eXtreme", "UV/IR cut"]
+    for name in names:
+        assert filter_token(name) == core(name), name
+
+
+def test_a_live_frame_takes_the_filter_of_the_settled_wheel_s49(phot_client, monkeypatch):
+    """Release ``_live_filter``: the wheel's settled slot, else the frame's form filter."""
+    tset = target_set()
+    tset.save(phot_client.sessions_path / "targets" / "SYN_Var.json")
+    set_object(phot_client)
+    hub = phot_client.hub
+    request = MeasureRequest(1, synthetic_raw(0), GREEN_WCS, T0, 1, fwhm=2.4, filter_name="IR")
+    assert hub.photometry._frame_filter(request) == "IR"  # no wheel: the form's
+    monkeypatch.setattr(type(hub.wheel), "connected", property(lambda self: True))
+    monkeypatch.setattr(type(hub.wheel), "moving", property(lambda self: False))
+    monkeypatch.setattr(type(hub.wheel), "slot", property(lambda self: "LP"))
+    assert hub.photometry._frame_filter(request) == "LP"
+    opened = replace(request, origin="file", filter_name=None)
+    assert hub.photometry._frame_filter(opened) == ""  # an opened file says, or nothing

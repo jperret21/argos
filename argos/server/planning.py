@@ -104,11 +104,26 @@ def sun_radec(jd: float) -> tuple[float, float]:
     return (math.degrees(ra) / 15.0) % 24.0, math.degrees(dec)
 
 
+def _altitude_of_date(jd: float, ra_hours: float, dec_deg: float, lat: float, lon: float):
+    """Altitude (degrees) of coordinates **of date**: the hour-angle formula alone.
+
+    The Sun's apparent position is already of date; ``sky_geometry.altitude_at``
+    takes J2000 coordinates and, with release S51, precesses them to the date
+    first, which would move the Sun by the 26 years of precession (0.2° in its
+    altitude, a minute on dusk and dawn).
+    """
+    gmst_h = (18.697374558 + 24.06570982441908 * (jd - 2451545.0)) % 24.0
+    ha = math.radians(((gmst_h + lon / 15.0) % 24.0 - ra_hours) * 15.0)
+    phi, dec = math.radians(lat), math.radians(dec_deg)
+    sin_alt = math.sin(phi) * math.sin(dec) + math.cos(phi) * math.cos(dec) * math.cos(ha)
+    return math.degrees(math.asin(max(-1.0, min(1.0, sin_alt))))
+
+
 def sun_altitude(t: float, lat: float, lon: float) -> float:
     """Sun altitude (degrees, no refraction) at Unix time *t*."""
     jd = jd_of(t)
     ra_h, dec = sun_radec(jd)
-    return altitude_at(jd, ra_h, dec, lat, lon)
+    return _altitude_of_date(jd, ra_h, dec, lat, lon)
 
 
 def solar_noon(day: date, lon: float) -> float:

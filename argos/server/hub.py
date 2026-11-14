@@ -140,6 +140,8 @@ from argos.server.network import NetworkMonitor
 from argos.server.observation import ObservationService
 from argos.server.photometry import PhotometryService
 from argos.server.sequence import SequenceService
+from argos.server import keepawake
+from argos.server.attention import AttentionService
 from argos.server.sessions import SessionIndex, is_session
 from argos.server.settings import Settings, SimOptions
 from argos.server.site_check import SITE_KEYS, SiteCheck
@@ -384,6 +386,15 @@ class Hub:
         self._last_frame_metrics: dict[str, Any] | None = None
         # -- wave 6a (Sequences: run, interlock, preflight) -----------------------
         self.sequence = SequenceService(self)
+        # -- wave 6b (The night: keep-awake during a run, attention rules) --------
+        # Only the CLI server takes a real OS sleep assertion (process-wide state).
+        self.keep_awake = keepawake.KeepAwake(
+            keepawake.os_backend() if self._settings.manage_process else keepawake.NullBackend(),
+            on_change=self._publish_keep_awake,
+            enabled=lambda: bool(self.config.get("alerts.keep_awake", True)),
+            log=lambda level, text: self.log(level, text, source="sequence", topic="sequence"),  # type: ignore[arg-type]
+        )
+        self.attention = AttentionService(self)
 
         self.config.add_listener(self._on_config_changed)
         if self.config.load_error:
@@ -404,10 +415,13 @@ class Hub:
         if self._settings.network_interval_s > 0:
             self.network.start()
         self.targets.publish()  # the cached record a new client receives
+        self.attention.start()  # wave 6b
 
     def shutdown(self) -> None:
         """Release everything at server exit."""
         self.sequence.close()  # wave 6a: stop a run first, its subs complete on disk
+        self.keep_awake.close()  # wave 6b: the sleep assertion goes with the run
+        self.attention.close()
         self.field.close()
         self.photometry.close()
         self.jobs.shutdown()
@@ -500,6 +514,8 @@ class Hub:
                 if hasattr(self, "sequence")
                 else {"state": "idle", "active": False, "run_id": None, "object_name": None}
             ),
+            # wave 6b: the OS sleep assertion held during a run
+            "keep_awake": self.keep_awake.record() if hasattr(self, "keep_awake") else None,
         }
 
     def status(self) -> dict[str, Any]:
@@ -539,6 +555,8 @@ class Hub:
                 snapshots.append(("frame_metrics", seq, dict(self._last_frame_metrics)))
             # Wave 6a: the run as it stands (a page opened mid-run).
             snapshots.extend(self.sequence.snapshots(seq))
+            # Wave 6b: the attention list and its history (a client joining mid-run).
+            snapshots.extend(self.attention.snapshots(seq))
             return snapshots
 
     def devices(self) -> dict[str, Any]:
@@ -565,6 +583,11 @@ class Hub:
         self._publish("status", self._status_payload())
         if hasattr(self, "field"):
             self._update_center_available()
+
+    def _publish_keep_awake(self) -> None:
+        """Wave 6b: the keep-awake record changed (its worker holds no lock)."""
+        with self._lock:
+            self._publish_status()
 
     def _update_center_available(self) -> None:
         """Lock held: ``center_available`` of the field and of MountState (A29, A32)."""
@@ -705,6 +728,8 @@ class Hub:
             self.network.wake()
         if SITE_KEYS & changed.keys():
             self.site_check.site_changed()
+        if "alerts.keep_awake" in changed and hasattr(self, "keep_awake"):
+            self.keep_awake.recheck()  # wave 6b review: applies to the run in progress
         if "hardware.profile" in changed or any(
             key.startswith("hardware.overrides.") for key in changed
         ):
@@ -1145,6 +1170,8 @@ class Hub:
             run.stop()  # the focuser goes back to its start; the camera is gone
         elif run is not None and device_id == "focuser":
             run.halt()  # nothing can move a focuser being disconnected
+        if device_id == "camera" and hasattr(self, "field"):
+            self.field.reset_scale_reference()  # S50: another camera may follow
         if device_id == "mount":
             self.jog.mount_gone()
         elif device_id == "filterwheel":
@@ -2411,7 +2438,13 @@ class Hub:
                     if live:
                         self._refresh_camera(**changes)
                 self.metrics.submit(job)
-                self.field.on_frame(seq, pixels, origin, epoch=start + (end - start) / 2)
+                self.field.on_frame(
+                    seq,
+                    pixels,
+                    origin,
+                    epoch=start + (end - start) / 2,
+                    filter_name=frame.filter,  # the frame's form filter (S49)
+                )
                 if log_note:
                     self.log(level, message, source="camera", topic="camera")  # type: ignore[arg-type]
                 if save_job is not None:
@@ -2804,7 +2837,13 @@ class Hub:
         # The frame's own e-/ADU for its errors, never the Camera form's (S41).
         egain = frame_egain(opened.gain_header, self.config.get("camera.egain_table", {}) or {})
         self.field.on_frame(
-            seq, opened.pixels, "file", hint=opened.pointing, epoch=opened.epoch, egain=egain
+            seq,
+            opened.pixels,
+            "file",
+            hint=opened.pointing,
+            epoch=opened.epoch,
+            egain=egain,
+            filter_name=opened.filter_name,  # its FILTER card: its curve (S49)
         )
         shape = "×".join(str(n) for n in (opened.pixels.shape[1], opened.pixels.shape[0]))
         self.log("info", f"Opened {p.name} ({shape})", source="camera", topic="camera")

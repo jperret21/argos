@@ -305,6 +305,31 @@ def test_automatic_identification_solves_when_due(field_client):
     assert "Automatic field identification on" in log_messages(field_client)
 
 
+def test_a_lost_lock_makes_the_next_solve_due_at_once_s48(field_client):
+    """Release S48: the photometry lost the field. In a run the sub in hand is
+    solved now; outside a run the next frame is due (never the same one again)."""
+    hub = field_client.hub
+    field_client.put("/api/field/auto", json={"enabled": True}, headers=AUTH)
+    take_frame(field_client)
+    settle(field_client)
+    calls = len(field_client.astap.calls())
+    seq = take_frame(field_client)  # not due: 3600 s, and the mount did not move
+    settle(field_client)
+    assert len(field_client.astap.calls()) == calls
+    hub.field.resolve_due(seq, now=False)  # live: nothing now ...
+    settle(field_client)
+    assert len(field_client.astap.calls()) == calls
+    take_frame(field_client)  # ... the next frame is due
+    settle(field_client)
+    assert len(field_client.astap.calls()) == calls + 1
+    seq = take_frame(field_client)
+    settle(field_client)
+    hub.field.resolve_due(seq, now=True)  # a sequence sub: solved at once
+    settle(field_client)
+    assert len(field_client.astap.calls()) == calls + 2
+    assert field_client.get("/api/field", headers=AUTH).json()["solution"]["frame_seq"] == seq
+
+
 def test_a_sequence_arms_identification_and_restores_it(field_client):
     hub = field_client.hub
     hub.field.arm_for_sequence()
@@ -395,6 +420,77 @@ def test_camera_frames_after_a_solved_file_invalidate_it(field_client, tmp_path)
     field = field_client.get("/api/field", headers=AUTH).json()
     assert field["state"] == "invalidated" and field["reason"] == "source_changed"
     assert field_client.get("/api/field/select", headers=AUTH).json()["selection"] is None
+
+
+def _scaled(factor: float) -> dict:
+    """``WCS_FIELDS`` with the plate scale multiplied by ``factor``."""
+    return {
+        **WCS_FIELDS,
+        "CD1_1": WCS_FIELDS["CD1_1"] * factor,
+        "CD2_2": WCS_FIELDS["CD2_2"] * factor,
+    }
+
+
+def test_a_solution_off_the_session_scale_is_refused_s50(field_client):
+    """Release S50: XX Cyg 2026-09-07 045156Z frame 1 solved at 7.093″ per green px
+    where every other solve of the night gave 7.341-7.343; that solution replaced
+    the good one and the next sub was measured 21-26 px off every star."""
+    take_frame(field_client)
+    assert solve(field_client)["state"] == "done"  # the first good solve: the reference
+    field_client.astap.set("solve", wcs=_scaled(7.093 / 7.342))
+    take_frame(field_client)
+    job = solve(field_client)
+    assert job["state"] == "failed" and job["error"]["code"] == "not_solved"  # done before
+    field = field_client.get("/api/field", headers=AUTH).json()
+    assert field["generation"] == 1 and field["solution"] is not None  # the good one kept
+    assert field["solution"]["scale_arcsec_px"] == pytest.approx(7.35 / 2.0, abs=1e-3)
+    message = field["last_attempt"]["message"]
+    assert field["last_attempt"]["outcome"] == "failed" and "refused" in message
+    assert "3.4 % below" in message
+    assert any("Solve: solution refused" in m for m in log_messages(field_client))
+    field_client.astap.set("solve", wcs=_scaled(7.329 / 7.342))  # the RR Lyr run's spread
+    take_frame(field_client)
+    assert solve(field_client)["state"] == "done"
+    assert field_client.get("/api/field", headers=AUTH).json()["generation"] == 2
+
+
+def test_a_camera_disconnect_restarts_the_scale_reference_s50(field_client):
+    """Release ``_on_camera_will_disconnect``: another camera may follow, so its
+    first good solve is the new reference."""
+    take_frame(field_client)
+    assert solve(field_client)["state"] == "done"
+    assert field_client.hub.field._scale_ref is not None
+    answer = field_client.delete("/api/devices/camera", headers=AUTH)
+    assert answer.status_code == 200, answer.text
+    assert field_client.hub.field._scale_ref is None
+    answer = field_client.post(
+        "/api/devices/camera/connect", json={"mode": "simulator"}, headers=AUTH
+    )
+    assert answer.status_code == 200, answer.text
+    field_client.astap.set("solve", wcs=_scaled(0.9))  # another camera's scale
+    take_frame(field_client)
+    assert solve(field_client)["state"] == "done"
+    assert field_client.hub.field._scale_ref[0] == pytest.approx(7.35 * 0.9)
+
+
+def test_an_opened_file_is_not_held_to_the_camera_scale_s50(field_client, tmp_path):
+    """Another instrument's FITS solves at its own scale; it neither sets nor is
+    held to the camera's reference; another profile starts a new reference."""
+    take_frame(field_client)
+    solve(field_client)
+    field_client.astap.set("solve", wcs=_scaled(0.8))
+    path = write_fits(tmp_path / "other.fits", np.full((120, 160), 700, np.uint16))
+    field_client.post("/api/camera/open-fits", json={"path": str(path)}, headers=AUTH)
+    wait_for(lambda: field_client.hub.field._frame.origin == "file")
+    assert solve(field_client)["state"] == "done"
+    take_frame(field_client)  # back to the camera: the camera's reference holds
+    assert solve(field_client)["state"] == "failed"
+    hub = field_client.hub
+    reference = hub.field._scale_ref
+    assert reference is not None and reference[0] == pytest.approx(7.35)
+    hub.field._scale_ref = (reference[0], "another-profile", reference[2])
+    assert solve(field_client)["state"] == "done"  # a new profile: a new reference
+    assert hub.field._scale_ref[0] == pytest.approx(7.35 * 0.8)
 
 
 # -- A46, A47: catalogue and layers ------------------------------------------------

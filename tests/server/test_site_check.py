@@ -37,6 +37,19 @@ BERKELEY = {"site.name": "Berkeley", "site.latitude": 37.87084, "site.longitude"
 PARIS = {"site.name": "Paris", "site.latitude": 48.8566, "site.longitude": 2.3522}
 
 
+def _core_precesses() -> bool:
+    """GUARD (pending merge of release/0.5.0): S51, ``sky_geometry`` precesses J2000 to the
+    date (``precess_j2000_to_date``)."""
+    from argos.core.imaging import sky_geometry
+
+    return hasattr(sky_geometry, "precess_j2000_to_date")
+
+
+#: GUARD (S51): the Paris site is 2.788° from the mount with the J2000 position used as
+#: of date, 2.897° precessed (release S51); the messages round it.
+PARIS_APART = "2.9" if _core_precesses() else "2.8"
+
+
 def _reading(state: str = "tracking", alt: float | None = MOUNT_ALT, az: float | None = MOUNT_AZ):
     return MountReading(
         state=state,
@@ -90,9 +103,12 @@ def test_horizontal_at_matches_astropy_to_a_fraction_of_a_degree(offline_iers):
 def test_horizontal_at_sweep_against_astropy(offline_iers):
     """Random 2026 directions and sites: the claim of :func:`horizontal_at`'s docstring.
 
-    Coordinates of date (what the mount reports) agree within 0.05°; J2000
-    coordinates fed in directly are off by the precession since 2000, up to
-    about 0.4° in 2026 (bounded here at 0.5°).
+    Before release S51 the formula took coordinates of date (within 0.05°) and
+    was off by the precession since 2000 for J2000 ones, up to about 0.4° in
+    2026 (bounded here at 0.5°). With S51 it precesses J2000 to the date: J2000
+    coordinates (what ``argos.core.alpaca.telescope`` returns from the driver's
+    ``EquatorialSystem``) agree within 0.05°, coordinates of date are off by the
+    precession. GUARD: the branch follows the core.
     """
     import random
 
@@ -129,8 +145,12 @@ def test_horizontal_at_sweep_against_astropy(offline_iers):
         )
         icrs = SkyCoord(ra=ra_h * 15 * u.deg, dec=dec * u.deg).transform_to(frame)
         worst_j2000 = max(worst_j2000, angle_between_directions(alt, az, icrs.alt.deg, icrs.az.deg))
-    assert worst_of_date < 0.05, worst_of_date
-    assert worst_j2000 < 0.5, worst_j2000
+    if _core_precesses():  # release S51 merged
+        assert worst_j2000 < 0.05, worst_j2000
+        assert worst_of_date < 0.5, worst_of_date
+    else:
+        assert worst_of_date < 0.05, worst_of_date
+        assert worst_j2000 < 0.5, worst_j2000
 
 
 def test_angle_between_directions():
@@ -182,7 +202,7 @@ def test_paris_site_agrees_within_2_8_degrees():
     record = evaluate(_reading(), _getter(PARIS), FIRST_FRAME)
     assert record["state"] == "ok"
     assert record["separation_deg"] == pytest.approx(2.8, abs=0.2)
-    assert record["message"] == "The Settings site agrees with the mount (2.8° apart)."
+    assert record["message"] == f"The Settings site agrees with the mount ({PARIS_APART}° apart)."
 
 
 def test_direction_not_altitude_decides():
@@ -294,7 +314,7 @@ def test_agreeing_site_is_confirmed_with_an_info_line():
     check.mount_connected(1, None)
     check.on_reading(_reading(), 1)
     assert rec.checks() == [
-        ("info", "Site check: the Settings site agrees with the mount (2.8° apart).")
+        ("info", f"Site check: the Settings site agrees with the mount ({PARIS_APART}° apart).")
     ]
 
 
@@ -307,7 +327,7 @@ def test_driver_site_mismatch_alone_is_never_logged_as_agreeing():
     checks = rec.checks()
     assert [lvl for lvl, _ in checks] == ["warning"], checks
     message = checks[0][1]
-    assert "pointing agrees with the Settings site (2.8° apart), but" in message
+    assert f"pointing agrees with the Settings site ({PARIS_APART}° apart), but" in message
     assert "111 km from the Settings site" in message
     assert not any(lvl == "info" for lvl, _ in checks)
 
@@ -363,7 +383,7 @@ def test_periodic_check_speaks_only_when_the_verdict_changes():
     check.on_reading(_reading(), 1)  # back: INFO "again"
     assert rec.checks()[-1] == (
         "info",
-        "Site check: the Settings site agrees with the mount again (2.8° apart).",
+        f"Site check: the Settings site agrees with the mount again ({PARIS_APART}° apart).",
     )
     assert len(rec.checks()) == 3
 

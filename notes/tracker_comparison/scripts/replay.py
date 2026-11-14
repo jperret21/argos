@@ -327,7 +327,11 @@ def main(argv: list[str]) -> int:
         # points are checked against the curves it appended to.
         qt_results = [] if skipped else list(captured)
         captured.clear()
-        appended = {k for k, c in engine.lightcurves.items() if len(c.points) > before.get(k, 0)}
+        appended = {  # release S49: curve keys are "<star>@<filter>"
+            k.partition("@")[0]
+            for k, c in engine.lightcurves.items()
+            if len(c.points) > before.get(k, 0)
+        }
         for res in qt_results:
             p_mag = res.diff.mag if res.diff is not None else None
             if p_mag is not None and star_key(res.star) not in appended:

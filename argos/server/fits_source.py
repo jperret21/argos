@@ -162,8 +162,11 @@ class OpenedFrame:
         pointing: tuple[float, float] | None = None,
         epoch: datetime | None = None,
         gain_header: dict[str, Any] | None = None,
+        filter_name: str | None = None,
     ) -> None:
         self.pixels = pixels
+        #: The header's ``FILTER`` (S49: the photometry curve of that filter); None: absent.
+        self.filter_name = filter_name
         #: The header's ``GAIN`` and ``EGAIN``: the frame's own e-/ADU (S41).
         self.gain_header = gain_header or {}
         #: The exposure midpoint itself (the photometry epoch, wave 5).
@@ -243,4 +246,5 @@ def load_raw_fits_frame(path: Path) -> OpenedFrame:
         pointing=header_hint(header),
         epoch=mid,
         gain_header={key: header.get(key) for key in ("GAIN", "EGAIN")},
+        filter_name=(str(header.get("FILTER")).strip() if header.get("FILTER") else None),
     )

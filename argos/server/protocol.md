@@ -952,12 +952,16 @@ SiteCheck = {"state": "ok"|"mismatch"|"unknown",
   More than `tolerance_deg` (5°) is `mismatch`.
 - The expected direction uses the fast spherical trigonometry of
   `sky_geometry.horizontal_at` (`de5732f`; GMST IAU 1982 linear term, no
-  precession, nutation or refraction). With coordinates of date (what the
-  mount reports) it agrees with astropy (FK5 of date, no refraction) within
-  0.01°; fed J2000 coordinates it is off by the precession since 2000, up to
-  about 0.4° in 2026 (`tests/server/test_site_check.py` sweeps 120 random
-  directions, sites and 2026 dates with bounds of 0.05° and 0.5°). Either
-  way far inside the 5° tolerance. It never downloads anything.
+  precession, nutation or refraction). With coordinates of date it agrees with
+  astropy (FK5 of date, no refraction) within 0.01°; fed J2000 coordinates it
+  is off by the precession since 2000, up to about 0.4° in 2026
+  (`tests/server/test_site_check.py` sweeps 120 random directions, sites and
+  2026 dates with bounds of 0.05° and 0.5°). The mount's RA/Dec reach it as
+  J2000 (`argos.core.alpaca.telescope` converts from the driver's
+  `EquatorialSystem`). Release S51 (wave 6b) precesses J2000 to the date
+  first (IAU 1976): J2000 within 0.05° once release/0.5.0 is merged (the
+  sweep test follows the core). Either way far inside the 5° tolerance. It
+  never downloads anything.
 - A Settings site counts as set when it has a name or when its coordinates
   are not the 0/0 default (`argos.core.config.observing_site`, `de5732f`);
   otherwise the check is `unknown` / `no_site` and nothing is compared.
@@ -1789,6 +1793,25 @@ Grid = {"lines": [[[x, y], …], …],                  // polyline segments (br
   for a different frame geometry — discarded."). A failure keeps the last
   good solution: `state: "failed"`, ERROR "Solve: <message>" (manual),
   INFO for an automatic attempt.
+- **Wrong solutions refused** (release S50, wave 6b; `_on_worker_solved`): a
+  camera frame's solution whose plate scale (its CD matrix, ″ per green px)
+  is more than 1 % from the **first good solve of the session** is refused
+  and the last good solution kept, as a failure: `state: "failed"`,
+  `last_attempt.outcome: "failed"`, the job `failed` / `not_solved`, WARN
+  "Solve: solution refused — plate scale 3.547″/px is 3.4 % below this
+  session's 3.671″/px (a wrong match); the previous solution is kept" (per
+  full-resolution px, as the summary). The reference is the first accepted
+  solve of a camera frame for the active `hardware.profile` and frame
+  geometry; another profile or geometry, or a camera disconnect, starts a new
+  one (the profile's
+  nominal scale is not used: it is 1.8 % above every measured solve). An
+  opened file (another instrument, another night) is never gated and never
+  sets the reference. On the owner's runs: 270 solves, the good ones within
+  0.3 % of their night's first, one refused (XX Cyg 2026-09-07 `045156Z`
+  frame 1, its second, 7.093″ per green px against 7.341-7.343). The S48 lock
+  check is not a guard against a wrong solution (a new solution rebuilds the
+  tracker from the stars it shows); a wrong solution at the right scale is an
+  open owner decision (wave 6b report).
 - **Automatic identification** (`PUT /api/field/auto`,
   `astrometry_controller.py:82-85, 121-154`): per new frame (latest wins,
   on the field thread) a live solve (`live=True`: bounded timeout,
@@ -1800,6 +1823,10 @@ Grid = {"lines": [[[x, y], …], …],                  // polyline segments (br
   Sequences (wave 6) arm it for the run even without a prior solution
   (Q-O12) through `FieldService.arm_for_sequence()` / `disarm_after_sequence()`,
   which restore the observer's choice afterwards (`auto_source: "sequence"`).
+  `FieldService.resolve_due(frame_seq, now=)` (release S48, wave 6b): the
+  photometry lost the field (`field_lost`, `lock_lost`): the next frame is due
+  whatever the cadence; with `now` (a sequence sub) the frame in hand is solved
+  at once when it is still the newest and no solve runs.
 - **Invalidation** (`_clear_astrometry` `imaging_page.py:2501-2563`,
   `invalidate_astrometry` `acquisition_engine.py:1067-1084`): the
   solution, the catalogue, the layers, the tracking transform and the
@@ -2133,7 +2160,9 @@ automatic identification on, live view therefore gives one point per
 re-solve (`astrometry.live_resolve_s`, 20 s by default, or a mount move).
 A sequence (wave 6) will measure every saved sub instead
 (`_on_seq_frame_saved`, 772-797); the service already has that entry
-(`measure_saved_frame`).
+(`measure_saved_frame`). A run's sub is never measured again by this path,
+even when its solve ends after the run did (wave 6b integration: it gave a
+second, one-point curve under no filter).
 
 Nothing is measured (`photometry.state` says why, no point, no CSV line)
 when the set has no `target` (`no_target`), the frame has no epoch
@@ -2165,7 +2194,12 @@ saturated ensemble, no comparison) gives no point that frame.
 - **Apertures placed by core's `ApertureTracker`** (owner decision; not the
   wave 4 `FieldTracker`, which keeps placing the overlays): built on the
   first measured frame after a new solution, a target-set change or an
-  object change (`_build_live_tracker`, 1569-1582): anchors =
+  object change (`_build_live_tracker`, 1569-1582). After a set change
+  (release S52, wave 6b science review) it is built on the solution **as
+  tracked so far** (the solve with the dropped tracker's shift and rotation,
+  frozen at the change), never on the raw solve the field has drifted from,
+  until the next solution; in a run the set change also makes the next sub's
+  solve due (`FieldService.resolve_due`). Anchors =
   `select_tracking_anchors` over the comparisons and checks (SNR ≥ 10,
   unsaturated, not suspect, at most 6), else any star of the set **seen where
   the solution places it** (SNR ≥ 5); a tracker built with none is built
@@ -2182,6 +2216,31 @@ saturated ensemble, no comparison) gives no point that frame.
   `photometry.track_apertures: false` measures through the solution alone.
   Outside a sequence each point follows a fresh solution, so the tracker
   only re-centres the solution on that frame's anchors.
+- **Lock check** (release S48, wave 6b): after the tracker update, at least
+  ceil(n/2) of the tracker's n anchor stars must show a star (aperture SNR ≥ 5)
+  where the tracked solution puts them (`anchors_seen`, the batch's S43 rule).
+  Otherwise the frame gets **no point**: WARN "Photometry skipped: fewer than
+  half the anchor stars show a star where the solution places them — the
+  field moved since the solve, or clouds. Re-solving.", status
+  `skipped` / `lock_lost` (message "Skipped frame #<seq>: …"), a
+  `frame_skipped` event (`reason: "lock_lost"`), and the next solve is **due
+  at once** (`FieldService.resolve_due`): in a run the sub in hand is solved
+  now (its solution serves the next sub); outside a run the next frame is due
+  (a live point follows each solve: solving the same frame again would repeat
+  it). S35's `field_lost` makes the solve due the same way. It catches a jump
+  where one window centroided a neighbour (S35 sees an anchor and does not
+  fire), and clouds that dim most anchors below SNR 5; not a wrong plate
+  solution, whose rebuilt tracker anchors on the stars it shows. The status record's
+  `lock` gives the last check (`PhotometryStatus` below); the attention rule
+  `tracker_lost` counts both reasons.
+- **One curve per (star, filter)** (release S49, wave 6b): the filter of the
+  measured frame is a sub's read-back `FILTER`, an opened file's `FILTER` card
+  (none: `clear`), a live frame's wheel slot when the wheel reports one
+  settled, else the frame's Camera form filter. Its **token** is the frame
+  file name's (`fits_writer.filter_token`: the abbreviation, `[A-Za-z0-9_-]`,
+  lower case, `clear` for none: `IR` → `ir`, `LP` → `lp`). Each (star, token)
+  has its own curve, floor, CSV and series; the leave-one-out report vets the
+  comparisons of the measured frame's filter only.
 - **Calibration** (`measure_targets`, `session.py:47-160`): targets and
   checks against the full ensemble, each comparison leave-one-out;
   `egain` from `camera.egain_table`, else the driver, else the sensor model;
@@ -2198,7 +2257,9 @@ saturated ensemble, no comparison) gives no point that frame.
 - **Time and airmass** (X2): `jd_utc` of the midpoint; with a site set
   (`observing_site`: a name, or coordinates other than 0/0) `bjd_tdb` from
   astropy for the star's own RA / Dec and the site, and the star's own
-  airmass at `jd_utc` (Pickering); without a site no `bjd_tdb` and the
+  airmass at `jd_utc` (Pickering; `airmass_at`, its J2000 position precessed
+  to the date once release S51 is merged: +0.0006 at 68°, up to +0.029 at
+  12° on the owner's runs); without a site no `bjd_tdb` and the
   mount's airmass for a camera frame (`null` without a mount, and `null` for an
   opened file, another night: Qt used the mount's current altitude, fixed for
   0.5.0, `notes/release_0_5_0.md` S34).
@@ -2206,14 +2267,18 @@ saturated ensemble, no comparison) gives no point that frame.
   `LightCurve.to_csv` (15 columns, `lightcurve.py:14-30`; written beside the
   file and renamed over it, so a reader never sees it half written: release
   S38) at
-  `<sessions_path>/targets/<object>_<YYYYMMDDTHHMMSSZ>_<auid or name>.csv`
+  `<sessions_path>/targets/<object>_<YYYYMMDDTHHMMSSZ>_<filter>_<auid or name>.csv`
   outside a run, one file per curve named after its start (`-2`, `-3`… on the
   time for two in one second), so measuring an object again never overwrites
   an earlier curve (`_photometry_csv_path`, release S40; inside a run, wave 6:
-  `<run>/photometry/<role>_<object>_<tag>.csv`); with `diagnostics.enabled`
+  `<run>/photometry/<role>_<object>_<filter>_<tag>.csv`; `<filter>` the token,
+  release S49: before 6b the name had no filter, the contents are unchanged);
+  with `diagnostics.enabled`
   the flight recorder `<sessions_path>/targets/<object>_live_diagnostics.jsonl`
   (`star`, `ensemble`, `frame` records). The leave-one-out report is written
-  to `<run>/photometry_quality.json` inside a run only (S17).
+  to `<run>/photometry_quality.json` inside a run only (S17); with several
+  filters, that file vets the run's first filter and
+  `<run>/photometry_quality_<filter>.json` each other one (S49).
 
 ### Live photometry (A54)
 
@@ -2230,8 +2295,10 @@ LivePhotometry = {"object_name": string, "run_root": path|null,
                   "status": PhotometryStatus,
                   "revision": int,                   // +1 at every reset
                   "seq": int}                        // the newest point / reset seq
-Curve = {"key": string,                  // Qt's curve key: AUID, else the display name
+Curve = {"key": string,                  // "<AUID, else display name>@<filter token>" (S49)
          "star_key": string|null,        // TargetStar key in the set (null: no longer in it)
+         "filter": string,               // the filter token ("ir", "v", "clear"): one curve
+                                         //   per (star, filter); say it when several
          "role": "target"|"comparison"|"check", "name": string, "auid": string|null,
          "mags": {band: float},          // catalogue magnitudes (VSP)
          "catalogue_v": float|null,      // D10: the check is plotted as check − this
@@ -2267,6 +2334,7 @@ Curves are listed in measurement order (Qt's dict order).
 ```
 PhotometryPoint = {"type": "photometry_point", "seq": int, "revision": int,
                    "frame_seq": int, "key": string, "star_key": string, "role": string,
+                   "filter": string,             // the curve's filter token (S49)
                    "name": string, "auid": string|null,
                    "index": int,                 // position of the point in its curve
                    "point": LcPoint,
@@ -2295,7 +2363,9 @@ that re-reads the snapshot ignores the events whose `seq` it covers.
 
 ```
 ComparisonQuality = {"type": "comparison_quality", "revision": int,
-                     "frame_seq": int|null, "report": Report|null}
+                     "frame_seq": int|null,
+                     "filter": string|null,       // the filter whose comparisons it vets (S49)
+                     "report": Report|null}
 Report = {… comparison_quality_report (quality.py:22-98) as written to
           photometry_quality.json: schema, generated_utc, selection_status
           ("insufficient_data"|"not_ready"|"live_preview_consistent"),
@@ -2304,23 +2374,29 @@ Report = {… comparison_quality_report (quality.py:22-98) as written to
 Entry = {"name", "auid", "n_valid", "scatter_mag", "median_formal_error_mag",
          "status": "insufficient_data"|"noisy"|"unstable"|"stable",
          // added on the wire:
-         "key": string,                          // its curve key
+         "key": string,                          // its curve key (of the report's filter)
          "star_key": string,                     // its TargetStar key
          "last": {"mag", "mag_err", "comps_used", "jd_utc"}|null}
                                                  // its newest leave-one-out point
 PhotometryStatus = {"type": "photometry",
                     "state": "off"|"waiting"|"measured"|"skipped",
                     "reason": "no_target"|"not_solved"|"no_epoch"|"no_comparison"
-                              |"no_point"|"field_lost"|null,
+                              |"no_point"|"field_lost"|"lock_lost"|null,
                     "message": string|null,
                     "frames": int, "points": int,        // since the last reset
                     "last": {"frame_seq", "t", "jd_utc", "bjd_tdb"|null,
                              "points": int,               // kept on that frame
                              "target": {"key", "mag", "mag_err", "bjd_tdb"}|null,
+                             "filter": string,            // its filter token (S49)
                              "aperture_px": float, "fwhm_px": float,   // green px
                              "anchors": int|null,         // tracker anchors used
                              "tracking": {"rot_deg", "dx", "dy",       // green px
                                           "residual_px"}|null}|null,
+                    "lock": {"frame_seq": int,           // S48: the last lock check
+                             "anchors": int,             //   the tracker's anchor stars
+                             "seen": int,                //   showing a star (SNR ≥ 5)
+                             "needed": int,              //   ceil(anchors / 2)
+                             "held": bool}|null,         //   null: tracking off, S35, reset
                     "revision": int}
 ```
 
@@ -2331,8 +2407,8 @@ sends `report: null`. Per comparison, `status` is its leave-one-out status
 (a target, no solution yet, or the set changed since the last measurement:
 the next solution measures), `measured` (the last attempt kept points),
 `skipped` (the last attempt kept none: `no_epoch`, `field_lost`,
-`no_comparison` when the set has no comparison, else `no_point`). A curve's
-`star_key` is `null` once its star left the set.
+`lock_lost` (S48), `no_comparison` when the set has no comparison, else
+`no_point`). A curve's `star_key` is `null` once its star left the set.
 
 ### Field variables (A50)
 
@@ -2516,6 +2592,7 @@ Qt editor would clamp or substitute is an issue instead:
 | `interval_ignored` | warning | an interval on a step with a cadence: the cadence wins (P2) |
 | `no_object` | warning | empty object name (Qt readiness "Object name required"; frames say "Unknown") |
 | `start_in_past` | warning | `start_at_utc` already passed: Start runs at once |
+| `light_filters` | warning | the enabled Light steps use two filters or more (two names of one filter token count once): "Light steps use 2 filters (IR and LP): each star gets one light curve and one CSV per filter." (release S49, the Qt editor's words; `step` null, `field` `filter_name`) |
 
 Ranges: the connected camera's limits as Qt's `set_camera_limits`
 (`sequence_panel.py:1016-1041`: exposure from max(min, 0.01 s)); after a
@@ -2633,9 +2710,12 @@ dusk to dawn (Q-P6): the longest interval with the Sun below −18°; none
 low, with a note. Samples run every `step_min` (1-60) from an hour before
 sunset to an hour after sunrise (solar 16:00 to 08:00 when the Sun does not
 set or rise), on UTC multiples of `step_min`. Altitudes are the core's fast
-spherical trigonometry (`sky_geometry.altitude_at`, ≈0.1°, no refraction);
-the Sun is the Astronomical Almanac low-precision position (≈0.01°); both
-are checked against astropy in the tests. `min_alt_deg` comes from the
+spherical trigonometry (`sky_geometry.altitude_at`, ≈0.1°, no refraction;
+within 0.01° once release S51 precesses J2000 to the date); the Sun is the
+Astronomical Almanac low-precision position (≈0.01°), already of date, so its
+altitude takes the hour-angle formula without that precession
+(`planning._altitude_of_date`); both are checked against astropy in the
+tests. `min_alt_deg` comes from the
 config key `site.min_altitude_deg` (default 30°) unless the query gives one
 (a handle being dragged). The Moon comes later (Q-P6).
 
@@ -3072,7 +3152,7 @@ run, the running plan) against the devices and folders, worst level first;
 | `disk` | needed against free | needed > 80 % of free | needed > free |
 | `calibration` | darks, flats and biases matching the plan's Light steps that night | "Missing tonight: step 2 (10 s, gain 80, IR): flats and biases." (counts per kind in `details`) | — |
 | `lid` | Dark / Bias steps through the wheel's Dark slot (the telescope's lid; the client names it "Dark frames") | Dark / Bias steps without a wheel with a Dark slot: "put the lid on" | — |
-| `sleep` | always: "Keep the computer awake and its lid open for the whole run: a sleeping computer stops the run." (PROPOSAL §7: lid-closed sleep is out of software reach; keep-awake is wave 6b) | — | — |
+| `sleep` | keep-awake works (wave 6b): "The computer is kept awake during the run (caffeinate). Keep its lid open: a closed lid still sleeps most laptops." (`details.method`) | no method, or off in Settings › Alerts: "The computer is not kept awake: <why>. Keep it awake and its lid open for the whole run: a sleeping computer stops the run." (PROPOSAL §7: lid-closed sleep is out of software reach) | — |
 
 - **Altitude**: the target is the observation's target (else the plan's
   metadata `ra_deg` / `dec_deg`, a transit plan's); altitude from the site
@@ -3126,6 +3206,261 @@ there):
 `sequence` is a snapshot (newest kept); `frame_saved` stays a stream.
 `GET /api/photometry/live` (A54) now fills `run_root` and
 `sequence_running` while a run is active.
+
+## Night (wave 6b): attention, keep-awake, wrap-up
+
+Wave 6b, server half (`web/lab/PROPOSAL.md` §3.1 and §7, owner decisions
+D2 and D3; `web/lab/research/functional-spaces.md` §4.10 and §4.14). Still
+`"api": 2` (additive). Modules: `argos/server/attention.py` (rules, items,
+acknowledgement), `argos/server/keepawake.py` (the OS sleep assertion),
+`argos/server/wrapup.py` (the end-of-run record and the calibration plan).
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| GET | `/api/attention` | — | AttentionState |
+| POST | `/api/attention/{id}/ack` | AckBody (optional) | AttentionState |
+| POST | `/api/attention/ack-all` | AckBody (optional) | AttentionState |
+| GET | `/api/sequence/wrapup` | — | WrapUp (`404 not_found` "No run has ended yet." before the first end) |
+| POST | `/api/sequence/calibration-plan` | CalibrationBody (optional) | `{"plan": PlanRecord, "replaced": Plan}` |
+
+New WebSocket event `attention` (a **snapshot**, newest kept; sent on
+every change and once to a client that connects, after `sequence`). The
+status record gains `keep_awake`; the `sequence` record gains `autofocus`,
+`autofocus_passes` and `wrapup`. New config category `alerts` (Settings ›
+Alerts).
+
+### Attention (PROPOSAL §7, D3)
+
+The rules run **on the server**, so every client shows the same list and
+an acknowledgement made on one is seen by all. Port of
+`web/src/lab/workspace/model/rules.ts` (its tests are the oracle:
+`tests/server/test_attention.py` replays the lab's synthetic night), turned
+from "evaluate the whole list" into per-frame state with hysteresis.
+
+```
+AttentionItem  = {"id": string,             // "<rule>-<run_id or 'server'>-<n>", unique in the server process
+                  "rule": RuleId,             // machine id, below
+                  "cause": string,            // rule + subject ("hfd_rise:IR", "device_lost:mount"): one open item per cause
+                  "name": string,             // the rule in words: "HFD rise", "No new frame", …
+                  "level": "critical"|"attention"|"info",
+                  "kind": "condition"|"event",// condition: clears itself when its cause ends; event: stays until acknowledged
+                  "title": string,            // the rule and the numbers, never an interpretation alone
+                  "short": string,            // Watch headline (read from 2 m): the value and the factor only
+                  "detail": string,           // the rule, its threshold and the frames that fired it
+                  "values": {string: number|string|null},
+                  "since": ISO,               // when the cause began (the firing sub's DATE-OBS, or when found)
+                  "raised_utc": ISO, "updated_utc": ISO,
+                  "frame": int|null,          // the run's sub number (1-based, as frames_done) that fired it
+                  "run_id": string|null,
+                  "action": {"to": "focus"|"field"|"run"|"watch"|"devices", "label": string}|null,
+                  "active": bool,             // in the active list
+                  "cleared_utc": ISO|null,
+                  "cleared_reason": "resolved"|"run_ended"|"new_run"|"acknowledged"|null,
+                  "acked": bool, "acked_utc": ISO|null, "acked_by": string|null,
+                  "occurrences": int,         // 1, +1 each time the same cause fires again within 10 min of its clear
+                  "tone": int, "toned_utc": ISO, // 1, +1 at a reopen that sounds again; the client plays one tone per (id, tone)
+                  "sound": bool,              // the client plays the level's tone when it appears (info: alerts.sound_info)
+                  "repeat_s": int|null}       // critical only: repeat the tone every N s while active and not acknowledged
+AttentionState = {"active": [AttentionItem],  // critical, then attention, then info; newest first within a level
+                  "history": [AttentionItem], // items that left the active list (resolved, run_ended, new_run, acknowledged events), newest first, at most 200
+                  "counts": {"critical": int, "attention": int, "info": int,
+                             "unacked": int}, // active, not acknowledged, level ≠ info (the status-bar chip)
+                  "sound": {"level": "off"|"soft"|"normal", "info": bool, "repeat_s": int},
+                  "thresholds": {…the alerts.* values in force},
+                  "last_change": {"change": "raised"|"updated"|"reopened"|"cleared"|"acked",
+                                  "id": string}|null,
+                  "revision": int}
+AckBody        = {"by"?: string (≤ 64)}       // who acknowledged (the client's label); default "observer"
+```
+
+- **Levels by mark and word** (D3): critical = filled disc, attention =
+  upright mark, info = hollow ring, always with the word; never a triangle.
+- **Numbers in the texts** follow the UI's (`web/src/lib/format/number.ts`):
+  counts grouped with U+202F from 1 000 ("2 010 stars"), U+2212 for
+  negatives, ranges "23 … 25". HFD keeps the lab's one decimal in the texts
+  (rules.ts, the oracle).
+- **Hysteresis.** A frame rule fires after `alerts.consecutive_frames` (K,
+  default 3) subs in a row past its threshold and clears after K subs in a
+  row back inside it; the timed rules have the margins below. At most **one
+  open item per cause**; a cause that fires again within 10 min of its clear
+  **reopens** its item (`occurrences` + 1, `last_change.change:
+  "reopened"`), later it is a new item. A reopened item is **unacknowledged**
+  again: a new episode needs a new acknowledgement (wave 6b review: an
+  acknowledged "No new frame" that came back was silent). A critical reopen
+  always sounds (`tone` + 1, a log line); a non-critical one within 15 min
+  of its last tone keeps its `tone` and logs nothing (a value flapping
+  across its threshold all night: one item, no storm of tones or lines;
+  the next audible reopen logs "<name> again (×n): …").
+- **Acknowledge** (any client): `acked`, `acked_utc`, `acked_by` set;
+  repeats stop. An acknowledged **condition** stays active until its cause
+  ends; an acknowledged **event** moves to the history (`cleared_reason:
+  "acknowledged"`). A second ack is a no-op; an unknown id is `404
+  not_found`. `ack-all` acknowledges every active item.
+- **Scope.** The rules watch a run (from Start to its end): the frame rules
+  read the run's own subs (`frame_saved` with `source: "sequence"`, Light
+  frames) and the photometry outcome of each; nothing fires outside a run.
+  When a run ends its open conditions clear (`run_ended`); a new run moves
+  the previous run's unacknowledged events to the history (`new_run`).
+- **Log.** Every raise is a log line (`source: "attention"`; critical
+  ERROR, attention WARNING, info INFO): "HFD rise: HFD 17.5 px = 2.8× the
+  first 20 frames" (the title alone when it already starts with the rule's
+  name: "Run stopped: …"); a clear "Cleared: <name> — <why>"; an ack
+  "Acknowledged: <name> (<title>)".
+- **Evaluation never blocks the event loop**: the service observes the
+  published events (an `EventBus` tap only queues them) and evaluates them
+  on its own thread, plus a 1 s timer for the timed rules.
+
+| `rule` | Level | Kind | Fires | Clears | Action |
+|---|---|---|---|---|---|
+| `no_frame` | critical | condition | running or pausing, and `now − save of the last sub` > max(F × c, c + M) s, c = median save-to-save interval of the run's subs since the last break (pause, autofocus, new step): a client learns of a frame when it is saved (`frame_saved` `t`); before two saves since the break, > F × f + M s, f = the larger of the planned `cadence_s` and the newest sub's start-to-save time (a Seestar's 10 s sub costs 20-45 s), counted from the start or the resume before the first save. Counted from the sub's start (before the wave 6b fix) it fired at the start of all 9 of the owner's runs; from the save: 0 false alarms, worst 0.77 of the limit, the real freeze of RR Lyr 2026-09-25 still fires (112 s after the last save) | a sub is saved; the run pauses or ends | Watch |
+| `hfd_rise` | attention | condition | after the first B Light subs of a filter: HFD > H × the median HFD of those B, K in a row | K in a row at or under | Focus |
+| `star_drop` | attention | condition | stars < S × the median of the first B Light subs of the filter, K in a row | K in a row at or over | — |
+| `comps_low` | attention | condition | the target's point used fewer than C comparisons, K measured subs in a row (subs without a target point do not count) | K in a row with C or more | Field |
+| `tracker_lost` | attention | condition | K Light subs in a row got no point because the stars are not where the solution puts them: photometry `reason` `field_lost` (S35) or `lock_lost` (S48, below) | K subs in a row measured | Field |
+| `altitude` | attention | condition | the target is below `site.min_altitude_deg` (30° when unset) now, or will be within A min (checked every 60 s; Light runs only: a plan with no enabled Light step has none, as the preflight's "Calibration frames only"). "Now" is the mount's altitude when the mount points within 1° of the target, else the Settings site's; "within A min" is extrapolated from the Settings site only while the site check (`site_check.state`) is not `mismatch`. With a mismatching site and no mount reading on the target: no verdict (RR Lyr 2026-09-25: 13.9° from the wrong site while the mount read 75°). The detail says where "now" came from | above the limit + 0.5° and not below within A min | Run |
+| `disk` | attention | condition | free space of the run folder's disk < the subs of D min at the cadence, or of the run's remaining frames (`frames_total` − saved) when fewer (the newest sub's file size) | free ≥ 1.1 × that | — |
+| `device_lost` | critical | condition | a mount or focuser connected when the run started is no longer connected (a camera or wheel lost ends the run: `run_error`) | connected again | Devices |
+| `run_error` | critical | event | the run ended with `camera_error`, `device_lost`, `wheel_error`, `save_error`, `autofocus_timeout` or `refused` (the message verbatim) | acknowledged | Run |
+| `autofocus_failed` | attention | event | a mid-run autofocus ended `rejected`, `failed`, `cancelled`, `timeout` or `not_started` without a Stop | acknowledged | Focus |
+| `run_started` | info | event | the run left `waiting` ("Run started · RR Lyr · 195 frames · ends about 22:54 UTC") | acknowledged, or the next run | — |
+| `run_ended` | info | event | the run ended `completed`, `stopped` or `cancelled` | acknowledged, or the next run | Run |
+| `autofocus_done` | info | event | a mid-run autofocus ended `done` (best position, HFD) | acknowledged, or the next run | — |
+
+Thresholds are config keys, category `alerts` (`GET /api/config` meta;
+`PATCH /api/config`); a change applies from the next evaluation:
+
+| Key | Default | Range | Meaning |
+|---|---|---|---|
+| `alerts.sound` | `"normal"` | off, soft, normal | Tone volume of the clients (Web Audio; the client plays, armed by a user gesture) |
+| `alerts.sound_info` | `false` | — | Info items sound too (one soft tone) |
+| `alerts.repeat_critical_s` | 30 | 0-600 s | Repeat a critical tone until acknowledged (0: once) |
+| `alerts.consecutive_frames` | 3 | 1-20 | K |
+| `alerts.baseline_frames` | 20 | 5-200 | B |
+| `alerts.hfd_factor` | 1.5 | 1.1-5 | H |
+| `alerts.star_factor` | 0.7 | 0.1-0.95 | S |
+| `alerts.comparisons_min` | 3 | 1-20 | C |
+| `alerts.no_frame_factor` | 2.0 | 1.2-10 | F |
+| `alerts.no_frame_margin_s` | 60 | 0-3600 s | M |
+| `alerts.altitude_warn_min` | 15 | 0-180 min | A |
+| `alerts.disk_minutes` | 30 | 1-600 min | D |
+| `alerts.keep_awake` | `true` | — | Keep the computer awake during a run (below) |
+
+Defaults are `functional-spaces.md` §4.10 (replayed on the 2026-09-25
+run: the HFD rise fires at frame 150; no star, comparison or silence alarm).
+
+**Hook agreed with the photometry half (S48).** A Light sub refused by the
+S48 lock check (fewer than ceil(n/2) anchors show a star of SNR ≥ 5 where
+the tracked solution puts them) leaves the `photometry` status with
+`state: "skipped"`, `reason: "lock_lost"`; `tracker_lost` counts it as it
+counts S35's `field_lost`. Each skipped outcome is counted once (its
+`message` names the frame).
+
+### Keep-awake (PROPOSAL §3.1)
+
+While a run is active (from Start, `waiting` included: a scheduled start
+needs the computer awake, to its end) the server holds an OS sleep
+assertion with the tools the OS has (no dependency): macOS `caffeinate -i
+-w <server pid>` (the assertion "caffeinate command-line tool" in `pmset -g
+assertions`; it ends with the server even after a crash), Linux
+`systemd-inhibit --what=idle:sleep --mode=block` around `tail --pid=<server
+pid> -f /dev/null`, Windows `SetThreadExecutionState(ES_CONTINUOUS |
+ES_SYSTEM_REQUIRED)` on a holder thread. Released when the run ends
+(completed, stopped, failed, the run thread crashed) and at shutdown. Only
+the server started by the CLI takes a real assertion; in-process tests use
+a fake.
+
+```
+KeepAwake = {"state": "off"|"held"|"failed"|"unsupported"|"disabled",
+             "method": "caffeinate"|"systemd-inhibit"|"SetThreadExecutionState"|null,
+             "since": ISO|null,          // held since
+             "reason": string|null,      // why it is held: "A sequence is running (RR Lyr)."
+             "message": string|null}     // failed / unsupported: why
+```
+
+- In `status.keep_awake` (a change sends `status`).
+- Preflight `sleep` row: `ok` "The computer is kept awake during the run
+  (caffeinate). Keep its lid open: a closed lid still sleeps most laptops."
+  when a method exists and `alerts.keep_awake` is on; `note` otherwise
+  ("…not kept awake: <why>. Keep the computer awake and its lid open…").
+  Lid-closed sleep stays out of software reach: the row always says so.
+- A failed assertion is a WARNING log line and `state: "failed"`; the run
+  goes on.
+- `alerts.keep_awake` changed during a run applies at once: off releases the
+  assertion (`state: "disabled"`), on takes it (wave 6b review; before, both
+  waited for the next run).
+- A shutdown or a Stop that arrives while the OS call is being made never
+  leaves the assertion held: it is released as soon as the call returns.
+
+### Sequence record additions (6a leftovers, D2)
+
+```
+"autofocus": {"started_utc": ISO, "stage": string|null, "step": int,
+              "total": int, "position": int|null}|null,   // the mid-run pass in progress (state "autofocus")
+"autofocus_passes": [{"started_utc": ISO, "ended_utc": ISO|null,
+                      "state": "done"|"rejected"|"failed"|"cancelled"|"timeout"|"not_started",
+                      "position": int|null, "hfd_px": float|null,
+                      "message": string|null, "frames_done": int}],   // the run's passes, oldest first
+                                                         // (idle: the last run's, until the next Start)
+"wrapup": WrapUp|null                                    // the last run's, from its end to the next Start
+```
+
+The record is re-sent on every sample of a mid-run autofocus (the run
+strip's `afStep` is `autofocus.step` of `autofocus.total`).
+
+### Wrap-up (PROPOSAL §3.1, D2; functional-spaces §4.14)
+
+Built when a run ends, after its last point is measured (the run waits up
+to 10 s for the photometry queue, 2 s at shutdown), then the `sequence`
+record is re-sent with it (`wrapup` is `null` in the first record of the
+end, for a moment).
+
+```
+WrapUp = {"run_id": string|null, "object_name": string,
+          "outcome": RunResult,                          // = last_result
+          "started_utc": ISO|null, "ended_utc": ISO,
+          "frames": {"saved": int, "total": int, "by_type": {"Light": int, …}},
+          "points": {"target": int, "all": int, "flagged": int,   // suspect or saturated points
+                     "frames_measured": int,
+                     "frames_skipped": {"field_lost": int, "lock_lost": int, "other": int}},
+          "attention": {"critical": int, "attention": int, "info": int,
+                        "items": [{"id", "rule", "name", "level", "title", "since",
+                                   "cleared_utc", "acked"}]},   // the run's items, oldest first
+          "run_root": path|null, "run_folder": string|null, "run_bytes": int|null,
+          "mount": {"connected": bool, "state": string|null, "tracking": bool|null,
+                    "end_action": string},                // after the end action ran
+          "calibration": Calibration}
+Calibration = {"darks": [{"exposure_s": float, "gain": int, "count": int,
+                          "existing": int, "estimate_s": float}],
+               "biases": [{"exposure_s": float, "gain": int, "count": int,
+                           "existing": int, "estimate_s": float}],
+               "overhead_s": float,       // median (DATE-OBS to save − exposure) of the subs, ≥ 3 s
+               "cadence_s": float|null,   // the run's observed cadence
+               "dark_slot": bool,         // the wheel has a Dark slot (else: put the lid on)
+               "note": string|null}
+CalibrationBody = {"darks"?: int (0-999, default 20), "biases"?: int (0-999, default 30)}
+```
+
+- One dark entry per (exposure, gain) of the run's Light steps, one bias
+  entry per gain (exposure max(the camera's shortest, 0.01 s): the plan's
+  floor, Qt's); counts
+  are the guide's 20 darks and 30 biases; `existing` are tonight's
+  (the preflight's `calibration` count: the night from local noon);
+  `estimate_s` = count × (exposure + `overhead_s`): the observed cadence,
+  not the exposure alone (functional-spaces finding 1).
+- `POST /api/sequence/calibration-plan` replaces the **draft** with those
+  Dark and Bias steps (the last run's object, its gain, the Dark slot
+  through the wheel; nothing starts) and returns the plan record and the
+  draft it replaced (for an Undo). Without a wrap-up it uses the draft's
+  Light steps. `409 run_active` while a run is active; `400
+  invalid_argument` when there is no Light step to match.
+
+### Errors (wave 6b)
+
+| HTTP | code | When |
+|---|---|---|
+| 404 | `not_found` | Ack of an unknown attention id; the wrap-up before any run ended. |
+| 409 | `run_active` | Calibration plan during a run. |
+| 400 | `invalid_argument` | Calibration plan with no Light step to match; counts out of range. |
 
 ## State records
 
@@ -3223,6 +3558,7 @@ DeviceState     = {"state": "disconnected"|"connecting"|"connected"|"busy"|"erro
 | `{"type": "photometry_reset", …PhotometryReset}` | Wave 5. The live curves changed under the client (object change, role change, sequence start): re-read `GET /api/photometry/live`. |
 | `{"type": "comparison_quality", …ComparisonQuality}` | Wave 5. The leave-one-out report after every measured frame (`report: null` after a reset). |
 | `{"type": "photometry", …PhotometryStatus}` | Wave 5. Every change of the live photometry status (set, field, outcome of a measurement). |
+| `{"type": "attention", …AttentionState}` | Wave 6b. Every change of the attention list (raised, updated, reopened, cleared, acknowledged); once to a client that connects. A snapshot. |
 | `{"type": "log", …LogEntry}` | Server events, plus WARNING-and-above records from `argos.core`, such as Alpaca driver warnings (core INFO, logged on every exposure, stays in the server log; a core message repeated within 60 s is sent once). Right after the first `status` (and `network`, `stellarium`, `activity`, in that order), a new client receives the last 200 log lines, oldest first, so a page opened mid-session shows what happened before; older lines come from `GET /api/logs`. A client that reconnects drops the lines whose `seq` it already holds. |
 
 A camera change therefore sends both a `camera` message and a `status`
@@ -3419,3 +3755,4 @@ wide by 1920 px high, 16-bit, mono.
 | A58 | Wave 5: `POST /api/photometry/comparisons/recommend` (`replace` / `complete`, `count`) |
 | — | Wave 5 follow-ups of wave 4: `auto_selected` in the `POST /api/targets` answer and `DELETE /api/targets/{key}?also=` (Undo of a new target); `frame_metrics` replayed to a new client; `GET /api/fs/list` lists a typed file's folder with `selected` |
 | A62-A64 | Wave 6a: `GET /api/sequence`, `POST /api/sequence/start` (`start_at_utc`, Q-P2) / `pause` / `resume` / `stop`, `sequence` event and `status.sequence`, `GET /api/sequence/preflight`; the mount interlock (`409 run_active`, `pause_run`), the geometry lock (S15), `frame_saved` of a run, `--sim-replay` |
+| §7 (6b) | Wave 6b: `attention` event, `GET /api/attention`, `POST /api/attention/{id}/ack` and `/ack-all`, config category `alerts`; `status.keep_awake` and the preflight `sleep` row; `GET /api/sequence/wrapup`, `POST /api/sequence/calibration-plan`; `sequence.autofocus`, `autofocus_passes`, `wrapup` |

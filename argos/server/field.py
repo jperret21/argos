@@ -23,6 +23,12 @@ Threads (none is the event loop; none holds the hub lock across work):
 
 State is guarded by the hub lock and published with ``Hub._publish`` under
 it, so events leave in the order of the changes.
+
+0.5.0 S50 (release ``AstrometryController._on_worker_solved``): a camera frame's
+solution whose plate scale is more than 1 % from the first good solve of the
+session (the active profile and frame geometry) is refused, the last good
+solution kept. S48: the photometry's lock check makes the next solve due at
+once (:meth:`FieldService.resolve_due`).
 """
 
 from __future__ import annotations
@@ -153,6 +159,15 @@ class Frame:
     epoch: datetime | None = None
     #: An opened frame's own e-/ADU (``frame_egain``, S41); None → the live chain.
     egain: float | None = None
+    #: The frame's filter (a live frame's Camera form, an opened file's FILTER card):
+    #: its photometry curve (S49). None: unknown.
+    filter_name: str | None = None
+
+
+#: S50: a camera frame's solution more than this fraction from the session's first
+#: good solve is refused (release ``astrometry_controller.SCALE_TOLERANCE``). The
+#: owner's 270 solves span 0.3 % around their night's first; the wrong one, 3.4 %.
+SCALE_TOLERANCE = 0.01
 
 
 @dataclass
@@ -243,6 +258,10 @@ class FieldService:
 
         # threads
         self._closed = False
+        #: S50: the first good solve of a camera frame: (″ per green px, profile, geometry).
+        self._scale_ref: tuple[float, Any, tuple[int, int]] | None = None
+        #: S48: the photometry lost the field: the next frame is due at once.
+        self._resolve_due_flag = False
         self._frame_cond = threading.Condition()
         self._frame_pending: Frame | None = None
         self._frame_thread = threading.Thread(
@@ -559,11 +578,20 @@ class FieldService:
         hint: tuple[float, float] | None = None,
         epoch: datetime | None = None,
         egain: float | None = None,
+        filter_name: str | None = None,
     ) -> None:
         """A new frame was published (camera or file); latest wins on the frame thread."""
         if raw is None or getattr(raw, "ndim", 0) != 2 or self._closed:
             return
-        frame = Frame(seq=seq, raw=raw, origin=origin, hint=hint, epoch=epoch, egain=egain)
+        frame = Frame(
+            seq=seq,
+            raw=raw,
+            origin=origin,
+            hint=hint,
+            epoch=epoch,
+            egain=egain,
+            filter_name=filter_name,
+        )
         family = _origin_family(origin)
         dropped = False
         with self._hub._lock:
@@ -735,9 +763,41 @@ class FieldService:
         if before is False:
             self.set_auto(False)
 
+    def reset_scale_reference(self) -> None:
+        """Another camera may follow (a camera disconnect): the next good solve is the
+        new plate-scale reference (S50, release ``reset_scale_reference``)."""
+        with self._hub._lock:
+            self._scale_ref = None
+
+    def resolve_due(self, frame_seq: int, *, now: bool = False) -> None:
+        """The photometry lost the field (S35 or the S48 lock check): solve again at once.
+
+        The next frame is due whatever the cadence. With ``now`` (a sequence
+        sub) the frame in hand is solved now when it is still the newest: its
+        solution serves the next sub. Outside a run only the next frame is due:
+        a live point follows each solve, and solving the same frame again would
+        repeat it (release ``AcquisitionEngine._resolve_now``).
+        """
+        with self._hub._lock:
+            self._resolve_due_flag = True
+            frame = self._frame
+            requeue = (
+                now
+                and self._auto
+                and self._solving is None
+                and frame is not None
+                and frame.seq == frame_seq
+            )
+        if requeue:
+            self._ensure_threads()
+            with self._frame_cond:
+                if self._frame_pending is None:
+                    self._frame_pending = frame
+                self._frame_cond.notify()
+
     def _due(self, mount: tuple[float, float] | None) -> bool:
         """``_due`` (``astrometry_controller.py:135-154``). Lock held."""
-        if self._wcs is None:
+        if self._wcs is None or self._resolve_due_flag:
             return True
         if (time.monotonic() - self._attempt_mono) >= float(
             self._hub.config.get("astrometry.live_resolve_s", 20.0) or 20.0
@@ -844,6 +904,7 @@ class FieldService:
                 attempt_radec = hint
             self._attempt_mono = time.monotonic()
             self._attempt_radec = attempt_radec
+            self._resolve_due_flag = False  # S48: this attempt is the re-solve
             reticle = self._reticle_target()
         settings = build_solve_settings(
             self._hub.config.get, gs, live=(mode == "auto"), mount_radec=hint
@@ -888,6 +949,20 @@ class FieldService:
             message = "could not build WCS from the solution"
             self._end_attempt(mode, "failed", message, claim)
             self._hub.log("error", f"Solve: {message}", source="field", topic="field")
+            raise ApiError(409, "not_solved", message)
+        refusal = self._scale_refusal(wcs, gs, frame)
+        if refusal is not None:
+            # S50: a wrong match (XX Cyg 2026-09-07, 3.4 % off) is worse than no new
+            # solution: the last good one is kept, as after a failed solve.
+            message = f"solution refused — {refusal}"
+            self._end_attempt(mode, "failed", message, claim)
+            self._hub.log("warning", f"Solve: {message}", source="field", topic="field")
+            self._hub.set_activity(
+                "Field identification refused (plate scale)",
+                source="field",
+                topic="field",
+                log=False,
+            )
             raise ApiError(409, "not_solved", message)
         # The solved frame's own sources: detected-only filters, anchors and
         # the re-acquisition of a lost lock (brightest first).
@@ -1020,6 +1095,7 @@ class FieldService:
                 generation=generation,
                 origin=newest.origin,
                 egain=newest.egain,
+                filter_name=newest.filter_name,
             )
         )
         return solution
@@ -1058,6 +1134,36 @@ class FieldService:
                 "t": utc_iso(),
             }
             self._publish_field()
+
+    def _scale_refusal(self, wcs, gs: tuple[int, int], frame: Frame) -> str | None:
+        """Why a camera frame's solution is refused (S50), or None to accept it.
+
+        The reference is the first good solve of a camera frame for the active
+        profile and frame geometry (the profile's nominal scale is 1.8 % above
+        every measured one); another profile or geometry starts a new one. An
+        opened file is never gated and never sets it (another instrument).
+        Called before the solution is applied; the reference is kept here.
+        """
+        if _origin_family(frame.origin) != "camera":
+            return None
+        scale = _green_scale_arcsec(wcs)
+        if scale is None:
+            return None
+        profile = self._hub.config.get("hardware.profile", None)
+        with self._hub._lock:
+            ref = self._scale_ref
+            if ref is None or ref[1] != profile or ref[2] != gs:
+                self._scale_ref = (scale, profile, gs)
+                return None
+        deviation = scale / ref[0] - 1.0
+        if abs(deviation) <= SCALE_TOLERANCE:
+            return None
+        # Per full-res px, as the solve summary is (green px / 2).
+        return (
+            f"plate scale {scale / 2.0:.3f}″/px is {abs(deviation) * 100.0:.1f} % "
+            f"{'below' if deviation < 0 else 'above'} this session's {ref[0] / 2.0:.3f}″/px "
+            "(a wrong match); the previous solution is kept"
+        )
 
     def _summary(self, result, target_radec) -> str:
         """``_summary`` (``astrometry_controller.py:226-238``)."""

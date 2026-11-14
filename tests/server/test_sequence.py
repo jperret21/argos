@@ -263,6 +263,21 @@ def test_start_time_errors(seq, value, text):
     assert state(seq)["state"] == "idle"
 
 
+def test_a_start_days_ahead_names_its_day(seq):
+    """Wave 6b design review: "The start time 21:30 UTC is more than 24 h ahead" for a start
+    three days away read as tonight; the refusal and the preflight name the day."""
+    put_plan(seq)
+    when = (datetime.now(timezone.utc) + timedelta(days=3)).replace(hour=21, minute=30)
+    day = f"{when.day} {when.strftime('%b')} 21:30 UTC"
+    response = seq.post(
+        "/api/sequence/start", json={"start_at_utc": when.isoformat()}, headers=AUTH
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["message"] == f"The start time {day} is more than 24 h ahead."
+    check = checks(seq, start_at_utc=when.isoformat())["start_at"]
+    assert check["level"] == "block" and day in check["message"]
+
+
 def test_a_start_time_already_passed_starts_now(seq):
     put_plan(seq, steps=[light(count=1)])
     past = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
@@ -854,4 +869,6 @@ def test_preflight_ids_are_unique_and_plan_notes_name_their_issue(seq):
     assert "plan" in ids and "plan:interval_ignored:1" in ids
     by_id = {c["id"]: c for c in body["checks"]}
     assert by_id["plan"]["message"].startswith("2 frames, about ")
-    assert by_id["sleep"]["level"] == "ok" and "lid open" in by_id["sleep"]["message"]
+    # Wave 6b: "ok" only when keep-awake works (test_night.py); in-process tests take no
+    # OS assertion, so the row is a note; the lid stays out of software reach either way.
+    assert by_id["sleep"]["level"] == "note" and "lid open" in by_id["sleep"]["message"]

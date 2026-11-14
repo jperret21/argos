@@ -29,7 +29,7 @@ META_FIELDS = {
 }  # fmt: skip
 CATEGORIES = {
     "connection", "observer_site", "instrument", "plate_solving", "catalogues", "photometry",
-    "data_storage", "privacy_diagnostics", "appearance", "observe",
+    "alerts", "data_storage", "privacy_diagnostics", "appearance", "observe",
 }  # fmt: skip
 
 

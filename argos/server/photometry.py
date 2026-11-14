@@ -18,7 +18,11 @@ A Qt-free port of the live photometry half of ``AcquisitionEngine``
   1669-1698), the flight recorder (``_diagnostics``, 887-913);
 - **reset**: an object change clears the curves (``on_object_changed`` →
   ``clear_lightcurves``, 258-274, 1281-1293); a set change or a new solution
-  drops the tracker (``_reset_tracker``, 1595-1602).
+  drops the tracker (``_reset_tracker``, 1595-1602);
+- **0.5.0 S48** (release branch): the lock check of each measured frame
+  (fewer than ceil(n/2) anchors showing a star where the tracked solution puts
+  them: no point, a re-solve due at once); **S49**: one curve and one CSV per
+  (star, filter), the filter in the file name, the comparisons vetted per filter.
 
 One deliberate difference with the Qt 0.5.0 code: the series FWHM is frozen
 on the **first** measured frame. Qt read it before ``_diagnostics`` reset it on
@@ -35,6 +39,7 @@ client's snapshots and read without the service lock.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import math
@@ -56,6 +61,7 @@ from argos.core.catalog.targets import (
     comparison_chart_id,
 )
 from argos.core.config import observing_site
+from argos.core.imaging.fits_writer import FILTER_ABBREV
 from argos.core.imaging.green import green_plane
 from argos.core.imaging.metrics import detect_stars
 from argos.core.photometry.airmass import (
@@ -67,7 +73,12 @@ from argos.core.photometry.airmass import (
 from argos.core.photometry.lightcurve import LcPoint, LightCurve
 from argos.core.photometry.params import DEFAULT_FWHM, PhotometryParams, measure_frame
 from argos.core.photometry.quality import comparison_quality_report, save_comparison_quality_report
-from argos.core.photometry.tracking import ApertureTracker, TrackedWCS, select_tracking_anchors
+from argos.core.photometry.tracking import (
+    ApertureTracker,
+    TrackedWCS,
+    anchors_seen,
+    select_tracking_anchors,
+)
 from argos.core.photometry.uncertainty import apply_systematic_floor, estimate_systematic_floor
 from argos.server.state import utc_iso
 
@@ -82,6 +93,15 @@ FIELD_LOST_TEXT = (
     "Photometry skipped: no star of the set where the solution places it"
     " — the field moved since the solve, or clouds."
 )
+#: S48 (release branch ``_measure_photometry``).
+LOCK_LOST_TEXT = (
+    "Photometry skipped: fewer than half the anchor stars show a star where the"
+    " solution places them — the field moved since the solve, or clouds."
+    " Re-solving."
+)
+#: S48: an anchor is seen at SNR 5 or more (S35's threshold); the lock holds when
+#: ceil(n/2) of the n anchors are seen (S43's rule).
+LOCK_MIN_SNR = 5.0
 
 STATUS_TEXT = {
     "no_target": "No target star: choose one on the image or in the Variables list.",
@@ -93,6 +113,10 @@ STATUS_TEXT = {
     "field_lost": (
         "Skipped frame #{seq}: no star of the set where the solution places it"
         " (the field moved since the solve, or clouds)."
+    ),
+    "lock_lost": (
+        "Skipped frame #{seq}: fewer than half the anchor stars show a star where the"
+        " solution places them (the field moved, or clouds); re-solving."
     ),
 }
 
@@ -174,9 +198,28 @@ def point_record(
     }
 
 
-def curve_key(star) -> str:
-    """Qt's curve key (``_emit_live_point``, 1740): the AUID, else the display name."""
+def star_curve_key(star) -> str:
+    """Qt's star key (``_emit_live_point``, 1740): the AUID, else the display name."""
     return star.auid or star.display_name
+
+
+def filter_token(filter_name: str | None) -> str:
+    """The filter as frame and curve file names spell it (release ``fits_writer.filter_token``,
+    S49): the abbreviation (``FILTER_ABBREV``), ASCII letters, digits, ``_`` and ``-``,
+    lower case; ``clear`` for none. Its parity with the core's is a guarded test."""
+    import re
+    import unicodedata
+
+    name = str(filter_name or "").strip()
+    name = FILTER_ABBREV.get(name, name)
+    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^A-Za-z0-9_-]", "", ascii_name.replace(" ", "_")).lower() or "clear"
+
+
+def curve_key(star, token: str) -> str:
+    """One curve per (star, filter) (S49, release ``lightcurve.curve_key``):
+    ``<AUID or name>@<filter token>``."""
+    return f"{star_curve_key(star)}@{token}"
 
 
 def safe_name(text: str) -> str:
@@ -188,14 +231,19 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def new_preview_csv(folder: Path, obj: str, tag: str, now: datetime, taken=()) -> Path:
-    """``_new_preview_csv`` (S40): ``<folder>/<object>_<YYYYMMDDTHHMMSSZ>_<star>.csv``,
-    a file not yet used; ``-2``, ``-3``… on the time for curves started in the
-    same second. Review still finds ``<object>.json`` and the star."""
+def new_preview_csv(
+    folder: Path, obj: str, tag: str, now: datetime, taken=(), token: str = ""
+) -> Path:
+    """``_new_preview_csv`` (S40, S49):
+    ``<folder>/<object>_<YYYYMMDDTHHMMSSZ>_<filter>_<star>.csv``, a file not yet
+    used; ``-2``, ``-3``… on the time for curves started in the same second.
+    Review still finds ``<object>.json`` and the star."""
     stamp = now.strftime("%Y%m%dT%H%M%SZ")
     count = 1
     while True:
         mark = stamp if count == 1 else f"{stamp}-{count}"
+        if token:
+            mark = f"{mark}_{token}"
         path = folder / f"{safe_name(f'{obj}_{mark}_{tag}')}.csv"
         if path not in taken and not path.exists():
             return path
@@ -296,6 +344,9 @@ class MeasureRequest:
     origin: str = "live"  # the frame's origin; "file" = Open FITS (another night)
     reset_tracker: bool = False  # a new solution: rebuild the tracker first
     egain: float | None = None  # an opened frame's own e-/ADU (frame_egain, S41)
+    #: The frame's filter (S49): a sub's read-back FILTER, an opened file's FILTER
+    #: card, a live frame's Camera form; None: the wheel's settled slot, else the form.
+    filter_name: str | None = None
 
 
 class PhotometryService:
@@ -320,6 +371,16 @@ class PhotometryService:
         self._phot_fwhm: float | None = None
         self._tracker: ApertureTracker | None = None
         self._tracker_anchors = 0  # anchor stars the tracker was built with
+        self._tracker_anchor_stars: list = []  # ...and which (the S48 lock check)
+        #: The solution the tracker was built on (the request's raw WCS, and that
+        #: WCS or the tracked solution frozen at a set change), then that freeze (S52).
+        self._tracker_base: tuple[Any, Any] | None = None
+        self._rebase: tuple[Any, Any] | None = None
+        #: S48: the last lock check ({frame_seq, anchors, seen, needed, held}), or None.
+        self._lock_state: dict[str, Any] | None = None
+        #: S49: the first filter measured since the curves were cleared (its vetting
+        #: report keeps the name ``photometry_quality.json``).
+        self._primary_filter: str | None = None
         self._diag: SessionDiagnostics | None = None
         self._diag_object: str | None = None
         self._diag_root: Path | None = None  # the run folder of the recorder (wave 6a)
@@ -328,10 +389,12 @@ class PhotometryService:
         self._outcome: tuple[str, str | None, int | None] | None = None  # state, reason, seq
         self._measured_keys: frozenset[str] = frozenset()  # the set the outcome is about
         self._quality_report: dict[str, Any] | None = None
+        self._quality_filter: str | None = None  # the filter the report vets (S49)
         self._quality_revision = 0
         self._quality_record: dict[str, Any] = {
             "revision": 0,
             "frame_seq": None,
+            "filter": None,
             "report": None,
         }
         self._status: dict[str, Any] = self._status_record()
@@ -398,11 +461,14 @@ class PhotometryService:
         """A new solution was applied: ``measure_photometry_if_idle`` (1062-1065)."""
         with self._hub._lock:
             owner = self._hub._camera_state.owner
-        if owner in ("sequence", "autofocus"):
-            # A sequence measures every saved sub instead; a fresh solution is
-            # still a new reference for its tracker (_on_reference_solved).
+        # A sequence measures every saved sub instead; a fresh solution is still a new
+        # reference for its tracker (_on_reference_solved). A run's sub is never measured
+        # again here: its solve may finish after the run ended (wave 6b integration: the
+        # run's last sub got a second point under no filter, a one-point curve and CSV).
+        if owner in ("sequence", "autofocus") or request.origin == "sequence":
             with self._lock:
                 self._tracker = None
+                self._rebase = None
             return
         self.submit(replace(request, reset_tracker=True))
 
@@ -411,16 +477,31 @@ class PhotometryService:
         self.submit(request)
 
     def on_targets_changed(self) -> None:
-        """``_reset_tracker`` after a set change (1301, 1320, 1345, 1510).
+        """A set change drops the tracker (release ``_anchors_changed``, S52).
+
+        The next tracker is built on the solution as tracked so far, frozen
+        here, never on the raw solution: the field has drifted since that
+        solve, and a tracker rebuilt there kept only a neighbour seen at a stale
+        position, passed the S48 check with 1 anchor of 1 and measured every
+        aperture on blank sky until the next solve (the science review's replay
+        of RR Lyr 0-79). In a run the next sub is solved at once.
 
         When the set's stars changed, the status waits for the next measurement:
         the last one was of the previous set (its points, its frame).
         """
         keys = frozenset(s.key() for s in self._hub.targets.snapshot().stars)
+        with self._hub._lock:
+            in_run = self._hub._camera_state.owner == "sequence"
         with self._lock:
+            tracker, base = self._tracker, self._tracker_base
+            if tracker is not None and self._tracker_anchors and base is not None:
+                self._rebase = (base[0], TrackedWCS(base[1], copy.copy(tracker)))
             self._tracker = None
             if keys != self._measured_keys:
                 self._outcome = None
+        field = getattr(self._hub, "field", None)
+        if in_run and field is not None and hasattr(field, "resolve_due"):
+            field.resolve_due(-1)  # the next frame, not the one in hand
         self.refresh_status()
 
     def on_object_changed(self, object_name: str) -> None:
@@ -466,6 +547,9 @@ class PhotometryService:
         self._meta.clear()
         self._csv.clear()
         self._preview_csv.clear()
+        self._primary_filter = None
+        self._quality_filter = None
+        self._lock_state = None
         self._frames = 0
         self._points = 0
         self._last = None
@@ -533,6 +617,8 @@ class PhotometryService:
             "frames": self._frames,
             "points": self._points,
             "last": dict(self._last) if self._last is not None else None,
+            # S48: the last lock check (null: tracking off, or not measured yet).
+            "lock": dict(self._lock_state) if self._lock_state is not None else None,
             "revision": self._revision,
         }
 
@@ -552,6 +638,7 @@ class PhotometryService:
         record = {
             "revision": self._quality_revision,
             "frame_seq": frame_seq,
+            "filter": self._quality_filter,  # the filter whose comparisons it vets (S49)
             "report": self._wire_report(self._quality_report),
         }
         self._quality_record = record
@@ -563,8 +650,9 @@ class PhotometryService:
         if report is None:
             return None
         entries = []
+        token = self._quality_filter or "clear"
         for entry in report.get("comparison_stars", []):
-            key = entry.get("auid") or entry.get("name")
+            key = f"{entry.get('auid') or entry.get('name')}@{token}"  # its curve (S49)
             meta = self._meta.get(key, {})
             curve = self._curves.get(key)
             last = None
@@ -589,10 +677,11 @@ class PhotometryService:
         run_root = str(root) if root is not None else None
         sequence_running = bool(sequence is not None and sequence.active)
         with self._lock:
-            set_keys = {curve_key(s): s.key() for s in tset.stars}
+            set_keys = {star_curve_key(s): s.key() for s in tset.stars}
             curves = []
             for key, curve in self._curves.items():
                 meta = self._meta.get(key, {})
+                token = meta.get("filter") or key.rpartition("@")[2]
                 extra = meta.get("points", [])
                 mags = dict(meta.get("mags") or {})
                 floor = next(
@@ -602,7 +691,8 @@ class PhotometryService:
                 curves.append(
                     {
                         "key": key,
-                        "star_key": set_keys.get(key),  # null: no longer in the set
+                        "star_key": set_keys.get(key.rpartition("@")[0]),  # null: left the set
+                        "filter": token,  # S49: one curve per (star, filter)
                         "role": curve.role,
                         "name": curve.name,
                         "auid": curve.auid or None,
@@ -672,13 +762,14 @@ class PhotometryService:
                 self._phot_fwhm = None  # new object → re-sample the series FWHM (P7)
         return self._diag
 
-    def _csv_path(self, tset: TargetSet, star, run_root: Path | None, key: str) -> Path:
-        """``_photometry_csv_path``: a run's ``photometry/{role}_{object}_{star}.csv``;
-        outside a run, the curve's own file, named after its start (S40)."""
+    def _csv_path(self, tset: TargetSet, star, run_root: Path | None, key: str, token: str) -> Path:
+        """``_photometry_csv_path``: a run's ``photometry/{role}_{object}_{filter}_{star}.csv``
+        (release S49: one file per star and filter); outside a run, the curve's own
+        file, named after its start (S40) and filter."""
         obj = tset.object_name or "Unknown"
         tag = star.auid or star.display_name
         if run_root is not None:
-            safe = safe_name(f"{obj}_{tag}")
+            safe = safe_name(f"{obj}_{token}_{tag}")
             role = getattr(star, "role", "target") or "target"
             return run_root / "photometry" / f"{role}_{safe or 'photometry'}.csv"
         path = self._preview_csv.get(key)
@@ -689,6 +780,7 @@ class PhotometryService:
                 tag,
                 _utcnow(),
                 taken=set(self._preview_csv.values()),
+                token=token,
             )
             self._preview_csv[key] = path
         return path
@@ -717,17 +809,22 @@ class PhotometryService:
         return alignment not in ("eq", "eq_gem")
 
     def _wcs_for_frame(self, green, tset: TargetSet, params: PhotometryParams, wcs):
-        """``_wcs_for_frame`` (1542-1567, with the release branch's S35). Lock held."""
+        """``_wcs_for_frame`` (1542-1567, with the release branch's S35 and S52). Lock held."""
         if not params.track_apertures:
             return wcs
+        # After a set change, the tracked solution frozen then (S52).
+        rebase = self._rebase
+        base = rebase[1] if rebase is not None and rebase[0] is wcs else wcs
         if self._tracker is None or not self._tracker_anchors:
             # Also when built with no star seen (clouds, or the field had moved):
             # try again on this frame rather than until the next solution (S35).
-            self._tracker, self._tracker_anchors = self._build_live_tracker(
-                green, wcs, tset, params
+            self._tracker, self._tracker_anchor_stars = self._build_live_tracker(
+                green, base, tset, params
             )
+            self._tracker_anchors = len(self._tracker_anchor_stars)
+            self._tracker_base = (wcs, base)
         self._tracker.update(green, allow_rotation=self._allow_rotation())
-        return TrackedWCS(wcs, self._tracker)
+        return TrackedWCS(base, self._tracker)
 
     def _field_lost(self, params: PhotometryParams) -> bool:
         """No star of the set where the tracked solution places it (S35). Lock held.
@@ -743,7 +840,7 @@ class PhotometryService:
     def _build_live_tracker(green, wcs, tset: TargetSet, params: PhotometryParams):
         """``_build_live_tracker`` (1569-1582, with the release branch's S35).
 
-        Returns the tracker and its anchor count. Without a comparison bright
+        Returns the tracker and its anchor stars. Without a comparison bright
         enough to steer, any star of the set seen where the solution places it
         (SNR ≥ 5); never the set's stars unseen, whose noise centroids passed
         for anchors when the field had moved since the solve.
@@ -759,7 +856,53 @@ class PhotometryService:
             frame_center=(w / 2.0, h / 2.0),
             search_r=max(8.0, 2.0 * params.aperture_px(None)),
         )
-        return tracker, len(anchors)
+        return tracker, list(anchors)
+
+    def _check_lock(self, green, tracked, params: PhotometryParams, frame_seq: int) -> bool:
+        """The S48 lock check (release ``_lock_lost``): True when the lock holds.
+        Called with the service lock held.
+
+        After a jump larger than the search radius a tracker window may
+        centroid a neighbour or noise: the tracker reports that anchor and moves
+        every aperture by its offset, and S35 (no anchor at all) does not fire.
+        Half the anchors (rounded up) must show a star of SNR ≥ 5 where the
+        tracked solution puts them. Clouds that dim the anchors below SNR 5 fail
+        it too. It does not catch a wrong plate solution: a new solution rebuilds
+        the tracker from the stars seen where it puts them (S50 refuses the wrong
+        scale instead).
+        """
+        stars = self._tracker_anchor_stars
+        if not params.track_apertures or self._tracker is None or not stars:
+            self._lock_state = None
+            return True
+        seen = anchors_seen(green, tracked, stars, params, min_snr=LOCK_MIN_SNR)
+        needed = max(1, math.ceil(len(stars) / 2))
+        self._lock_state = {
+            "frame_seq": frame_seq,
+            "anchors": len(stars),
+            "seen": int(seen),
+            "needed": needed,
+            "held": seen >= needed,
+        }
+        return seen >= needed
+
+    def _frame_filter(self, request: MeasureRequest) -> str:
+        """The measured frame's filter name (S49).
+
+        A sequence sub's read-back FILTER and an opened file's FILTER card as
+        they are; a live frame (release ``_live_filter``): the wheel's settled
+        slot when it reports one, else the frame's Camera form filter.
+        """
+        if request.origin in ("sequence", "file"):
+            return request.filter_name or ""
+        wheel = getattr(self._hub, "wheel", None)
+        if wheel is not None and wheel.connected and not wheel.moving and wheel.slot:
+            return str(wheel.slot)
+        if request.filter_name is not None:
+            return request.filter_name
+        with self._hub._lock:
+            settings = getattr(self._hub, "_capture_settings", None)
+            return str(getattr(settings, "filter", "") or "")
 
     def measure(self, request: MeasureRequest) -> int:
         """``_measure_photometry`` (1604-1667) on one frame; returns the points kept."""
@@ -767,6 +910,7 @@ class PhotometryService:
         with self._lock:
             if request.reset_tracker:
                 self._tracker = None  # _on_reference_solved (1599-1602)
+                self._rebase = None
             if tset.object_name != self._object:
                 # The observation changed under a queued frame: never mix objects.
                 if self._object is not None or self._curves:
@@ -785,6 +929,7 @@ class PhotometryService:
             self.refresh_status()
             return 0
         frame_fwhm = self._frame_fwhm(request)
+        token = filter_token(self._frame_filter(request))  # one curve per (star, filter): S49
         # An opened frame's errors use its own e-/ADU (S41), else the live chain.
         egain = request.egain if request.egain is not None else self._hub.targets.egain()
         params = PhotometryParams.from_config(self._hub.config.get, egain=egain)
@@ -808,13 +953,25 @@ class PhotometryService:
             frame_no = self._diag_frame
             self._diag_frame += 1
             tracked = self._wcs_for_frame(green, tset, params, request.wcs)
+            lost = None
             if self._field_lost(params):
                 # No point on blank sky (S35); the service lock, then the hub's.
-                diag.record("event", frame=frame_no, what="frame_skipped", reason="field_lost")
-                self._outcome = ("skipped", "field_lost", request.frame_seq)
-                self._hub.log("warning", FIELD_LOST_TEXT, source="photometry", topic="photometry")
+                self._lock_state = None
+                lost = ("field_lost", FIELD_LOST_TEXT)
+            elif not self._check_lock(green, tracked, params, request.frame_seq):
+                lost = ("lock_lost", LOCK_LOST_TEXT)  # S48
+            if lost is not None:
+                diag.record("event", frame=frame_no, what="frame_skipped", reason=lost[0])
+                self._outcome = ("skipped", lost[0], request.frame_seq)
+                self._hub.log("warning", lost[1], source="photometry", topic="photometry")
                 self.refresh_status()
+                # S48: a re-solve due at once; in a run the sub in hand is solved now.
+                field = getattr(self._hub, "field", None)
+                if field is not None and hasattr(field, "resolve_due"):
+                    field.resolve_due(request.frame_seq, now=request.origin == "sequence")
                 return 0
+            if self._primary_filter is None:
+                self._primary_filter = token
             bundled_iers_only()  # BJD_TDB offline (S37)
             results = measure_frame(
                 green,
@@ -845,17 +1002,17 @@ class PhotometryService:
                 if not (has_mag or has_ratio):
                     continue
                 point = self._emit_live_point(
-                    tset, res, jd, air, fwhm, (lat, lon, elev), request, t_iso
+                    tset, res, jd, air, fwhm, (lat, lon, elev), request, t_iso, token
                 )
                 kept += 1
                 if res.star.role == ROLE_TARGET and target_point is None:
                     target_point = {
-                        "key": curve_key(res.star),
+                        "key": curve_key(res.star, token),
                         "mag": _num(point.mag),
                         "mag_err": _num(point.mag_err),
                         "bjd_tdb": _num(point.bjd_tdb),
                     }
-            self._write_live_quality_report(tset, request)
+            self._write_live_quality_report(tset, request, token)
             self._frames += 1
             self._points += kept
             r_ap = params.aperture_px(fwhm)
@@ -866,6 +1023,7 @@ class PhotometryService:
                 "bjd_tdb": target_point["bjd_tdb"] if target_point is not None else None,
                 "points": kept,
                 "target": target_point,
+                "filter": token,
                 "aperture_px": r_ap,
                 "fwhm_px": fwhm,
                 "anchors": tracker.anchors_used if tracker is not None else None,
@@ -890,8 +1048,11 @@ class PhotometryService:
         self.refresh_status()
         return kept
 
-    def _emit_live_point(self, tset, res, jd, air, fwhm, site, request, t_iso) -> LcPoint:
-        """``_emit_live_point`` (1700-1765): the point, its curve, its CSV, its event."""
+    def _emit_live_point(
+        self, tset, res, jd, air, fwhm, site, request, t_iso, token: str = "clear"
+    ) -> LcPoint:
+        """``_emit_live_point`` (1700-1765): the point, its (star, filter) curve (S49),
+        its CSV, its event."""
         lat, lon, elev = site
         bjd = (
             bjd_tdb(jd, res.star.ra_deg, res.star.dec_deg, float(lat), float(lon), float(elev))
@@ -923,7 +1084,7 @@ class PhotometryService:
             relative_flux=res.relative.flux_ratio if res.relative else None,
             relative_flux_err=res.relative.flux_ratio_err if res.relative else None,
         )
-        key = curve_key(res.star)
+        key = curve_key(res.star, token)
         lc = self._curves.get(key)
         if lc is None or lc.role != res.star.role:
             # A star whose role changed starts a new curve (S33, fixed for 0.5.0:
@@ -939,12 +1100,13 @@ class PhotometryService:
         meta = self._meta.setdefault(key, {"points": []})
         meta["star_key"] = res.star.key()
         meta["mags"] = dict(res.star.mags)
+        meta["filter"] = token
         lc.append(point)
         zp = res.diff.zero_point if res.diff is not None else None
         zp_rms = res.diff.zp_rms if res.diff is not None else None
         meta["points"].append((request.frame_seq, t_iso, zp, zp_rms))
         self._apply_systematic_floor(lc)
-        path = self._csv_path(tset, res.star, request.run_root, key)
+        path = self._csv_path(tset, res.star, request.run_root, key, token)
         self._csv[key] = path
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -962,6 +1124,7 @@ class PhotometryService:
             "frame_seq": request.frame_seq,
             "key": key,
             "star_key": res.star.key(),
+            "filter": token,  # S49: the curve's filter token
             "role": lc.role,
             "name": lc.name,
             "auid": lc.auid or None,
@@ -999,11 +1162,21 @@ class PhotometryService:
                 changed = True
         return changed
 
-    def _write_live_quality_report(self, tset: TargetSet, request: MeasureRequest) -> None:
-        """``_write_live_quality_report`` (1669-1698): every frame (S17). Lock held."""
+    def _write_live_quality_report(
+        self, tset: TargetSet, request: MeasureRequest, token: str = "clear"
+    ) -> None:
+        """``_write_live_quality_report`` (1669-1698): every frame (S17), the comparisons
+        of the measured frame's filter only (S49): the run's first filter in
+        ``photometry_quality.json``, another in ``photometry_quality_<filter>.json``.
+        Lock held."""
+        by_star = {
+            key.rpartition("@")[0]: curve
+            for key, curve in self._curves.items()
+            if self._meta.get(key, {}).get("filter") == token
+        }
         report = comparison_quality_report(
             tset,
-            self._curves,
+            by_star,
             min_points=int(self._cfg("photometry.comparison_validation_min_points", 10)),
             max_scatter_mag=float(
                 self._cfg("photometry.comparison_validation_max_scatter_mag", 0.10)
@@ -1013,11 +1186,17 @@ class PhotometryService:
             ),
         )
         self._quality_report = report
+        self._quality_filter = token
         self._publish_quality(request.frame_seq)
         if request.run_root is None:
             return
+        name = (
+            "photometry_quality.json"
+            if token == self._primary_filter
+            else f"photometry_quality_{token}.json"
+        )
         try:
-            save_comparison_quality_report(request.run_root / "photometry_quality.json", report)
+            save_comparison_quality_report(request.run_root / name, report)
         except OSError as exc:
             self._hub.log(
                 "warning",
@@ -1027,4 +1206,11 @@ class PhotometryService:
             )
 
 
-__all__ = ["MeasureRequest", "PhotometryService", "curve_key", "point_record"]
+__all__ = [
+    "MeasureRequest",
+    "PhotometryService",
+    "curve_key",
+    "filter_token",
+    "point_record",
+    "star_curve_key",
+]

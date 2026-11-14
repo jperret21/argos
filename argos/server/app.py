@@ -293,6 +293,19 @@ class SequenceStartBody(_Body):
     start_at_utc: str | None = Field(default=None, max_length=64)
 
 
+class AttentionAckBody(_Body):
+    """Wave 6b: who acknowledged (the client's label)."""
+
+    by: str | None = Field(default=None, max_length=64)
+
+
+class CalibrationPlanBody(_Body):
+    """Wave 6b: darks per Light series and biases per gain (the guide's 20 and 30)."""
+
+    darks: int | None = Field(default=None, ge=0, le=999)
+    biases: int | None = Field(default=None, ge=0, le=999)
+
+
 class DeviceConnectBody(_Body):
     """API 2: one device or all of them; the address defaults to the config's."""
 
@@ -1131,6 +1144,33 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
         start_at_utc: str | None = Query(default=None, max_length=64),
     ) -> dict[str, Any]:
         return hub.sequence.preflight(start_at_utc, given=start_at_utc is not None)
+
+    # -- wave 6b: the night (attention, wrap-up) ----------------------------------------
+
+    @api.get("/attention")
+    def attention_state() -> dict[str, Any]:
+        return hub.attention.record()
+
+    @api.post("/attention/ack-all")
+    def attention_ack_all(body: AttentionAckBody | None = None) -> dict[str, Any]:
+        return hub.attention.ack_all(body.by if body else None)
+
+    @api.post("/attention/{item_id}/ack")
+    def attention_ack(
+        item_id: str = Path(min_length=1, max_length=200),
+        body: AttentionAckBody | None = None,
+    ) -> dict[str, Any]:
+        return hub.attention.ack(item_id, body.by if body else None)
+
+    @api.get("/sequence/wrapup")
+    def sequence_wrapup() -> dict[str, Any]:
+        return hub.sequence.wrapup()
+
+    @api.post("/sequence/calibration-plan")
+    def sequence_calibration_plan(body: CalibrationPlanBody | None = None) -> dict[str, Any]:
+        return hub.sequence.calibration_plan(
+            body.darks if body else None, body.biases if body else None
+        )
 
     # -- wave 6a, plan: draft, presets, files, visibility, transits (A42, A59-A61, A65, A66)
     @api.get("/sequence/plan")

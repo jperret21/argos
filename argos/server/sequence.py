@@ -131,6 +131,12 @@ def _hhmm(when: datetime) -> str:
     return when.astimezone(timezone.utc).strftime("%H:%M UTC")
 
 
+def _day_hhmm(when: datetime) -> str:
+    """A start on another day says which (it read "21:30 UTC" for a start 3 days ahead)."""
+    w = when.astimezone(timezone.utc)
+    return f"{w.day} {w.strftime('%b %H:%M')} UTC"
+
+
 def wire_plan(plan: SequencePlan) -> dict[str, Any]:
     """The schema-2 record of a plan (``plan_to_dict`` plus ``schema``)."""
     return {"schema": 2, **plan_to_dict(plan)}
@@ -210,6 +216,12 @@ class _Run:
     dark_skip_logged: bool = False
     dither_sign: int = 1
     camera_generation: int = -1
+    #: Wave 6b: (DATE-OBS → save duration, exposure) of each Light sub (wrap-up overhead).
+    costs: list[tuple[float, float]] = field(default_factory=list)
+    #: Wave 6b: subs saved per frame type (wrap-up).
+    by_type: dict[str, int] = field(default_factory=dict)
+    #: Wave 6b: the run's mid-run autofocus passes (record ``autofocus_passes``).
+    af_passes: list[dict[str, Any]] = field(default_factory=list)
 
 
 class SequenceService:
@@ -221,6 +233,13 @@ class SequenceService:
         self._run: _Run | None = None
         self._last_result: dict[str, Any] | None = None
         self._revision = 0
+        # -- wave 6b: the wrap-up, the last run's autofocus passes, keep-awake --------
+        self._wrapup: dict[str, Any] | None = None
+        self._last_plan: SequencePlan | None = None
+        self._last_passes: list[dict[str, Any]] = []
+        self._awake = False
+        #: How long the end waits for the last sub's photometry (s); shutdown: 2 s.
+        self.photometry_wait_s = 10.0
         self._record: dict[str, Any] = self._build_record()
         #: The clock of DATE-OBS / DATE-AVG and the run id (tests: a scripted one).
         self.clock: ClockFn = _utcnow
@@ -230,6 +249,7 @@ class SequenceService:
         #: A start is being prepared (camera taken, plan checked): one at a time, so
         #: two clients pressing Start never share the camera (hub lock).
         self._starting = False
+        hub.bus.add_tap(self._on_event)
 
     # ------------------------------------------------------------------
     # State and records
@@ -335,6 +355,9 @@ class SequenceService:
                 "paused_by": None,
                 "end_action": "Nothing",
                 "last_result": self._last_result,
+                "autofocus": None,
+                "autofocus_passes": [dict(p) for p in self._last_passes],
+                "wrapup": self._wrapup,
                 "revision": self._revision,
             }
         plan = run.plan
@@ -375,14 +398,50 @@ class SequenceService:
             "paused_by": run.paused_by if state in ("pausing", "paused", "autofocus") else None,
             "end_action": plan.on_complete,
             "last_result": self._last_result,
+            "autofocus": self._af_progress() if state == "autofocus" else None,
+            "autofocus_passes": [dict(p) for p in run.af_passes],
+            "wrapup": None,
             "revision": self._revision,
         }
+
+    def _af_progress(self) -> dict[str, Any] | None:
+        """Lock held: the mid-run sweep in progress (the run strip's ``afStep``)."""
+        record = self._hub._autofocus_record()
+        if record.get("state") not in ("running", "stopping"):
+            return None
+        return {
+            "started_utc": record.get("started_utc"),
+            "stage": record.get("stage"),
+            "step": int(record.get("step") or 0),
+            "total": int(record.get("total") or 0),
+            "position": record.get("position"),
+        }
+
+    def _on_event(self, kind: str, payload: dict[str, Any]) -> None:
+        """Bus tap: a mid-run autofocus sample re-sends the record (sweep progress).
+
+        Autofocus records are published under the hub lock (``AutofocusRun._update``),
+        so re-publishing here takes no new lock.
+        """
+        if kind != "autofocus" or self._state != "autofocus":
+            return
+        with self._hub._lock:
+            if self._state == "autofocus" and self._run is not None:
+                self._publish()
 
     def _publish(self, *, status: bool = False) -> dict[str, Any]:
         """Lock held: a new revision of the record, on the ``sequence`` event."""
         self._revision += 1
         self._record = self._build_record()
         self._hub._publish("sequence", dict(self._record))
+        active = self._state in ACTIVE
+        if active != self._awake:
+            # Wave 6b: the OS sleep assertion follows the run (want() never blocks).
+            self._awake = active
+            keep = getattr(self._hub, "keep_awake", None)
+            if keep is not None:
+                name = self._record.get("object_name") or "Unknown"
+                keep.want(f"A sequence is running ({name})." if active else None)
         if status:
             self._hub._publish_status()
         return dict(self._record)
@@ -586,6 +645,8 @@ class SequenceService:
                 )
             self._run = run
             self._last_result = None
+            self._wrapup = None
+            self._last_passes = []
             self._state = "waiting" if start_at is not None else "running"
             run.thread = threading.Thread(
                 target=self._thread_main, args=(run,), name="argos-sequence", daemon=True
@@ -627,7 +688,7 @@ class SequenceService:
             raise ApiError(
                 400,
                 "invalid_argument",
-                f"The start time {_hhmm(when)} is more than 24 h ahead.",
+                f"The start time {_day_hhmm(when)} is more than 24 h ahead.",
             )
         if when <= now:
             return None  # already passed: the plan's start_in_past warning, start now
@@ -1393,6 +1454,12 @@ class SequenceService:
         saved = utc_iso()
         with hub._lock:
             run.frames_saved += 1
+            run.by_type[spec.frame_type] = run.by_type.get(spec.frame_type, 0) + 1
+            if spec.frame_type == "Light" and run.exposure_started_mono is not None:
+                # Monotonic, never the injectable clock: one more clock() call per sub
+                # would shift a scripted clock and every later DATE-OBS (parity tests).
+                duration = time.monotonic() - run.exposure_started_mono
+                run.costs.append((duration, float(spec.exposure_s)))
             run.last_frame_utc = utc_iso(start)
             run.last_saved_utc = saved
             run.last_frame_name = path.name
@@ -1449,6 +1516,7 @@ class SequenceService:
                 generation=generation,
                 run_root=run_root,
                 origin="sequence",
+                filter_name=filter_actual,  # its read-back FILTER: its curve (S49)
             )
         )
 
@@ -1521,12 +1589,24 @@ class SequenceService:
             self._log("info", "Sequence: autofocus skipped — the wheel is on the Dark slot.")
             return
         run.af_done.clear()
+        # Wave 6b: the pass on the run strip (``autofocus_passes``).
+        af_pass: dict[str, Any] = {
+            "started_utc": utc_iso(),
+            "ended_utc": None,
+            "state": "running",
+            "position": None,
+            "hfd_px": None,
+            "message": None,
+            "frames_done": run.frames_done,
+        }
         with hub._lock:
             self._close_segment(run)
+            run.af_passes.append(af_pass)
             self._state = "autofocus"
             self._publish(status=True)
         self._log("cmd", "Sequence: autofocus…")
         exposure = 0.0
+        not_started: str | None = None
         try:
             started = hub.start_autofocus(for_sequence=True)
             exposure = float((started.get("params") or {}).get("exposure_s") or 0.0)
@@ -1534,6 +1614,7 @@ class SequenceService:
                 run.autofocus_runs += 1
         except ApiError as exc:
             self._log("warning", f"Sequence: autofocus not started — {exc.message}")
+            not_started = exc.message
             run.af_done.set()
         if run.stop.is_set():
             hub.stop_autofocus()  # stopped while the sweep was starting
@@ -1544,16 +1625,36 @@ class SequenceService:
             hub.stop_autofocus()
             run.af_done.wait(30.0)
             if not run.stop.is_set():
+                self._end_pass(af_pass, "timeout", f"No end within {bound:.0f} s.")
                 raise _RunEnded(
                     "autofocus_timeout",
                     f"Autofocus did not end within {bound:.0f} s — sequence aborted.",
                 )
+        if not_started is not None:
+            self._end_pass(af_pass, "not_started", not_started)
+        else:
+            self._end_pass(af_pass, None, None)
         with hub._lock:
             run.segment_start = time.monotonic()
             run.starts.clear()
             if self._state == "autofocus":
                 self._state = "pausing" if not run.gate.is_set() else "running"
                 self._publish(status=True)
+
+    def _end_pass(self, af_pass: dict[str, Any], state: str | None, message: str | None) -> None:
+        """Record how a mid-run pass ended (from the autofocus record unless *state*)."""
+        hub = self._hub
+        with hub._lock:
+            record = hub._autofocus_record()
+            best = record.get("best") or {}
+            af_pass.update(
+                ended_utc=utc_iso(),
+                state=state or str(record.get("state") or "failed"),
+                position=record.get("position") if state is None else None,
+                hfd_px=best.get("hfd_px") if state is None else None,
+                message=message if state is not None else record.get("message"),
+            )
+            self._publish()
 
     def on_autofocus_end(self) -> None:
         """The hub's autofocus ended (any outcome): wake a run waiting for it."""
@@ -1568,6 +1669,11 @@ class SequenceService:
         """``_on_seq_finished`` (acquisition_engine.py:889-904)."""
         hub = self._hub
         ended = utc_iso()
+        # Wave 6b: the last sub's point belongs to the run (its wrap-up, its rules).
+        wait_s = 2.0 if reason == "shutdown" else self.photometry_wait_s
+        deadline = time.monotonic() + wait_s
+        while not hub.photometry.idle() and time.monotonic() < deadline:
+            time.sleep(0.05)
         result = {
             "completed": bool(completed),
             "reason": "completed" if completed else reason,
@@ -1586,6 +1692,8 @@ class SequenceService:
                 self._run = None
             self._state = "idle"
             self._last_result = result
+            self._last_plan = run.plan
+            self._last_passes = [dict(p) for p in run.af_passes]
             self._publish(status=True)
         if hub.focuser.record().get("locked_by") == "sequence":
             hub.focuser.lock(None)
@@ -1603,6 +1711,154 @@ class SequenceService:
             level = "info" if reason in ("stopped", "shutdown") else "error"
             self._log(level, f"Sequence stopped: {message}")
             hub.set_activity("Sequence stopped", source="sequence", topic="sequence", log=False)
+        if reason != "shutdown":
+            try:
+                self._wrap_up(run, result)
+            except Exception:  # the outcome is already published; never fail the end
+                logger.exception("Wrap-up failed")
+
+    # -- the wrap-up (wave 6b) -----------------------------------------------------------
+
+    def _calibration(self, plan: SequencePlan, run: _Run | None, darks: int, biases: int):
+        """Darks and biases matching *plan*'s Light steps, with tonight's counts."""
+        from argos.server import wrapup
+
+        hub = self._hub
+        started = parse_utc(run.started_utc) if run is not None and run.started_utc else None
+        tonight = _night_frames(hub._sessions_root(), _night_start(started or self.clock()))
+        with hub._lock:
+            limits = hub._camera_limits
+            dark_slot = bool(hub.wheel.connected and hub.wheel.has_dark_slot)
+        if run is not None:
+            overhead = wrapup.overhead_s(run.costs)
+            cadence = self._observed_cadence(run)
+        else:
+            overhead = cadence = None
+        return wrapup.calibration(
+            plan,
+            tonight=tonight,
+            overhead=overhead,
+            cadence=cadence,
+            min_exposure_s=limits.exposure_min_s if limits is not None else None,
+            dark_slot=dark_slot,
+            darks=darks,
+            biases=biases,
+        )
+
+    def _wrap_up(self, run: _Run, result: dict[str, Any]) -> None:
+        """Build the wrap-up after the end (and its end action), then re-send the record."""
+        from argos.server import wrapup
+
+        hub = self._hub
+        attention = getattr(hub, "attention", None)
+        summary: dict[str, Any] = {}
+        if attention is not None:
+            attention.flush(2.0)  # the end's own items (run_error, run_ended) are in
+            summary = attention.run_summary(run.run_id)
+        try:
+            points = wrapup.point_counts(hub.photometry.live_record())
+        except Exception:
+            logger.warning("Wrap-up: the live curves could not be read", exc_info=True)
+            points = {"target": 0, "all": 0, "flagged": 0}
+        root = result.get("run_root")
+        with hub._lock:
+            mount_slot = hub._slots["mount"]
+            mount_connected = mount_slot.state in ("connected", "busy")
+            mount = hub._mount_state
+        record = {
+            "run_id": run.run_id,
+            "object_name": str(run.plan.object_name or "") or "Unknown",
+            "outcome": dict(result),
+            "started_utc": run.started_utc,
+            "ended_utc": result["ended_utc"],
+            "frames": {
+                "saved": run.frames_saved,
+                "total": run.frames_total,
+                "by_type": dict(run.by_type),
+            },
+            "points": {
+                **points,
+                "frames_measured": int(summary.get("frames_measured", 0)),
+                "frames_skipped": summary.get(
+                    "frames_skipped", {"field_lost": 0, "lock_lost": 0, "other": 0}
+                ),
+            },
+            "attention": {
+                "critical": int(summary.get("critical", 0)),
+                "attention": int(summary.get("attention", 0)),
+                "info": int(summary.get("info", 0)),
+                "items": list(summary.get("items", [])),
+            },
+            "run_root": root,
+            "run_folder": Path(root).name if root else None,
+            "run_bytes": wrapup.folder_bytes(root),
+            "mount": {
+                "connected": mount_connected,
+                "state": mount.state if mount_connected else None,
+                "tracking": bool(mount.tracking) if mount_connected else None,
+                "end_action": run.plan.on_complete,
+            },
+            "calibration": self._calibration(
+                run.plan, run, wrapup.DEFAULT_DARKS, wrapup.DEFAULT_BIASES
+            ),
+        }
+        with hub._lock:
+            if self._run is None and self._last_result is result:
+                self._wrapup = record
+                self._publish()
+
+    def wrapup(self) -> dict[str, Any]:
+        """``GET /api/sequence/wrapup``."""
+        with self._hub._lock:
+            record = self._wrapup
+        if record is None:
+            raise ApiError(404, "not_found", "No run has ended yet.")
+        return dict(record)
+
+    def calibration_plan(self, darks: int | None = None, biases: int | None = None):
+        """``POST /api/sequence/calibration-plan``: the draft takes tonight's darks and biases."""
+        from argos.server import wrapup
+        from argos.server.sequence_plan import PlanBody
+
+        hub = self._hub
+        darks = wrapup.DEFAULT_DARKS if darks is None else int(darks)
+        biases = wrapup.DEFAULT_BIASES if biases is None else int(biases)
+        if not (0 <= darks <= 999 and 0 <= biases <= 999) or darks + biases == 0:
+            raise ApiError(400, "invalid_argument", "Counts: 0-999 darks and biases, not both 0.")
+        if self.active:
+            raise ApiError(409, "run_active", "The plan is locked while the sequence runs.")
+        with hub._lock:
+            plan = self._last_plan
+        if plan is None:
+            plan = self._plan_for_run()  # the draft (its 400 is passed on)
+        if not wrapup.light_series(plan):
+            raise ApiError(
+                400,
+                "invalid_argument",
+                "No Light step to match: the calibration frames follow the Light steps.",
+            )
+        calib = self._calibration(plan, None, darks, biases)  # exposures and gains
+        body = wrapup.calibration_plan(plan, calib, darks=darks, biases=biases)
+        previous = hub.plan.record().get("plan")
+        record = hub.plan.put(PlanBody.model_validate(body))
+        self._log(
+            "cmd",
+            f"Calibration plan prepared: {darks} darks and {biases} biases per Light series "
+            "(not started).",
+        )
+        return {"plan": record, "replaced": previous}
+
+    def target_radec(self) -> tuple[float, float] | None:
+        """The running plan's target (hours, degrees), for the altitude rule; None for a
+        run without Light frames (the preflight's "Calibration frames only: no altitude
+        needed": the wrap-up's darks at dawn raised a false altitude alert)."""
+        with self._hub._lock:
+            run = self._run
+        if run is None or not any(
+            s.enabled and int(s.count or 0) > 0 and s.frame_type == "Light" for s in run.plan.steps
+        ):
+            return None
+        return self._target_radec(run.plan)
 
     def _end_action(self, action: str) -> None:
         """``_run_on_complete_action``: only on full completion, logged."""
@@ -1821,7 +2077,7 @@ class SequenceService:
                     add(
                         "start_at",
                         "block",
-                        f"The start time {_hhmm(when)} is more than 24 h ahead.",
+                        f"The start time {_day_hhmm(when)} is more than 24 h ahead.",
                     )
                 elif when <= now:
                     add(
@@ -1858,13 +2114,7 @@ class SequenceService:
             checks.append(disk)
             self._check_calibration(add, plan, start)
             self._check_lid(add, plan)
-            # PROPOSAL §7: lid-closed sleep is out of software reach; say so.
-            add(
-                "sleep",
-                "ok",
-                "Keep the computer awake and its lid open for the whole run: a sleeping "
-                "computer stops the run.",
-            )
+            self._check_sleep(add)
         else:
             needed, free = 0, None
         order = {"block": 0, "note": 1, "ok": 2}
@@ -2173,6 +2423,27 @@ class SequenceService:
                 "ok",
                 "Darks, flats and biases matching the Light steps this night.",
                 details,
+            )
+
+    def _check_sleep(self, add: Callable[..., None]) -> None:
+        """Keep-awake (wave 6b); lid-closed sleep is out of software reach (PROPOSAL §7)."""
+        keep = getattr(self._hub, "keep_awake", None)
+        works, method, why = keep.capability() if keep is not None else (False, None, None)
+        if works:
+            add(
+                "sleep",
+                "ok",
+                f"The computer is kept awake during the run ({method}). Keep its lid open: "
+                "a closed lid still sleeps most laptops.",
+                {"method": method},
+            )
+        else:
+            add(
+                "sleep",
+                "note",
+                f"The computer is not kept awake{f': {why}' if why else ''}. Keep it awake "
+                "and its lid open for the whole run: a sleeping computer stops the run.",
+                {"method": None, "reason": why},
             )
 
     def _check_lid(self, add: Callable[..., None], plan: SequencePlan) -> None:

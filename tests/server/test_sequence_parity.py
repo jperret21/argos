@@ -40,6 +40,7 @@ from tests.server.conftest import AUTH, science_client, wait_for  # noqa: E402
 from tests.server.test_field import FakeAstap  # noqa: E402
 from tests.server.test_photometry import (  # noqa: E402
     EGAIN,
+    requires_s49_core,
     OBJECT,
     SITE,
     WCS_FIELDS,
@@ -259,6 +260,7 @@ def without_time(path: Path) -> dict:
     return data
 
 
+@requires_s49_core  # GUARD: the run's CSV names and curve keys carry the filter (S49)
 def test_a_sequence_gives_the_qt_files_and_points(make_client, tmp_path):
     paths = frames(tmp_path / "frames", n=14)
     count = len(paths) - 1  # frame 0 identifies the field first, on the server

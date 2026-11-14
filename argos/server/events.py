@@ -33,7 +33,7 @@ import asyncio
 import logging
 import threading
 from collections import deque
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +159,10 @@ class EventBus:
         self._events: set[EventSubscriber] = set()
         self._frames: set[FrameSubscriber] = set()
         self._latest_frame: bytes | None = None
+        #: Wave 6b: in-process observers of every event (the attention rules). A tap
+        #: runs on the publishing thread, often under the hub lock: it must only
+        #: queue the event (never block, never take another lock).
+        self._taps: tuple[Callable[[str, dict[str, Any]], None], ...] = ()
 
     # -- lifecycle (loop thread) ------------------------------------------
 
@@ -177,8 +181,18 @@ class EventBus:
 
     # -- publishing (any thread) -----------------------------------------
 
+    def add_tap(self, tap: Callable[[str, dict[str, Any]], None]) -> None:
+        """Observe every published event, before any client (wave 6b, attention)."""
+        with self._lock:
+            self._taps = (*self._taps, tap)
+
     def publish(self, kind: str, seq: int | None, payload: dict[str, Any]) -> None:
         """Queue one JSON event (a snapshot kind with its *seq*, or ``log``)."""
+        for tap in self._taps:
+            try:
+                tap(kind, payload)
+            except Exception:  # an observer never breaks publishing
+                logger.exception("Event tap failed on %s", kind)
         self._call_soon(self._dispatch_event, kind, seq, payload)
 
     def publish_frame(self, frame: bytes) -> None:

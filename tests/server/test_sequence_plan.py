@@ -772,3 +772,59 @@ def test_plan_files_get_a_plain_file_s_mode_and_export_needs_its_folder(plan_cli
     assert not (sessions / "a").exists()
     draft = plan_client.hub.plan._path
     assert draft.stat().st_mode & 0o777 == expected
+
+
+def test_light_steps_through_two_filters_are_a_warning_s49(plan_client):
+    """Release S49: each filter gets its own light curve and CSV; the plan says so."""
+    steps = [
+        {"frame_type": "Light", "filter_name": "IR", "count": 5},
+        {"frame_type": "Dark", "filter_name": "Dark", "count": 5},
+    ]
+    assert not any(
+        i["code"] == "light_filters" for i in _put(plan_client, _plan(steps=steps))["issues"]
+    )
+    steps.append({"frame_type": "Light", "filter_name": "LP", "count": 5})
+    record = _put(plan_client, _plan(steps=steps))
+    (issue,) = [i for i in record["issues"] if i["code"] == "light_filters"]
+    assert (issue["step"], issue["field"], issue["level"]) == (None, "filter_name", "warning")
+    assert issue["message"] == (
+        "Light steps use 2 filters (IR and LP): each star gets one light curve and one "
+        "CSV per filter."
+    )  # the Qt editor's words (release sequencer.light_filters_warning)
+    steps[2]["enabled"] = False
+    assert not any(
+        i["code"] == "light_filters" for i in _put(plan_client, _plan(steps=steps))["issues"]
+    )
+
+
+def _core_light_filters_warning():
+    """GUARD (pending merge of release/0.5.0): the core's S49 plan warning, or None."""
+    from argos.core.imaging import sequencer
+
+    return getattr(sequencer, "light_filters_warning", None)
+
+
+@pytest.mark.skipif(
+    _core_light_filters_warning() is None,
+    reason="the core has no S49 yet (release/0.5.0 not merged)",
+)
+def test_the_two_filter_warning_is_the_qt_editors_s49():
+    """The server's ``light_filters`` issue says what the Qt sequence panel says."""
+    core = _core_light_filters_warning()
+    cases = [
+        [("Light", "IR", 5, True)],
+        [("Light", "IR", 5, True), ("Light", "LP", 5, True)],
+        [("Light", "IR", 5, True), ("Light", "LP", 5, False), ("Dark", "Dark", 5, True)],
+        [("Light", "V", 5, True), ("Light", "B", 5, True), ("Light", "V", 3, True)],
+        [("Light", "Ha", 5, True), ("Light", "ha", 5, True)],  # one token: one curve
+        [("Light", "", 5, True), ("Light", "IR-cut", 5, True), ("Light", "LRGB", 0, True)],
+        [("Flat", "IR", 5, True), ("Light", "LP", 5, True)],
+    ]
+    for steps in cases:
+        plan = SequencePlan(
+            steps=[
+                SequenceStep(frame_type=t, filter_name=f, count=n, enabled=on)
+                for t, f, n, on in steps
+            ]
+        )
+        assert sp.light_filters_warning(plan_to_dict(plan)) == core(plan), steps
