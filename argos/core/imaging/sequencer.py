@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterator
 
-from argos.core.imaging.fits_writer import IMAGE_TYPE_MAP
+from argos.core.imaging.fits_writer import IMAGE_TYPE_MAP, filter_token
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +173,35 @@ def total_frames(plan: SequencePlan) -> int:
     """Return the total number of frames the plan will shoot."""
     per_pass = sum(s.count for s in plan.steps if s.enabled and s.count > 0)
     return per_pass * max(1, plan.repeat)
+
+
+def light_filters(plan: SequencePlan) -> list[str]:
+    """The filters the plan's enabled Light steps expose through, in step order.
+
+    Two names that give one filter token (``filter_token``) count once: they
+    land in one light curve.
+    """
+    seen: dict[str, str] = {}
+    for step in plan.steps:
+        if step.enabled and step.count > 0 and step.frame_type == "Light":
+            seen.setdefault(filter_token(step.filter_name), step.filter_name or "no filter")
+    return list(seen.values())
+
+
+def light_filters_warning(plan: SequencePlan) -> str | None:
+    """S49: the plan's Light steps use two filters or more, or None.
+
+    Each star then gets one light curve and one CSV per filter (the filter
+    in the file name), its comparisons vetted per filter.
+    """
+    names = light_filters(plan)
+    if len(names) < 2:
+        return None
+    listed = ", ".join(names[:-1]) + f" and {names[-1]}"
+    return (
+        f"Light steps use {len(names)} filters ({listed}): each star gets one light curve "
+        "and one CSV per filter."
+    )
 
 
 #: Per-frame overhead (download + save + bookkeeping) used by the estimate.

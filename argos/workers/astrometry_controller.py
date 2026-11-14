@@ -9,6 +9,9 @@ frame is plate-solved so the page doesn't grow ad-hoc solve state:
   moved more than ``astrometry.live_resolve_arcmin``, or ``astrometry.live_resolve_s``
   elapsed (between solves a tracked grid stays valid, so we don't thrash);
 - **a failed solve keeps the last good WCS** — the grid never blanks on one miss;
+- **a wrong solution is refused** (S50): a camera frame's solution whose plate
+  scale is more than 1 % from the session's first good solve keeps the last
+  good WCS, as a failed solve does;
 - live solves use a small search radius + bounded timeout and **skip the slow
   whole-sky blind retry** (via :func:`build_solve_settings`), so the cadence can't
   stall the UI.
@@ -22,6 +25,7 @@ Signals:
 from __future__ import annotations
 
 import logging
+import math
 import time
 
 import numpy as np
@@ -42,6 +46,21 @@ logger = logging.getLogger(__name__)
 #: ``(ra_hours, dec_deg)`` of a pointing or target, or ``None``.
 RaDec = tuple[float, float]
 
+#: S50: a camera frame's solution whose plate scale differs from the session's
+#: first good solve by more than this fraction is refused. The owner's 270
+#: solves span 0.3 % around their night's first; the one wrong match was 3.4 % off.
+SCALE_TOLERANCE = 0.01
+
+
+def green_scale_arcsec(wcs) -> float | None:
+    """Arcseconds per green px of a solution (its CD matrix), or None."""
+    try:
+        a, b, c, d = (float(v) for v in wcs.cd)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    det = abs(a * d - b * c)
+    return math.sqrt(det) * 3600.0 if det > 0 and math.isfinite(det) else None
+
 
 class AstrometryController(QObject):
     """Owns the live plate-solve lifecycle + auto-solve policy."""
@@ -60,6 +79,13 @@ class AstrometryController(QObject):
         self._last_solve_monotonic = 0.0
         self._last_solve_radec: RaDec | None = None  # mount pointing at the last attempt
         self._pending_target: RaDec | None = None  # target for the in-flight solve's overlay
+        #: S50: the in-flight solve is of a camera frame (an opened FITS is not gated).
+        self._pending_gate = True
+        #: S50: the first good solve's scale (″/green px) and frame geometry.
+        self._scale_ref: float | None = None
+        self._scale_ref_shape: tuple[int, int] | None = None
+        #: S48: the photometry lost the field: the next frame is due at once.
+        self._resolve_due = False
 
     # ------------------------------------------------------------------
     # State
@@ -88,6 +114,20 @@ class AstrometryController(QObject):
     def auto(self) -> bool:
         return self._auto
 
+    @property
+    def scale_reference(self) -> float | None:
+        """The session's first good solve's plate scale (″ per green px), S50."""
+        return self._scale_ref
+
+    def reset_scale_reference(self) -> None:
+        """Another camera or telescope: the next good solve is the new reference (S50)."""
+        self._scale_ref = None
+        self._scale_ref_shape = None
+
+    def make_due(self) -> None:
+        """The photometry lost the field (S48): the next frame is solved at once."""
+        self._resolve_due = True
+
     def invalidate(self) -> None:
         """Drop the current WCS — a slew/goto makes the previous solution stale.
 
@@ -108,14 +148,18 @@ class AstrometryController(QObject):
         green_shape: tuple[int, int],
         mount_radec: RaDec | None = None,
         target_radec: RaDec | None = None,
+        *,
+        gate_scale: bool = True,
     ) -> bool:
         """Force a solve (the manual button) — thorough settings, with blind retry.
 
-        Returns ``False`` if a solve is already running.
+        ``gate_scale`` False for an opened FITS (another instrument may have
+        another scale): its solution neither sets nor is held to the camera's
+        reference (S50). Returns ``False`` if a solve is already running.
         """
         if self.is_busy():
             return False
-        self._start(raw, green_shape, mount_radec, target_radec, live=False)
+        self._start(raw, green_shape, mount_radec, target_radec, live=False, gate=gate_scale)
         return True
 
     def on_new_frame(
@@ -124,16 +168,18 @@ class AstrometryController(QObject):
         green_shape: tuple[int, int],
         mount_radec: RaDec | None = None,
         target_radec: RaDec | None = None,
+        *,
+        gate_scale: bool = True,
     ) -> None:
         """Auto-solve hook — called per processed frame. No-op unless armed + due."""
         if not self._auto or self.is_busy() or raw is None:
             return
         if not self._due(mount_radec):
             return
-        self._start(raw, green_shape, mount_radec, target_radec, live=True)
+        self._start(raw, green_shape, mount_radec, target_radec, live=True, gate=gate_scale)
 
     def _due(self, mount_radec: RaDec | None) -> bool:
-        if self._wcs is None:
+        if self._wcs is None or self._resolve_due:
             return True
         if (time.monotonic() - self._last_solve_monotonic) >= float(
             self._cfg("astrometry.live_resolve_s", 20.0)
@@ -180,11 +226,14 @@ class AstrometryController(QObject):
         target_radec: RaDec | None,
         *,
         live: bool,
+        gate: bool = True,
     ) -> None:
         green = extract_plane(raw, VIEW_G)
         settings = build_solve_settings(self._cfg, green_shape, live=live, mount_radec=mount_radec)
         self._green_shape = green_shape
         self._pending_target = target_radec
+        self._pending_gate = gate
+        self._resolve_due = False
         self._last_solve_monotonic = time.monotonic()
         self._last_solve_radec = mount_radec
         self.state.emit("Plate-solving…")
@@ -219,9 +268,44 @@ class AstrometryController(QObject):
         if wcs is None:
             self.failed.emit("could not build WCS from the solution")
             return
+        refusal = self._scale_refusal(wcs)
+        if refusal is not None:
+            # S50: a wrong match (XX Cyg 2026-09-07, 3.4 % off) is worse than no
+            # new solution: keep the last good WCS, as a failed solve does.
+            logger.warning("Solution refused: %s", refusal)
+            self.failed.emit(f"solution refused — {refusal}")
+            if self._wcs is not None:
+                self.state.emit("Solution refused — keeping last WCS")
+            return
         self._wcs = wcs
         overlay = overlay_for(wcs, self._green_shape, self._cfg, target_radec=self._pending_target)
         self.solved.emit(wcs, overlay, self._summary(result))
+
+    def _scale_refusal(self, wcs) -> str | None:
+        """Why a camera frame's solution is refused (S50), or None to accept it.
+
+        The reference is the session's first good solve (the profile's nominal
+        scale is 1.8 % above every measured one), restarted by another frame
+        geometry or :meth:`reset_scale_reference`. An opened FITS is not gated.
+        """
+        if not self._pending_gate:
+            return None
+        scale = green_scale_arcsec(wcs)
+        if scale is None:
+            return None
+        if self._scale_ref is None or self._scale_ref_shape != self._green_shape:
+            self._scale_ref = scale
+            self._scale_ref_shape = self._green_shape
+            return None
+        deviation = scale / self._scale_ref - 1.0
+        if abs(deviation) <= SCALE_TOLERANCE:
+            return None
+        # Reported per full-res px, as the solve summary is.
+        return (
+            f"plate scale {scale / 2.0:.3f}″/px is {abs(deviation) * 100.0:.1f} % "
+            f"{'below' if deviation < 0 else 'above'} this session's {self._scale_ref / 2.0:.3f}″/px "
+            "(a wrong match); the previous solution is kept"
+        )
 
     def _summary(self, result) -> str:
         bits = [f"Solved — RA {result.ra_hours:.4f}h", f"Dec {result.dec_deg:+.4f}°"]

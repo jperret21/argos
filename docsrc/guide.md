@@ -436,10 +436,13 @@ ensemble described in {doc}`differential_photometry`.
 
 Live measurements and target sets are also kept under `<sessions>/targets/`:
 outside a sequence, each live curve has its own CSV,
-`<object>_<UTC start>_<star>.csv`, so measuring an object again never
-overwrites an earlier curve.
+`<object>_<UTC start>_<filter>_<star>.csv`, so measuring an object again never
+overwrites an earlier curve. Each star has one curve per filter (the filter as
+frame names spell it: `ir`, `lp`, `v`, `clear` for none); a run's curves are
+`photometry/<role>_<object>_<filter>_<star>.csv`, and the Plan warns when its
+Light steps use two filters.
 A batch re-measurement (**Re-run subs…**) writes its per-star CSVs, named
-`<role>_<object>_<star>.csv`, and the target set it used into a new
+`<role>_<object>_<filter>_<star>.csv`, and the target set it used into a new
 `photometry_rerun_<UTC>/` folder of the session; it measures only light frames
 (by `IMAGETYP`), skips frames without `DATE-OBS`, and a cancelled run writes
 nothing. A frame on which the field has jumped away from the apertures (a

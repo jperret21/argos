@@ -238,7 +238,7 @@ class FITSWriter:
         del exposure_start  # precise time belongs in DATE-OBS, not the basename
         obj = _sanitize(object_name) or "unknown"
         typ = _sanitize(image_type.replace(" Frame", "")).lower() or "light"
-        filt = _sanitize(FILTER_ABBREV.get(filter_name, filter_name)).lower() or "clear"
+        filt = filter_token(filter_name)
         exposure_ms = max(0, round(float(exposure_time) * 1000.0))
         gain_tag = f"_g{int(gain):03d}" if gain is not None else ""
         return f"{obj}_{filt}_{typ}_e{exposure_ms:06d}ms{gain_tag}_{frame_index:05d}.fit"
@@ -300,6 +300,16 @@ class FITSWriter:
 # --------------------------------------------------------------------------- #
 # Helpers                                                                      #
 # --------------------------------------------------------------------------- #
+
+
+def filter_token(filter_name: str | None) -> str:
+    """The filter as frame and curve file names spell it (``ir``, ``lp``, ``v``…).
+
+    The abbreviation of :data:`FILTER_ABBREV`, sanitised, lower case; ``clear``
+    for no filter. One light curve per (star, filter token) (S49).
+    """
+    name = str(filter_name or "").strip()
+    return _sanitize(FILTER_ABBREV.get(name, name)).lower() or "clear"
 
 
 def _sanitize(s: str) -> str:

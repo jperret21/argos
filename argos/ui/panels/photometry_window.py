@@ -373,6 +373,21 @@ class PhotometryWindow(QWidget):
         if not any(lc.role == "target" for lc in curves):
             QMessageBox.information(self, "Export AAVSO", "No target points to export.")
             return
+        # S53: a report has one band (FILT); since S49 a run through two filters
+        # keeps one curve per (star, filter), and its target and check curves were
+        # all written under the one FILT code.
+        tokens = sorted(
+            {lc.filter_name for lc in curves if lc.filter_name and lc.role in ("target", "check")}
+        )
+        if len(tokens) > 1:
+            QMessageBox.warning(
+                self,
+                "Export AAVSO",
+                f"These curves are in {len(tokens)} filters ({', '.join(tokens)}), and an AAVSO "
+                "report has one band. Open one filter's target CSV in Analyze "
+                "(target_<object>_<filter>_<star>.csv) and export it from there.",
+            )
+            return
         path, _ = QFileDialog.getSaveFileName(
             self, "Export AAVSO", str(self._export_dir() / "aavso.txt"), "Text (*.txt)"
         )

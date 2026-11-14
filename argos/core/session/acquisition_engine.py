@@ -49,7 +49,7 @@ from argos.core.config import Config, observing_site
 from argos.core.hardware import active as hardware
 from argos.core.imaging import sensor_models
 from argos.core.imaging.astrometry_session import field_geometry
-from argos.core.imaging.fits_writer import FITSWriter, FrameContext
+from argos.core.imaging.fits_writer import FITSWriter, FrameContext, filter_token
 from argos.core.imaging.green import green_plane
 from argos.core.imaging.metrics import detect_stars, frame_metrics, measure_star_at
 from argos.core.imaging.platesolve import angular_separation_deg
@@ -61,7 +61,14 @@ from argos.core.photometry.airmass import (
     julian_date,
 )
 from argos.core.photometry.aperture import measure_aperture
-from argos.core.photometry.lightcurve import LcPoint, LightCurve
+from argos.core.photometry.lightcurve import (
+    LcPoint,
+    LightCurve,
+    curve_key,
+    curves_of_filter,
+    run_curve_csv_name,
+    series_label,
+)
 from argos.core.photometry.params import (
     DEFAULT_FWHM,
     PhotometryParams,
@@ -69,7 +76,12 @@ from argos.core.photometry.params import (
     measure_frame,
 )
 from argos.core.photometry.quality import comparison_quality_report, save_comparison_quality_report
-from argos.core.photometry.tracking import ApertureTracker, TrackedWCS, select_tracking_anchors
+from argos.core.photometry.tracking import (
+    ApertureTracker,
+    TrackedWCS,
+    anchors_seen,
+    select_tracking_anchors,
+)
 from argos.core.photometry.uncertainty import apply_systematic_floor, estimate_systematic_floor
 from argos.core.session.device_session import DeviceSession
 from argos.core.session.diagnostics import SessionDiagnostics
@@ -84,6 +96,9 @@ from argos.workers.sequence_worker import SequenceWorker
 logger = logging.getLogger(__name__)
 
 _SOFTWARE = SOFTWARE_ID
+#: S48: an anchor is seen when its aperture at the tracked position has this SNR
+#: (S35's "seen" threshold); the lock holds when half the anchors are seen (S43).
+_LOCK_MIN_SNR = 5.0
 
 
 def _is_light_frame(frame_type: str) -> bool:
@@ -112,18 +127,22 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _new_preview_csv(folder: Path, obj: str, tag: str, now: datetime, taken=()) -> Path:
-    """``<folder>/<object>_<YYYYMMDDTHHMMSSZ>_<star>.csv``, a file not yet used.
+def _new_preview_csv(
+    folder: Path, obj: str, tag: str, now: datetime, taken=(), token: str = ""
+) -> Path:
+    """``<folder>/<object>_<YYYYMMDDTHHMMSSZ>_<filter>_<star>.csv``, a file not yet used.
 
-    The start time sits between object and star so that Review still finds the
-    object's set (``<object>.json``, the longest stem prefix) and the star (the
-    stem's AUID or name suffix). Two curves started in the same second take
-    ``-2``, ``-3``… on the time.
+    The start time and the filter token (S49) sit between object and star so
+    that Review still finds the object's set (``<object>.json``, the longest
+    stem prefix) and the star (the stem's AUID or name suffix). Two curves
+    started in the same second take ``-2``, ``-3``… on the time.
     """
     stamp = now.strftime("%Y%m%dT%H%M%SZ")
     count = 1
     while True:
         mark = stamp if count == 1 else f"{stamp}-{count}"
+        if token:
+            mark = f"{mark}_{token}"
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in f"{obj}_{mark}_{tag}")
         path = folder / f"{safe}.csv"
         if path not in taken and not path.exists():
@@ -330,6 +349,12 @@ class AcquisitionEngine(QObject):
         # new curve (object change, role change, restart) gets a new file and
         # never rewrites an earlier one.
         self._preview_csvs: dict[str, Path] = {}
+        # S49: the filter of the frame in hand (sequence sub, live frame, opened
+        # FITS) and the first filter measured since the store was cleared (its
+        # vetting report keeps the name photometry_quality.json).
+        self._last_filter = ""
+        self._primary_filter: str | None = None
+        self._measured_filter = "clear"  # the token of the frame being measured
         # Set when a frame's uncertainty floor changed earlier points: the
         # store is re-rendered once at the end of that frame, not per star.
         self._curves_dirty = False
@@ -351,6 +376,10 @@ class AcquisitionEngine(QObject):
         # solves, so apertures and catalog markers stay on the stars during an
         # alt-az sequence. Rebuilt on a fresh solve or a target-set change.
         self._tracker: ApertureTracker | None = None
+        self._tracker_anchor_stars: list = []  # the set's stars the tracker steers on (S48)
+        # (raw solve, tracked solution frozen at a set change): what a tracker
+        # rebuilt between two solves builds on (S52).
+        self._rebase: tuple | None = None
 
         # Last sequence directory (for the photometry setup window).
         self._last_sequence_dir: Path | None = None
@@ -435,6 +464,7 @@ class AcquisitionEngine(QObject):
         """Drop the session's curve store (object change). CSVs stay on disk."""
         self._lightcurves.clear()
         self._preview_csvs.clear()
+        self._primary_filter = None
         self._comparison_quality_report = None
         self.comparison_quality_updated.emit({})
         self.curves_changed.emit()
@@ -653,6 +683,7 @@ class AcquisitionEngine(QObject):
             self._last_exposure_mid = start_dt + (end_dt - start_dt) / 2
         except (TypeError, ValueError):
             self._last_exposure_mid = None
+        self._last_filter = self._live_filter(used, params)
         # Publish the (possibly decimated) preview; flag it so plate-solve /
         # photometry skip half-quality frames (their plate scale is wrong).
         self._last_raw_decimated = preview_arr.shape != full_arr.shape
@@ -699,8 +730,20 @@ class AcquisitionEngine(QObject):
                 # would be a no-op here because LIVE owns the camera).
                 self._camera_service.release(CameraState.SINGLE)
 
+    def _live_filter(self, used, params) -> str:
+        """The filter a live frame was exposed through (S49): the wheel's settled
+        slot when a wheel reports one, else the form's filter for that frame."""
+        session = self._session
+        if session.filterwheel is not None and not session.filter_moving and session.filter_slot:
+            return str(session.filter_slot)
+        tag = used.tag if used is not None and getattr(used, "tag", None) is not None else params
+        return str(getattr(tag, "filter_name", "") or "")
+
     def _on_camera_will_disconnect(self) -> None:
         """The session is about to drop the camera — stop using it first."""
+        # Another camera or telescope may follow: its first good solve is the
+        # new plate-scale reference (S50).
+        self._astrometry.reset_scale_reference()
         state = self._camera_service.state
         if state in (CameraState.LIVE, CameraState.SINGLE):
             self._camera_service.release(state)  # stops the preview loop
@@ -827,6 +870,7 @@ class AcquisitionEngine(QObject):
         self.invalidate_astrometry()
         self._last_exposure_mid = fits_exposure_mid(header)
         self._file_egain = frame_egain(header, self._cfg("camera.egain_table", {}))
+        self._last_filter = str(header.get("FILTER", "") or "").strip()
         self._active_run_root = None
         self.ingest_frame(frame)
         self._last_raw_from_file = True
@@ -852,6 +896,8 @@ class AcquisitionEngine(QObject):
                 self._write_active_selection(target_set)
             except OSError as exc:
                 self.log_message.emit("WARN", f"Save run targets: {exc}")
+        if record is not None:
+            self._last_filter = str(getattr(record, "filter_name", "") or "")  # S49
         if record is not None and getattr(record, "timestamp", None):
             try:
                 start = datetime.fromisoformat(str(record.timestamp).replace("Z", "+00:00"))
@@ -1118,7 +1164,11 @@ class AcquisitionEngine(QObject):
         # quality previews are skipped — their plate scale would poison the solve.
         if self._last_raw is not None and green_shape is not None and not self._last_raw_decimated:
             self._astrometry.on_new_frame(
-                self._last_raw, green_shape, self._mount_radec(), self._session.target_radec
+                self._last_raw,
+                green_shape,
+                self._mount_radec(),
+                self._session.target_radec,
+                gate_scale=not self._last_raw_from_file,  # S50: camera frames only
             )
 
     def solve_now(self) -> None:
@@ -1133,7 +1183,11 @@ class AcquisitionEngine(QObject):
             return
         mount = self._mount_radec()
         if not self._astrometry.solve_now(
-            self._last_raw, self._green_shape, mount, self._session.target_radec
+            self._last_raw,
+            self._green_shape,
+            mount,
+            self._session.target_radec,
+            gate_scale=not self._last_raw_from_file,  # S50: an opened FITS is not gated
         ):
             return  # a solve is already running
         hint = (
@@ -1318,7 +1372,7 @@ class AcquisitionEngine(QObject):
                 self._auto_select_comparisons(tset, targets[0])
                 if tset.by_role(ROLE_COMPARISON):
                     self._save_target_set(tset)
-                    self._reset_tracker()  # the anchor constellation changed
+                    self._anchors_changed()
                     self.targets_changed.emit(tset)
 
     # ------------------------------------------------------------------
@@ -1375,7 +1429,7 @@ class AcquisitionEngine(QObject):
         """
         tset = self.target_set()  # detects the key change and reloads
         self.clear_lightcurves()
-        self._reset_tracker()
+        self._anchors_changed()
         self.targets_changed.emit(tset)
 
     def set_target_role(self, star: TargetStar) -> None:
@@ -1384,7 +1438,7 @@ class AcquisitionEngine(QObject):
         if star.role == ROLE_TARGET:
             self._auto_select_comparisons(tset, star)
         self._save_target_set(tset)
-        self._reset_tracker()  # the anchor constellation changed
+        self._anchors_changed()
         self.targets_changed.emit(tset)
 
     def propose_comparison_stars(self) -> int:
@@ -1403,7 +1457,7 @@ class AcquisitionEngine(QObject):
         added = len(tset.by_role(ROLE_COMPARISON)) - before
         if added:
             self._save_target_set(tset)
-            self._reset_tracker()
+            self._anchors_changed()
             self.targets_changed.emit(tset)
         return added
 
@@ -1433,7 +1487,7 @@ class AcquisitionEngine(QObject):
             return 0
         tset.stars = trial.stars
         self._save_target_set(tset)
-        self._reset_tracker()
+        self._anchors_changed()
         self.targets_changed.emit(tset)
         return added
 
@@ -1610,7 +1664,7 @@ class AcquisitionEngine(QObject):
         tset = self.target_set()
         tset.remove(key)
         self._save_target_set(tset)
-        self._reset_tracker()  # the anchor constellation changed
+        self._anchors_changed()
         self.targets_changed.emit(tset)
 
     # ------------------------------------------------------------------
@@ -1636,17 +1690,17 @@ class AcquisitionEngine(QObject):
             return float(value)
         return sensor_models.lookup_egain(hardware.profile().sensor, self._params().gain)
 
-    def _photometry_csv_path(self, star) -> Path:
+    def _photometry_csv_path(self, star, token: str) -> Path:
+        """One CSV per (star, filter) (S49): the filter token in the name."""
         obj = self.target_set().object_name or "Unknown"
         tag = star.auid or star.display_name
-        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in f"{obj}_{tag}")
         if self._active_run_root is not None:
             role = getattr(star, "role", "target") or "target"
-            return self._active_run_root / "photometry" / f"{role}_{safe or 'photometry'}.csv"
+            return self._active_run_root / "photometry" / run_curve_csv_name(role, obj, token, tag)
         # No run yet (live preview, Open FITS): one file per curve, named after
         # the time it started, so measuring the object again (A → B → A, the
         # next evening) never overwrites the earlier points on disk.
-        key = star.auid or star.display_name
+        key = curve_key(star, token)
         path = self._preview_csvs.get(key)
         if path is None:
             path = _new_preview_csv(
@@ -1655,6 +1709,7 @@ class AcquisitionEngine(QObject):
                 tag,
                 _utcnow(),
                 taken=set(self._preview_csvs.values()),
+                token=token,
             )
             self._preview_csvs[key] = path
         return path
@@ -1669,13 +1724,15 @@ class AcquisitionEngine(QObject):
         fix for the field bug where the variable-star markers froze at the
         solve position while the alt-az field rotated under them.
         """
-        wcs = self._astrometry.wcs
         if not params.track_apertures:
-            return wcs
+            return self._astrometry.wcs
+        wcs = self._base_wcs()
         if self._tracker is None or not self._tracker.anchor_count:
             # Also when built with no star seen (clouds, or the field had
             # moved): try again on this frame rather than until the next solve.
-            self._tracker = self._build_live_tracker(green, wcs, tset, params)
+            self._tracker, self._tracker_anchor_stars = self._build_live_tracker(
+                green, wcs, tset, params
+            )
         telescope = self._session.telescope
         # The alt-az tracker needs a rigid rotation + translation.  On an EQ
         # wedge there is no field rotation, so only retain measured drift;
@@ -1696,10 +1753,41 @@ class AcquisitionEngine(QObject):
             params.track_apertures and self._tracker is not None and not self._tracker.anchors_used
         )
 
+    def _lock_lost(self, green, tracked, params: PhotometryParams) -> bool:
+        """Fewer than half the anchors show a star where the tracked solution puts them (S48).
+
+        The batch's S43 check, in the live and sequence paths: after a jump
+        larger than the search radius a window may centroid a neighbour or
+        noise, the tracker reports that anchor and moves every aperture by its
+        offset, and S35 (no anchor at all) does not fire. Clouds that dim the
+        anchors below SNR 5 fail it too. It does not catch a wrong plate
+        solution: a new solution rebuilds the tracker from the stars seen where
+        that solution puts them, so its anchors pass by construction (S50
+        refuses the wrong scale instead).
+        """
+        stars = self._tracker_anchor_stars
+        if not params.track_apertures or self._tracker is None or not stars:
+            return False
+        seen = anchors_seen(green, tracked, stars, params, min_snr=_LOCK_MIN_SNR)
+        return seen < max(1, math.ceil(len(stars) / 2))
+
+    def _resolve_now(self, green) -> None:
+        """The field was lost: the next solve is due at once (S48).
+
+        In a run the frame in hand is solved now (its solution serves the next
+        sub). Outside a run only the next frame is due: a live point follows
+        each solve, and solving the same frame again would only repeat it.
+        """
+        self._astrometry.make_due()
+        if self._camera_service.state is CameraState.SEQUENCE and self._last_raw is not None:
+            self._astrometry.on_new_frame(
+                self._last_raw, green.shape, self._mount_radec(), self._session.target_radec
+            )
+
     @staticmethod
     def _build_live_tracker(
         green, wcs, tset: TargetSet, params: PhotometryParams
-    ) -> ApertureTracker:
+    ) -> tuple[ApertureTracker, list]:
         candidates = tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK)
         anchors = select_tracking_anchors(green, wcs, candidates, params)
         if not anchors:
@@ -1710,11 +1798,12 @@ class AcquisitionEngine(QObject):
             anchors = select_tracking_anchors(green, wcs, list(tset.stars), params, min_snr=5.0)
         xy = [wcs.world_to_pixel_deg(s.ra_deg, s.dec_deg) for s in anchors]
         h, w = green.shape
-        return ApertureTracker(
+        tracker = ApertureTracker(
             [(float(x), float(y)) for x, y in xy],
             frame_center=(w / 2.0, h / 2.0),
             search_r=max(8.0, 2.0 * params.aperture_px(None)),
         )
+        return tracker, list(anchors)
 
     def tracked_wcs(self):
         """The reference WCS with the live rigid correction applied.
@@ -1722,13 +1811,42 @@ class AcquisitionEngine(QObject):
         What the page must project catalog markers / hit-tests through; falls
         back to the raw reference solve before the first tracked measurement.
         """
-        wcs = self._astrometry.wcs
+        wcs = self._base_wcs()
         if wcs is None or self._tracker is None:
             return wcs
         return TrackedWCS(wcs, self._tracker)
 
+    def _base_wcs(self):
+        """The solution a tracker is built on: the raw solve, or the tracked
+        solution frozen at a set change since that solve (S52)."""
+        wcs = self._astrometry.wcs
+        if wcs is not None and self._rebase is not None and self._rebase[0] is wcs:
+            return self._rebase[1]
+        return wcs
+
     def _reset_tracker(self) -> None:
+        """A new reference (a solve, a slew): the tracker starts from it."""
         self._tracker = None
+        self._tracker_anchor_stars = []
+        self._rebase = None
+
+    def _anchors_changed(self) -> None:
+        """The set's stars changed between two solves: rebuild the tracker (S52).
+
+        The new tracker is built on the solution as tracked so far, frozen here,
+        never on the raw solve. The field has drifted since that solve: a tracker
+        rebuilt there kept only the stars that happened to show at the stale
+        positions (a neighbour), passed the S48 check with 1 anchor of 1 and
+        measured every aperture on blank sky until the next solve. In a run the
+        next sub is solved at once.
+        """
+        wcs = self._astrometry.wcs
+        if wcs is not None and self._tracker is not None and self._tracker.anchor_count:
+            self._rebase = (wcs, TrackedWCS(self._base_wcs(), copy.copy(self._tracker)))
+        self._tracker = None
+        self._tracker_anchor_stars = []
+        if self._camera_service.state is CameraState.SEQUENCE:
+            self._astrometry.make_due()
 
     @pyqtSlot(object, object, str)
     def _on_reference_solved(self, _wcs, _overlay, _summary: str) -> None:
@@ -1770,6 +1888,17 @@ class AcquisitionEngine(QObject):
                 " — the field moved since the solve, or clouds.",
             )
             diag.record("event", frame=frame_no, what="frame_skipped", reason="field_lost")
+            self._resolve_now(green)
+            return
+        if self._lock_lost(green, tracked, params):
+            self.log_message.emit(
+                "WARN",
+                "Photometry skipped: fewer than half the anchor stars show a star where the"
+                " solution places them — the field moved since the solve, or clouds."
+                " Re-solving.",
+            )
+            diag.record("event", frame=frame_no, what="frame_skipped", reason="lock_lost")
+            self._resolve_now(green)
             return
         results = measure_frame(
             green,
@@ -1780,6 +1909,10 @@ class AcquisitionEngine(QObject):
             on_star=lambda s, phot, x, y: diag.star(frame_no, s, phot, x, y),
         )
         jd = julian_date(self._last_exposure_mid)
+        token = filter_token(self._last_filter)  # one curve per (star, filter): S49
+        if self._primary_filter is None:
+            self._primary_filter = token
+        self._measured_filter = token
         # The mount says where it points now: never the airmass of an opened
         # frame from another night (S34).
         pos = None if self._last_raw_from_file else self._session.last_position
@@ -1808,7 +1941,7 @@ class AcquisitionEngine(QObject):
             has_ratio = res.relative is not None and res.relative.flux_ratio is not None
             if not (has_mag or has_ratio):
                 continue
-            self._emit_live_point(res, jd, air, fwhm, (lat, lon, elev))
+            self._emit_live_point(res, jd, air, fwhm, (lat, lon, elev), token)
         if self._curves_dirty:
             # One whole-store re-render per frame, whatever the star count.
             self._curves_dirty = False
@@ -1822,11 +1955,14 @@ class AcquisitionEngine(QObject):
         a run. It gives the observer a clear quality state and preserves the
         exact selection already recorded in ``photometry_selection.json``.
         The report is computed and shown in plain live preview too; it is
-        written to disk only inside a run's folder.
+        written to disk only inside a run's folder. It vets the comparisons
+        of the measured frame's filter only (S49): the run's first filter in
+        ``photometry_quality.json``, another in ``photometry_quality_<filter>.json``.
         """
+        token = self._measured_filter
         report = comparison_quality_report(
             target_set,
-            self._lightcurves,
+            curves_of_filter(self._lightcurves, token),
             min_points=int(self._cfg("photometry.comparison_validation_min_points", 10)),
             max_scatter_mag=float(
                 self._cfg("photometry.comparison_validation_max_scatter_mag", 0.10)
@@ -1839,15 +1975,18 @@ class AcquisitionEngine(QObject):
         self.comparison_quality_updated.emit(report)
         if self._active_run_root is None:
             return
+        name = (
+            "photometry_quality.json"
+            if token == self._primary_filter
+            else f"photometry_quality_{token}.json"
+        )
         try:
-            save_comparison_quality_report(
-                self._active_run_root / "photometry_quality.json", report
-            )
+            save_comparison_quality_report(self._active_run_root / name, report)
         except OSError as exc:
             self.log_message.emit("WARN", f"Save photometry quality: {exc}")
 
-    def _emit_live_point(self, res, jd: float, air, fwhm, site) -> None:
-        """Append one measured star to its live curve + CSV and signal it."""
+    def _emit_live_point(self, res, jd: float, air, fwhm, site, token: str = "clear") -> None:
+        """Append one measured star to its (star, filter) curve + CSV and signal it."""
         lat, lon, elev = site
         bjd = (
             bjd_tdb(jd, res.star.ra_deg, res.star.dec_deg, float(lat), float(lon), float(elev))
@@ -1881,7 +2020,7 @@ class AcquisitionEngine(QObject):
             relative_flux=res.relative.flux_ratio if res.relative else None,
             relative_flux_err=res.relative.flux_ratio_err if res.relative else None,
         )
-        key = res.star.auid or res.star.display_name
+        key = curve_key(res.star, token)
         lc = self._lightcurves.get(key)
         if lc is None or lc.role != res.star.role:
             # A star whose role changed starts a new curve (S33): a comparison's
@@ -1889,8 +2028,14 @@ class AcquisitionEngine(QObject):
             if lc is not None:
                 self._curves_dirty = True  # the old curve leaves the display
                 self._preview_csvs.pop(key, None)  # ...and keeps its own file
+            elif any(c.filter_name != token for c in self._lightcurves.values()):
+                # A second filter: every series is relabelled with its filter.
+                self._curves_dirty = True
             lc = LightCurve(
-                auid=res.star.auid or "", name=res.star.display_name, role=res.star.role
+                auid=res.star.auid or "",
+                name=res.star.display_name,
+                role=res.star.role,
+                filter_name=token,
             )
             self._lightcurves[key] = lc
         lc.append(point)
@@ -1902,10 +2047,11 @@ class AcquisitionEngine(QObject):
             # (_measure_photometry emits curves_changed).
             self._curves_dirty = True
         else:
+            multi = any(c.filter_name != token for c in self._lightcurves.values())
             self.photometry_point.emit(
                 PhotometryPoint(
                     key=key,
-                    name=res.star.display_name,
+                    name=series_label(lc, multi),
                     jd=jd,
                     mag=point.mag,
                     mag_err=point.mag_err,
@@ -1916,7 +2062,7 @@ class AcquisitionEngine(QObject):
                 )
             )
         try:
-            lc.to_csv(self._photometry_csv_path(res.star))
+            lc.to_csv(self._photometry_csv_path(res.star, token))
         except OSError as exc:
             self.log_message.emit("WARN", f"photometry.csv: {exc}")
 

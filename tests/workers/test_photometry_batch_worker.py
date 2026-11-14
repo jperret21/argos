@@ -119,13 +119,13 @@ def test_batch_measures_and_writes_uncertainty_aware_csv(_scene) -> None:
     # One target curve + one leave-one-out vetting curve per comparison.
     assert len(result.curves) == 3
     assert {lc.role for lc in result.curves.values()} == {"target", "comparison"}
-    curve = result.curves["T"]
+    curve = result.curves["T@clear"]
     assert curve.role == "target" and len(curve.points) == 3
     assert len(seen) == 9  # a point signal per star per frame
     # The target is brighter than the V=11 comps → calibrated mag < 11.
     assert curve.points[0].mag < 11.0
     # Each comp vetted against the other one recovers its own catalog mag.
-    comp_curve = result.curves["C1"]
+    comp_curve = result.curves["C1@clear"]
     assert comp_curve.role == "comparison"
     assert abs(comp_curve.points[0].mag - 11.0) < 0.1
 
@@ -328,8 +328,8 @@ def test_batch_exports_the_check_star_curve(tmp_path) -> None:
 
     result = result_box[0]
     assert result.ok
-    assert "K1" in result.curves  # the K curve exists…
-    k_curve = result.curves["K1"]
+    assert "K1@clear" in result.curves  # the K curve exists (frames without FILTER: S49)…
+    k_curve = result.curves["K1@clear"]
     assert len(k_curve.points) == 5
     k_mags = [p.mag for p in k_curve.points]
     assert max(k_mags) - min(k_mags) < 0.05  # …and the constant K star is flat
@@ -571,7 +571,7 @@ def test_batch_counts_unreadable_frame_as_skipped(_scene) -> None:
 
     result, _points = _run_batch(req)
 
-    assert result.ok and len(result.curves["T"].points) == 2
+    assert result.ok and len(result.curves["T@clear"].points) == 2
     assert result.frames_done == 2  # measured frames only
     assert result.frames_skipped == 1
 
@@ -603,13 +603,13 @@ def test_batch_csv_names_carry_role_prefix(_scene) -> None:
 
     names = sorted(p.name for p in out_dir.glob("*.csv"))
     assert names == [
-        "comparison_TST_Tau_C1.csv",
-        "comparison_TST_Tau_C2.csv",
-        "target_TST_Tau_T.csv",
+        "comparison_TST_Tau_clear_C1.csv",
+        "comparison_TST_Tau_clear_C2.csv",
+        "target_TST_Tau_clear_T.csv",
     ]
     targets = _TargetSet.load(out_dir / "targets.json")  # saved beside them
     assert {star.auid for star in targets.stars} == {"T", "C1", "C2"}
-    path = out_dir / "comparison_TST_Tau_C1.csv"
+    path = out_dir / "comparison_TST_Tau_clear_C1.csv"
     curves, problems = identify_curve_file(path, read_curves_csv(path), targets)
     assert problems == [] and [lc.role for lc in curves.values()] == ["comparison"]
 
@@ -732,7 +732,7 @@ def test_batch_re_solves_a_frame_on_which_the_field_jumped(tmp_path) -> None:
     result, _points = _run_batch(req)
 
     assert result.ok and result.frames_done == 8
-    curve = result.curves["T"]
+    curve = result.curves["T@clear"]
     assert len(curve.points) == 8
     assert not any(p.suspect for p in curve.points)
     mags = [p.mag for p in curve.points]
@@ -751,7 +751,7 @@ def test_batch_flags_points_until_the_field_is_re_anchored(tmp_path) -> None:
     result, _points = _run_batch(req)
 
     assert result.ok and result.frames_done == 8
-    by_frame = {round(p.jd_utc, 6): p for p in result.curves["T"].points}
+    by_frame = {round(p.jd_utc, 6): p for p in result.curves["T@clear"].points}
     jds = sorted(by_frame)
     assert len(jds) > 4  # blank-sky points are kept, flagged
     assert all(not by_frame[jd].suspect for jd in jds[:4])
@@ -823,3 +823,21 @@ def test_batch_follows_the_real_rr_lyr_jump_with_astap(tmp_path) -> None:
         tx, ty = truth.world_to_pixel_deg(target.ra_deg, target.dec_deg)
         x, y = placed[frame]
         assert math.hypot(x - float(tx), y - float(ty)) < 2.0, frame
+
+
+def test_a_re_run_keeps_one_curve_per_star_and_filter_s49(_scene) -> None:
+    """S49: a re-run of frames taken through two filters put every frame's
+    point of a star in one curve and one CSV."""
+    req, out_dir = _scene
+    for path, filt in zip(req.fits_paths, ("V", "B", "V")):
+        with fits.open(path, mode="update") as hdul:
+            hdul[0].header["FILTER"] = filt
+
+    result, points = _run_batch(req)
+
+    assert sorted(k for k in result.curves if k.startswith("T@")) == ["T@b", "T@v"]
+    assert len(result.curves["T@v"].points) == 2 and len(result.curves["T@b"].points) == 1
+    names = sorted(p.name for p in out_dir.glob("*.csv"))
+    assert "target_TST_Tau_v_T.csv" in names and "target_TST_Tau_b_T.csv" in names
+    assert "target_TST_Tau_T.csv" not in names  # the one mixed file before the fix
+    assert {p.name for p in points if p.key == "T@b"} == {"T [b]"}

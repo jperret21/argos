@@ -48,6 +48,7 @@ from argos.core.imaging.sequencer import (
     SequencePlan,
     SequenceStep,
     estimated_duration_s,
+    light_filters_warning,
     plan_from_dict,
     plan_to_dict,
 )
@@ -281,6 +282,11 @@ class SequencePanel(QWidget):
         edit_row.addWidget(self._estimate_lbl)
         left.addStretch(1)
         left.addLayout(edit_row)
+        self._filters_lbl = design.MutedLabel("")
+        self._filters_lbl.setWordWrap(True)
+        self._filters_lbl.setStyleSheet(f"color:{theme.WARNING}; background:transparent;")
+        self._filters_lbl.hide()
+        left.addWidget(self._filters_lbl)
         self._workspace.setCentralWidget(steps)
 
         # ── Individually dockable planning panels ──────────────────────
@@ -738,6 +744,7 @@ class SequencePanel(QWidget):
                     f"step {r + 1}: filter '{step.filter_name}' not on this wheel → {fallback}"
                 )
         filter_combo.setCurrentIndex(idx)
+        filter_combo.currentTextChanged.connect(self._refresh_estimate)  # S49 warning
         self._table.setCellWidget(r, 2, filter_combo)
 
         exp = QDoubleSpinBox()
@@ -1129,10 +1136,16 @@ class SequencePanel(QWidget):
 
     def _refresh_estimate(self, *_args) -> None:
         try:
-            est = estimated_duration_s(self.to_plan())
+            plan = self.to_plan()
+            est = estimated_duration_s(plan)
         except (AttributeError, RuntimeError):
             return  # a row is mid-construction
         self._estimate_lbl.setText(f"≈ {_format_duration(est)} total" if est > 0 else "")
+        warning = light_filters_warning(plan)  # S49: one light curve per filter
+        label = getattr(self, "_filters_lbl", None)  # built after the first refresh
+        if label is not None:
+            label.setText(warning or "")
+            label.setVisible(bool(warning))
 
     def _refresh_readiness(self) -> None:
         """Explain the next useful action without turning the Run card into a log."""

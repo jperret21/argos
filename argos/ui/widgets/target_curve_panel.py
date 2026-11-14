@@ -63,8 +63,11 @@ class TargetCurvePanel(QWidget):
         self._curves = targets
         self._selector.blockSignals(True)
         self._selector.clear()
+        multi = len({getattr(c, "filter_name", "") for c in curves.values()}) > 1
         for key, curve in targets.items():
             label = str(getattr(curve, "name", "") or getattr(curve, "auid", "") or key)
+            if multi and getattr(curve, "filter_name", ""):
+                label = f"{label} [{curve.filter_name}]"  # one curve per filter (S49)
             if getattr(curve, "role", "target") == "check":
                 label = f"{label} (check)"
             self._selector.addItem(label, key)

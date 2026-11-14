@@ -481,6 +481,48 @@ def test_aavso_export_names_the_check_star_and_the_vsp_chart(qapp, tmp_path, mon
         qapp.processEvents()
 
 
+def test_aavso_export_refuses_curves_of_two_filters_s53(qapp, tmp_path, monkeypatch) -> None:
+    """S53: since S49 a run through two filters keeps one curve per (star,
+    filter), and the export wrote every target curve under the one FILT code of
+    Settings, with KMAG from the first check curve whatever its filter:
+    mislabelled AAVSO data. A report holds one band: the export is refused, and
+    a one-filter window still exports."""
+    from PyQt6.QtWidgets import QFileDialog
+
+    import argos.ui.panels.photometry_window as pw
+
+    out = tmp_path / "aavso.txt"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(out), ""))
+    boxes = _MessageBoxRecorder()
+    monkeypatch.setattr(pw, "QMessageBox", boxes, raising=False)
+    curves = {}
+    for token, mag in (("ir", 11.0), ("lp", 11.4)):
+        target = LightCurve(auid="000-BCK-301", name="XX Cyg", role="target", filter_name=token)
+        target.append(LcPoint(2451545.0 + (0.01 if token == "lp" else 0.0), mag, 0.02))
+        check = LightCurve(auid="000-BJV-171", name="106", role="check", filter_name=token)
+        check.append(LcPoint(2451545.0 + (0.01 if token == "lp" else 0.0), mag - 0.4, 0.01))
+        curves[f"000-BCK-301@{token}"] = target
+        curves[f"000-BJV-171@{token}"] = check
+    win = PhotometryWindow()
+    try:
+        win.load_curves(curves, obscode="ABC")
+        win._export_aavso()
+        assert not out.exists()  # two rows under one FILT before the fix
+        assert boxes.shown and boxes.shown[-1][0] == "warning"
+        assert "2 filters (ir, lp)" in boxes.shown[-1][1]
+
+        win.load_curves(
+            {k: c for k, c in curves.items() if k.endswith("@ir")}, obscode="ABC", filt="TG"
+        )
+        win._export_aavso()
+        rows = [ln.split(",") for ln in out.read_text().splitlines() if not ln.startswith("#")]
+        assert len(rows) == 1 and rows[0][10] == "10.6000"
+    finally:
+        win.close()
+        win.deleteLater()
+        qapp.processEvents()
+
+
 def test_target_plot_lists_check_curve(qapp) -> None:
     """S9: once Review gives check curves their role, the source-curve plot
     must still list them (the comparison plot shows comparisons only)."""

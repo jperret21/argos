@@ -209,3 +209,34 @@ def test_single_star_csv_restores_role_and_name(tmp_path) -> None:
     # Nothing to identify it with: say so rather than guess.
     curves, problems = identify_curve_file(legacy, read_curves_csv(legacy), TargetSet())
     assert problems and "role unknown" in problems[0]
+
+
+def test_review_keeps_one_curve_per_star_and_filter_s49(tmp_path) -> None:
+    """S49: a run's CSVs carry the filter (``{role}_{object}_{filter}_{star}``);
+    Review keeps the V and the B curve of a star apart (it kept the longer one,
+    the other filter lost, when both mapped to the star) and still reads a
+    file written before S49."""
+    root = tmp_path / "20261112T200000Z_XX_Cyg"
+    photometry = root / "photometry"
+    photometry.mkdir(parents=True)
+    (root / "session.json").write_text(json.dumps({"object": "XX Cyg", "frames": []}))
+    star = {"role": "target", "ra_deg": 300.81517, "dec_deg": 58.95458, "auid": "000-BCK-301"}
+    (root / "targets.json").write_text(
+        json.dumps({"object": "XX Cyg", "stars": [{**star, "name": "XX Cyg"}]})
+    )
+    header = "jd_utc,mag,mag_err,saturated\n"
+    rows = "".join(f"2461281.{7 + i},11.6,0.02,0\n" for i in range(3))
+    (photometry / "target_XX_Cyg_v_000-BCK-301.csv").write_text(header + rows)
+    (photometry / "target_XX_Cyg_b_000-BCK-301.csv").write_text(header + rows[:20])
+
+    curves = load_session_curves(load_session(root, read_temperature=False))
+
+    assert sorted((c.filter_name, len(c.points)) for c in curves.values()) == [("b", 1), ("v", 3)]
+    assert {c.name for c in curves.values()} == {"XX Cyg"}  # the AAVSO NAME stays the star
+
+    (photometry / "target_XX_Cyg_b_000-BCK-301.csv").unlink()
+    (photometry / "target_XX_Cyg_v_000-BCK-301.csv").rename(
+        photometry / "target_XX_Cyg_000-BCK-301.csv"
+    )  # a file written before S49
+    (curve,) = load_session_curves(load_session(root, read_temperature=False)).values()
+    assert curve.filter_name == "" and len(curve.points) == 3
