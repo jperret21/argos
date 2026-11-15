@@ -1503,10 +1503,12 @@ class SequenceService:
         # P5: one differential point per saved Light sub, through the reference solution.
         if spec.frame_type != "Light":
             return
-        reference = hub.field.reference_solution()
+        # One read (S56): the solution and the frame it was solved on, never a newer
+        # solve's frame paired with the old solution.
+        reference = hub.field.reference_with_frame()
         if reference is None or not hub.targets.target_set().by_role(ROLE_TARGET):
             return
-        wcs, generation = reference
+        wcs, generation, solved_seq, solved_raw = reference
         hub.photometry.measure_saved_frame(
             MeasureRequest(
                 frame_seq=seq,
@@ -1517,7 +1519,8 @@ class SequenceService:
                 run_root=run_root,
                 origin="sequence",
                 filter_name=filter_actual,  # its read-back FILTER: its curve (S49)
-                solved_seq=hub.field.reference_frame_seq(wcs),  # S56: fresh when seq - 1
+                solved_seq=solved_seq,  # S56: fresh when seq - 1
+                solved_raw=solved_raw,  # S56: the anchors are chosen on the solved frame
             )
         )
 

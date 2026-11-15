@@ -28,7 +28,9 @@ A Qt-free port of the live photometry half of ``AcquisitionEngine``
   agree (a re-pointing the mount did not report); **S56**: a lock on fewer than 3
   anchors is unverified, its points flagged suspect and a re-solve due at once,
   unless the frame is measured within 2 px of a solution of this sub or the
-  previous one; **S57**: every vetting file names its filter.
+  previous one; the anchors are chosen on the solved frame (:func:`anchor_frame`)
+  and a run's sub verified through the previous sub's solution is solved too (S56
+  as amended on 2026-11-15, second set); **S57**: every vetting file names its filter.
 
 One deliberate difference with the Qt 0.5.0 code: the series FWHM is frozen
 on the **first** measured frame. Qt read it before ``_diagnostics`` reset it on
@@ -166,6 +168,26 @@ STATUS_TEXT = {
         " solution places them (the field moved, or clouds); re-solving."
     ),
 }
+
+
+def anchor_frame(green, wcs, solved_raw: np.ndarray | None):
+    """The frame the tracker's anchors are chosen on and the solution exact there, or
+    None (release ``AcquisitionEngine._anchor_frame``, S56 as amended on 2026-11-15,
+    second set): the frame ``wcs`` was solved on, of the measured frame's geometry.
+
+    Chosen on the measured sub through a solution of an earlier one, only the stars
+    that happened to show at the stale positions qualified after a jump, and the
+    lock check (S48, S56) verified the very star that moved the apertures (real RR
+    Lyr subs moved 500 px without a slew: 1 anchor, 2.16 px of tracker motion, the
+    target 496 px off). On the solved frame every anchor qualifies, and the check
+    counts those the measured sub shows (1 of 6 there: the lock is lost).
+    """
+    if solved_raw is None or wcs is None:
+        return None
+    solved = green_plane(solved_raw)
+    if solved.shape != green.shape:
+        return None
+    return solved, wcs
 
 
 def bundled_iers_only() -> None:
@@ -397,6 +419,9 @@ class MeasureRequest:
     #: S56: the seq of the frame ``wcs`` was solved on (None: unknown). A solution
     #: of this frame or the previous one (seq - 1) is fresh.
     solved_seq: int | None = None
+    #: S56 (2026-11-15, second set): the raw frame ``wcs`` was solved on (None:
+    #: unknown): the tracker's anchors are chosen there, where the solution is exact.
+    solved_raw: np.ndarray | None = None
 
 
 class PhotometryService:
@@ -936,11 +961,18 @@ class PhotometryService:
         return alignment not in ("eq", "eq_gem")
 
     def _wcs_for_frame(
-        self, green, tset: TargetSet, params: PhotometryParams, wcs, generation: int | None = None
+        self,
+        green,
+        tset: TargetSet,
+        params: PhotometryParams,
+        wcs,
+        generation: int | None = None,
+        solved_raw: np.ndarray | None = None,
     ):
         """``_wcs_for_frame`` (1542-1567, with the release branch's S35 and S52). Lock held.
         ``generation``: the field generation of ``wcs`` (S54 checks only a tracker
-        built for the current solution)."""
+        built for the current solution). ``solved_raw``: the frame ``wcs`` was solved
+        on, where the anchors are chosen (S56 as amended, :func:`anchor_frame`)."""
         if not params.track_apertures:
             return wcs
         # After a set change, the tracked solution frozen then (S52).
@@ -948,9 +980,10 @@ class PhotometryService:
         base = rebase[1] if rebase is not None and rebase[0] is wcs else wcs
         if self._tracker is None or not self._tracker_anchors:
             # Also when built with no star seen (clouds, or the field had moved):
-            # try again on this frame rather than until the next solution (S35).
+            # try again rather than until the next solution, which S35 makes due.
+            # The anchors are chosen on the solved frame (S56, second set).
             self._tracker, self._tracker_anchor_stars = self._build_live_tracker(
-                green, base, tset, params
+                green, base, tset, params, chosen_on=anchor_frame(green, wcs, solved_raw)
             )
             self._tracker_anchors = len(self._tracker_anchor_stars)
             self._tracker_base = (wcs, base)
@@ -969,18 +1002,24 @@ class PhotometryService:
         )
 
     @staticmethod
-    def _build_live_tracker(green, wcs, tset: TargetSet, params: PhotometryParams):
-        """``_build_live_tracker`` (1569-1582, with the release branch's S35).
+    def _build_live_tracker(green, wcs, tset: TargetSet, params: PhotometryParams, chosen_on=None):
+        """``_build_live_tracker`` (1569-1582, with the release branch's S35 and S56).
 
         Returns the tracker and its anchor stars. Without a comparison bright
         enough to steer, any star of the set seen where the solution places it
         (SNR ≥ 5); never the set's stars unseen, whose noise centroids passed
-        for anchors when the field had moved since the solve.
+        for anchors when the field had moved since the solve. The anchors are
+        chosen on ``chosen_on`` = (green plane, solution) when given: the frame
+        the solution was solved on, where it is exact (S56 as amended on
+        2026-11-15); the tracker is placed on ``wcs`` (the solve or its S52 rebase).
         """
+        pick_green, pick_wcs = chosen_on if chosen_on is not None else (green, wcs)
         candidates = tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK)
-        anchors = select_tracking_anchors(green, wcs, candidates, params)
+        anchors = select_tracking_anchors(pick_green, pick_wcs, candidates, params)
         if not anchors:
-            anchors = select_tracking_anchors(green, wcs, list(tset.stars), params, min_snr=5.0)
+            anchors = select_tracking_anchors(
+                pick_green, pick_wcs, list(tset.stars), params, min_snr=5.0
+            )
         xy = [wcs.world_to_pixel_deg(s.ra_deg, s.dec_deg) for s in anchors]
         h, w = green.shape
         tracker = ApertureTracker(
@@ -1036,6 +1075,22 @@ class PhotometryService:
         if not 0 < n < LOCK_VERIFY_MIN_ANCHORS:
             return False
         return not self._fresh_lock(tset, tracked, request)
+
+    def _verified_on_previous_solution(
+        self, params: PhotometryParams, request: MeasureRequest
+    ) -> bool:
+        """A run's sub of 1 or 2 anchors verified through the previous sub's solution
+        (release ``_verified_on_previous_solution``, S56 as amended on 2026-11-15,
+        second set): its own solve is due now, so the next sub is never two subs
+        from a solution (one solve per run flagged every other sub of XX Cyg
+        2026-08-29 050148Z: 12 of 22). Outside a run a live point follows each solve:
+        nothing more is due. Lock held."""
+        n = len(self._tracker_anchor_stars)
+        if not (params.track_apertures and self._tracker is not None):
+            return False
+        if not 0 < n < LOCK_VERIFY_MIN_ANCHORS or request.origin != "sequence":
+            return False
+        return request.solved_seq is not None and request.frame_seq - request.solved_seq == 1
 
     @staticmethod
     def _fresh_lock(tset: TargetSet, tracked, request: MeasureRequest) -> bool:
@@ -1122,7 +1177,9 @@ class PhotometryService:
             fwhm = self._phot_fwhm or DEFAULT_FWHM
             frame_no = self._diag_frame
             self._diag_frame += 1
-            tracked = self._wcs_for_frame(green, tset, params, request.wcs, request.generation)
+            tracked = self._wcs_for_frame(
+                green, tset, params, request.wcs, request.generation, request.solved_raw
+            )
             lost = None
             if self._field_lost(params):
                 # No point on blank sky (S35); the service lock, then the hub's.
@@ -1161,6 +1218,12 @@ class PhotometryService:
                     field.resolve_due(request.frame_seq, now=request.origin == "sequence")
             else:
                 self._unverified_logged = False  # a verified frame ends the episode
+                if self._verified_on_previous_solution(params, request):
+                    # S56 (2026-11-15, second set): the sub in hand is solved too, so
+                    # the next sub is measured through the previous one's solution.
+                    field = getattr(self._hub, "field", None)
+                    if field is not None and hasattr(field, "resolve_due"):
+                        field.resolve_due(request.frame_seq, now=True)
             if self._primary_filter is None:
                 self._primary_filter = token
             bundled_iers_only()  # BJD_TDB offline (S37)

@@ -1458,14 +1458,15 @@ def test_a_few_anchor_lock_near_a_fresh_solution_is_verified_s56(phot_client):
     assert _measure_target(hub, 2, raw.copy(), 1) is False  # the previous sub's
     live = phot_client.get("/api/photometry/live", headers=AUTH).json()
     assert live["status"]["lock"]["verified"] is True
-    assert not hub.field._resolve_due_flag
+    assert hub.field._resolve_due_flag  # its own solve is due too (2026-11-15, second set)
+    hub.field._resolve_due_flag = False
     assert _measure_target(hub, 3, raw.copy(), 1) is True  # two subs after it
     assert hub.field._resolve_due_flag
     for seq, (shift, flagged) in enumerate(((1, False), (3, True)), start=10):
         hub.field._resolve_due_flag = False
         moved = np.roll(raw, 2 * shift, axis=1)  # the field drifted ``shift`` green px
         assert _measure_target(hub, seq, moved, seq - 1, reset=True) is flagged, shift
-        assert hub.field._resolve_due_flag is flagged
+        assert hub.field._resolve_due_flag  # a re-solve, or (verified) the sub in hand solved
 
 
 def test_the_unverified_lock_warns_once_per_episode_s56(phot_client):
@@ -1493,6 +1494,73 @@ def test_the_unverified_lock_warns_once_per_episode_s56(phot_client):
     assert len(warnings()) == 2
     hub.photometry.on_field_invalidated()
     assert hub.photometry._unverified_logged is False
+
+
+def test_the_lock_check_uses_anchors_chosen_on_the_solved_frame_s56(phot_client, monkeypatch):
+    """Release S56 as amended (2026-11-15, second set): the anchors were chosen on the
+    measured sub through the previous sub's solution. After a jump only a star that
+    happened to show at a stale position qualified (here a field star 1.1 px from
+    C1's solved spot): 1 anchor of 1, seen by construction (S48), moving the
+    apertures 1.1 px, so S56 verified it and the sub was measured off its stars,
+    unflagged (real RR Lyr subs moved 500 px: 1 anchor, the target 496 px off,
+    flagged by a 0.16 px margin). The anchors are now chosen on the frame the
+    solution was solved on (``solved_raw``): 1 of them shows a star on the moved
+    sub, the lock is lost, no point, a re-solve due."""
+    tset = target_set()
+    tset.save(phot_client.sessions_path / "targets" / "SYN_Var.json")
+    set_object(phot_client)
+    hub = phot_client.hub
+    monkeypatch.setattr(type(hub.field), "solved", property(lambda self: True))
+    solved = synthetic_raw(0, drift=False)
+    rng = np.random.default_rng(77)  # another field: none of the set's stars
+    sky_only = np.clip(300.0 + rng.normal(0.0, 6.0, (GH, GW)), 0, 65535)
+    moved = np.kron(sky_only, np.ones((2, 2))).astype(np.uint16)
+    moved = _add_star(_add_star(moved, 43.0, 38.5, 10.0), 101.0, 80.5, 10.5)
+    request = MeasureRequest(
+        2,
+        moved,
+        GREEN_WCS,
+        T0,
+        1,
+        fwhm=2.4,
+        origin="sequence",
+        solved_seq=1,  # the previous sub's solution
+        solved_raw=solved,
+    )
+    assert hub.photometry.measure(request) == 0  # points off the stars, unflagged, before
+    assert len(hub.photometry._tracker_anchor_stars) >= 3  # 1 (the field star) before
+    status = phot_client.get("/api/photometry/live", headers=AUTH).json()["status"]
+    assert status["state"] == "skipped" and status["reason"] == "lock_lost"
+    assert status["lock"]["seen"] == 1 and status["lock"]["anchors"] >= 3
+    assert hub.field._resolve_due_flag
+
+
+def test_a_run_solves_the_sub_verified_through_the_previous_solution_s56(phot_client, monkeypatch):
+    """Release S56 as amended (2026-11-15, second set): a sub of 1-2 anchors verified
+    through the previous sub's solution made no solve due, so the next sub was two
+    subs from a solution: with one solve per run the subs alternated verified and
+    flagged (XX Cyg 2026-08-29 050148Z: 12 of 22 flagged). In a run the sub in hand
+    is now solved too; outside a run a live point follows each solve."""
+    _two_anchor_set(phot_client)
+    hub = phot_client.hub
+    calls: list[tuple[int, bool]] = []
+    monkeypatch.setattr(hub.field, "resolve_due", lambda seq, now=False: calls.append((seq, now)))
+    raw = synthetic_raw(0, drift=False)
+    assert _measure_target(hub, 1, raw, 1) is False  # this sub's own solution
+    assert calls == []
+    assert _measure_target(hub, 2, raw.copy(), 1) is False  # the previous sub's
+    assert calls == [(2, True)]  # [] before the fix
+    solved = 2  # one solve per run: a sub's solve lands when it is due
+    for seq in range(3, 7):
+        calls.clear()
+        assert _measure_target(hub, seq, raw.copy(), solved, reset=True) is False, seq
+        solved = seq if calls else solved  # subs 4 and 6 flagged before the fix
+    calls.clear()
+    live = MeasureRequest(
+        8, raw.copy(), GREEN_WCS, T0, 1, fwhm=2.4, reset_tracker=True, solved_seq=7
+    )
+    assert hub.photometry.measure(live) == 3  # a live frame: nothing more is due
+    assert calls == []
 
 
 def test_the_anchor_check_needs_half_the_anchors_s54(phot_client, monkeypatch):

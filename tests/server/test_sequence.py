@@ -662,6 +662,32 @@ def test_an_in_run_target_set_edit_is_journalled(seq):
     assert len(history) == 2  # the run's first save, then the edit
 
 
+def test_a_sub_is_measured_with_the_frame_its_solution_was_solved_on_s56(seq, monkeypatch):
+    """Release S56 as amended (2026-11-15, second set), through a run: each saved
+    Light sub is measured with the reference solution and the frame it was solved on,
+    read together (``FieldService.reference_with_frame``): its freshness
+    (``solved_seq``) and the frame its tracker's anchors are chosen on
+    (``solved_raw``). Without them the anchors were chosen on the measured sub again
+    and the 500 px jump passed the lock check with 1 anchor."""
+    from argos.core.catalog.targets import TargetSet, TargetStar
+
+    TargetSet(
+        object_name="SYN Var",
+        stars=[TargetStar("target", 291.0, 42.0, name="SYN Var", source="vsx")],
+    ).save(seq.sessions_path / "targets" / "SYN_Var.json")
+    wcs, raw = object(), np.zeros((4, 4), dtype=np.uint16)
+    monkeypatch.setattr(seq.hub.field, "reference_with_frame", lambda: (wcs, 7, 41, raw))
+    requests: list = []
+    monkeypatch.setattr(seq.hub.photometry, "measure_saved_frame", requests.append)
+    put_plan(seq, steps=[light(count=2)])
+    start(seq)
+    assert wait_state(seq, "idle")["last_result"]["completed"]
+    assert len(requests) == 2
+    for request in requests:
+        assert request.origin == "sequence" and request.wcs is wcs and request.generation == 7
+        assert request.solved_seq == 41 and request.solved_raw is raw  # None before
+
+
 # -- the simulator replay source ---------------------------------------------------------
 
 

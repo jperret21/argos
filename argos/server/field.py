@@ -506,12 +506,17 @@ class FieldService:
                 return None
             return self._wcs, self._generation
 
-    def reference_frame_seq(self, wcs: Any) -> int | None:
-        """The seq of the frame the reference solution ``wcs`` was solved on, or None
-        when ``wcs`` is no longer the reference (S56: a solution of this sub or the
-        previous one is fresh; release ``AstrometryController.solved_raw``)."""
+    def reference_with_frame(self) -> tuple[Any, int, int | None, np.ndarray | None] | None:
+        """The reference WCS, its generation, and the seq and raw pixels of the frame
+        it was solved on, read under one lock, or None (a sequence's sub is measured
+        with them: S56, a solution of this sub or the previous one is fresh, and the
+        tracker's anchors are chosen on the solved frame, where it is exact; release
+        ``AstrometryController.solved_raw``). Read apart, a solve landing between the
+        two reads paired the old solution with no frame."""
         with self._hub._lock:
-            return self._ref_seq if self._wcs is wcs else None
+            if self._wcs is None:
+                return None
+            return self._wcs, self._generation, self._ref_seq, self._ref_raw
 
     def _tracked_wcs(self):
         """``tracked_wcs`` (``acquisition_engine.py:1584-1593``). Lock held."""
@@ -1123,6 +1128,7 @@ class FieldService:
                 egain=newest.egain,
                 filter_name=newest.filter_name,
                 solved_seq=frame.seq,  # S56: a solution of this frame or the previous one
+                solved_raw=frame.raw,  # S56: the anchors are chosen on the solved frame
             )
         )
         return solution

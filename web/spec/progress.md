@@ -2060,6 +2060,34 @@ per run plus re-solves when due ("per run").
   post-merge snapshot: 050148Z every sub and per run (118 points, 12 and 66 suspect), RR
   Lyr 0-39 (272 points, 42 suspect) and 40-79 with an injected wrong solve (306 points,
   S54 refusal text identical): 0 differences.
+- **S56, second set** (2026-11-15; S56 amended in place, no new S number). (1) The anchors
+  are chosen on the frame the solution was solved on, through it (exact there), not on the
+  measured sub: the S48/S56 checks count them on the measured sub. Real RR Lyr subs moved
+  500 px without a slew: before, 1 anchor (a field star), 2.16 px of tracker motion, the
+  target 496 px off, flagged by a 0.16 px margin; after, 1 of 6 seen, lock lost, no point, a
+  re-solve due (subs 44-46 skipped, 47-48 flagged as before: 2 anchors in the moved frame,
+  4.3 px drift per sub). (2) In a run a 1-2 anchor sub verified through the previous sub's
+  solution is solved too (server: `resolve_due(seq, now=True)`); outside a run nothing more.
+  (3) The 2 px threshold stays. Cost on the 8 runs: every sub, unchanged (255 target
+  points, 3 flagged, 265 solves, 2 skipped: RR Lyr 52 and 175 now by `lock_lost`); per run,
+  3 flagged (14 before), 35 solves (24), 3 WARN episodes (13): 050148Z 2 of 22 flagged
+  (12), 23 solves (13). 050148Z keeps 2 anchors on 20 of 22 subs (subs 9 and 11: 1, its
+  first comparison at SNR 9.9 on the solved subs 8 and 10; still verified, 1.01 and 0.57
+  px from the star) and all its verified frames. The RR Lyr 0-39 set-change case with S52
+  off: the rebuilt tracker's 6 anchors come from frame 0, every target point within 1.12
+  px, none flagged (frames 4, 7, 8, 10 and 11 were 29.5-35.8 px off, flagged; 2 and 3
+  skipped). Decision 2 needs the sub's solve to land before the next sub: slower solves
+  leave such subs flagged and solve every other sub (no loop or stall). The batch re-run
+  (S58) needs neither rule (it builds trackers on the frame it just solved and re-solves
+  before measuring). The sequence reads the solution and its frame in one call
+  (`FieldService.reference_with_frame()`, review finding); the field and sequence tests
+  check that `solved_raw` and `solved_seq` reach the photometry. Qt only: a run's first sub
+  after an opened FITS took the file's anchors (decision 1) and S54 refused the camera's
+  own solution against them; a file's anchors no longer vet a camera solution (S59
+  amended; the server drops the file's solution on `source_changed`). Server and fixed Qt in one process on a post-merge snapshot: 050148Z every
+  sub and per run (118 points, 12 suspect each), RR Lyr 0-39 with and without S52 (318
+  points, 0 suspect), the 500 px jump (27 points, 6 suspect, the same skips and S54
+  refusals): 0 differences. No GUARD: the server tests need no new core.
 - **S58** (2026-11-15): the batch re-run's S43 check gets S56's rule (a frame of 1-2
   anchors is re-solved when no solution of it or the previous frame verifies it, else
   flagged). Re-running 050148Z: before, 4 unflagged target points 2.5-4.5 px off the star;
@@ -2083,8 +2111,9 @@ per run plus re-solves when due ("per run").
   drawn on LP subs before).
 - **Still open**: the AAVSO export with two filters (Qt refuses them, S53; W7's Review
   needs the same rule); the alert thresholds (the owner marks `wave6b-attention-replay.md`);
-  the owner decisions of the 2026-11-15 fixer report (S56 on a field drifting more than
-  2 px per sub, S56 after an unreported jump, anchors on the solved frame).
+  the S56 second set's report (an anchor at the SNR 10 edge: 050148Z subs 9 and 11) and
+  its fixer's (Qt keeps an opened FITS's solution until the camera's own solve, S59; the
+  server drops it on `source_changed`).
 
 ### 6. Known gaps, and the guards to check after the merge
 

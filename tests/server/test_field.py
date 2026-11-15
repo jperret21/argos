@@ -571,9 +571,9 @@ def test_three_agreeing_refused_solutions_are_accepted_as_a_re_pointing_s54(
     hub = field_client.hub
     take_frame(field_client)
     assert solve(field_client)["state"] == "done"
-    wcs, _generation = hub.field.reference_solution()
-    assert hub.field.reference_frame_seq(wcs) == hub.field._ref_seq is not None
-    assert hub.field.reference_frame_seq(object()) is None  # no longer the reference
+    wcs, generation, ref_seq, ref_raw = hub.field.reference_with_frame()
+    assert (wcs, generation) == hub.field.reference_solution()
+    assert ref_seq == hub.field._ref_seq is not None and ref_raw is hub.field._ref_raw is not None
     monkeypatch.setattr(photometry, "anchors_seen", lambda *a, **k: 0)
     stars = [TargetStar("comparison", *GREEN_WCS.pixel_to_world_deg(20.0, 15.0), auid="A1")]
     stars.append(TargetStar("comparison", *GREEN_WCS.pixel_to_world_deg(60.0, 45.0), auid="A2"))
@@ -588,6 +588,22 @@ def test_three_agreeing_refused_solutions_are_accepted_as_a_re_pointing_s54(
         states.append(solve(field_client)["state"])
     assert states == ["failed", "failed", "done"]  # refused for ever before the amendment
     assert any("re-pointing the mount did not report" in m for m in log_messages(field_client))
+
+
+def test_a_solution_hands_the_photometry_the_frame_it_was_solved_on_s56(field_client, monkeypatch):
+    """Release S56 as amended (2026-11-15, second set): the tracker's anchors are
+    chosen on the frame the solution was solved on, where it is exact. The point
+    measured after a solve carries that frame (``solved_raw``) and its seq; without
+    it the anchors were chosen on the measured frame again (the 500 px jump passed
+    the lock check with 1 anchor)."""
+    hub = field_client.hub
+    requests: list = []
+    monkeypatch.setattr(hub.photometry, "on_solved", requests.append)
+    seq = take_frame(field_client)
+    assert solve(field_client)["state"] == "done"
+    (request,) = requests
+    assert request.solved_raw is hub.field._ref_raw is not None
+    assert request.solved_seq == hub.field._ref_seq == seq
 
 
 # -- A46, A47: catalogue and layers ------------------------------------------------

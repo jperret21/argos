@@ -1857,9 +1857,15 @@ Grid = {"lines": [[[x, y], …], …],                  // polyline segments (br
   which restore the observer's choice afterwards (`auto_source: "sequence"`).
   `FieldService.resolve_due(frame_seq, now=)` (release S48, wave 6b): the
   photometry lost the field (`field_lost`, `lock_lost`) or its lock is
-  unverified (S56): the next frame is due
+  unverified (S56), or a run's sub of 1 or 2 anchors was verified through the
+  previous sub's solution (S56, second set of 2026-11-15): the next frame is due
   whatever the cadence; with `now` (a sequence sub) the frame in hand is solved
   at once when it is still the newest and no solve runs.
+  `FieldService.reference_with_frame()` gives the reference solution, its
+  generation, and the seq and raw pixels of the frame it was solved on, read
+  under one lock (None without a solution): a sequence's sub is measured with
+  them (S56: its freshness, and the frame its tracker's anchors are chosen on;
+  read apart, a solve landing in between paired the old solution with no frame).
 - **Invalidation** (`_clear_astrometry` `imaging_page.py:2501-2563`,
   `invalidate_astrometry` `acquisition_engine.py:1067-1084`): the
   solution, the catalogue, the layers, the tracking transform and the
@@ -1873,7 +1879,9 @@ Grid = {"lines": [[[x, y], …], …],                  // polyline segments (br
   changed — WCS overlays cleared (solve again)."), `file_opened` (Open
   FITS, `acquisition_engine.py:741-767`) or `source_changed` (camera
   frames arrive after an opened file was solved: its solution would be
-  drawn on another field). The target set is kept. A solve running at
+  drawn on another field; release S59 keeps that solution in Qt until the
+  camera's own solve and never checks a camera solution against the file's
+  anchors, which cannot happen here). The target set is kept. A solve running at
   that moment is cancelled and released at once (`solving: null`; a new
   Identify field may start); one that ends after the field moved is
   discarded (INFO "Solve finished for a field that has moved since —
@@ -2235,9 +2243,19 @@ saturated ensemble, no comparison) gives no point that frame.
   solve due (`FieldService.resolve_due`). Anchors =
   `select_tracking_anchors` over the comparisons and checks (SNR ≥ 10,
   unsaturated, not suspect, at most 6), else any star of the set **seen where
-  the solution places it** (SNR ≥ 5); a tracker built with none is built
-  again on the next frame. Search radius `max(8, 2 × aperture(None))` green
-  px; updated on every measured frame with rotation unless the mount reports
+  the solution places it** (SNR ≥ 5), chosen **on the frame the solution was
+  solved on** (`MeasureRequest.solved_raw`: the field's solved frame for a live
+  point, `FieldService.reference_with_frame()` for a sequence's sub), through that
+  solution, where it is exact (release S56 as amended, owner decision 2026-11-15,
+  second set; the measured frame only when the solved one is unknown or of
+  another geometry); the tracker is placed through the solution or its S52
+  freeze as before. Chosen on the measured sub through an earlier sub's
+  solution, after a jump only the stars that happened to show at the stale
+  positions qualified, and the lock check verified the very star that moved the
+  apertures (real RR Lyr subs moved 500 px: 1 anchor, the target 496 px off);
+  on the solved frame all 6 qualify and 1 shows a star on the moved sub: the
+  lock is lost. A tracker built with none is built again on the next frame.
+  Search radius `max(8, 2 × aperture(None))` green px; updated on every measured frame with rotation unless the mount reports
   `eq` / `eq_gem` (`_wcs_for_frame`, 1542-1567). A frame on which no anchor
   is found (the field moved further than the search radius since the
   solution, or clouds hide every anchor) gets **no point**: WARN "Photometry
@@ -2286,6 +2304,17 @@ saturated ensemble, no comparison) gives no point that frame.
   one). Re-solving." once per episode (a verified frame, an invalidation or a
   set change ends it; a solve that lands does not), a `lock_unverified` event
   (`anchors`) per flagged frame in the flight recorder, `lock.verified: false`.
+  In a run (a sequence's sub) a frame of 1 or 2 anchors verified through the
+  **previous** sub's solution makes its own solve due at once
+  (`FieldService.resolve_due(seq, now=True)`, S56 as amended, owner decision
+  2026-11-15, second set): the next sub is then measured through a solution of
+  the previous one, never two subs from it (with one solve per run XX Cyg
+  2026-08-29 `050148Z` alternated verified and flagged subs: 12 of 22 flagged,
+  now 2). Outside a run a live point follows each solve: nothing more is due.
+  This needs the sub's solve to land before the next sub is measured: with solves
+  slower than one sub interval such subs stay flagged and every other sub is
+  solved (no loop or stall: at most one solve starts per sub).
+  The 2 px threshold stays until a field drifting more is observed.
 - **One curve per (star, filter)** (release S49, wave 6b): the filter of the
   measured frame is a sub's read-back `FILTER`, an opened file's `FILTER` card
   (none: `clear`), a live frame's wheel slot when the wheel reports one
