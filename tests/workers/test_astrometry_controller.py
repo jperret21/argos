@@ -160,3 +160,47 @@ def test_a_lost_lock_makes_a_solve_due_at_once_s48(qapp) -> None:
     assert c._due((5.0, 22.0)) is False
     c.make_due()
     assert c._due((5.0, 22.0)) is True
+
+
+# ── S55: S50's reference moves with three agreeing solves ───────────────────
+
+
+def test_a_wrong_first_solve_cannot_refuse_every_later_good_one_s55(qapp) -> None:
+    """S55: S50's reference was the session's first good solve, so a wrong first
+    solve (here at 7.093″ per green px, the scale of XX Cyg 2026-09-07's wrong
+    match) refused every later good one (7.341-7.343) until the camera
+    reconnected. The reference now moves to the mean of three consecutive solves
+    that agree within 0.3 %: the third good solve is accepted."""
+    c = AstrometryController(_cfg({}))
+    solved, failed, notices = [], [], []
+    c.solved.connect(lambda wcs, _o, _s: solved.append(wcs))
+    c.failed.connect(failed.append)
+    c.notice.connect(notices.append)
+    c._green_shape = (1920, 1080)
+    c._on_worker_solved(_result(7.093))  # a wrong first solve: the reference
+    c._on_worker_solved(_result(7.342))
+    c._on_worker_solved(_result(7.341))
+    assert len(solved) == 1 and len(failed) == 2  # two good solves refused
+    c._on_worker_solved(_result(7.343))  # refused for ever before the fix
+    assert len(solved) == 2
+    assert abs(c.scale_reference - 7.342) < 1e-6  # the three solves' mean
+    assert len(notices) == 1 and "reference moves" in notices[0]  # the Activity log says so
+    c._on_worker_solved(_result(7.093))  # the wrong scale is now the one refused
+    assert len(solved) == 2 and "3.4 %" in failed[-1]
+
+
+def test_the_reference_moves_only_on_three_agreeing_solves_s55(qapp) -> None:
+    """A wrong solve between good ones never moves the reference, nor do two
+    agreeing wrong ones; three good ones re-centre it within the tolerance."""
+    c = AstrometryController(_cfg({}))
+    solved = []
+    c.solved.connect(lambda wcs, _o, _s: solved.append(wcs))
+    c._green_shape = (1920, 1080)
+    for scale in (7.342, 7.343, 7.093, 7.341, 7.093, 7.094, 7.342):
+        c._on_worker_solved(_result(scale))
+    assert len(solved) == 4  # every good solve, no wrong one
+    assert abs(c.scale_reference - 7.342) < 1e-6
+    c.reset_scale_reference()  # another camera: the window restarts too
+    for scale in (5.84, 5.84):
+        c._on_worker_solved(_result(scale))
+    assert abs(c.scale_reference - 5.84) < 1e-9

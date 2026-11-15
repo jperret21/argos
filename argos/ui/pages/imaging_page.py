@@ -2438,9 +2438,17 @@ class ImagingPage(QWidget):
                 "field was lost (a pointing jump or clouds) and not re-solved: their points "
                 "are flagged suspect and left out of the AAVSO export.",
             )
-        elif not result.frames_resolved and (
-            abs(result.rotation_deg) > 0.05 or result.shift_px > 1.0
-        ):
+        if result.frames_unverified:
+            # S58: a lock on 1-2 anchors verifies nothing away from a fresh solution.
+            self.log_message.emit(
+                "WARN",
+                f"Batch photometry: {result.frames_unverified} frame(s) steered by fewer than"
+                " 3 anchor stars had no verified lock (no solution of that frame or the one"
+                " before within 2 px): their points are flagged suspect and left out of the"
+                " AAVSO export.",
+            )
+        lost = result.frames_resolved or result.frames_unanchored or result.frames_unverified
+        if not lost and (abs(result.rotation_deg) > 0.05 or result.shift_px > 1.0):
             self.log_message.emit(
                 "INFO",
                 f"Apertures tracked the field: {result.rotation_deg:+.2f}° rotation, "

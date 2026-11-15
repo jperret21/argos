@@ -58,6 +58,13 @@ _CALIBRATION_WORDS = ("dark", "flat", "bias", "offset", "zero")
 #: S43: an anchor is seen when its aperture at the tracked position has this SNR
 #: (the S35 "seen" threshold); the lock holds when half the anchors are seen.
 _LOCK_MIN_SNR = 5.0
+#: S58 (S56's rule in the re-run): with fewer anchors ceil(n/2) is met by the very
+#: anchor that moved the apertures, so the S43 check verifies nothing; such a frame
+#: is verified only when measured through a solution of this frame or the previous
+#: one and the tracker moved no aperture of the set this many green px or more from
+#: where that solution puts it. Otherwise it is re-solved (with a solver) or flagged.
+_LOCK_VERIFY_MIN_ANCHORS = 3
+_LOCK_FRESH_MAX_SHIFT_PX = 2.0
 
 
 def discover_light_frames(folder: Path) -> list[Path]:
@@ -144,8 +151,9 @@ class BatchResult:
     could not be read or dated. A ``cancelled`` run writes no CSV and its
     curves are partial (``ok`` still means "no error"). ``frames_resolved``
     counts the frames re-solved after the tracker lost the field (S43),
-    ``frames_unanchored`` those measured without the field: their points are
-    flagged suspect.
+    ``frames_unanchored`` those measured without the field, ``frames_unverified``
+    those whose lock rested on fewer than 3 anchors with no fresh solution (S58):
+    their points are flagged suspect.
     """
 
     curves: dict[str, LightCurve] = field(default_factory=dict)
@@ -158,6 +166,9 @@ class BatchResult:
     out_dir: Path | None = None  # where the CSVs were written
     frames_resolved: int = 0
     frames_unanchored: int = 0
+    #: S58: frames whose lock rested on 1-2 anchors with no solution of that frame or
+    #: the one before within 2 px: their points are flagged suspect.
+    frames_unverified: int = 0
 
     @property
     def ok(self) -> bool:
@@ -193,6 +204,13 @@ class PhotometryBatchWorker(QThread):
         self._frames_unanchored = 0
         self._solver_failed_logged = False
         self._flagged: set[int] = set()  # id() of the points measured without the field
+        # S58: the series index of the frame being measured and of the frame the
+        # current reference was solved on (None: the request's solve, of no frame here).
+        self._file_index = -1
+        self._reference_index: int | None = None
+        self._frames_unverified = 0
+        self._frames_verify_solved = 0
+        self._unverified_logged = False
 
     def cancel(self) -> None:
         """Ask the run to stop at the next frame boundary."""
@@ -240,6 +258,7 @@ class PhotometryBatchWorker(QThread):
                 out_dir=None if cancelled else req.out_dir,
                 frames_resolved=self._frames_resolved,
                 frames_unanchored=self._frames_unanchored,
+                frames_unverified=self._frames_unverified,
             )
             multi_filter = len({lc.filter_name for lc in curves.values()}) > 1
             for key in sorted(self._check_keys):
@@ -272,13 +291,21 @@ class PhotometryBatchWorker(QThread):
                         self._frames_resolved,
                         self._frames_unanchored,
                     )
-                else:
+                elif not self._frames_unverified:
                     logger.info(
                         "Batch tracking: field rotated %.2f°, drifted %.1f px over %d frames",
                         result.rotation_deg,
                         result.shift_px,
                         done,
                     )
+            if self._frames_unverified or self._frames_verify_solved:
+                logger.warning(
+                    "Batch tracking: %d frame(s) steered by fewer than 3 anchor stars were"
+                    " re-solved to verify their lock; %d had no verified lock (points"
+                    " flagged suspect)",
+                    self._frames_verify_solved,
+                    self._frames_unverified,
+                )
             diag.record(
                 "event",
                 what="batch_end",
@@ -287,6 +314,7 @@ class PhotometryBatchWorker(QThread):
                 shift_px=result.shift_px,
                 frames_resolved=self._frames_resolved,
                 frames_unanchored=self._frames_unanchored,
+                frames_unverified=self._frames_unverified,
             )
             self.finished_batch.emit(result)
         except Exception as exc:  # pragma: no cover - safety net
@@ -306,6 +334,7 @@ class PhotometryBatchWorker(QThread):
         Returns False, with no point, for a frame that cannot be read or has
         no usable DATE-OBS: an undated point would carry JD 0 to the AAVSO.
         """
+        self._file_index += 1  # S58: "this frame or the previous one"
         arr, jd, egain = self._read_frame(fpath, self._req.egain_table)
         if arr is None:
             logger.warning("%s: unreadable — skipped", fpath.name)
@@ -321,6 +350,8 @@ class PhotometryBatchWorker(QThread):
             self._series_fwhm = self._measure_series_fwhm(arr, diag)
         diag.record("frame", frame=frame_no, file=fpath.name, jd_utc=jd, fwhm=self._series_fwhm)
         wcs, anchored = self._anchor(green, wcs, diag, frame_no, fpath.name)
+        if anchored:
+            wcs, anchored = self._verify(green, wcs, diag, frame_no, fpath.name)
         if self._tracker is not None:
             diag.record(
                 "tracking",
@@ -389,6 +420,7 @@ class PhotometryBatchWorker(QThread):
         solution = self._solve(green, fname)
         if solution is not None:
             self._reference = solution
+            self._reference_index = self._file_index
             self._tracker = self._build_tracker(green)
             self._tracker.update(green)
             tracked = TrackedWCS(self._reference, self._tracker)
@@ -406,6 +438,65 @@ class PhotometryBatchWorker(QThread):
             what="unanchored",
             reason="no solver" if self._req.solver is None else "not re-solved",
         )
+        return wcs, False
+
+    def _fresh(self, tracked) -> bool:
+        """S58: the frame is measured through a solution of this frame or the previous
+        one, and the tracker moved no aperture of the set ``_LOCK_FRESH_MAX_SHIFT_PX``
+        or more from where that solution puts it (the live path's S56 rule)."""
+        if self._reference_index is None or self._file_index - self._reference_index > 1:
+            return False
+        shift = 0.0
+        for star in self._req.target_set.stars:
+            x0, y0 = self._reference.world_to_pixel_deg(star.ra_deg, star.dec_deg)
+            x1, y1 = tracked.world_to_pixel_deg(star.ra_deg, star.dec_deg)
+            d = math.hypot(float(x1) - float(x0), float(y1) - float(y0))
+            if not math.isfinite(d):
+                return False
+            shift = max(shift, d)
+        return shift < _LOCK_FRESH_MAX_SHIFT_PX
+
+    def _verify(self, green, wcs, diag, frame_no: int, fname: str):
+        """S58: S56's rule for a lock on fewer than 3 anchors, in the re-run.
+
+        With 1 or 2 anchors the S43 check is met by the very anchor that moved the
+        apertures: a neighbour or noise passes. Such a frame is verified only near
+        a fresh solution (:meth:`_fresh`); otherwise it is re-solved now (the live
+        path makes a re-solve due) and verified on its own solution, else its
+        points are flagged suspect. Returns ``(wcs, verified)``.
+        """
+        n = len(self._anchor_stars)
+        if self._tracker is None or not 0 < n < _LOCK_VERIFY_MIN_ANCHORS or self._fresh(wcs):
+            self._unverified_logged = False
+            return wcs, True
+        solution = self._solve(green, fname)
+        if solution is not None:
+            self._reference = solution
+            self._reference_index = self._file_index
+            self._tracker = self._build_tracker(green)
+            self._tracker.update(green)
+            tracked = TrackedWCS(self._reference, self._tracker)
+            n = len(self._anchor_stars)
+            if self._lock_holds(green, tracked) and (
+                n >= _LOCK_VERIFY_MIN_ANCHORS or self._fresh(tracked)
+            ):
+                self._frames_verify_solved += 1
+                self._unverified_logged = False
+                diag.record("event", frame=frame_no, what="lock_verified_by_solve", anchors=n)
+                return tracked, True
+            wcs = tracked
+        self._frames_unverified += 1
+        if not self._unverified_logged:
+            self._unverified_logged = True  # once per episode
+            logger.warning(
+                "%s: only %d anchor star(s) steer the apertures — the lock cannot be"
+                " verified; points are flagged suspect while fewer than 3 anchor stars steer"
+                " the apertures (except within 2 px of a solution of this frame or the"
+                " previous one)",
+                fname,
+                n,
+            )
+        diag.record("event", frame=frame_no, what="lock_unverified", anchors=n)
         return wcs, False
 
     def _solve(self, green, fname: str):

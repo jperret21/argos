@@ -10,8 +10,12 @@ frame is plate-solved so the page doesn't grow ad-hoc solve state:
   elapsed (between solves a tracked grid stays valid, so we don't thrash);
 - **a failed solve keeps the last good WCS** — the grid never blanks on one miss;
 - **a wrong solution is refused** (S50): a camera frame's solution whose plate
-  scale is more than 1 % from the session's first good solve keeps the last
-  good WCS, as a failed solve does;
+  scale is more than 1 % from the session's reference keeps the last good WCS,
+  as a failed solve does. The reference is the first good solve, moved to the
+  mean of any 3 consecutive solves that agree within 0.3 % (S55), so a wrong
+  first solve cannot refuse every later good one; a solution that the
+  photometry's previous anchors do not confirm is refused the same way (S54,
+  :meth:`set_solution_check`);
 - live solves use a small search radius + bounded timeout and **skip the slow
   whole-sky blind retry** (via :func:`build_solve_settings`), so the cadence can't
   stall the UI.
@@ -20,6 +24,7 @@ Signals:
     solved(FrameWCS, WCSOverlay, str): a fresh solution + grid overlay + summary.
     failed(str): the last solve attempt failed (the previous WCS, if any, is kept).
     state(str): short human status for the page ("Plate-solving…", "Idle", …).
+    notice(str): a warning for the Activity log (S55: the scale reference moved).
 """
 
 from __future__ import annotations
@@ -50,6 +55,11 @@ RaDec = tuple[float, float]
 #: first good solve by more than this fraction is refused. The owner's 270
 #: solves span 0.3 % around their night's first; the one wrong match was 3.4 % off.
 SCALE_TOLERANCE = 0.01
+#: S55: the reference moves to the mean of this many consecutive camera solves
+#: when they agree with each other within ``SCALE_AGREEMENT`` (max/min - 1). The
+#: owner's good solves span 0.3 % over a night.
+SCALE_AGREE_SOLVES = 3
+SCALE_AGREEMENT = 0.003
 
 
 def green_scale_arcsec(wcs) -> float | None:
@@ -68,6 +78,7 @@ class AstrometryController(QObject):
     solved = pyqtSignal(object, object, str)  # FrameWCS, WCSOverlay, summary
     failed = pyqtSignal(str)
     state = pyqtSignal(str)
+    notice = pyqtSignal(str)
 
     def __init__(self, cfg_get, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -84,6 +95,14 @@ class AstrometryController(QObject):
         #: S50: the first good solve's scale (″/green px) and frame geometry.
         self._scale_ref: float | None = None
         self._scale_ref_shape: tuple[int, int] | None = None
+        #: S55: the scales of the last camera solves of that geometry (refused ones too).
+        self._scale_recent: list[float] = []
+        #: S54: ``check(wcs, raw) -> reason | None`` vets a camera frame's new solution.
+        self._solution_check = None
+        #: S54: the raw frame of the in-flight solve (what its solution describes).
+        self._pending_raw: np.ndarray | None = None
+        #: S56: the raw frame the current WCS was solved on (None: unknown or dropped).
+        self._solved_raw: np.ndarray | None = None
         #: S48: the photometry lost the field: the next frame is due at once.
         self._resolve_due = False
 
@@ -95,6 +114,12 @@ class AstrometryController(QObject):
     def wcs(self):
         """The last good :class:`FrameWCS`, or ``None``."""
         return self._wcs
+
+    @property
+    def solved_raw(self) -> np.ndarray | None:
+        """The raw frame the current WCS was solved on (S56: the engine tells a
+        solution of this sub or the previous one by identity), or ``None``."""
+        return self._solved_raw if self._wcs is not None else None
 
     @property
     def green_shape(self) -> tuple[int, int] | None:
@@ -116,13 +141,20 @@ class AstrometryController(QObject):
 
     @property
     def scale_reference(self) -> float | None:
-        """The session's first good solve's plate scale (″ per green px), S50."""
+        """The session's plate-scale reference (″ per green px): S50's first good
+        solve, moved by three agreeing solves (S55)."""
         return self._scale_ref
 
     def reset_scale_reference(self) -> None:
         """Another camera or telescope: the next good solve is the new reference (S50)."""
         self._scale_ref = None
         self._scale_ref_shape = None
+        self._scale_recent = []
+
+    def set_solution_check(self, check) -> None:
+        """S54: ``check(wcs, raw)`` returns why a camera frame's new solution is
+        refused (the previous anchors show no star where it puts them), or None."""
+        self._solution_check = check
 
     def make_due(self) -> None:
         """The photometry lost the field (S48): the next frame is solved at once."""
@@ -135,6 +167,7 @@ class AstrometryController(QObject):
         on the new pointing instead of drawing a grid that no longer matches.
         """
         self._wcs = None
+        self._solved_raw = None
         self._last_solve_radec = None
         self.state.emit("WCS cleared (slew)")
 
@@ -233,6 +266,7 @@ class AstrometryController(QObject):
         self._green_shape = green_shape
         self._pending_target = target_radec
         self._pending_gate = gate
+        self._pending_raw = raw
         self._resolve_due = False
         self._last_solve_monotonic = time.monotonic()
         self._last_solve_radec = mount_radec
@@ -258,6 +292,7 @@ class AstrometryController(QObject):
 
     def _on_worker_solved(self, result) -> None:
         self.state.emit("Idle")
+        raw, self._pending_raw = self._pending_raw, None
         if not result.solved:
             # Keep the previous WCS — a single miss must not blank the grid.
             self.failed.emit(result.message)
@@ -269,15 +304,21 @@ class AstrometryController(QObject):
             self.failed.emit("could not build WCS from the solution")
             return
         refusal = self._scale_refusal(wcs)
+        if refusal is None and self._pending_gate and self._solution_check is not None:
+            # S54: a new solution on which fewer than half the previous tracker's
+            # anchors show a star where it puts them (XX Cyg 2026-09-07 045156Z
+            # frame 1: 1 of 6) is a wrong match, or the field is not there.
+            refusal = self._solution_check(wcs, raw)
         if refusal is not None:
-            # S50: a wrong match (XX Cyg 2026-09-07, 3.4 % off) is worse than no
-            # new solution: keep the last good WCS, as a failed solve does.
+            # S50, S54: a wrong match (XX Cyg 2026-09-07, 3.4 % off) is worse than
+            # no new solution: keep the last good WCS, as a failed solve does.
             logger.warning("Solution refused: %s", refusal)
             self.failed.emit(f"solution refused — {refusal}")
             if self._wcs is not None:
                 self.state.emit("Solution refused — keeping last WCS")
             return
         self._wcs = wcs
+        self._solved_raw = raw
         overlay = overlay_for(wcs, self._green_shape, self._cfg, target_radec=self._pending_target)
         self.solved.emit(wcs, overlay, self._summary(result))
 
@@ -286,7 +327,10 @@ class AstrometryController(QObject):
 
         The reference is the session's first good solve (the profile's nominal
         scale is 1.8 % above every measured one), restarted by another frame
-        geometry or :meth:`reset_scale_reference`. An opened FITS is not gated.
+        geometry or :meth:`reset_scale_reference`. It moves to the mean of the
+        last 3 camera solves (refused ones included) when they agree within
+        0.3 % (S55): a wrong first solve no longer refuses every later good one.
+        An opened FITS is not gated.
         """
         if not self._pending_gate:
             return None
@@ -296,7 +340,23 @@ class AstrometryController(QObject):
         if self._scale_ref is None or self._scale_ref_shape != self._green_shape:
             self._scale_ref = scale
             self._scale_ref_shape = self._green_shape
+            self._scale_recent = [scale]
             return None
+        self._scale_recent = (self._scale_recent + [scale])[-SCALE_AGREE_SOLVES:]
+        recent = self._scale_recent
+        if len(recent) == SCALE_AGREE_SOLVES and max(recent) <= min(recent) * (
+            1.0 + SCALE_AGREEMENT
+        ):
+            moved = sum(recent) / len(recent)
+            if abs(moved / self._scale_ref - 1.0) > SCALE_TOLERANCE:
+                text = (
+                    f"Solve: the plate-scale reference moves from {self._scale_ref / 2.0:.3f}″/px"
+                    f" to {moved / 2.0:.3f}″/px — {len(recent)} solves agree; the earlier"
+                    " reference was a wrong match"
+                )
+                logger.warning(text)
+                self.notice.emit(text)
+            self._scale_ref = moved
         deviation = scale / self._scale_ref - 1.0
         if abs(deviation) <= SCALE_TOLERANCE:
             return None

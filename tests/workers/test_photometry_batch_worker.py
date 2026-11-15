@@ -841,3 +841,92 @@ def test_a_re_run_keeps_one_curve_per_star_and_filter_s49(_scene) -> None:
     assert "target_TST_Tau_v_T.csv" in names and "target_TST_Tau_b_T.csv" in names
     assert "target_TST_Tau_T.csv" not in names  # the one mixed file before the fix
     assert {p.name for p in points if p.key == "T@b"} == {"T [b]"}
+
+
+def _two_anchor_scene(tmp_path, *, n=6, jump_at=None, jump=(26.0, 12.0)):
+    """Target and two comparisons (a tracker of 2 anchors), still or jumping at
+    frame ``jump_at``; after the jump a field star lands where comparison C1 was,
+    so the S43 check (1 of 2 anchors seen) passes on blank-sky apertures."""
+    ref = {(1.0, 1.0): (60.0, 60.0), (2.0, 2.0): (100.0, 40.0), (3.0, 3.0): (40.0, 110.0)}
+    jumped = {k: (x + jump[0], y + jump[1]) for k, (x, y) in ref.items()}
+    neighbour = (100.0, 40.0)  # where C1 was
+    ts = TargetSet(object_name="TWO Tau")
+    ts.set_role(TargetStar(role=ROLE_TARGET, ra_deg=1.0, dec_deg=1.0, auid="T"))
+    for i in (2, 3):
+        ts.set_role(
+            TargetStar(
+                role=ROLE_COMPARISON,
+                ra_deg=float(i),
+                dec_deg=float(i),
+                auid=f"C{i - 1}",
+                mags={"V": 11.0},
+            )
+        )
+    rng = np.random.default_rng(58)
+    paths = []
+    for i in range(n):
+        after = jump_at is not None and i >= jump_at
+        pos = jumped if after else ref
+        stars = [(pos[(1.0, 1.0)], 20000.0), (pos[(2.0, 2.0)], 8000.0), (pos[(3.0, 3.0)], 8000.0)]
+        if after:
+            stars.append((neighbour, 8000.0))
+        raw = _raw_with_green_stars(stars, green_shape=(160, 160))
+        raw += rng.normal(0.0, 3.0, raw.shape).astype(np.float32)
+        p = tmp_path / f"two_{i:03d}.fits"
+        _write_fits(p, raw, f"2026-08-29T05:{i:02d}:00")
+        paths.append(p)
+    req = BatchRequest(
+        fits_paths=paths,
+        wcs=_FakeWCS(ref),
+        target_set=ts,
+        params=PhotometryParams.from_config(lambda k, d: d),
+        out_dir=tmp_path / "out",
+        object_name="TWO Tau",
+    )
+    return req, _FakeWCS(ref), _FakeWCS(jumped)
+
+
+def test_a_re_run_flags_a_lock_on_two_anchors_without_a_fresh_solution_s58(tmp_path) -> None:
+    """S58: with 1 or 2 anchors the S43 check (ceil(n/2) seen) is met by the very
+    anchor that moved the apertures, so it verifies nothing (S56 in the live path).
+    Without a solver, a re-run's frames measured through the reference solve (of
+    no frame of the series) are flagged suspect; they were good points before."""
+    req, _ref, _jumped = _two_anchor_scene(tmp_path)
+    result, _points = _run_batch(req)
+
+    assert result.ok and result.frames_done == 6
+    points = result.curves["T@clear"].points
+    assert len(points) == 6 and all(p.suspect for p in points)  # unflagged before the fix
+    assert result.frames_unverified == 6
+    assert result.frames_unanchored == 0  # S43's lock holds: 1 of 2 seen
+
+
+def test_a_re_run_verifies_two_anchors_on_a_fresh_solution_s58(tmp_path) -> None:
+    """S58: a frame measured through its own solution or the previous frame's,
+    within 2 px of it, is verified: a solver re-solves every other frame and no
+    point is flagged. After a jump onto a neighbour (the S43 check passes) the
+    tracker moved the apertures 28 px: the frame is re-solved, never measured on
+    blank sky."""
+    req, ref, _jumped = _two_anchor_scene(tmp_path)
+    calls: list = []
+    req.solver = lambda green: calls.append(green.shape) or ref
+    result, _points = _run_batch(req)
+    assert not any(p.suspect for p in result.curves["T@clear"].points)
+    assert len(calls) == 3  # frames 0, 2 and 4: 1 and 3 use the previous frame's
+    assert result.frames_unverified == 0
+
+    (tmp_path / "jump").mkdir()
+    req, ref, jumped = _two_anchor_scene(tmp_path / "jump", n=4, jump_at=2)
+    solved: list = []
+
+    def solver(green):
+        solved.append(len(solved))
+        return ref if len(solved) == 1 else jumped
+
+    req.solver = solver
+    result, _points = _run_batch(req)
+    points = result.curves["T@clear"].points
+    assert len(points) == 4 and not any(p.suspect for p in points)
+    mags = [p.mag for p in points]
+    assert max(mags) - min(mags) < 0.05, mags  # never a blank-sky value
+    assert len(solved) == 2  # frame 0 (no fresh solve) and frame 2 (the jump)

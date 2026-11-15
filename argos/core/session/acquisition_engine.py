@@ -99,6 +99,55 @@ _SOFTWARE = SOFTWARE_ID
 #: S48: an anchor is seen when its aperture at the tracked position has this SNR
 #: (S35's "seen" threshold); the lock holds when half the anchors are seen (S43).
 _LOCK_MIN_SNR = 5.0
+#: S56: with fewer anchors, ceil(n/2) is met by the very anchor that moved the
+#: solution: the lock is unverified, its points flagged suspect, a re-solve due...
+_LOCK_VERIFY_MIN_ANCHORS = 3
+#: ...unless the frame is measured through a solution of this sub or the previous one
+#: and the tracker moved no aperture of the set more than this (green px) from where
+#: that solution puts it: the tracker's own outlier floor (``RESIDUAL_FLOOR_PX``); a
+#: neighbour locked after a jump or a stale rebuild (S52) moved them 22-36 px.
+_LOCK_FRESH_MAX_SHIFT_PX = 2.0
+#: S54: 3 consecutive solutions refused by the anchor check that agree with each
+#: other within this many green px (where each puts the newest one's frame centre)
+#: are a re-pointing the mount did not report: the third is accepted. The owner's
+#: runs' 3 consecutive good solves span at most 10.4 px (RR Lyr 2026-09-25: 4.3 px
+#: of drift per sub), apart from the subs across a real jump (22.7 and 145 px).
+_REPOINT_SOLVES = 3
+_REPOINT_AGREE_PX = 20.0
+
+
+def lock_unverified_text(n: int) -> str:
+    """S56's Activity line (once per episode)."""
+    return (
+        f"Photometry: only {n} anchor star{'s' if n != 1 else ''} steer the apertures — the"
+        " lock cannot be verified; points are flagged suspect while fewer than 3 anchor"
+        " stars steer the apertures (except within 2 px of a solution of this sub or the"
+        " previous one). Re-solving."
+    )
+
+
+def solutions_span_px(solutions, green_shape) -> float:
+    """S54: the largest distance (green px) between where the solutions put the newest
+    one's frame centre: how well consecutive solutions agree in position."""
+    h, w = green_shape
+    ra_h, dec = solutions[-1].pixel_to_radec((w - 1) / 2.0, (h - 1) / 2.0)
+    pts = [
+        tuple(float(v) for v in s.world_to_pixel_deg(float(ra_h) * 15.0, float(dec)))
+        for s in solutions
+    ]
+    return max(
+        (math.hypot(a[0] - b[0], a[1] - b[1]) for i, a in enumerate(pts) for b in pts[i + 1 :]),
+        default=0.0,
+    )
+
+
+def repoint_text(seen: int, anchors: int, span_px: float) -> str:
+    """S54's Activity line when 3 refused solutions agree: a re-pointing is accepted."""
+    return (
+        f"Solve: {_REPOINT_SOLVES} consecutive solutions agree within {span_px:.1f} px on a"
+        f" field where the anchor stars are not ({seen} of {anchors} seen) — accepted as a"
+        " re-pointing the mount did not report"
+    )
 
 
 def _is_light_frame(frame_type: str) -> bool:
@@ -316,6 +365,8 @@ class AcquisitionEngine(QObject):
         # Authoritative last frame for solve/photometry. ``decimated`` marks a
         # half-quality preview whose plate scale would poison a solve.
         self._last_raw: np.ndarray | None = None
+        #: S56: the frame before it (a solution of this sub or the previous one is fresh).
+        self._prev_raw: np.ndarray | None = None
         self._last_raw_decimated = False
         #: The last frame came from Open FITS (another night): no mount airmass (S34).
         self._last_raw_from_file = False
@@ -331,6 +382,9 @@ class AcquisitionEngine(QObject):
         self._astrometry.failed.connect(self._on_solve_failed)
         self._astrometry.state.connect(self.action_changed)
         self._astrometry.solved.connect(self._on_reference_solved)
+        self._astrometry.notice.connect(lambda text: self.log_message.emit("WARN", text))
+        # S54: a new solution must show the previous anchors' stars where it puts them.
+        self._astrometry.set_solution_check(self._solution_refusal)
 
         # §6 P1: live catalog (VSX/VSP) + persistent target set.
         self._catalog_worker: CatalogWorker | None = None
@@ -380,6 +434,11 @@ class AcquisitionEngine(QObject):
         # (raw solve, tracked solution frozen at a set change): what a tracker
         # rebuilt between two solves builds on (S52).
         self._rebase: tuple | None = None
+        #: S56: the current unverified-lock episode was logged (once per episode: until
+        #: a verified frame, a slew or invalidation, or a set change).
+        self._unverified_logged = False
+        #: S54: the consecutive solutions refused by the anchor check (their WCS).
+        self._repoint_refused: list = []
 
         # Last sequence directory (for the photometry setup window).
         self._last_sequence_dir: Path | None = None
@@ -687,8 +746,7 @@ class AcquisitionEngine(QObject):
         # Publish the (possibly decimated) preview; flag it so plate-solve /
         # photometry skip half-quality frames (their plate scale is wrong).
         self._last_raw_decimated = preview_arr.shape != full_arr.shape
-        self._last_raw = preview_arr
-        self._last_raw_from_file = False
+        self._take_raw(preview_arr)
         self.frame_ready.emit(
             LiveFrame(
                 preview=preview_arr,
@@ -840,11 +898,22 @@ class AcquisitionEngine(QObject):
         batch re-run all work from a FITS opened without a telescope.
         """
         self._last_raw_decimated = False
-        self._last_raw = full_arr
-        self._last_raw_from_file = False
+        self._take_raw(full_arr)
         self.frame_ready.emit(
             LiveFrame(preview=full_arr, full=full_arr, start=None, end=None, decimated=False)
         )
+
+    def _take_raw(self, arr) -> None:
+        """A camera frame (or a sub) becomes ``_last_raw``; the one before is kept (S56).
+
+        Back from an opened FITS, the tracker built on the file's field is dropped
+        (S59): a camera solution was otherwise held to the file's anchors (S54).
+        """
+        if self._last_raw_from_file:
+            self._reset_tracker()
+        self._prev_raw = self._last_raw
+        self._last_raw = arr
+        self._last_raw_from_file = False
 
     def open_fits_frame(self, path) -> datetime | None:
         """Load a saved FITS into the live pipeline (Open FITS, offline replay).
@@ -1218,6 +1287,7 @@ class AcquisitionEngine(QObject):
         self._exoplanet_hosts = []
         self._catalog_centre = None
         self._reset_tracker()
+        self._unverified_logged = False  # S56: a slew or invalidation ends the episode
 
     # ------------------------------------------------------------------
     # Catalog (VSX/VSP once per field)
@@ -1771,6 +1841,95 @@ class AcquisitionEngine(QObject):
         seen = anchors_seen(green, tracked, stars, params, min_snr=_LOCK_MIN_SNR)
         return seen < max(1, math.ceil(len(stars) / 2))
 
+    def _lock_unverified(self, params: PhotometryParams, tset: TargetSet, tracked) -> bool:
+        """The tracker steers on fewer than 3 anchors: the S48 check verifies nothing (S56).
+
+        With n = 1 or 2 anchors, ceil(n/2) = 1 anchor must be seen, and the
+        anchor whose centroid moved the solution is seen by construction: a
+        neighbour taken for a comparison after a jump, or at a stale position
+        after a set change (S52), passes. The frame keeps its points, flagged
+        suspect, and a solve is due at once; a new solution rebuilds the tracker.
+
+        Verified all the same (S56 as amended on 2026-11-15): a frame measured
+        through a solution of this sub or the previous one on which the tracker
+        moved no aperture of the set more than ``_LOCK_FRESH_MAX_SHIFT_PX`` from
+        where that solution puts it (:meth:`_fresh_lock`).
+        """
+        n = len(self._tracker_anchor_stars)
+        if not (params.track_apertures and self._tracker is not None):
+            return False
+        if not 0 < n < _LOCK_VERIFY_MIN_ANCHORS:
+            return False
+        return not self._fresh_lock(tset, tracked)
+
+    def _fresh_lock(self, tset: TargetSet, tracked) -> bool:
+        """The frame is measured through a solution of this sub or the previous one,
+        and the tracker moved the set's apertures less than 2 px from it (S56).
+
+        The quantity: the largest distance, over the set's stars, between a star's
+        position through the raw solution and through the tracked one this frame
+        is measured with (a set-change rebase included). Between two subs the
+        owner's fields drift 1-5 px; a neighbour taken for an anchor moves them
+        by the distance to that neighbour (22-36 px in the cases seen).
+        """
+        wcs = self._astrometry.wcs
+        solved = self._astrometry.solved_raw
+        if wcs is None or solved is None or self._last_raw is None:
+            return False
+        if solved is not self._last_raw and solved is not self._prev_raw:
+            return False
+        shift = 0.0
+        for star in tset.stars:
+            x0, y0 = wcs.world_to_pixel_deg(star.ra_deg, star.dec_deg)
+            x1, y1 = tracked.world_to_pixel_deg(star.ra_deg, star.dec_deg)
+            d = math.hypot(float(x1) - float(x0), float(y1) - float(y0))
+            if not math.isfinite(d):
+                return False
+            shift = max(shift, d)
+        return shift < _LOCK_FRESH_MAX_SHIFT_PX
+
+    def _solution_refusal(self, wcs, raw) -> str | None:
+        """Why a camera frame's new solution is refused (S54), or None to accept it.
+
+        A new solution rebuilds the tracker from the stars seen where it puts
+        them, so a wrong match passes the S48 check by construction (XX Cyg
+        2026-09-07 045156Z frame 1: 1 anchor of 6 seen, the next frame measured
+        24 px off every star). Fewer than ceil(k/2) of the current tracker's k
+        anchors showing a star (SNR >= 5, S35's threshold) where the new solution
+        puts them on the frame it solved refuses it: the previous solution and
+        its tracker stay. No tracker (the first solve, after a slew, Open FITS or
+        a set change) means no check. Called by the controller (``_on_worker_solved``).
+
+        3 consecutive refused solutions that agree with each other within
+        ``_REPOINT_AGREE_PX`` (S54 as amended on 2026-11-15, as S55 moves the scale
+        reference): the field moved without a reported slew (camera-only, another
+        app), the third is accepted and logged.
+        """
+        stars = self._tracker_anchor_stars
+        if self._tracker is None or not stars or raw is None:
+            return None
+        params = PhotometryParams.from_config(self._cfg, egain=self._egain())
+        if not params.track_apertures:
+            return None
+        green = green_plane(raw)
+        seen = anchors_seen(green, wcs, stars, params, min_snr=_LOCK_MIN_SNR)
+        needed = max(1, math.ceil(len(stars) / 2))
+        if seen >= needed:
+            self._repoint_refused = []
+            return None
+        self._repoint_refused = (self._repoint_refused + [wcs])[-_REPOINT_SOLVES:]
+        if len(self._repoint_refused) == _REPOINT_SOLVES:
+            span = solutions_span_px(self._repoint_refused, green.shape)
+            if span <= _REPOINT_AGREE_PX:
+                self._repoint_refused = []
+                self.log_message.emit("WARN", repoint_text(seen, len(stars), span))
+                return None
+        return (
+            f"only {seen} of the {len(stars)} anchor stars show a star where it places them"
+            f" ({needed} needed: a wrong match, or the field is not there); the previous"
+            " solution is kept"
+        )
+
     def _resolve_now(self, green) -> None:
         """The field was lost: the next solve is due at once (S48).
 
@@ -1829,6 +1988,7 @@ class AcquisitionEngine(QObject):
         self._tracker = None
         self._tracker_anchor_stars = []
         self._rebase = None
+        self._repoint_refused = []  # S54: no anchors to refuse a solution against
 
     def _anchors_changed(self) -> None:
         """The set's stars changed between two solves: rebuild the tracker (S52).
@@ -1845,6 +2005,8 @@ class AcquisitionEngine(QObject):
             self._rebase = (wcs, TrackedWCS(self._base_wcs(), copy.copy(self._tracker)))
         self._tracker = None
         self._tracker_anchor_stars = []
+        self._repoint_refused = []
+        self._unverified_logged = False  # S56: a set change ends the episode
         if self._camera_service.state is CameraState.SEQUENCE:
             self._astrometry.make_due()
 
@@ -1900,6 +2062,18 @@ class AcquisitionEngine(QObject):
             diag.record("event", frame=frame_no, what="frame_skipped", reason="lock_lost")
             self._resolve_now(green)
             return
+        unverified = self._lock_unverified(params, tset, tracked)
+        if unverified:
+            # S56: 1 or 2 anchors verify nothing (the anchor that moved the solution is
+            # always seen) away from a fresh solution: flag the points, solve again now.
+            n = len(self._tracker_anchor_stars)
+            if not self._unverified_logged:
+                self._unverified_logged = True  # once per episode
+                self.log_message.emit("WARN", lock_unverified_text(n))
+            diag.record("event", frame=frame_no, what="lock_unverified", anchors=n)
+            self._resolve_now(green)
+        else:
+            self._unverified_logged = False  # a verified frame ends the episode
         results = measure_frame(
             green,
             tracked,
@@ -1941,7 +2115,7 @@ class AcquisitionEngine(QObject):
             has_ratio = res.relative is not None and res.relative.flux_ratio is not None
             if not (has_mag or has_ratio):
                 continue
-            self._emit_live_point(res, jd, air, fwhm, (lat, lon, elev), token)
+            self._emit_live_point(res, jd, air, fwhm, (lat, lon, elev), token, unverified)
         if self._curves_dirty:
             # One whole-store re-render per frame, whatever the star count.
             self._curves_dirty = False
@@ -1957,7 +2131,8 @@ class AcquisitionEngine(QObject):
         The report is computed and shown in plain live preview too; it is
         written to disk only inside a run's folder. It vets the comparisons
         of the measured frame's filter only (S49): the run's first filter in
-        ``photometry_quality.json``, another in ``photometry_quality_<filter>.json``.
+        ``photometry_quality.json``, another in ``photometry_quality_<filter>.json``;
+        each file names its filter in a ``filter`` key (the token, S57).
         """
         token = self._measured_filter
         report = comparison_quality_report(
@@ -1981,12 +2156,20 @@ class AcquisitionEngine(QObject):
             else f"photometry_quality_{token}.json"
         )
         try:
-            save_comparison_quality_report(self._active_run_root / name, report)
+            # S57: the file says which filter it vets (additive: readers ignore it).
+            save_comparison_quality_report(self._active_run_root / name, report, filter_token=token)
         except OSError as exc:
             self.log_message.emit("WARN", f"Save photometry quality: {exc}")
 
-    def _emit_live_point(self, res, jd: float, air, fwhm, site, token: str = "clear") -> None:
-        """Append one measured star to its (star, filter) curve + CSV and signal it."""
+    def _emit_live_point(
+        self, res, jd: float, air, fwhm, site, token: str = "clear", unverified: bool = False
+    ) -> None:
+        """Append one measured star to its (star, filter) curve + CSV and signal it.
+
+        ``unverified``: the frame's lock rests on fewer than 3 anchors (S56): the
+        point is flagged suspect, as a batch re-run flags a frame measured
+        without the field (S43).
+        """
         lat, lon, elev = site
         bjd = (
             bjd_tdb(jd, res.star.ra_deg, res.star.dec_deg, float(lat), float(lon), float(elev))
@@ -2011,7 +2194,7 @@ class AcquisitionEngine(QObject):
             comps_used=res.diff.comps_used if res.diff else 0,
             relative_comps_used=res.relative.comps_used if res.relative else 0,
             saturated=bool(res.phot and res.phot.saturated),
-            suspect=bool(res.phot and res.phot.suspect),
+            suspect=bool(res.phot and res.phot.suspect) or unverified,
             formal_mag_err=(
                 res.diff.formal_mag_err or res.diff.mag_err
                 if res.diff and res.diff.mag_err is not None

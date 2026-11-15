@@ -1401,6 +1401,351 @@ def test_a_set_change_never_re_anchors_on_a_stale_solution_s52(shot_rig, monkeyp
     assert engine._tracker.anchors_used >= 3
 
 
+def _land_solution(engine, monkeypatch, wcs, raw) -> None:
+    """A solution of ``raw`` lands through the controller's gates (S50, S54), as an
+    ASTAP result would: ``_start`` recorded the frame, the worker returned."""
+    import argos.workers.astrometry_controller as ac
+    from argos.core.imaging.platesolve import SolveResult
+
+    monkeypatch.setattr(ac, "wcs_from_result", lambda _result, _shape: wcs)
+    monkeypatch.setattr(ac, "overlay_for", lambda *a, **k: None)
+    controller = engine.astrometry
+    controller._green_shape = (raw.shape[0] // 2, raw.shape[1] // 2)
+    controller._pending_raw = raw
+    controller._pending_gate = True
+    controller._on_worker_solved(SolveResult(solved=True, ra_hours=0.667, dec_deg=20.0))
+
+
+def test_a_new_solution_the_anchors_do_not_confirm_is_refused_s54(shot_rig, monkeypatch) -> None:
+    """S54: a new plate solution rebuilt the tracker from the stars seen where it
+    put them, so a wrong match passed S48 (XX Cyg 2026-09-07 045156Z frame 1: 1
+    anchor of 6 seen, the next frame measured 24 px off every star; S50 also
+    refuses that one, by its scale). A camera frame's new solution on which fewer
+    than half the previous tracker's anchors show a star (SNR >= 5) where it puts
+    them is now refused: the previous solution and its tracker stay."""
+    import math
+    from datetime import datetime, timezone
+
+    engine, _session, _form, logs = shot_rig
+    xy, frame_a, _frame_b = _s48_field(engine, monkeypatch)
+    good = _GridWCS(xy)
+    engine.astrometry._wcs = good
+    engine._on_reference_solved(None, None, "")
+
+    def measure(minute: int) -> None:
+        engine._last_raw, engine._last_raw_decimated = frame_a, False
+        engine._last_exposure_mid = datetime(2026, 11, 1, 3, minute, tzinfo=timezone.utc)
+        engine._measure_photometry()
+
+    measure(0)
+    assert engine._tracker.anchors_used == 4
+    wrong = _GridWCS({k: (x + 25.0, y + 10.0) for k, (x, y) in xy.items()})
+    _land_solution(engine, monkeypatch, wrong, frame_a)
+    assert engine.astrometry.wcs is good  # the wrong match replaced it before the fix
+    assert any(
+        level == "ERROR" and "refused" in msg and "0 of the 4 anchor" in msg for level, msg in logs
+    ), logs
+    measure(1)  # the frame stays on its stars
+    x, y = engine.tracked_wcs().world_to_pixel_deg(10.0, 20.0)
+    assert math.hypot(x - 150.0, y - 100.0) < 1.0
+    assert len(_lc(engine, "V1").points) == 2
+
+
+def test_a_good_solution_after_a_jump_or_a_slew_is_accepted_s54(shot_rig, monkeypatch) -> None:
+    """S54 costs no good solution: after a 30 px jump the new solution puts the
+    previous anchors on their stars; after a slew there is no previous tracker."""
+    from datetime import datetime, timezone
+
+    engine, _session, _form, _logs = shot_rig
+    xy, frame_a, _frame_b = _s48_field(engine, monkeypatch)
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+    engine._last_raw, engine._last_raw_decimated = frame_a, False
+    engine._last_exposure_mid = datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc)
+    engine._measure_photometry()
+    moved_xy = {k: (x + 30.0, y) for k, (x, y) in xy.items()}
+    moved = _GridWCS(moved_xy)
+    _land_solution(engine, monkeypatch, moved, _field_frame(list(moved_xy.values())))
+    assert engine.astrometry.wcs is moved
+    engine.invalidate_astrometry()  # a slew: another field, no previous anchors
+    elsewhere = _GridWCS({k: (x + 200.0, y + 120.0) for k, (x, y) in xy.items()})
+    _land_solution(engine, monkeypatch, elsewhere, _field_frame([(10.0, 10.0)]))
+    assert engine.astrometry.wcs is elsewhere
+
+
+def _two_anchor_field(engine, monkeypatch):
+    """Target V1 and two comparisons: a tracker of 2 anchors."""
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+
+    xy = {(10.0, 20.0): (150.0, 100.0), (10.01, 20.0): (60.0, 50.0), (10.02, 20.0): (230.0, 60.0)}
+    stars = [TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1")]
+    stars += [
+        TargetStar(ROLE_COMPARISON, ra, dec, auid=f"C{i}", source="vsp", mags={"V": 10.0})
+        for i, (ra, dec) in enumerate(list(xy)[1:])
+    ]
+    monkeypatch.setattr(engine, "target_set", lambda: TargetSet(object_name="V1", stars=stars))
+    return xy, _field_frame(list(xy.values()))
+
+
+def test_a_lock_on_fewer_than_three_anchors_flags_its_points_s56(shot_rig, monkeypatch) -> None:
+    """S56: with 1 or 2 anchors the S48 check (ceil(n/2) seen) is met by the very
+    anchor that moved the solution, so it verifies nothing (the RR Lyr
+    2026-09-25 replays: 1 or 2 anchors after the VSP backfill). Such a frame's
+    points are now flagged suspect (the CSV's suspect column, kept, left out of
+    the AAVSO export) and a re-solve is due at once, unless the frame is measured
+    within 2 px of a solution of this sub or the previous one (S56 as amended)."""
+    from datetime import datetime, timezone
+
+    from argos.core.photometry.lightcurve import LightCurve
+
+    engine, _session, _form, logs = shot_rig
+    xy, frame = _two_anchor_field(engine, monkeypatch)
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+    for minute in range(2):
+        engine._last_raw, engine._last_raw_decimated = frame, False
+        engine._last_exposure_mid = datetime(2026, 11, 1, 3, minute, tzinfo=timezone.utc)
+        engine._measure_photometry()
+    assert len(engine._tracker_anchor_stars) == 2
+    points = _lc(engine, "V1").points
+    assert len(points) == 2 and all(p.suspect for p in points)  # unflagged before the fix
+    assert engine.astrometry._due(None) is True  # a re-solve is due at once
+    warnings = [m for level, m in logs if level == "WARN" and "cannot be verified" in m]
+    assert len(warnings) == 1  # once per episode, not per frame
+    csv = next(path for key, path in engine._preview_csvs.items() if key.startswith("V1@"))
+    assert [p.suspect for p in LightCurve.from_csv(csv).points] == [True, True]
+
+
+def test_a_run_re_solves_the_sub_whose_lock_is_unverified_s56(shot_rig, monkeypatch) -> None:
+    """In a run the sub in hand is solved at once, as after a lost lock (S48);
+    a lock on 3 anchors or more is verified: no flag, no re-solve."""
+    from datetime import datetime, timezone
+
+    from argos.workers.camera_service import CameraState
+
+    engine, _session, _form, _logs = shot_rig
+    started: list = []
+    monkeypatch.setattr(
+        engine.astrometry, "on_new_frame", lambda raw, shape, *a, **k: started.append(shape)
+    )
+    monkeypatch.setattr(engine._camera_service, "_state", CameraState.SEQUENCE)
+    xy, frame = _two_anchor_field(engine, monkeypatch)
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+    engine._last_raw, engine._last_raw_decimated = frame, False
+    engine._last_exposure_mid = datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc)
+    engine._measure_photometry()
+    assert started == [(200, 300)]
+    assert _lc(engine, "V1").points[-1].suspect
+
+    started.clear()
+    engine.astrometry._resolve_due = False
+    xy4, frame4, _b = _s48_field(engine, monkeypatch)
+    engine.astrometry._wcs = _GridWCS(xy4)
+    engine._on_reference_solved(None, None, "")
+    engine._last_raw = frame4
+    engine._last_exposure_mid = datetime(2026, 11, 1, 3, 1, tzinfo=timezone.utc)
+    engine._measure_photometry()
+    assert len(engine._tracker_anchor_stars) == 4
+    assert started == [] and engine.astrometry._resolve_due is False
+    assert not _lc(engine, "V1").points[-1].suspect
+
+
+def _measure_raw(engine, raw, minute: int) -> None:
+    """A frame becomes the engine's last raw (``_take_raw``) and is measured."""
+    from datetime import datetime, timezone
+
+    engine._take_raw(raw)
+    engine._last_raw_decimated = False
+    engine._last_exposure_mid = datetime(2026, 11, 1, 3, minute, tzinfo=timezone.utc)
+    engine._measure_photometry()
+
+
+def test_a_few_anchor_lock_near_a_fresh_solution_is_verified_s56(shot_rig, monkeypatch) -> None:
+    """S56 as amended (2026-11-15): with 1-2 anchors a frame is verified when it is
+    measured through a solution of this sub or the previous one and the tracker
+    moved no aperture 2 px or more from where that solution puts it (XX Cyg
+    2026-08-29 050148Z: 2 anchors, every point within 2 px of its star, all 22
+    flagged before). No re-solve is made due then. Two subs after the solve, or
+    3 px from it, the frame is flagged and a re-solve is due, as before."""
+    engine, _session, _form, _logs = shot_rig
+    xy, frame = _two_anchor_field(engine, monkeypatch)
+    engine._take_raw(frame)
+    _land_solution(engine, monkeypatch, _GridWCS(xy), frame)
+    _measure_raw(engine, frame, 0)  # through this sub's own solution
+    assert len(engine._tracker_anchor_stars) == 2
+    assert not _lc(engine, "V1").points[-1].suspect  # flagged before the amendment
+    assert engine.astrometry._resolve_due is False
+    _measure_raw(engine, frame.copy(), 1)  # the previous sub's solution
+    assert not _lc(engine, "V1").points[-1].suspect
+    assert engine.astrometry._resolve_due is False
+    _measure_raw(engine, frame.copy(), 2)  # two subs after it: unverified
+    assert _lc(engine, "V1").points[-1].suspect
+    assert engine.astrometry._resolve_due is True
+
+    for minute, (shift, flagged) in enumerate(((1.0, False), (3.0, True)), start=3):
+        engine.astrometry._resolve_due = False
+        base = frame.copy()
+        engine._take_raw(base)
+        _land_solution(engine, monkeypatch, _GridWCS(xy), base)
+        moved = _field_frame([(x + shift, y) for x, y in xy.values()])
+        _measure_raw(engine, moved, minute)
+        assert _lc(engine, "V1").points[-1].suspect is flagged, shift
+        assert engine.astrometry._resolve_due is flagged
+
+
+def test_the_unverified_lock_warns_once_per_episode_s56(shot_rig, monkeypatch) -> None:
+    """S56 as amended: one Activity line per episode. A solve that lands does not
+    end it (on a field that never reaches 3 anchors it warned on every sub, with
+    'until the next solve', which was false there); a verified frame, a slew or
+    a set change does."""
+    engine, _session, _form, logs = shot_rig
+    xy, frame = _two_anchor_field(engine, monkeypatch)
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+
+    def warnings() -> list[str]:
+        return [m for level, m in logs if level == "WARN" and "cannot be verified" in m]
+
+    _measure_raw(engine, frame, 0)
+    _measure_raw(engine, frame.copy(), 1)
+    old = frame.copy()  # a solve of an older frame lands: still unverified
+    _land_solution(engine, monkeypatch, _GridWCS(xy), old)
+    _measure_raw(engine, frame.copy(), 2)
+    _measure_raw(engine, frame.copy(), 3)
+    assert len(warnings()) == 1, warnings()  # 2 before the amendment
+    assert "while fewer than 3 anchor stars steer the apertures" in warnings()[0]
+    fresh = frame.copy()
+    engine._take_raw(fresh)
+    _land_solution(engine, monkeypatch, _GridWCS(xy), fresh)
+    _measure_raw(engine, fresh, 4)  # verified: the episode ends
+    assert not _lc(engine, "V1").points[-1].suspect
+    _measure_raw(engine, frame.copy(), 5)
+    _measure_raw(engine, frame.copy(), 6)  # stale again: a new episode
+    assert len(warnings()) == 2
+    engine.invalidate_astrometry()  # a slew ends it too
+    assert engine._unverified_logged is False
+
+
+def test_the_anchor_check_needs_half_the_anchors_s54(shot_rig, monkeypatch) -> None:
+    """S54's threshold is ceil(k/2) of the tracker's k anchors: 1 of 4 seen refuses
+    the solution (045156Z frame 1 was 1 of 6), 2 of 4 accept it."""
+    import argos.core.session.acquisition_engine as ae
+
+    engine, _session, _form, _logs = shot_rig
+    xy, frame_a, _frame_b = _s48_field(engine, monkeypatch)
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+    _measure_raw(engine, frame_a, 0)
+    assert len(engine._tracker_anchor_stars) == 4
+    monkeypatch.setattr(ae, "anchors_seen", lambda *a, **k: 1)
+    reason = engine._solution_refusal(_GridWCS(xy), frame_a)
+    assert reason is not None and "only 1 of the 4 anchor stars" in reason
+    assert "(2 needed" in reason
+    monkeypatch.setattr(ae, "anchors_seen", lambda *a, **k: 2)
+    assert engine._solution_refusal(_GridWCS(xy), frame_a) is None
+
+
+class _LinearWCS:
+    """A continuous solve (1 green px per arcsec) shifted by ``dx`` px: S54's
+    agreement is measured at the frame centre, where no set star is."""
+
+    def __init__(self, dx: float) -> None:
+        self.dx = dx
+
+    def world_to_pixel_deg(self, ra: float, dec: float):
+        return 150.0 + (ra - 10.0) * 3600.0 + self.dx, 100.0 + (dec - 20.0) * 3600.0
+
+    def pixel_to_radec(self, x: float, y: float):
+        return (10.0 + (x - 150.0 - self.dx) / 3600.0) / 15.0, 20.0 + (y - 100.0) / 3600.0
+
+
+def test_three_agreeing_refused_solutions_are_a_re_pointing_s54(shot_rig, monkeypatch) -> None:
+    """S54 as amended (2026-11-15): when the field moved without a reported slew
+    (camera only, another app), the previous anchors are off the frame and every
+    correct solution was refused until a slew. 3 consecutive solutions refused by
+    the anchor check that agree within 20 px are now accepted and logged; 3 that
+    disagree stay refused."""
+    import argos.core.session.acquisition_engine as ae
+
+    engine, _session, _form, logs = shot_rig
+    xy, frame_a, _frame_b = _s48_field(engine, monkeypatch)
+    good = _GridWCS(xy)
+    engine.astrometry._wcs = good
+    engine._on_reference_solved(None, None, "")
+    _measure_raw(engine, frame_a, 0)
+    monkeypatch.setattr(ae, "anchors_seen", lambda *a, **k: 0)  # the field moved away
+    for dx in (300.0, 400.0, 500.0):  # disagreeing: wrong matches
+        _land_solution(engine, monkeypatch, _LinearWCS(dx), frame_a)
+        assert engine.astrometry.wcs is good
+    for dx in (600.0, 604.0):
+        _land_solution(engine, monkeypatch, _LinearWCS(dx), frame_a)
+        assert engine.astrometry.wcs is good
+    third = _LinearWCS(608.0)
+    _land_solution(engine, monkeypatch, third, frame_a)
+    assert engine.astrometry.wcs is third  # refused for ever before the amendment
+    assert any(
+        level == "WARN" and "re-pointing the mount did not report" in msg for level, msg in logs
+    ), logs
+    assert engine._repoint_refused == [] and engine._tracker is None
+
+
+def test_a_camera_frame_after_an_opened_fits_drops_its_tracker_s59(shot_rig, monkeypatch) -> None:
+    """S59: an opened FITS is solved and measured (a tracker on the file's field);
+    back to camera frames, that tracker was kept, so the camera's first solution
+    was held to the file's anchors (S54) and refused while the camera points
+    elsewhere. A camera frame after a file now drops it, as the server's
+    source_changed does."""
+    engine, _session, _form, _logs = shot_rig
+    xy, frame_a, _frame_b = _s48_field(engine, monkeypatch)
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+    _measure_raw(engine, frame_a, 0)
+    engine._last_raw_from_file = True  # as open_fits_frame leaves it
+    assert engine._tracker is not None
+    engine.ingest_frame(_field_frame([(20.0, 20.0)]))  # a camera sub elsewhere
+    assert engine._tracker is None and engine._tracker_anchor_stars == []
+    elsewhere = _GridWCS({k: (x + 200.0, y + 120.0) for k, (x, y) in xy.items()})
+    _land_solution(engine, monkeypatch, elsewhere, engine._last_raw)
+    assert engine.astrometry.wcs is elsewhere  # refused before the fix (0 of 4 seen)
+
+
+def test_every_vetting_file_names_its_filter_s57(shot_rig, tmp_path, monkeypatch) -> None:
+    """S57: ``photometry_quality.json`` vets the run's first filter and did not say
+    which. Every vetting file now carries an additive ``filter`` key (the S49
+    token); Review, which ignores unknown keys, still reads it."""
+    import json
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+
+    engine, _session, _form, _logs = shot_rig
+    comps = [TargetStar(ROLE_COMPARISON, 10.01 * i, 20.0, auid=f"C{i}") for i in (1, 2, 3)]
+    tset = TargetSet(
+        object_name="V1",
+        stars=[TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1"), *comps],
+    )
+    _fake_measure_rig(engine, monkeypatch, tset, [])
+    real_report = type(engine)._write_live_quality_report.__get__(engine)
+    monkeypatch.setattr(engine, "_write_live_quality_report", real_report)
+    run = tmp_path / "20261114T200000Z_V1"
+    (run / "lights").mkdir(parents=True)
+    t0 = datetime(2026, 11, 14, 20, 0, tzinfo=timezone.utc)
+    for i, filt in enumerate(["IR", "LP", "IR"]):
+        record = SimpleNamespace(
+            image_type="Light Frame",
+            timestamp=(t0 + timedelta(minutes=i)).isoformat(),
+            exposure_s=10.0,
+            filter_name=filt,
+        )
+        engine._on_seq_frame_saved(str(run / "lights" / f"f{i}.fit"), record)
+    first = json.loads((run / "photometry_quality.json").read_text())
+    other = json.loads((run / "photometry_quality_lp.json").read_text())
+    assert first["filter"] == "ir" and other["filter"] == "lp"  # no key before the fix
+    assert first["comparison_stars"] and first["schema"] == other["schema"]
+
+
 def test_recommend_with_no_vsp_star_passing_the_gate_keeps_the_ensemble(
     shot_rig, monkeypatch
 ) -> None:
