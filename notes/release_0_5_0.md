@@ -1,7 +1,7 @@
 # Argos 0.5.0 — data-integrity and hardware-safety fixes
 
 > Branch: `release/0.5.0`, cut from the published `release/0.4.2`.
-> Last updated: 2026-11-13.
+> Last updated: 2026-11-15.
 
 A bug-fix release with no new features. Specifying the web UI meant taking an
 inventory of the Qt code, and that inventory turned up defects that affect
@@ -80,6 +80,14 @@ a run's sub verified through the previous solution is solved too), and add
 opened FITS drops the file's tracker, and the file's anchors never check a camera
 solution).
 
+Porting Review's exports and batch re-run to the web UI (its wave 7) found four
+more, each with a test that fails on the code before it: **S60** (the AAVSO export
+wrote a pre-0.5.0 batch CSV's undated points as rows dated JD 0), **S61** (Export
+measurements of a two-filter run merged a star's two curves when read back),
+**S62** (the batch re-run measured another object's frames against the target set)
+and **S63** (a batch re-run of a session folder also measured the links and
+registered copies Siril had written beside its lights: each epoch three times).
+
 **Several of these defects affect files you already hold.** The table says
 which; *Check your old files* below says how to find them.
 
@@ -142,6 +150,12 @@ which; *Check your old files* below says how to find them.
 | S57 | `photometry_quality.json` did not say which filter it vets | A two-filter run's vetting file ambiguous (format only) | no (format: an added key) |
 | S58 | Batch re-run: with 1 or 2 anchors the S43 lock check verified nothing | Unflagged points of an unverified lock (XX Cyg `050148Z` re-run: 4 target points 2.5-4.5 px off their star) | no (none of the owner's runs was re-run) |
 | S59 | A tracker built on an opened FITS survived the return to camera frames (or, in a run, was rebuilt on the file's anchors) | The camera's correct solutions refused by S54 against the file's anchor stars | no (S54 is new in 0.5.0) |
+| S60 | The AAVSO export wrote undated points (JD 0, from a pre-0.5.0 batch CSV) | Rows dated `0.000000` (4713 BC) in an AAVSO report | rarely (reports exported from a 0.4.x batch re-run of frames without `DATE-OBS`; none of the owner's) |
+| S61 | Export measurements wrote a star's curves of two filters under one `star_id` | Read back, both bands became one curve | only runs through two filters (none of the owner's) |
+| S62 | The batch re-run measured every object's lights in the chosen folder | Another field's frames measured against the target set: blank-sky points | no (none of the owner's runs was re-run) |
+| S63 | The batch re-run of a session folder measured the FITS other programs wrote beside lights/ | Each epoch measured three times (links to the lights, registered copies) | no (none of the owner's runs was re-run; RR Lyr 2026-09-25 would have been) |
+| S64 | The AAVSO report's `#SOFTWARE` line named no version | `#SOFTWARE=Argos` where the format asks for the name and version | **yes** (every AAVSO report: a header line only, no observation) |
+| S65 | The Frame Viewer read a calibrated float frame in [0, 1] as is | Measure star: SNR 0, peak 0 ADU; Identify field: a black plane for ASTAP | only frames from other software (Siril's `r_light_*.fit`); display only, nothing written |
 | S24 | An ASTAP database folder replaced the chosen database set | Slower or failed solves | no |
 | S29 | Two unvalidated-profile warnings, hard-coded IMX585 hint | Contradictory wording | no |
 
@@ -318,7 +332,9 @@ against the day you installed 0.5.0.
   points were submitted without a flag.
 - **Batch CSVs (S13).** A row with `jd_utc = 0` came from a frame without
   `DATE-OBS`. This only happened with frames from other software, and only in
-  `*.fits` folders (S12 kept the re-run from finding Argos frames).
+  `*.fits` folders (S12 kept the re-run from finding Argos frames). An AAVSO
+  report exported from such a CSV (S60) has rows with `DATE` `0.000000`:
+  retract them.
 - **Batch re-runs across a pointing jump (S43).** A re-run's
   `<object>_diagnostics.jsonl` (written when diagnostics are on) has one
   `star` record per star and frame: frames on which every comparison has
@@ -622,6 +638,23 @@ default).
 **What changed.** The writer resolves `EGAIN` in the same order; the comment
 names the source (`egain_table`, `driver` or the sensor reference).
 **How to check.** `tests/core/test_fits_writer.py::test_egain_header_is_the_value_the_photometry_uses`.
+
+### S65 — The Frame Viewer measures a calibrated float frame in counts
+
+**What was wrong.** The Frame Viewer (**Analyze › Open frame**) read a FITS as
+its numbers. A calibrated float frame whose values lie in [0, 1] (the convention
+of Siril's `r_light_*.fit`, as in star_var_script's `process/` folder beside a
+session's lights) gave **Measure star** an SNR of 0 and a peak of 0 ADU (the sky
+σ is floored at one count and the peak truncated to an integer), and
+**Identify field** handed ASTAP a black plane. Found by the web UI's wave 7
+technical review on the owner's RR Lyr 2026-09-25 folder.
+**Who was affected.** Anyone opening such a frame in the Frame Viewer. Display
+only: nothing is written, no curve or report uses these numbers.
+**What changed.** `read_fits_2d` scales a float frame whose values all lie in
+(0, 1] by 65535, as the web viewer does. Integer frames and float frames in
+counts are read unchanged.
+**How to check.** `tests/ui/test_frame_viewer_fits.py::test_a_float_frame_in_0_1_is_measured_in_counts_s65`
+(SNR 0 on the code before the fix) and `::test_a_float_frame_in_counts_is_read_unchanged`.
 
 ### S59 — A camera frame after an opened FITS drops the file's tracker
 
@@ -1429,6 +1462,59 @@ nothing. A one-filter export is unchanged.
 **How to check.** `tests/ui/test_photometry_window.py::test_aavso_export_refuses_curves_of_two_filters_s53`
 (a two-row file under one `FILT` on the code before the fix).
 
+### S60 — The AAVSO export leaves undated points out
+
+**What was wrong.** Before S13 a batch re-run dated a frame without `DATE-OBS` at
+JD 0 (`jd_utc = jd or 0.0`). S13 stopped writing such points, but the CSVs
+written before still open in Analyze (**Open curve CSV…**), and **Export AAVSO**
+wrote their rows with `DATE` `0.000000`, an observation in 4713 BC; a `nan`
+date was written as `nan`.
+**Who was affected.** AAVSO reports exported from a 0.4.x batch re-run's CSV
+that held a frame without `DATE-OBS` (third-party `*.fits` frames: S12 kept the
+0.4.x re-run from finding Argos's own `.fit` frames). None of the owner's.
+**What changed.** `write_aavso` leaves out a point whose `jd_utc` is not finite
+or is before JD 2 400 000 (1858, `MIN_AAVSO_JD`), whatever its flags, and counts
+it (`AavsoExportSummary.undated_excluded`); the export's message lists them
+("Left out: 1 undated (JD 0) point(s)."). Dated points are written as before,
+byte for byte.
+**How to check.** `tests/core/test_photometry_core.py::test_aavso_export_leaves_out_undated_points_s60`
+(rows dated `0.000000` and `nan` on the code before the fix) and
+`tests/ui/test_photometry_window.py::test_aavso_export_reports_undated_points_left_out_s60`.
+In an AAVSO report you sent, look for a `DATE` field `0.000000` or `nan`.
+
+### S64 — The AAVSO report names the software's version
+
+**What was wrong.** Every AAVSO report began with `#SOFTWARE=Argos`. The AAVSO
+Extended File Format asks for the name *and version* of the software that wrote
+the file (`#SOFTWARE=` "Name and version of software used to create the
+format"); a report could not say which Argos, with which fixes, produced it.
+Found by the web UI's wave 7 science review, checking the files field by field.
+**Who was affected.** Every AAVSO report. The header line only: no observation,
+magnitude, date or airmass changes.
+**What changed.** `write_aavso` stamps `argos.SOFTWARE_ID` (`Argos v<version>`,
+the string already written into the FITS `SWCREATE`/`CREATOR` headers) unless a
+caller passes `software=`. Analyze's **Export AAVSO** and the web server's
+export call it the same way, so their files stay byte for byte the same.
+**How to check.** `tests/core/test_photometry_core.py::test_aavso_header_names_the_software_and_its_version_s64`
+(`#SOFTWARE=Argos` on the code before the fix). Old reports: the line is only
+informative; nothing to correct.
+
+### S61 — Export measurements refuses curves of two filters
+
+**What was wrong.** The multi-curve CSV of **Export measurements…**
+(`write_curves_csv`) has no filter column. Since S49 a run through two filters
+keeps one curve per (star, filter): both of a star's curves were written under
+one `star_id` (its AUID), and read back (Analyze, Review) they became one curve
+mixing both bands, the S49 defect again.
+**Who was affected.** Exports of a run or live preview through two filters. None
+of the owner's (one filter per run).
+**What changed.** As the AAVSO export (S53), the export is refused when the
+curves span two filters or more ("These curves are in 2 filters (b, v), and the
+export has no filter column: …"); the run's `photometry/` folder holds one CSV
+per star and filter. A one-filter export is unchanged.
+**How to check.** `tests/ui/test_photometry_window.py::test_measurements_export_refuses_curves_of_two_filters_s61`
+(one merged curve on reload on the code before the fix).
+
 ### S9 — Review keeps the check star's role
 
 **What was wrong.** Review recovered roles from the file-name prefix with a
@@ -1487,7 +1573,7 @@ and `tests/ui/test_photometry_window.py::test_aavso_export_refuses_unset_obscode
 **Who was affected.** Anyone trying to recover a run's photometry.
 **What changed.** `.fit`, `.fits` and `.fts` in any case; calibration frames left
 out by `IMAGETYP`; frames ordered by `DATE-OBS`. Frames are not filtered on
-`OBJECT`.
+`OBJECT` (S62 adds it).
 **How to check.** `tests/workers/test_photometry_batch_worker.py::test_discover_light_frames_finds_fit_and_skips_calibration`.
 
 ### S13 — No JD 0 point, no saved cancelled run, roles kept
@@ -1601,6 +1687,45 @@ on frames 0, 2 and 4, no point flagged; after a jump onto a neighbour the frame 
 re-solved, never measured on blank sky; no re-solve on the code before the fix)
 and `tests/ui/test_batch_rerun.py::test_batch_summary_says_how_many_frames_had_no_verified_lock_s58`
 ("Apertures tracked the field" on the code before the fix).
+
+### S62 — A batch re-run measures the target set's object only
+
+**What was wrong.** S12 left out calibration frames by `IMAGETYP` but kept every
+light frame of the chosen folder, searched recursively when it holds no FITS
+itself. A folder holding two objects' frames, or the sessions folder, was
+measured whole against one target set: another field's frames gave points on
+blank sky (or on whatever star sat at those coordinates).
+**Who was affected.** Re-runs pointed at a folder above one session. None of the
+owner's runs was re-run.
+**What changed.** A light frame whose `OBJECT` names another object than the
+target set's is left out (compared without case, spaces or underscores: `XX_Cyg`
+is `XX Cyg`); a frame without `OBJECT` is kept, as before. "No frames" now names
+the object ("No light frames (.fit/.fits/.fts) of XX Cyg in …").
+**How to check.** `tests/workers/test_photometry_batch_worker.py::test_discover_light_frames_keeps_the_object_s62`
+(the other object's frame listed on the code before the fix).
+
+### S63 — A batch re-run of a session measures its lights only
+
+**What was wrong.** S12 searches the chosen folder's subfolders when it holds no
+FITS itself, and took every FITS it found. A session folder in which another
+program ran keeps that program's files beside `lights/`: star_var_script's Siril
+`process/` holds a link to every light (`light_00001.fit` →
+`lights/…_00001.fit`) and a registered copy (`r_light_00001.fit`), both with the
+light's `IMAGETYP`, `OBJECT` and `DATE-OBS`. The owner's RR Lyr 2026-09-25
+folder gave 585 frames for 195 lights: every epoch measured three times (twice
+on the same pixels, once on Siril's resampled copy), three points per date in
+each curve.
+**Who was affected.** Batch re-runs of a session folder that another program
+wrote into. None of the owner's runs was re-run; RR Lyr 2026-09-25 would have
+been.
+**What changed.** In the subfolder search, the frames of an Argos session folder
+(one holding `session.json` and `lights/`) are those of its `lights/`, and a
+link to a frame already listed is that frame (each file once, by its resolved
+path). A folder that holds FITS itself is read as before; a folder without
+`session.json` still gives every FITS below it, each file once.
+**How to check.** `tests/workers/test_photometry_batch_worker.py::test_discover_light_frames_measures_a_session_s_lights_only_s63`
+(the link and the registered copy listed on the code before the fix). In a
+re-run's CSV, look for two or three rows with the same `jd_utc`.
 
 ## Plate solving
 

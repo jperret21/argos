@@ -2326,11 +2326,15 @@ class ImagingPage(QWidget):
         folder = QFileDialog.getExistingDirectory(self, "Folder of saved subs", start)
         if not folder:
             return
-        # Argos writes .fit; calibration frames (IMAGETYP) are never measured.
-        paths = discover_light_frames(Path(folder))
+        # Argos writes .fit; calibration frames (IMAGETYP) and another object's
+        # frames (OBJECT, S62) are never measured.
+        paths = discover_light_frames(Path(folder), tset.object_name)
         if not paths:
             QMessageBox.information(
-                self, "No frames", f"No light frames (.fit/.fits/.fts) in {folder}"
+                self,
+                "No frames",
+                f"No light frames (.fit/.fits/.fts) of {tset.object_name or 'the target'}"
+                f" in {folder}",
             )
             return
         params = PhotometryParams.from_config(self._cfg, egain=self._engine_egain())

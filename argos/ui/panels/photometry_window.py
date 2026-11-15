@@ -348,6 +348,19 @@ class PhotometryWindow(QWidget):
         if not curves:
             QMessageBox.information(self, "Export measurements", "No measurements to export.")
             return
+        # S61: the file has no filter column, so one star's curves of two filters
+        # (S49) share its star_id and merge into one curve when read back.
+        tokens = sorted({lc.filter_name for lc in curves if lc.filter_name})
+        if len(tokens) > 1:
+            QMessageBox.warning(
+                self,
+                "Export measurements",
+                f"These curves are in {len(tokens)} filters ({', '.join(tokens)}), and the "
+                "export has no filter column: read back, a star's curves of both filters "
+                "would become one. The run's photometry/ folder holds one CSV per star and "
+                "filter ({role}_{object}_{filter}_{star}.csv).",
+            )
+            return
         path, _ = QFileDialog.getSaveFileName(
             self, "Export light curve", str(self._export_dir() / "photometry.csv"), "CSV (*.csv)"
         )
@@ -413,6 +426,9 @@ class PhotometryWindow(QWidget):
             excluded.append(
                 f"{summary.suspect_excluded} suspect (cosmic ray / hot pixel, or no verified lock)"
             )
+        if summary.undated_excluded:
+            # S60: a pre-0.5.0 batch re-run dated a frame without DATE-OBS at JD 0.
+            excluded.append(f"{summary.undated_excluded} undated (JD 0)")
         text = f"{summary.rows} observation(s) written to {Path(path).name}."
         if excluded:
             text += "\nLeft out: " + ", ".join(excluded) + " point(s)."

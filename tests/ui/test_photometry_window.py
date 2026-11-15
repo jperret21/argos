@@ -786,6 +786,63 @@ def test_aavso_export_reports_rows_and_excluded_points(qapp, tmp_path, monkeypat
         qapp.processEvents()
 
 
+def test_aavso_export_reports_undated_points_left_out_s60(qapp, tmp_path, monkeypatch) -> None:
+    """S60: a pre-0.5.0 batch CSV's JD 0 rows are left out of the report, and said."""
+    import argos.ui.panels.photometry_window as pw
+
+    out = tmp_path / "aavso.txt"
+    monkeypatch.setattr(pw.QFileDialog, "getSaveFileName", lambda *a, **k: (str(out), ""))
+    boxes = _MessageBoxRecorder()
+    monkeypatch.setattr(pw, "QMessageBox", boxes, raising=False)
+    win = _window_with_one_target("TST")
+    try:
+        win.lightcurves["T"].append(LcPoint(jd_utc=0.0, mag=12.0, mag_err=0.02))
+        win._export_aavso()
+        rows = [ln.split(",") for ln in out.read_text().splitlines() if not ln.startswith("#")]
+        assert rows and all(row[1] != "0.000000" for row in rows)
+        ((kind, text),) = boxes.shown
+        assert kind == "information" and "1 undated (JD 0)" in text
+    finally:
+        win.close()
+        win.deleteLater()
+        qapp.processEvents()
+
+
+def test_measurements_export_refuses_curves_of_two_filters_s61(qapp, tmp_path, monkeypatch) -> None:
+    """S61: the multi-curve CSV has no filter column. Since S49 a star has one curve
+    per filter, and Export measurements wrote both under one ``star_id`` (its AUID):
+    read back (Analyze, Review), the V and B points became one curve. The export is
+    refused for two filters, as the AAVSO one (S53); one filter still exports."""
+    import argos.ui.panels.photometry_window as pw
+    from argos.core.photometry.lightcurve import read_curves_csv
+
+    out = tmp_path / "photometry.csv"
+    monkeypatch.setattr(pw.QFileDialog, "getSaveFileName", lambda *a, **k: (str(out), ""))
+    boxes = _MessageBoxRecorder()
+    monkeypatch.setattr(pw, "QMessageBox", boxes, raising=False)
+    curves = {}
+    for token, mag in (("v", 11.0), ("b", 11.6)):
+        target = LightCurve(auid="000-BCK-301", name="XX Cyg", role="target", filter_name=token)
+        target.append(LcPoint(2451545.0 + (0.01 if token == "b" else 0.0), mag, 0.02))
+        curves[f"000-BCK-301@{token}"] = target
+    win = PhotometryWindow()
+    try:
+        win.load_curves(curves, obscode="TST")
+        win._export_csv()
+        assert not out.exists()  # one merged curve on reload before the fix
+        assert boxes.shown and boxes.shown[-1][0] == "warning"
+        assert "2 filters (b, v)" in boxes.shown[-1][1]
+
+        win.load_curves({"000-BCK-301@v": curves["000-BCK-301@v"]}, obscode="TST")
+        win._export_csv()
+        (curve,) = read_curves_csv(out).values()
+        assert [p.mag for p in curve.points] == [11.0]
+    finally:
+        win.close()
+        win.deleteLater()
+        qapp.processEvents()
+
+
 def test_aperture_geometry_locked_during_sequence(qapp) -> None:
     """S15: one touch of a geometry spin during a run silently changed the
     aperture or annulus mid-curve (applied from the next sub)."""

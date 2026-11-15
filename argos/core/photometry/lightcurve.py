@@ -260,16 +260,24 @@ def _opt_float(value) -> float | None:
         return None
 
 
+#: S60: a point dated before this Julian Date is undated, never an AAVSO row. Before
+#: S13 a batch re-run dated a frame without ``DATE-OBS`` at JD 0; no CCD observation
+#: is older than JD 2 400 000 (1858).
+MIN_AAVSO_JD = 2_400_000.0
+
+
 @dataclass(frozen=True)
 class AavsoExportSummary:
     """What :func:`write_aavso` wrote: data rows, and target points left out.
 
-    A point both saturated and suspect is counted as saturated.
+    A point both saturated and suspect is counted as saturated; an undated point
+    (S60) as undated, whatever its flags.
     """
 
     rows: int = 0
     saturated_excluded: int = 0
     suspect_excluded: int = 0
+    undated_excluded: int = 0
 
 
 def write_aavso(
@@ -279,7 +287,7 @@ def write_aavso(
     obscode: str = "XXX",
     filt: str = "TG",
     chart: str | None = None,
-    software: str = "Argos",
+    software: str | None = None,
     include_flagged: bool = False,
 ) -> AavsoExportSummary:
     """Write one or more :class:`LightCurve` to an AAVSO Extended File.
@@ -294,8 +302,15 @@ def write_aavso(
 
     Target points flagged *saturated* (clipped) or *suspect* (cosmic ray, hot
     pixel) are left out unless ``include_flagged``; when included, NOTES says
-    which flag they carry. A flagged check point never provides KMAG.
+    which flag they carry. A flagged check point never provides KMAG. An undated
+    point (``jd_utc`` not finite, or before :data:`MIN_AAVSO_JD`) is always left
+    out (S60). ``software`` defaults to ``argos.SOFTWARE_ID``, the name and
+    version the format asks for (S64).
     """
+    if software is None:
+        from argos import SOFTWARE_ID
+
+        software = SOFTWARE_ID
     check = next((lc for lc in curves if lc.role == "check" and lc.points), None)
     kname = _aavso_field(check.auid or check.name) if check is not None else None
     # Target and check points of one frame share its JD.
@@ -308,7 +323,7 @@ def write_aavso(
         if kname
         else {}
     )
-    rows = saturated_excluded = suspect_excluded = 0
+    rows = saturated_excluded = suspect_excluded = undated_excluded = 0
     chart_field = _aavso_field(chart) or "na"
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -328,6 +343,9 @@ def write_aavso(
                 continue
             name = (lc.name or lc.auid or "TARGET").upper()
             for p in lc.points:
+                if not (math.isfinite(p.jd_utc) and p.jd_utc >= MIN_AAVSO_JD):
+                    undated_excluded += 1  # S60: a JD 0 row is no observation
+                    continue
                 if not (math.isfinite(p.mag) and math.isfinite(p.mag_err)):
                     continue
                 flags = [
@@ -350,7 +368,7 @@ def write_aavso(
                     f"ENSEMBLE,na,{check_fields},{amass},na,{chart_field},{notes}\n"
                 )
                 rows += 1
-    return AavsoExportSummary(rows, saturated_excluded, suspect_excluded)
+    return AavsoExportSummary(rows, saturated_excluded, suspect_excluded, undated_excluded)
 
 
 def _aavso_field(value, limit: int = 20) -> str | None:
