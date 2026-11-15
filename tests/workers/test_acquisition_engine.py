@@ -1627,6 +1627,69 @@ def test_the_unverified_lock_warns_once_per_episode_s56(shot_rig, monkeypatch) -
     assert engine._unverified_logged is False
 
 
+def test_the_lock_check_uses_anchors_chosen_on_the_solved_frame_s56(shot_rig, monkeypatch) -> None:
+    """S56 as amended (2026-11-15, second set): the anchors were chosen on the
+    measured sub through the previous sub's solution. After a jump only the stars
+    that happened to show at the stale positions qualified: here a neighbour 1.1 px
+    from where comparison C0 was, 1 anchor of 1, seen by construction (S48), moving
+    the apertures 1.1 px, so S56 verified it: the target measured on another star,
+    unflagged (real RR Lyr subs moved 500 px: 1 anchor, 2.16 px of tracker motion,
+    the target 496 px off, flagged by a 0.16 px margin). The anchors are now chosen
+    on the frame the solution was solved on, where it is exact: 1 of the 4 shows a
+    star on the moved sub, the lock is lost, no point, a re-solve due."""
+    engine, _session, _form, logs = shot_rig
+    xy, frame_a, _frame_b = _s48_field(engine, monkeypatch)
+    neighbours = [(61.0, 50.5), (151.0, 100.5)]  # by C0's and the target's solved spots
+    moved = _field_frame([(x + 120.0, y) for x, y in xy.values()] + neighbours)
+    engine._take_raw(frame_a)
+    _land_solution(engine, monkeypatch, _GridWCS(xy), frame_a)
+    _measure_raw(engine, moved, 1)  # the next sub, through the previous sub's solution
+    assert len(engine._tracker_anchor_stars) == 4  # 1 (the neighbour) before the fix
+    points = [p for k, c in engine.lightcurves.items() if k.startswith("V1@") for p in c.points]
+    assert points == []  # one unflagged point, off the star, before the fix
+    assert any(level == "WARN" and "fewer than half" in msg for level, msg in logs), logs
+    assert engine.astrometry._resolve_due is True
+
+
+def test_a_run_solves_the_sub_verified_through_the_previous_solution_s56(
+    shot_rig, monkeypatch
+) -> None:
+    """S56 as amended (2026-11-15, second set): a sub of 1-2 anchors verified through
+    the previous sub's solution made no solve due, so the next sub was two subs from
+    a solution: with one solve per run the subs alternated verified and flagged (XX
+    Cyg 2026-08-29 050148Z: 12 of 22 flagged, 11 WARN episodes). In a run the sub in
+    hand is now solved too: every sub is measured through the previous one's
+    solution. Outside a run a live point follows each solve: nothing more is due."""
+    from argos.workers.camera_service import CameraState
+
+    engine, _session, _form, _logs = shot_rig
+    started: list = []
+    monkeypatch.setattr(
+        engine.astrometry, "on_new_frame", lambda raw, shape, *a, **k: started.append(raw)
+    )
+    xy, frame = _two_anchor_field(engine, monkeypatch)
+    for state in (CameraState.LIVE, CameraState.SEQUENCE):
+        monkeypatch.setattr(engine._camera_service, "_state", state)
+        engine.astrometry._resolve_due = False
+        started.clear()
+        engine._take_raw(frame)
+        _land_solution(engine, monkeypatch, _GridWCS(xy), frame)
+        _measure_raw(engine, frame, 0)  # this sub's own solution: nothing more to solve
+        assert started == [] and engine.astrometry._resolve_due is False
+        sub = frame.copy()
+        _measure_raw(engine, sub, 1)  # the previous sub's solution: verified
+        assert not _lc(engine, "V1").points[-1].suspect
+        in_run = state is CameraState.SEQUENCE
+        assert engine.astrometry._resolve_due is in_run  # False before the fix
+        assert [raw is sub for raw in started] == ([True] if in_run else [])
+    for minute in range(2, 6):  # one solve per run: a sub's solve lands when due
+        if engine.astrometry._resolve_due:
+            engine.astrometry._resolve_due = False
+            _land_solution(engine, monkeypatch, _GridWCS(xy), engine._last_raw)
+        _measure_raw(engine, frame.copy(), minute)
+        assert not _lc(engine, "V1").points[-1].suspect, minute  # 2 and 4 before the fix
+
+
 def test_the_anchor_check_needs_half_the_anchors_s54(shot_rig, monkeypatch) -> None:
     """S54's threshold is ceil(k/2) of the tracker's k anchors: 1 of 4 seen refuses
     the solution (045156Z frame 1 was 1 of 6), 2 of 4 accept it."""
@@ -1708,6 +1771,48 @@ def test_a_camera_frame_after_an_opened_fits_drops_its_tracker_s59(shot_rig, mon
     elsewhere = _GridWCS({k: (x + 200.0, y + 120.0) for k, (x, y) in xy.items()})
     _land_solution(engine, monkeypatch, elsewhere, engine._last_raw)
     assert engine.astrometry.wcs is elsewhere  # refused before the fix (0 of 4 seen)
+
+
+def test_a_run_after_an_opened_fits_accepts_the_camera_solution_s59(shot_rig, monkeypatch) -> None:
+    """S59 with S56 as amended (2026-11-15, second set): a run's first sub after an
+    opened FITS is measured through the file's solution, kept until the camera's own
+    solve, and its tracker's anchors are chosen on the frame that solution was solved
+    on: the file's. The sub's own solution was then held to the file's anchors (S54)
+    and refused while the camera points elsewhere, the defect S59 fixed. A file's
+    anchors never vet a camera solution now; the sub's lock is still lost, and once
+    the camera's solution is the reference its own anchors vet the next ones."""
+    from datetime import datetime, timezone
+
+    from argos.workers.camera_service import CameraState
+
+    engine, _session, _form, logs = shot_rig
+    xy, frame_a, _frame_b = _s48_field(engine, monkeypatch)
+    engine._take_raw(frame_a)
+    engine._last_raw_from_file = True  # as open_fits_frame leaves it
+    _land_solution(engine, monkeypatch, _GridWCS(xy), frame_a)
+    engine._last_raw_decimated = False
+    engine._last_exposure_mid = datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc)
+    engine._measure_photometry()  # the file is measured
+    assert len(_lc(engine, "V1").points) == 1
+    monkeypatch.setattr(engine._camera_service, "_state", CameraState.SEQUENCE)
+    monkeypatch.setattr(engine.astrometry, "on_new_frame", lambda *a, **k: None)
+    sub = _field_frame([(20.0, 20.0), (280.0, 180.0)])  # a camera sub elsewhere
+    _measure_raw(engine, sub, 1)  # the run's first sub, through the file's solution
+    assert len(engine._tracker_anchor_stars) == 4  # chosen on the file's frame (S56)
+    assert len(_lc(engine, "V1").points) == 1  # none seen where they are: no point
+    elsewhere = _GridWCS({k: (x + 200.0, y + 120.0) for k, (x, y) in xy.items()})
+    _land_solution(engine, monkeypatch, elsewhere, sub)
+    assert engine.astrometry.wcs is elsewhere  # refused before the fix (0 of the 4)
+    assert not any("refused" in msg for _level, msg in logs), logs
+
+    moved = {k: (x + 20.0, y) for k, (x, y) in xy.items()}  # the camera's own field
+    cam = _field_frame(list(moved.values()))
+    _land_solution(engine, monkeypatch, _GridWCS(moved), cam)
+    _measure_raw(engine, cam, 2)
+    assert len(engine._tracker_anchor_stars) == 4 and len(_lc(engine, "V1").points) == 2
+    wrong = _GridWCS({k: (x + 90.0, y + 40.0) for k, (x, y) in moved.items()})
+    _land_solution(engine, monkeypatch, wrong, cam.copy())
+    assert engine.astrometry.wcs is not wrong  # the camera's anchors vet it (S54)
 
 
 def test_every_vetting_file_names_its_filter_s57(shot_rig, tmp_path, monkeypatch) -> None:
