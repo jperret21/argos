@@ -46,6 +46,8 @@ from argos.server import profiles as profile_records
 from argos.server import runtime
 from argos.server.hub import Hub
 from argos.server.planning import PlanningService, TransitBody, TransitPlanBody
+from argos.server import review_routes
+from argos.server import export_routes
 from argos.server.sequence_plan import ExportBody, ImportBody, PlanBody, PlanService
 from argos.server.settings import Settings
 from argos.server.targets import star_from_pending
@@ -829,7 +831,11 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
     @api.get("/jobs/{job_id}/download")
     def job_download(job_id: str) -> FileResponse:
         path, name = hub.job_download(job_id)
-        return FileResponse(path, media_type="application/zip", filename=name)
+        # A support bundle is a ZIP; a wave 7 export a text file (A78, A79).
+        media = {".txt": "text/plain", ".csv": "text/csv"}.get(
+            name[name.rfind(".") :].lower() if "." in name else "", "application/zip"
+        )
+        return FileResponse(path, media_type=media, filename=name)
 
     @api.post("/support-bundle", status_code=202)
     def support_bundle(body: SupportBundleBody | None = None) -> dict[str, Any]:
@@ -1298,6 +1304,11 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
             await _pump(websocket, send_next)
         finally:
             hub.bus.unsubscribe_frames(sub)
+
+    # Wave 7, Review: sessions, curves and frames (A67-A75; review_routes.py).
+    review_routes.add_routes(api, hub)
+    # Wave 7, Review: exports and re-run (A76-A79; export_routes.py).
+    export_routes.add_routes(api, hub)
 
     app.include_router(public)
     app.include_router(api)

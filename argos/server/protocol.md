@@ -745,8 +745,19 @@ SessionSummary = {"path": path, "folder": string, "object": string, "started_utc
                   "curves": {"target": int, "comparison": int, "check": int},
                   "has_quality": bool,                  // photometry_quality.json
                   "has_targets": bool,                  // targets.json
+                  "quality": {"stable": int, "total": int}|null,  // (W7 fix) its verdict:
+                                                        //   comparisons "stable" of those vetted
                   "issues": [string]}
 ```
+
+(W7 fix) `issues` also carries the open's cheap readiness lines, so R0
+agrees with R1's badge: the header site check (X3) on the first light
+frame's header only ("The site in Settings was not where the telescope
+was…"), "<n> frame(s) flagged by the flight recorder: no detection of the
+target, or a zero point more than 1 mag off." and "<n> frame(s) measured
+while fewer than 3 comparison or check stars reached SNR 10 (S56: lock not
+verified)." (the counts of A69's `low_snr`/`zp_outlier` and `few_anchors`
+rules on the run's `diagnostics/*_live_diagnostics.jsonl`).
 
 A session is a folder directly inside `sessions_path` that holds a
 `session.json`; folders without one are not listed. Sessions come newest
@@ -3606,6 +3617,647 @@ CalibrationBody = {"darks"?: int (0-999, default 20), "biases"?: int (0-999, def
 | 409 | `run_active` | Calibration plan during a run. |
 | 400 | `invalid_argument` | Calibration plan with no Light step to match; counts out of range. |
 
+## Review (wave 7): sessions, curves, frames
+
+Wave 7 (`web/spec/README.md` rows A67-A75 on the job model A80) adds the
+routes below, still under `"api": 2` (additive). They read recorded
+sessions, curve CSVs and FITS files and never write into them. The session
+reader is the fixed Qt reader itself: `argos/core/session/review.py`
+(`load_session`, `identify_curve_file`, `nearest_light_frame`; 0.5.0 with
+S9, S10, S49, S57) is loaded from its file by `argos/server/review.py`,
+because its package `argos.core.session` imports PyQt6 and the server must
+not. The frame tools are the Frame Viewer's (`analysis_window.py`) over the
+unchanged core (`measure_star_at`, `build_solve_settings`, `wcs_from_result`,
+`overlay_for`) and the wave 4 server ports (`field_solve.py`,
+`field_catalog.py`).
+
+| Method | Path | Body | Returns | Row |
+|---|---|---|---|---|
+| POST | `/api/sessions/scan` | — | `202 {job_id, job}`, job `sessions_scan` | A67 |
+| POST | `/api/review/session` | `{"path": path}` | `202 {job_id, job}`, job `session_open`; result OpenSummary (the ReviewSession is read with the GET below, from the cache this open filled) | A68 |
+| GET | `/api/review/session?path=` | — | ReviewSession (the cached open, recomputed when stale or missing) | A68 |
+| GET | `/api/review/session/curves?path=` | — | CurveSet of the session | A69 |
+| GET | `/api/review/live/curves` | — | CurveSet of the live run (A54's store) | A69 |
+| POST | `/api/review/import-csv` | `{"path": path}` | CurveSet of one curve CSV; `422 invalid_csv` | A70 |
+| GET | `/api/files/frame?path=&view=raw` | — | binary frame, `/ws/frames` layout | A71 |
+| GET | `/api/files/fits-header?path=` | — | FitsHeader | A72 |
+| POST | `/api/files/measure-star` | MeasureStarBody | StarMeasure | A73 |
+| POST | `/api/files/solve` | `{"path": path}` | `202 {job_id, job}`, job `file_solve`; result FileSolution | A74 |
+| GET | `/api/files/solution?path=` | — | FileSolution of the last good solve of that file; `404 not_found` | A74 |
+| POST | `/api/files/catalogue` | `{"path": path}` | `202 {job_id, job}`, job `file_catalogue`; result FileLayers | A75 |
+
+**Paths.** Every `path` is absolute (`~` expanded) and must lie in the
+folders the file listing may browse (home and the ARGOS data folders, A11,
+symbolic links resolved): outside is `403 forbidden_path`, relative `400
+invalid_argument`, missing `404 not_found`. A session path is the folder or
+its `session.json`. FITS routes accept `.fit`, `.fits`, `.fts` (any letter
+case), else `400 invalid_argument`.
+
+### Sources (shared with the exports and re-run routes, A76-A79)
+
+```
+Source = {"kind": "session", "path": path}   // a session folder (A68, A69)
+       | {"kind": "import",  "path": path}   // one curve CSV (A70)
+       | {"kind": "live"}                    // the live run's curves (A54), read-only (D3)
+```
+
+In process, `hub.review.curve_set(source)` returns the same CurveSet as
+Python objects (`review.CurveSetData`): the core `LightCurve` objects as
+loaded (points untouched, the input of `write_aavso` / `write_curves_csv`),
+each with its wire key, filter token, flags and `problem`. A session's set
+is cached (keyed by the stamps of `session.json`, `targets.json`, the
+`photometry/` folder and its files), so the exports read the very curves
+the plot shows.
+
+### Session scan (A67)
+
+`GET /api/sessions` is unchanged (wave 2). `POST /api/sessions/scan`
+re-summarises every session folder under `sessions_path`, ignoring the
+cache (resource `sessions`, `409 busy` while one runs); progress
+`done`/`total` = folders, cancellable between folders. Result:
+`{"root": path, "total": int, "scanned_utc": ISO}`; the list is then read
+with `GET /api/sessions`.
+
+### Open a session (A68)
+
+```
+ReviewSession = {"source": Source, "path": path, "folder": string,
+  "object": string, "started_utc": string, "software": string,   // session.json as written
+  "observer": string,                         // session.json "observer" ("" when none)
+  "summary": object|null,                     // session.json "summary" block as written
+  "counts": {"frames": int, "lights": int, "missing_frames": int,
+             "filters": {"<filter_name or —>": int}, "image_types": {"<type>": int}},
+  "metadata": object,                         // observation.json as written ({} when none)
+  "quality": {"default": Report|null,         // photometry_quality.json (core's comparison_quality)
+              "default_filter": string|null,  // its "filter" key (S57); null: written before
+                                              //   0.5.0 (one-filter run, or both bands mixed)
+              "by_filter": {"<token>": Report}},   // photometry_quality_<token>.json (S57)
+  "warnings": [string],                       // load_session's warnings, verbatim
+  "readiness": {"state": "ready"|"warnings"|"blocked",
+                "issues": [{"code": string, "level": "error"|"warn"|"info",
+                            "message": string, "count"?: int}]},
+  "frames": [ReviewFrame],
+  "targets": {"object_name": string|null, "chart_id": string|null,    // comparison_chart_id
+              "stars": [{"key", "role", "name", "display_name", "auid", "ra_hours",
+                         "dec_deg", "source", "mags", "chart_id"}]},
+  "curves": [{"key", "role", "name", "filter", "n", "file_name"}],    // summary; points: A69
+  "filters": [string], "multi_filter": bool,  // curve filter tokens ("" left out)
+  "site_check": HeaderSiteCheck,
+  "airmass_source": "csv"|"header",           // which airmass the plots should use (see below)
+  "diagnostics": {"file": string|null, "frames": int},   // the run's flight recorder
+  "revision": string,                         // changes when any file read changes
+  "opened_utc": ISO}
+ReviewFrame = {"index": int, "filename": string,
+  "path": path|null,                          // the FITS found in the session tree; null: missing
+  "image_type": string, "filter_name": string, "filter": string,   // + its token (S49)
+  "light": bool,                              // a light frame (light_frames, review.py:61-63)
+  "exposure_s": float, "gain": int,
+  "timestamp": ISO|null,                      // session.json (exposure start)
+  "hfd": float|null, "fwhm": float|null, "star_count": int|null,   // as logged (green px)
+  "sky_adu": float|null, "peak_adu": float|null, "eccentricity": float|null,
+  "ccd_temp": float|null,                     // header CCD-TEMP (Qt's read_temperature)
+  "header": {"date_obs": string|null, "mid_utc": ISO|null, "jd_mid": float|null,
+             "airmass": float|null, "altitude": float|null, "azimuth": float|null,
+             "software": string|null, "width": int|null, "height": int|null,
+             "bayer": string|null}|null}      // null: no file or unreadable header
+HeaderSiteCheck = {"state": "ok"|"mismatch"|"unknown", "frames": int,
+                   "median_deg": float|null, "max_deg": float|null, "message": string}
+```
+
+- The job (`session_open`, resource = the folder, cancellable between
+  frames) reads `session.json` with core `load_session(read_temperature=
+  False)` (`review.py:102-175`, so every warning text is Qt's), then one
+  primary header per frame (stage `"headers"`, `done`/`total` = frames),
+  then the curves (stage `"curves"`, A69). A folder without `session.json`,
+  or one the core cannot read, fails with `session_invalid` and the core's
+  text ("No session.json in …", "Could not read session.json: …",
+  "session.json has no frame list"). The result is atomic: a session or an
+  error, never half of one (U9). (W7 fix) The cancel flag is also checked
+  while the curves are linked (every 500 points and between curves) and
+  before the job ends: a cancel during stage `"curves"` ends `cancelled`.
+  Each point finds its light frame by bisection (the same frame as Qt's
+  linear `nearest_light_frame`, ties to the earliest), not a scan per point.
+- (W7 fix) The job's result is `OpenSummary = {"path", "folder", "object",
+  "revision", "counts", "readiness"}`, not the ReviewSession: a job's
+  result travels in every `job` event and `GET /api/jobs` listing (4.7 MB
+  for a 6000-frame session). The client reads `GET /api/review/session`
+  once the job is `done` (the cached open, same `revision`).
+- `readiness.issues`: `session_warning` (warn, one per core warning, e.g.
+  "Missing FITS frame: <name>"), `no_lights` and `no_fits` (error; the
+  texts of `readiness_issues`, `review.py:76-82`), `site_mismatch` (warn),
+  `flagged_points` (warn, `count` = target points with `zp_outlier` or
+  `low_snr`), `unverified_lock` (warn, W7 fix, `count` = target points
+  with `few_anchors` and neither of those), `unidentified_curve` (warn,
+  one per curve file whose star or role is unknown). `state` is `blocked`
+  with an error, `warnings` with a warning, else `ready`.
+- **Header site check** (X3 on the files, `notes/release_0_5_0.md` "Site
+  set but wrong"): for each light frame carrying `RA` (h), `DEC`,
+  `ALTITUDE`, `AZIMUTH`, `SITELAT`, `SITELONG` and `DATE-OBS`, the
+  direction `horizontal_at` (`sky_geometry.py`) gives for the header site
+  is compared with the mount's `ALTITUDE`/`AZIMUTH` (`angle_between_
+  directions`, the whole direction). Median above 5° (`SITE_CHECK_TOLERANCE_
+  DEG`): `mismatch`, `airmass_source: "header"` and the issue "The site in
+  Settings was not where the telescope was during this run (the mount's
+  direction is <median>° from the one computed for that site): the curves'
+  airmass is wrong; the FITS header AIRMASS (from the mount) is right." The
+  owner's RR Lyr 2026-09-25 run is such a run. Otherwise `airmass_source:
+  "csv"`. Nothing is rewritten: the CSV keeps its airmass, A69 adds the
+  header's beside it.
+
+### Curves (A69, A70)
+
+```
+CurveSet = {"source": Source, "object": string|null, "root": path|null,
+            "targets": {…as ReviewSession.targets},
+            "curves": [ReviewCurve],
+            "filters": [string], "multi_filter": bool,
+            "problems": [string],             // per-file problems (identify_curve_file)
+            "airmass_source": "csv"|"header", "revision": string}
+ReviewCurve = {"key": string,                 // "<AUID, else display name>@<filter token>" (S49)
+               "identity": string,            // the core's identity key (dedup of aliases)
+               "role": "target"|"comparison"|"check", "name": string, "auid": string|null,
+               "role_source": "column"|"prefix"|"targets"|"default",
+               "filter": string,              // token; "" when nothing says (pre-0.5.0 name)
+               "filter_source": "name"|"session"|"live"|null,
+               "csv": path|null, "file_name": string|null,
+               "mags": {band: float}, "catalogue_v": float|null,   // the star in targets.json
+               "sigma_syst": float|null,      // the last point's floor
+               "exportable": bool, "problem": string|null,         // false: star or role unknown
+               "n": int,
+               "columns": {                   // n values each; null = empty in the CSV, or NaN
+                 "jd_utc", "bjd_tdb", "mag", "mag_err", "formal_mag_err", "sigma_syst",
+                 "airmass", "fwhm", "sky_adu", "comps_used", "relative_flux",
+                 "relative_flux_err", "relative_comps_used",         // LcPoint, lightcurve.py:39-62
+                 "saturated": [bool], "suspect": [bool],
+                 "frame": [int|null],         // ReviewSession.frames index (Qt's nearest_light_frame)
+                 "frame_dt_s": [float|null],  // jd_utc − that frame's header mid-exposure (s)
+                 "header_airmass": [float|null],   // that frame's header AIRMASS (the mount's)
+                 "zero_point": [float|null], "zp_rms": [float|null],  // flight recorder (4 dp)
+                 "snr": [float|null],         // the star's SNR on that frame (flight recorder)
+                 "flags": [[string]]}}        // see below; [] for a clean point
+```
+
+- **Session curves** (`GET /api/review/session/curves?path=`): every
+  `photometry/*.csv` through core `read_curves_csv` + `identify_curve_file`
+  as `load_session_curves` does (`review.py:178-212`): the role from the
+  `target_`, `comparison_`, `check_` prefix (S9: a check is a check), the
+  star from `targets.json` (AUID suffix, then name), aliases of one target
+  merged (the longer curve kept). Both S49 names are read: `{role}_{object}_
+  {filter}_{star}.csv` gives the filter token, a pre-0.5.0 `{role}_{object}_
+  {star}.csv` none: then `filter` is the token of the session's light frames
+  when they all used one filter (`filter_source: "session"`, the run could
+  only be that band), else `""`. Points keep file order (time order).
+- **Keys**: `<AUID or display name>@<token>` as the live store
+  (`curve_key`, S49). `multi_filter` is true when more than one token is
+  loaded: label a series "Name [filter]" only then (`series_label`).
+- **Flags** (display; nothing is dropped, the AAVSO export decides,
+  A77-A78):
+  - `suspect` and `saturated` are the CSV's (S56/S58 suspects: draw hollow).
+  - `zp_outlier`, `low_snr`: the release's "check your old files" rule for
+    S35/S52 (`notes/release_0_5_0.md`) applied from the run's flight recorder
+    (`diagnostics/<object>_live_diagnostics.jsonl`, written when
+    `diagnostics.enabled`). `zp_outlier`: on a frame where a **target**'s
+    ensemble zero point departs more than 1 mag from its run median, every
+    star's point of that frame (the zero point does not depend on the
+    target's own flux: the frame was measured off the stars, or through
+    thick cloud). `low_snr`: the point's own star had an SNR below 3 on that
+    frame (no detection), whatever its role. The owner's RR Lyr 2026-09-25
+    run has two `zp_outlier` frames (lights `_00053`, `_00176`, S35). No
+    recorder: neither flag.
+  - `few_anchors` (W7 fix): the release's S56 rule for old files, from the
+    same recorder: fewer than 3 `star` records of role comparison or check
+    with `snr` ≥ 10, not saturated, on that frame: the lock was not
+    verified; every star's point of the frame. Conservative (0.5.0 still
+    verifies such a sub within 2 px of a fresh solution, which old files do
+    not record): on the owner's files, all 22 frames of XX Cyg 2026-08-29
+    and RR Lyr frames 52 and 175 (already `zp_outlier`). Display and
+    readiness only (`unverified_lock`); the export decides (A77).
+  - The client draws `zp_outlier` / `low_snr` points hollow, leaves them out
+    of a cell's y range (a point off the range is a chevron on the edge) and
+    draws their error bar at half the error ink.
+  - `no_frame`: no logged light frame within 60 s of the point.
+- **Live** (`GET /api/review/live/curves`): the store of A54 in the same
+  shape (`filter_source: "live"`, `frame`/`frame_dt_s`/`header_airmass`/
+  `snr` null, `zero_point`/`zp_rms` as A54). Read-only (D3).
+- **Import** (`POST /api/review/import-csv`, A70): `read_curves_csv`; the
+  target set is `_target_set_of_curve`'s (`analyze_page.py:786-806`: the
+  CSV's folder or its parent's `targets.json`, else a live preview's
+  `<sessions>/targets/<object>.json`); a one-star CSV takes its role and star
+  from `identify_curve_file` (S10: never "target named after the file");
+  a multi-curve export keeps its `role` column (`role_source: "column"`);
+  a pre-0.5.0 name inside a session (its folder or `photometry/`) takes the
+  session's single light filter as A69 (`filter_source: "session"`, read
+  from `session.json` alone).
+  A curve whose star or role is unknown has `exportable: false` and the
+  core's problem text. `422 invalid_csv` with the reason: no valid row
+  ("No valid photometry rows in <name>"), a missing column ("<name> has no
+  'mag_err' column"), not UTF-8 text, not a CSV.
+
+### Frames (A71-A73)
+
+- **Frame** (`GET /api/files/frame?path=&view=raw`, A71): the first image
+  HDU as one binary message in the `/ws/frames` layout, `Content-Type:
+  application/octet-stream`; it is **never** published on `/ws/frames` (the
+  live image is not disturbed, W3). Any FITS image is displayed
+  (`load_fits_frame`, as the v1 Open FITS: integers clipped to 0…65535, float
+  data in [0, 1] scaled by 65535, a `(3, H, W)` cube interleaved), within the
+  size limits (`400 invalid_fits` beyond, or for a file that is not a FITS
+  image). `view` is `raw` only: the colour, R, G, B previews are computed by
+  the client from the raw mosaic and `bayer` (`viewer/palettes/cfa.ts`), as
+  for live frames. Header: the v1 fields (`seq` counts file frames, not
+  `/ws/frames` frames; `source: "file"`) plus `origin: "file"`, `path`,
+  `file_name`, `date_obs`, `epoch_utc` (exposure midpoint, S39 rule),
+  `bayer` (`BAYERPAT`, else the profile's for a 2-D integer frame, else
+  null), `filter`, `image_type`, `object`, `green_shape: [h, w]`, `raw: bool`
+  (the pixels are the file's own 16-bit counts; false: converted for
+  display, measurements still use the file's values).
+- **FITS header** (`GET /api/files/fits-header?path=`, A72):
+  `FitsHeader = {"path", "file_name", "text": string, "cards": [{"key",
+  "value", "comment"}], "keywords": {"<KEY>": string}}`. `text` is the
+  primary header one card per line, `END` last (Qt showed `str(header)`: the
+  same 80-column cards run together); `keywords` are `read_fits_meta`'s (`analysis_window.py:
+  68-123`, values as strings). `400 invalid_fits` when the file has no
+  readable FITS header.
+- **Measure star** (`POST /api/files/measure-star`, A73):
+
+```
+MeasureStarBody = {"path": path, "x": float, "y": float,   // frame px (numpy convention)
+                   "radius"?: int,       // aperture, green px (default imaging.star_radius_px)
+                   "snap"?: bool}        // true (default): snap within 6 green px to the peak
+                                         //   (measure_star_at's default); false: 2 (re-measure)
+StarMeasure = {"found": bool, "message": string|null,
+               "x", "y",                 // centroid, frame px
+               "x_green", "y_green",     // the core's green-plane centroid
+               "fwhm_px", "hfd_px",      // frame px (2 × green)
+               "fwhm_arcsec", "hfd_arcsec",
+               "scale_arcsec_px": float, // per frame px
+               "scale_source": "solution"|"profile",
+               "eccentricity": float|null, "snr": float, "peak_adu": int, "sky_adu": float,
+               "flux": float, "radius_green_px": int,
+               "scale": "raw"|"converted",   // (W7 fix) "converted": a float frame in [0, 1]
+                                             //   (Siril, PixInsight) measured × 65535 (Qt: S65)
+               "ra_hours": float|null, "dec_deg": float|null,   // through the file's solution
+               "ra_text": string|null, "dec_text": string|null}
+```
+
+  `snr` is `measure_star_at`'s peak above sky over the sky's σ (a detection
+  measure; R2 labels it "Peak/σ"), not the aperture photometric SNR of the
+  curves (A69 `snr`): on RR Lyr frame 1 they read 1 090 and 148.
+
+  The numbers are `measure_star_at` (`metrics.py:225-276`) on the file read
+  as the Frame Viewer reads it (`read_fits_2d`, `analysis_window.py:54-65`:
+  float32, NaN zeroed, a cube averaged), so they equal Qt's. Arcseconds use
+  the file's solution scale (its CD matrix) when A74 solved it, else the
+  profile's `arcsec_per_green_px` (Qt always used the profile's).
+  `found: false` (200) with "No star near (x, y)." when the core finds no
+  star-like signal; a position outside the frame is `400 invalid_argument`.
+
+### Solve and catalogue (A74, A75)
+
+- **Solve** (`POST /api/files/solve`, A74; job `file_solve`, resource = the
+  file, `409 busy` with `owner` while that file is solving): the green
+  plane (`green_plane`, the Frame Viewer's `extract_plane(VIEW_G)` in
+  float) solved by ASTAP with `build_solve_settings(live=False)` (120 s,
+  whole-sky retry), hinted by the header's `OBJCTRA`/`OBJCTDEC` when present
+  (as Observe for an opened file; Qt's Frame Viewer solved blind with the
+  scale hint only). Stages `"reading"`, `"ASTAP"`, `"ASTAP at native
+  sampling"`, `"ASTAP whole-sky"`. Cancel kills ASTAP at once (Qt could
+  not, P28); a cancel that lands as ASTAP answers still ends `cancelled`
+  and keeps no solution. A failure ends `failed` / `not_solved` with
+  ASTAP's message.
+
+```
+FileSolution = {"path": path, "file_name": string,
+                "solution": {"ra_hours", "dec_deg", "scale_arcsec_px",   // per frame px
+                             "rotation_deg", "mirrored",                 // as Field's Solution
+                             "frame_shape": [h, w], "hint": {"ra_hours", "dec_deg",
+                             "source": "header"}|null, "solved_utc": ISO, "summary": string},
+                "wcs": FrameWcs, "grid": Grid|null}                     // as Field (A43)
+```
+
+  The last good solution of a file is kept by the server (keyed by path,
+  size and modification time, the 16 newest files) for A73, A75 and `GET
+  /api/files/solution`.
+- **Catalogue** (`POST /api/files/catalogue`, A75; job `file_catalogue`,
+  resource = the file): `409 not_solved` "Identify the field first: the
+  catalogue is fetched around a plate solution." without a kept solution.
+  The request is the Frame Viewer's (`analysis_window.py:588-629`, the same
+  `catalog.*` keys and the 70/30 Gaia/SIMBAD budget as Observe); VSP around
+  the session's first target (the `targets.json` of the nearest session
+  folder above the file, `analysis_window.py:343-348`), else around the
+  field centre named by `OBJECT`. Network: VSX, VSP, Gaia, SIMBAD and NASA
+  as configured (`*_allow_network`). Cancel ends the job at once; a late
+  answer is dropped. A VSX failure ends `failed` / `lookup_failed`; a
+  failed optional source is in `warnings`.
+
+```
+FileLayers = {"path": path, "frame_shape": [h, w], "display_mag_limit": float,
+              "layers": {"stars", "variables", "galaxies", "nebulae_clusters", "exoplanets",
+                         "other_objects", "vsp", "selected"},   // [Marker] as FieldLayers (A47)
+              "counts": {layer: int},
+              "catalog": {"centre": {"ra_hours", "dec_deg"}, "radius_deg": float,
+                          "counts": {"variables", "comparisons", "field_stars",
+                                     "named_objects", "exoplanet_hosts"},
+                          "limits": {"field_stars": int, "named_objects": int},
+                          "warnings": [string]}}
+```
+
+  Markers are projected through the file's solution (`project_field`, the
+  Observe projection, with no detected-source filter: the Frame Viewer drew
+  every source in the frame); Gaia markers carry `g_mag` so the client
+  re-filters by `catalog.display_mag_limit` without a new request;
+  `selected` is the session's target set with roles.
+
+### Errors (wave 7, sessions and frames)
+
+| HTTP | code | When |
+|---|---|---|
+| 400 | `session_invalid` | A68/A69 on a folder without a readable `session.json` (the core's text). |
+| 400 | `invalid_fits` | A71-A74 on a file that is not a FITS image, or too large to display. |
+| 400 | `invalid_argument` | A relative path, a wrong suffix, a `view` other than `raw`, a measure position outside the frame. |
+| 403 | `forbidden_path` | A path outside home and the ARGOS data folders. |
+| 404 | `not_found` | A missing file or folder; `GET /api/files/solution` for a file never solved (or changed since). |
+| 409 | `busy` | A second `sessions_scan`, or a second `session_open` / `file_solve` / `file_catalogue` of the same path (`owner` = its job). |
+| 409 | `not_solved` | A75 without a kept solution of the file. |
+| 422 | `invalid_csv` | A70: the CSV holds no usable curve (the reason). |
+
+Job errors: `session_invalid` (A68), `not_solved` (A74), `lookup_failed`
+(A75), `invalid_fits` (A74, A75).
+
+## Review (wave 7): exports and re-run
+
+Rows A76-A79 on the job model (A80), still `"api": 2` (additive). The
+exports call the fixed core writers themselves, `write_aavso` and
+`write_curves_csv` (`lightcurve.py`, 0.5.0 with S11, S53 and S60), on the
+very `LightCurve` objects `hub.review.curve_set(source)` returns (the
+curves the plot shows, points untouched), driven as Qt's Review drives
+them: Analyze **Open curve CSV** (`analyze_page.py:737-783`) then the
+Photometry window's **Export AAVSO** / **Export measurements**
+(`photometry_window.py:338-418`), FILT = `photometry.default_band`, OBSCODE
+= `observer.obscode`, CHART = `comparison_chart_id` of the target set. The
+re-run is a Qt-free port of the fixed `PhotometryBatchWorker`
+(`photometry_batch_worker.py`, 0.5.0: S12, S13, S41, S43, S49, S58, S62
+and S63), measuring with the unchanged core (`measure_frame`,
+`ApertureTracker`, `anchors_seen`, `estimate_systematic_floor`).
+
+| Method | Path | Body | Returns | Row |
+|---|---|---|---|---|
+| POST | `/api/review/rerun/plan` | RerunBody | RerunPlan (what a start now would do; never writes) | A76 |
+| POST | `/api/review/rerun` | RerunBody | `202 {job_id, job}`, job `rerun`; result RerunResult | A76 |
+| POST | `/api/export/aavso/preview` | AavsoBody | AavsoPreview (never writes) | A77 |
+| POST | `/api/export/aavso` | AavsoBody + ExportTarget | `202 {job_id, job}`, job `export`; result ExportResult | A78 |
+| POST | `/api/export/csv` | CsvBody + ExportTarget | `202 {job_id, job}`, job `export`; result ExportResult | A79 |
+| GET | `/api/jobs/{id}/download` | — | an export written for a download (`text/plain` for `.txt`, `text/csv` for `.csv`, attachment) | A78, A79 |
+
+Paths follow the rule of the section above (absolute, inside home and the
+ARGOS data folders, else `400` / `403`).
+
+### AAVSO preview (A77) and export (A78)
+
+```
+AavsoBody    = {"source": Source,
+                "filter": string|null,    // the filter token to report (S53); null: the source's only one
+                "keys": [string]|null,    // target curves (ReviewCurve.key); null: every target curve of that filter
+                "check_key": string|null, // the check curve for KNAME/KMAG; null: the first check curve of that filter
+                "use_check": bool,        // default true; false: KNAME/KMAG "na"
+                "obscode": string|null,   // null: Settings observer.obscode
+                "filt": string|null,      // FILT; null: Settings photometry.default_band (Q-R2)
+                "chart": string|null}     // CHART; null: comparison_chart_id of the source's target set
+ExportTarget = {"path": path|null,        // absolute file; null: kept by the server for a download
+                "overwrite": bool}        // default false: an existing file is 409 file_exists
+AavsoPreview = {"source": Source, "object": string|null,
+                "obscode": string, "obscode_set": bool,  // what OBSCODE would be ("" when unset)
+                "band": string, "band_source": "request"|"settings",
+                "filter": string|null, "filters": [string],   // reported token; tokens of the source
+                "band_note": string|null,                     // FILT vs the frames' filter (S11)
+                "chart": string, "chart_source": "request"|"targets"|"none",   // "na" when none
+                "check": {"key", "name", "kname", "points", "kmag_rows"}|null,
+                "targets": [{"key", "name", "points", "rows",
+                             "saturated", "suspect", "nonfinite", "undated",
+                             "recorder_flagged": [int],     // point indices, see below
+                             "unverified_lock": [int]}],    // (W7 fix) S56 rule, see below
+                "rows": int,
+                "excluded": {"saturated": int, "suspect": int, "nonfinite": int, "undated": int},
+                "recorder_flagged": int,           // rows written although the recorder flags them
+                "unverified_lock": int,            // (W7 fix) rows on a few-anchor frame (S56)
+                "flagged_points": [{"key", "index", "jd_utc", "mag", "mag_err", "flags"}],  // both, named
+                "warnings": [{"code": "airmass_wrong_site"|"recorder_flagged"|"unverified_lock",
+                              "count": int, "message": string}],   // (W7 fix) shown with the glyph
+                "airmass": {"source": "csv", "state": "ok"|"mismatch", "message": string|null},
+                "notes": [string],                 // the other lines the dialog shows (the
+                                                   //   left-out counts, the check, the band note)
+                "refusal": {"code", "message", "details"?}|null,   // what A78 would answer now
+                "head": string,                    // the file's header and its first 3 rows
+                "default_path": path|null}         // <session>/<object>_<filter>_aavso.txt
+ExportResult = {"path": path|null, "name": string, "bytes": int, "download": bool,
+                "rows": int, "curves": int, "filter": string|null,
+                "excluded": {…as AavsoPreview}|null,   // AAVSO only
+                "notes": [string]}
+```
+
+- **What is written** is `write_aavso(path, curves, obscode=, filt=, chart=)`
+  with `curves` = the selected target curves in source order, then the
+  check curve: only target-role curves become rows; KNAME/KMAG come from
+  the check curve (its ensemble magnitude on the same frame, matched by
+  `jd_utc`); `DATE` is JD UTC at mid-exposure, `MTYPE=STD`,
+  `CNAME=ENSEMBLE`, `CMAG=na`, `TRANS=NO`, `GROUP=na`, `AMASS` the curve's
+  `airmass` column. The preview writes the same call into a temporary
+  file and reads it back: preview and export cannot differ.
+- **Left out, always, with counts and a note**: saturated points, suspect
+  points (cosmic ray or hot pixel, S43/S56/S58 points measured without a
+  verified lock), points with a non-finite magnitude or error, and (S60)
+  undated points (`jd_utc` not finite or below JD 2 400 000: a pre-0.5.0
+  batch re-run wrote JD 0 for a frame without `DATE-OBS`, S13). There is
+  no option to include them.
+- **Flight-recorder flags** (A69 `flags` `low_snr`, `zp_outlier`: a target SNR
+  below 3, S35's "not a detection", or a zero point more than 1 mag off, S52):
+  the fixed Qt export reads the CSV only and writes these points; so does
+  A78 while the owner decides (`recorder_flagged` counts them, a
+  `warnings` line says "… would be written although the run's flight
+  recorder marks them …", `flagged_points` names them). The owner's RR Lyr
+  2026-09-25 run has two (lights `_00053`, `_00176`, measured on blank sky
+  before S35). (W7 fix) `few_anchors` points (S56's conservative old-file
+  rule) are counted apart in `unverified_lock` with their own warning:
+  written too, as the fixed Qt writes them (XX Cyg 2026-08-29: all 22).
+- **One filter at a time (S53)**: `filters` are the tokens of the source's
+  target and check curves (`ReviewCurve.filter`; a pre-0.5.0 file name
+  takes the session frames' filter, else `""`). With more than one, a
+  `filter` must be chosen; KNAME/KMAG then come from that filter's check
+  curve only. `band_note` warns (export allowed, Q-R2) when FILT does not
+  fit the filter: `lp` (a duo-band nebula filter, not a photometric band),
+  or a Johnson/Cousins token (`u b v r i`) whose letter is not FILT.
+- **Airmass**: AMASS is the curve CSV's `airmass` (Qt's). When the session's
+  header site check says `mismatch` (`CurveSet.airmass_source: "header"`,
+  the owner's RR Lyr 2026-09-25 run), `airmass.state` is `mismatch` and a
+  `warnings` line (`airmass_wrong_site`) says the values were computed for
+  the wrong site (the FITS header AIRMASS is right); the export still
+  writes the CSV values (an owner decision is pending: header AIRMASS, or
+  `na`).
+- **Refusals** (`refusal` in the preview, the same `409` from A78 before
+  any job starts): `obscode_unset` ("Set your AAVSO observer code in
+  Settings first: it is stamped on every AAVSO report.", Q-R2: empty or
+  `XXX`, never written silently), `no_target` ("No target points to
+  export."), `multiple_filters` (`details.filters`; "These curves are in 2
+  filters (b, v), and an AAVSO report has one band: choose one."),
+  `curve_unidentified` ("The star or role of this light curve is unknown —
+  no AAVSO export.", S10; `details.problems`), `unknown_curve` (a key or
+  `check_key` the source does not have, or `check_key` of another role or
+  filter), `no_rows` (every point left out), `invalid_band` (FILT empty,
+  longer than 5 characters or not letters and digits). A78 adds
+  `file_exists`, `protected_path` and the path errors.
+- (W7 fix) **Protected files**: A78 and A79 answer `409 protected_path`
+  ("… holds the session's own data: an export never replaces it. Choose
+  another file name or folder."), whatever `overwrite` says, for a
+  destination that is one of the export's own source CSVs, or inside an
+  Argos session (a folder holding `session.json`) its `session.json`,
+  `targets.json`, or anything under `photometry/`, `photometry_rerun_*/`,
+  `lights/`, `diagnostics/`, `darks/`, `flats/`, `biases/`. The file is
+  written beside its destination (`.<name>.<job>.part`) and renamed over
+  it: a failed write never truncates the file it replaces.
+- **The job** (`export`, resource = the destination or the download, not
+  cancellable, about a second) writes the file and logs "AAVSO export:
+  <rows> observations written to <name>. Left out: …" (W7 fix: plurals
+  spelled out). A write error
+  ends `failed` / `write_failed` with the OS text. With `path: null` the
+  file (`<object>_<filter>_aavso.txt`) is kept for `GET /api/jobs/{id}/
+  download` as long as the job (10 min).
+
+### CSV export (A79)
+
+```
+CsvBody = {"source": Source, "keys": [string]|null,   // null: every curve with points
+           "filter": string|null}                     // null: the source's only filter
+```
+
+`write_curves_csv(path, curves)` (`lightcurve.py`: one lossless file,
+columns `star_id, role, name, auid` + the 15 point columns), curves in
+source order; Qt's **Export measurements**. Refusals (`409`): `no_points`
+("No measurements to export."), `unknown_curve`, `multiple_filters` (S61:
+the file has no filter column, so two filters' curves of one star would
+be read back as one curve: export one filter at a time). Default file
+`<session>/<object>_<filter>_photometry.csv`. Same job as A78.
+
+### Re-run photometry (A76)
+
+```
+RerunBody   = {"session": path,             // the session folder (or a folder of FITS frames)
+               "frames": path|null,         // a frames folder; null: the session's (lights/ …)
+               "targets": "session"|"live", // default "session": <session>/targets.json
+               "reference": "solve"|"live", // default "solve": ASTAP on reference_frame
+               "reference_frame": path|null,   // null: the first light frame in time order
+               "diagnostics": bool|null}    // null: Settings diagnostics.enabled
+RerunPlan   = {"session": path, "frames_dir": path, "frames": int,
+               "frame_names": {"first": string|null, "last": string|null},
+               "left_out": {"calibration": int, "other_object": int,
+                            "outside_lights": int, "duplicates": int},   // S62, S63
+               "stars": {"object": string, "target": int, "comparison": int, "check": int},
+               "targets": "session"|"live",
+               "reference": {"mode": "solve"|"live", "frame": string|null,
+                             "live_available": bool, "astap": bool},
+               "params": {"aperture_fwhm_mult", "aperture_min_px", "annulus_in_px",
+                          "annulus_out_px", "egain", "read_noise_e", "sat_adu",
+                          "band", "min_comps", "track_apertures"},
+               "site_set": bool,            // no site: no airmass and no BJD_TDB (never 0/0)
+               "out_dir": path,             // the folder a start now would create
+               "refusal": {"code", "message"}|null}
+RerunResult = {"out_dir": path, "folder": string, "source": Source,   // open it in Review
+               "frames_total": int, "frames_done": int, "frames_skipped": int,
+               "frames_resolved": int, "frames_unanchored": int, "frames_unverified": int,
+               "left_out": {…as RerunPlan},
+               "rotation_deg": float, "shift_px": float,
+               "series_fwhm_px": float|null, "aperture_px": float,
+               "reference": {"mode", "frame": string|null, "ra_hours", "dec_deg",
+                             "scale_arcsec_px": float|null},     // per frame px
+               "curves": [{"key", "role", "name", "auid", "filter", "points", "file"}],
+               "check_rms": [{"key", "filter", "rms_mag", "n"}],
+               "notes": [string]}           // the Qt log lines of _on_batch_done, same texts
+```
+
+- **Frames** (S12, S62): `discover_light_frames` — `.fit`, `.fits`, `.fts`
+  (any case) in the folder, else in its subfolders (a session root holds
+  `lights/`); a frame whose `IMAGETYP` names a calibration type is left
+  out, and so is one whose `OBJECT` names another object than the target
+  set's (S62; compared without case, spaces or underscores). In the subfolder
+  search, an Argos session folder's frames are its `lights/` only and a link
+  to a frame already listed is that frame (S63: star_var_script's Siril
+  `process/` beside the lights holds a link to each light and a registered
+  copy; the owner's RR Lyr 2026-09-25 folder gave 585 frames for 195
+  lights before). Ordered by `DATE-OBS`, undated last. A frame without a usable `DATE-OBS` is skipped
+  and counted (`frames_skipped`): an undated point would carry JD 0 (S13).
+  (W7 fix) The scan (one header per frame, about 4 ms each) is kept while
+  no FITS file below the folder changes (name, size, modification time):
+  the dialog's plans and the start cost one scan (23 s for 6000 frames
+  before, past the client's timeout; the client now waits 60 s for a plan,
+  a start or an AAVSO preview). A file announced larger than the display
+  limits is unreadable (skipped, as a corrupt one) and refused as a
+  reference frame (`invalid_fits`), from its header, before its pixels are
+  read.
+- (W7 fix) **Inputs**: a `session` that is a file (other than
+  `session.json`) is `400 invalid_argument` "<name> is not a session
+  folder" (as A68); a `reference_frame` without a FITS suffix is
+  `400 invalid_argument`.
+- **Stars**: the session's `targets.json` (`TargetSet.load`) or the live set
+  (A51); at least one target and one comparison, else `409 no_targets` /
+  `409 no_comparisons` (Qt's texts).
+- **Reference**: `solve` plate-solves the reference frame's green plane
+  with ASTAP (`build_solve_settings(live=False)`, hinted by `OBJCTRA` /
+  `OBJCTDEC`, as A74), stage `"solving the reference"`; a failure ends the
+  job `failed` / `not_solved`. `live` uses the field's current solution
+  (A43; `409 not_solved` "Plate-solve the live frame before a batch
+  re-run." without one). The S43/S58 re-solves of a frame use the live
+  settings around the reference's centre without the whole-sky retry
+  (`batch_frame_solver`), through the cancellable ASTAP runner.
+- **Measurement** is the worker's, frame by frame: the series FWHM on the
+  first readable frame (one aperture for the run), the tracker on the
+  comparisons and checks, the S43 lock check (half the anchors seen at SNR
+  5), a re-solve when the field is lost, S58's verification of a lock on 1
+  or 2 anchors (a solution of this frame or the previous one within 2 px,
+  else a re-solve, else the points flagged suspect), each frame's own
+  e-/ADU (`frame_egain`, S41; the fallback is Settings' table at the
+  Camera gain, else the sensor reference, as `_engine_egain`), JD UTC at
+  mid-exposure (`DATE-OBS` + `EXPTIME`/2), BJD_TDB and airmass for the
+  Settings site (none without a site), one curve per (star, filter)
+  (S49), the systematic floor per curve over the points measured with the
+  field. Progress: `done`/`total` = frames handled / frames, `message` =
+  the frame's name, stage `"measuring"` (`"re-solving"` while ASTAP runs).
+- **Output**: a **new** folder `<session>/photometry_rerun_<YYYYMMDDTHHMMSSZ>`
+  (`rerun_output_dir`; `-2`, `-3`… when that second's folder exists; W7 fix:
+  inside the session also when `frames` names another folder, the frames'
+  folder only when `session` holds no `session.json`), never
+  another run's files; it holds `{role}_{object}_{filter}_{star}.csv` per
+  curve (the 15-column CSV), the `targets.json` measured with and, when
+  diagnostics are on, `<object>_diagnostics.jsonl`. It is read in Review as
+  `{"kind": "import", "path": <one CSV of it>}` (its `targets.json` sits
+  beside), and `source` names its target CSV.
+- **Cancel** (`DELETE /api/jobs/{id}`) is honoured between frames and kills
+  a running ASTAP at once. A cancelled run writes no CSV (a partial run
+  replaces nothing, Qt's rule); its folder is removed unless diagnostics
+  were written into it. The job ends `cancelled` (`result: null`); its
+  `message` and the log say "Cancelled after <n>/<total> frames: no curve
+  saved", plus "; the per-frame notes are kept in <folder>/" when the
+  diagnostics stay (the job strip shows that message, not the last frame's
+  name). A cancel while the reference is being identified says "Cancelled
+  while identifying the reference frame: no curve saved" (W7 fix).
+- One re-run at a time per session (`409 busy`, `owner` = its job). The
+  re-run never touches the live photometry, its tracker or its curves
+  (S59).
+
+### Errors (wave 7, exports and re-run)
+
+| HTTP | code | When |
+|---|---|---|
+| 409 | `obscode_unset`, `no_target`, `no_rows`, `multiple_filters`, `curve_unidentified`, `unknown_curve`, `invalid_band` | A77 refusal, A78 before the job |
+| 409 | `no_points`, `unknown_curve`, `multiple_filters` | A79 before the job |
+| 409 | `file_exists` | A78, A79: the destination exists without `"overwrite": true` |
+| 409 | `protected_path` | A78, A79 (W7 fix): the destination is a source of the export or a session's own data (see "Protected files") |
+| 400 | `invalid_argument` | A76 (W7 fix): `session` is a file; `reference_frame` is not a FITS file |
+| 409 | `no_frames`, `no_targets`, `no_comparisons`, `not_solved`, `astap_missing` | A76 before the job |
+| 409 | `busy` | A second re-run of the same session, or an export to a destination being written |
+
+Job errors: `write_failed` (A78, A79), `not_solved` (A76 reference solve),
+`invalid_fits` (A76: the reference frame is unreadable or too large),
+`rerun_failed` (A76, the worker's exception text).
+
 ## State records
 
 ```
@@ -3900,3 +4552,4 @@ wide by 1920 px high, 16-bit, mono.
 | — | Wave 5 follow-ups of wave 4: `auto_selected` in the `POST /api/targets` answer and `DELETE /api/targets/{key}?also=` (Undo of a new target); `frame_metrics` replayed to a new client; `GET /api/fs/list` lists a typed file's folder with `selected` |
 | A62-A64 | Wave 6a: `GET /api/sequence`, `POST /api/sequence/start` (`start_at_utc`, Q-P2) / `pause` / `resume` / `stop`, `sequence` event and `status.sequence`, `GET /api/sequence/preflight`; the mount interlock (`409 run_active`, `pause_run`), the geometry lock (S15), `frame_saved` of a run, `--sim-replay` |
 | §7 (6b) | Wave 6b: `attention` event, `GET /api/attention`, `POST /api/attention/{id}/ack` and `/ack-all`, config category `alerts`; `status.keep_awake` and the preflight `sleep` row; `GET /api/sequence/wrapup`, `POST /api/sequence/calibration-plan`; `sequence.autofocus`, `autofocus_passes`, `wrapup` |
+| A67-A75 | Wave 7 (Review): `POST /api/sessions/scan` (job `sessions_scan`), `POST` / `GET /api/review/session` (job `session_open`), `GET /api/review/session/curves`, `GET /api/review/live/curves`, `POST /api/review/import-csv`, `GET /api/files/frame` (not on `/ws/frames`), `GET /api/files/fits-header`, `POST /api/files/measure-star`, `POST /api/files/solve` (job `file_solve`), `GET /api/files/solution`, `POST /api/files/catalogue` (job `file_catalogue`); the Source model |

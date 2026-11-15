@@ -83,6 +83,7 @@ def summarise(root: Path) -> dict[str, Any]:
         "curves": _curve_counts(root),
         "has_quality": (root / "photometry_quality.json").is_file(),
         "has_targets": (root / "targets.json").is_file(),
+        "quality": None,
         "issues": [],
     }
     issues: list[str] = summary["issues"]
@@ -147,6 +148,31 @@ def summarise(root: Path) -> dict[str, Any]:
         issues.append("No light frames were recorded.")
     if not fits:
         issues.append("No FITS frames found in this session folder.")
+    # The open's own readiness lines that cost little here (W7 design review: R0 said "–"
+    # where R1 said "2 issues"): the site check on the first light's header, and the
+    # flight recorder's flagged frames.
+    from argos.server import review as review_mod
+
+    try:
+        site = review_mod.first_light_site_check(root, document["frames"])
+        if site is not None and site["state"] == "mismatch":
+            issues.append(site["message"])
+        counts = review_mod.recorder_counts(root)
+    except Exception:  # pragma: no cover - a listing never fails on a damaged recorder
+        counts = {"flagged": 0, "unverified": 0}
+    if counts["flagged"]:
+        n = counts["flagged"]
+        issues.append(
+            f"{n} frame{'s' if n != 1 else ''} flagged by the flight recorder: no detection of"
+            " the target, or a zero point more than 1 mag off."
+        )
+    if counts["unverified"]:
+        n = counts["unverified"]
+        issues.append(
+            f"{n} frame{'s' if n != 1 else ''} measured while fewer than 3 comparison or check"
+            " stars reached SNR 10 (S56: lock not verified)."
+        )
+    summary["quality"] = _quality_verdict(quality)
     summary.update(
         frames=frames,
         lights=lights,
@@ -155,6 +181,19 @@ def summarise(root: Path) -> dict[str, Any]:
         image_types=dict(types),
     )
     return summary
+
+
+def _quality_verdict(path: Path) -> dict[str, int] | None:
+    """photometry_quality.json's verdict: comparisons "stable" of those vetted."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    stars = payload.get("comparison_stars") if isinstance(payload, dict) else None
+    if not isinstance(stars, list):
+        return None
+    rows = [s for s in stars if isinstance(s, dict)]
+    return {"stable": sum(1 for s in rows if s.get("status") == "stable"), "total": len(rows)}
 
 
 def is_session(path: Path) -> bool:
@@ -167,6 +206,17 @@ class SessionIndex:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._cache: dict[str, tuple[Any, dict[str, Any]]] = {}
+
+    @staticmethod
+    def _key_stamp(folder: Path) -> tuple:
+        return (_stamp(folder), _stamp(folder / SESSION_FILENAME), _stamp(folder / "photometry"))
+
+    def refresh(self, folder: Path) -> dict[str, Any]:
+        """Summarise *folder* again, whatever the cache holds (the ``sessions_scan`` job)."""
+        summary = summarise(folder)
+        with self._lock:
+            self._cache[str(folder)] = (self._key_stamp(folder), summary)
+        return summary
 
     def page(self, root: Path, offset: int = 0, limit: int = 50) -> dict[str, Any]:
         scanned = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -199,7 +249,7 @@ class SessionIndex:
                 continue
             key = str(folder)
             seen.add(key)
-            stamp = (_stamp(folder), _stamp(session_json), _stamp(folder / "photometry"))
+            stamp = self._key_stamp(folder)
             with self._lock:
                 cached = self._cache.get(key)
             if cached is not None and cached[0] == stamp:
