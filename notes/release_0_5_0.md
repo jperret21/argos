@@ -67,7 +67,15 @@ plate solution replaced the good one) and **S51** (the live and batch airmass
 left out the precession since J2000). The wave's science review found two more:
 **S52** (a target-set change between two solves rebuilt the tracker on the stale
 solution, and S48 passed it with 1 anchor of 1) and **S53** (the AAVSO export
-wrote a two-filter run under one `FILT`).
+wrote a two-filter run under one `FILT`). Four owner decisions of 2026-11-14
+close what those reviews left open: **S54** (a new plate solution that the
+tracker's anchors do not confirm is refused), **S55** (S50's scale reference
+moves when three solves agree), **S56** (a lock on fewer than 3 anchors is
+unverified: its points are flagged suspect) and **S57** (every vetting file names
+its filter); the owner's decisions of 2026-11-15 refine S54 (a re-pointing the
+mount did not report is accepted after three agreeing solutions) and S56 (a lock
+near a fresh solution is verified), and add **S58** (the batch re-run gets S56's
+rule) and **S59** (a camera frame after an opened FITS drops the file's tracker).
 
 **Several of these defects affect files you already hold.** The table says
 which; *Check your old files* below says how to find them.
@@ -125,6 +133,12 @@ which; *Check your old files* below says how to find them.
 | S51 | The live and batch airmass left out the precession since J2000 | CSV `airmass` / AAVSO `AMASS` off by up to ±0.08 at 10-15° (either sign, by position and hour angle; the owner's runs: low by 0.0008 at 68°, 0.004 at 41°, 0.029 at 12°) | **yes** (0.4.2 live curves, batch re-runs) |
 | S52 | A target-set change between two solves rebuilt the tracker on the stale solution | Unflagged points of every star on blank sky until the next solve, in sequence runs | possibly (the VSP backfill after a run's first solve; check below) |
 | S53 | The AAVSO export wrote every filter's curves under one `FILT` | A two-filter run reported as one band | only runs through two filters (none of the owner's) |
+| S54 | A wrong plate solution at the right scale replaced the good one | The next frames' points measured off every star, unflagged | no (the owner's one wrong solve is S50's) |
+| S55 | S50's scale reference was the session's first solve, wrong or not | After a wrong first solve, every later good solve refused until the camera reconnected | no (the owner's first solves were all good) |
+| S56 | With 1 or 2 anchors the S48 lock check verified nothing | Points of an unverified lock unflagged (off their stars after a jump or a stale rebuild) | **yes** (XX Cyg 2026-08-29 `050148Z` and `052943Z`; replayed with a solve before every sub: 3 target points now flagged suspect; check below) |
+| S57 | `photometry_quality.json` did not say which filter it vets | A two-filter run's vetting file ambiguous (format only) | no (format: an added key) |
+| S58 | Batch re-run: with 1 or 2 anchors the S43 lock check verified nothing | Unflagged points of an unverified lock (XX Cyg `050148Z` re-run: 4 target points 2.5-4.5 px off their star) | no (none of the owner's runs was re-run) |
+| S59 | A tracker built on an opened FITS survived the return to camera frames | The camera's correct solutions refused by S54 against the file's anchor stars | no (S54 is new in 0.5.0) |
 | S24 | An ASTAP database folder replaced the chosen database set | Slower or failed solves | no |
 | S29 | Two unvalidated-profile warnings, hard-coded IMX585 hint | Contradictory wording | no |
 
@@ -367,6 +381,29 @@ against the day you installed 0.5.0.
   frames 0-79 through the server found five such target points (frames 4, 7,
   8, 10, 11; SNR 0-2.6); the owner's Qt runs as shot solved before every sub,
   which limits this to the subs measured before the next solve.
+- **Points measured on a lock of 1 or 2 anchors (S56).** A sub on which fewer
+  than 3 comparison or check stars reached SNR 10 unsaturated (the tracker's
+  anchors) was measured through a lock nothing verified. 0.5.0 still verifies
+  such a sub when it is measured within 2 px of a solution of that sub or the one
+  before, which old files do not record. In a run's
+  `<object>_live_diagnostics.jsonl`, count per `frame` the `star` records of role
+  `comparison` or `check` with `snr` ≥ 10 that are not `saturated`: below 3,
+  treat that sub's rows as suspect (set `suspect` to 1 in the CSVs before an AAVSO
+  export). The rule is conservative: on the owner's files it flags every frame of
+  XX Cyg 2026-08-29 `050148Z` (22) and frames 0-3 of `052943Z`, frame 2 of
+  2026-09-07 `045156Z`, the frames of the three diagnostics files in the `045626Z`
+  folder (2 + 34 + 3; RR Lyr and M 27 runs among them) and RR Lyr 2026-09-25
+  `200453Z` frames 52 and 175 (`_00053`, `_00176`, the two blank-sky points S35
+  now drops). The replay of the study runs through 0.5.0 (a solve before every
+  sub) leaves 3 of them flagged: `050148Z` frames 0 and 13 (its target point
+  3.4 px off the star) and `052943Z` frame 0; the other frames the rule flags are
+  within 2 px of their star, or degraded or blank-sky subs, harmless to drop.
+- **Which filter a vetting file vets (S57).** A `photometry_quality.json`
+  without a `filter` key was written before 0.5.0. On a one-filter run it vets
+  that filter. On a two-filter run it vets both bands' points together (one
+  curve per star before S49) and should not be read as either filter's;
+  `photometry_quality_<filter>.json` (0.5.0 only) names its filter in the file
+  name.
 - **Take shots after a refused filter change (H9).** When the wheel refused a
   move (an ERROR "Filter move: …" in the Activity log, the Filter selector
   greyed), 0.4.2 left the selector on the slot you had asked for, and the Take
@@ -582,6 +619,23 @@ default).
 **What changed.** The writer resolves `EGAIN` in the same order; the comment
 names the source (`egain_table`, `driver` or the sensor reference).
 **How to check.** `tests/core/test_fits_writer.py::test_egain_header_is_the_value_the_photometry_uses`.
+
+### S59 — A camera frame after an opened FITS drops the file's tracker
+
+**What was wrong.** An opened FITS is solved and measured, which builds the
+aperture tracker on the file's field. Back to camera frames, the engine kept that
+tracker: the camera's first solution was checked by S54 against the file's
+anchor stars and refused while the camera pointed elsewhere (refused until a
+slew, a set change or, since the 2026-11-15 amendment of S54, three agreeing
+solutions).
+**Who was affected.** Nobody before 0.5.0: S54 is new in it. Found by the
+2026-11-14 review.
+**What changed.** The first camera frame (live or a run's sub) after an opened
+FITS drops the tracker, as the web server does when the frame source changes
+(`source_changed`). The file's solution stays until the camera's own solve, as
+before.
+**How to check.** `tests/workers/test_acquisition_engine.py::test_a_camera_frame_after_an_opened_fits_drops_its_tracker_s59`
+(the file's tracker kept on the code before the fix).
 
 ## Pointing and site in files
 
@@ -1192,11 +1246,101 @@ change, none.
 with the tracker's shift and rotation) and the next tracker is built on it until
 the next solve; a slew or a new solve starts from the raw solution as before. In
 a run a set change also makes the next sub's solve due at once. The web
-server's port (`PhotometryService.on_targets_changed`) has the same change. Left to
-an owner decision: with fewer than 3 anchors the S48 check is met by
-the anchor that moved the solution.
+server's port (`PhotometryService.on_targets_changed`) has the same change. With
+fewer than 3 anchors the S48 check is met by the anchor that moved the solution:
+S56 (owner decisions of 2026-11-14 and 2026-11-15) flags such points away from a
+fresh solution.
 **How to check.** `tests/workers/test_acquisition_engine.py::test_a_set_change_never_re_anchors_on_a_stale_solution_s52`
 (the target 26 px off and no re-solve due on the code before the fix).
+
+### S56 — A lock on fewer than 3 anchors is verified only near a fresh solution
+
+**What was wrong.** The S48 check needs ceil(n/2) of the tracker's n anchors to
+show a star where the tracked solution puts them. With n = 1 or 2 that is one
+anchor, and the anchor whose centroid moved the solution is seen by
+construction: a neighbour taken for a comparison after a jump, or a star at a
+stale position after a set change (S52), passed, and the frame was measured off
+its stars with no flag.
+**Who was affected.** Runs whose comparisons give fewer than 3 anchors (SNR 10,
+unsaturated, at most 6). Replaying the Qt sequence path on the 257 frames of the
+tracker study (8 runs, Argos's live solves, a solve landing before every sub;
+the solve before the run counts as one of an older frame): 3 of 255 target
+points (and every star's point of those frames) are now flagged, all on XX Cyg
+2026-08-29: `050148Z` frames 0 and 13 and `052943Z` frame 0. Those two runs have
+2 anchors on 25 of their 26 frames (only two of `050148Z`'s five comparisons
+reach SNR 10 in its 15 s subs, the others 4.3, 1.6 and 0); the other 22 of these
+are measured through the previous sub's solution with the tracker moving the
+apertures 0.30-1.57 px from it, and their target points lie 0.24-1.83 px from
+the star (an independent solve of each frame). Frame 13 is flagged at 2.66 px of tracker
+motion: its target point is 3.38 px off the star. No point is lost and the six
+other runs do not change (3 to 6 anchors). With one solve per run and re-solves
+only when due, every other sub of these two runs is flagged (14 of 255 target
+points; 24 re-solves in all against 34 when every such frame was flagged): a
+sub measured two subs after its solution is never verified. The S52 case stays
+caught: replaying RR Lyr 2026-09-25 frames 0-39 with the VSP comparison
+`000-BCG-653` added after frame 1, the next solves failing (frames 1-11) and the
+tracker rebuilt on the raw solve (as before S52), frames 4, 7, 8, 10 and 11 are
+measured through 1 anchor, 29.5-35.8 px from the star, on a solution 3-10 subs
+old: unflagged before, flagged now, and the re-solve made due lands at frame 12.
+With S52, that replay has no frame below 3 anchors.
+**What changed.** After the S48 check, a tracker of 1 or 2 anchors leaves the
+lock unverified unless the frame is measured through a solution of this sub or
+the previous one (the controller keeps the frame each solution describes,
+`AstrometryController.solved_raw`) and the tracker moved no aperture of the set
+2 px or more from where that solution puts it: the largest distance, over the
+set's stars, between their position through the raw solution and through the
+tracked one (a set-change rebase included), against the tracker's own outlier
+floor (`RESIDUAL_FLOOR_PX`, 2 px; the owner's fields drift 1-5 px between subs, a
+neighbour locked after a jump or a stale rebuild moved them 22-36 px). A
+verified frame makes no re-solve due. An unverified frame keeps its points, each
+flagged `suspect` (the CSV's `suspect` column: kept, left out of the AAVSO
+export, as a batch re-run flags a frame measured without the field, S43), and a
+solve is due at once (in a run the sub in hand is solved now, as after S48). A
+WARN once per episode ("Photometry: only 2 anchor stars steer the apertures —
+the lock cannot be verified; points are flagged suspect while fewer than 3
+anchor stars steer the apertures (except within 2 px of a solution of this sub
+or the previous one). Re-solving."): a verified frame, a slew or invalidation, or
+a set change ends the episode, a solve that lands does not (on a field that
+never reaches 3 anchors it was logged on every sub). A `lock_unverified` event
+per flagged frame in the flight recorder. The live plot does not draw suspect
+points apart (as before); the AAVSO export's summary now says "suspect (cosmic
+ray / hot pixel, or no verified lock)". The web server's port has the same
+change and gives the same points (XX Cyg `050148Z`, 118 points, identical with
+a solve before every sub, 12 suspect, and with one solve per run, 66 suspect;
+RR Lyr subs 0-39 above: 272 points, 42 suspect, identical). The batch re-run
+gets the same rule: S58.
+**How to check.** `tests/workers/test_acquisition_engine.py::test_a_lock_on_fewer_than_three_anchors_flags_its_points_s56`
+(the points unflagged on the code before the fix),
+`::test_a_run_re_solves_the_sub_whose_lock_is_unverified_s56` (no re-solve
+before the fix; a lock on 4 anchors is neither flagged nor re-solved),
+`::test_a_few_anchor_lock_near_a_fresh_solution_is_verified_s56` (this sub's or
+the previous sub's solution, 1 px of tracker motion: verified, no re-solve; two
+subs after it, or 3 px: flagged and re-solved; every such point flagged on the
+code before the 2026-11-15 amendment) and
+`::test_the_unverified_lock_warns_once_per_episode_s56` (two WARN lines across a
+landed solve before the amendment).
+**Check your old files.** See *Check your old files* (S56).
+
+### S57 — Every vetting file names its filter
+
+**What was wrong.** Since S49 a run's comparisons are vetted per filter:
+`photometry_quality.json` for the run's first filter, `photometry_quality_<filter>.json`
+for each other one. The first file did not say which filter it vets.
+**Who was affected.** A reader of a two-filter run's vetting file. No data
+changes.
+**What changed.** Every vetting file gets an additive last key `"filter"`, the
+S49 token (`ir`, `lp`, `clear`): `save_comparison_quality_report(path, report,
+filter_token=)`. Qt writes these files from the live and sequence path only, in
+a run's folder (a batch re-run writes none). Readers ignore unknown keys: Review
+(`load_session`) reads the file as before and keeps the key; the web server's
+session list (`has_quality`) too. XX Cyg 2026-09-07 `040723Z` (one filter)
+replayed through the Qt sequence path: its 9 CSVs byte for byte as before, its
+`photometry_quality.json` as before but for `generated_utc` and the added
+`"filter": "ir"`. The web server writes the same key.
+**How to check.** `tests/workers/test_acquisition_engine.py::test_every_vetting_file_names_its_filter_s57`
+(no key on the code before the fix),
+`tests/core/test_photometry_quality.py::test_the_vetting_file_names_its_filter_and_is_otherwise_unchanged_s57`
+and `tests/core/test_session_review.py::test_review_reads_a_vetting_file_that_names_its_filter_s57`.
 
 ## Review and AAVSO export
 
@@ -1349,6 +1493,45 @@ points before the fix) and
 On a copy of the RR Lyr session with ASTAP installed,
 `ARGOS_S43_SESSION=<copy> pytest -k real_rr_lyr` checks every target aperture of
 frames 48–79 against that frame's own ASTAP solve (skipped otherwise).
+With fewer than 3 anchors this check verifies nothing: S58.
+
+### S58 — A batch re-run verifies a lock on fewer than 3 anchors near a fresh solution
+
+**What was wrong.** S43's lock check needs ceil(n/2) of the n anchors to show a
+star where the tracked solution puts them. With 1 or 2 anchors the anchor that
+moved the apertures is seen by construction (S56 in the live path): a re-run of
+such a field measured every frame through the reference solve, never verified.
+**Who was affected.** A re-run of a field whose comparisons give fewer than 3
+anchors. None of the owner's files (no session holds a `photometry_rerun_*`
+folder). Re-running XX Cyg 2026-08-29 `050148Z` (2 anchors) through frame 0's
+solve: 22 unflagged target points, 4 of them 2.5-4.5 px off the star (frames 13,
+15, 16, 17; an independent solve of each frame).
+**What changed.** The live path's rule (S56): a frame steered by 1 or 2 anchors
+is verified only when it is measured through a solution of this frame or the
+previous one in the series and the tracker moved no aperture of the set 2 px or
+more from where that solution puts it. The reference solve given to the re-run
+is of no frame of the series. An unverified frame is re-solved at once with the
+configured solver (as S43 does on a lost lock), the tracker rebuilt on that
+solution, and verified there; without a solver, or when it does not verify, its
+points are flagged `suspect` (left out of the AAVSO export, of the run's
+`sigma_syst` and of the check-star RMS). The end of the run says how many frames
+were re-solved to verify their lock and how many were left unverified (WARN
+"Batch photometry: N frame(s) steered by fewer than 3 anchor stars had no
+verified lock …"). On `050148Z` with Argos's own solves as the solver: 12
+re-solves (every other frame; the one between uses the previous frame's), no
+point flagged, every target point within 1.89 px of the star (4.45 px at worst
+before). Without a solver: all 22 flagged. `052943Z` (2 anchors, 4 frames): 2
+re-solves, none flagged, 0.59 px at worst (0.93 before). The runs with 3 anchors
+or more (`053540Z`, 2026-09-07 `040723Z`) give the same points and flags as
+before, with or without a solver. The web server has no batch re-run.
+**How to check.**
+`tests/workers/test_photometry_batch_worker.py::test_a_re_run_flags_a_lock_on_two_anchors_without_a_fresh_solution_s58`
+(the points unflagged on the code before the fix) and
+`::test_a_re_run_verifies_two_anchors_on_a_fresh_solution_s58` (a solver called
+on frames 0, 2 and 4, no point flagged; after a jump onto a neighbour the frame is
+re-solved, never measured on blank sky; no re-solve on the code before the fix)
+and `tests/ui/test_batch_rerun.py::test_batch_summary_says_how_many_frames_had_no_verified_lock_s58`
+("Apertures tracked the field" on the code before the fix).
 
 ## Plate solving
 
@@ -1385,8 +1568,8 @@ used: it is 1.8 % above every measured solve. An opened FITS (another
 instrument, another night) is neither held to the reference nor sets it. The
 S48 lock check does not catch a wrong solution: a new solution rebuilds the
 tracker from the stars seen where it puts them (on the wrong solve above it
-kept 1 anchor of 6, which passed). A guard for a wrong solution at the right
-scale is left to the owner (web-UI wave 6b report).
+kept 1 anchor of 6, which passed): S54 is the guard for a wrong solution at the
+right scale, and S55 moves the reference when three solves agree.
 Over every solve of the owner's sessions (the 257 frames of the tracker study,
 Argos's live settings, and the 11 other runs: 15 frames, 13 solved: 270
 solves), the good
@@ -1397,6 +1580,92 @@ all (2026-06-18, 2026-09-25 `194741Z`).
 (the wrong solution replaced the good one on the code before the fix),
 `::test_the_scale_reference_restarts_with_the_camera_or_geometry_s50` and
 `::test_an_opened_frame_is_not_held_to_the_camera_scale_s50`.
+
+### S54 — A new solution that the tracker's anchors do not confirm is refused
+
+**What was wrong.** A new plate solution rebuilt the tracker from the stars seen
+where it put them, so a wrong match passed the S48 check by construction. S50
+refuses a wrong match by its scale only: one at the right scale replaced the
+good solution, and the next frames were measured off every star, unflagged.
+**Who was affected.** Live and sequence photometry after a wrong match at the
+session's scale. None in the owner's runs: their one wrong solve (XX Cyg
+2026-09-07 `045156Z`, the solve of its second sub) is 3.4 % off the scale and
+S50 refuses it.
+**What changed.** A camera frame's new solution on which fewer than ceil(k/2) of
+the current tracker's k anchors show a star (aperture SNR ≥ 5, S35's threshold)
+where it places them, on the frame it solved, is refused as S50 refuses one: the
+previous solution and its tracker stay, the frame stays on its stars, and the
+Activity log says why ("Solve: solution refused — only 1 of the 6 anchor stars
+show a star where it places them (3 needed: a wrong match, or the field is not
+there); the previous solution is kept"). No tracker means no check: the first
+solve, after a slew (the tracker goes with the solution), after Open FITS or a
+set change, for an opened FITS, and for the first camera solve after an opened
+FITS (S59). The engine gives the check to the controller
+(`AstrometryController.set_solution_check`, `AcquisitionEngine._solution_refusal`).
+On the owner's runs (the 257 frames of the tracker study, Argos's live solves
+replayed through the gates on the frame each solved): with a solve before every
+sub, 265 solves, 257 of them checked against a tracker; 253 of the 265 lie within
+1.4 px of an independent solve, 12 have none; refused: the `045156Z` wrong solve (by
+S50, which runs first; with S50 off, S54 refuses it alone: 1 of the 6 anchors
+seen); no good solve refused. With one solve per run and re-solves only when
+due: 34 solves, all good, none refused. A solution of the same RR Lyr frame
+moved 25, 10 px (a synthetic wrong match) is refused (0 of 6). The web server's
+port has the same change and the same decisions on these frames.
+**A re-pointing the mount did not report** (owner decision of 2026-11-15). A
+field moved by more than about half the frame without a slew reported (camera
+only, another app; the anchors off the frame) had its correct solutions refused
+until a slew, a GoTo or a set change. Now 3 consecutive solutions refused by this
+check that agree with each other within 20 green px (the largest distance
+between where they put the newest one's frame centre) are a re-pointing: the
+third is accepted and logged ("Solve: 3 consecutive solutions agree within 9.4
+px on a field where the anchor stars are not (0 of 1 seen) — accepted as a
+re-pointing the mount did not report"). As S55 moves the scale reference on 3
+agreeing solves: failed solves and S50 refusals between them neither count nor
+break the count; a solution the check passes, an accepted one, a slew or a set
+change restarts it. 20 px is twice the largest span of 3 consecutive good solves
+on the owner's runs (10.4 px, RR Lyr 2026-09-25, which drifts 4.3 px per sub;
+the subs across its two mount jumps span 22.7 and 145 px). On the owner's runs it
+changes nothing (the replays above, both schedules: no re-pointing accepted, the
+same refusals; `045156Z` with S50 off: its one S54 refusal stands). On real RR
+Lyr subs 41-48, subs 44 on moved 500 green px without a slew: before, every
+correct solution was refused and the subs after 43 were skipped or measured off
+the star (flagged); now subs 44 and 45 are refused, the solution of sub 46 is
+accepted (the three agree within 9.4 px) and sub 48 is measured 0.66 px from the
+star (flagged by S56: 2 of its comparisons are inside the moved frame, and RR Lyr
+drifts 4.3 px per sub). The web
+server's port has the same change.
+**How to check.** `tests/workers/test_acquisition_engine.py::test_a_new_solution_the_anchors_do_not_confirm_is_refused_s54`
+(the wrong solution replaced the good one on the code before the fix),
+`::test_a_good_solution_after_a_jump_or_a_slew_is_accepted_s54`,
+`::test_the_anchor_check_needs_half_the_anchors_s54` (1 of 4 seen refuses with
+"(2 needed", 2 of 4 accepts: it fails if the threshold is lowered to 1) and
+`::test_three_agreeing_refused_solutions_are_a_re_pointing_s54` (refused for ever
+before the 2026-11-15 amendment; 3 that disagree stay refused).
+
+### S55 — S50's scale reference moves when three solves agree
+
+**What was wrong.** S50's reference is the session's first good solve. A wrong
+first solve would have refused every later good one, until the camera
+reconnected.
+**Who was affected.** No session of the owner's: their first solves were all
+good.
+**What changed.** The last 3 camera solves of the reference's geometry (refused
+ones included) that agree with each other within 0.3 % (max / min − 1) move the
+reference to their mean; a move of more than the 1 % tolerance is logged ("Solve:
+the plate-scale reference moves from 3.546″/px to 3.671″/px — 3 solves agree;
+the earlier reference was a wrong match"). A wrong solve between good ones
+never moves it, nor do two agreeing wrong ones. Over the owner's 270 solves
+(272 frames, one controller per night), every accept and refuse decision is
+the one S50 made (one refused, `045156Z`); the reference re-centres within the
+night's 0.3 % spread. With a wrong first solve (3.4 % below) prepended to each
+night: before, every later solve was refused (32 on 2026-08-29, 33 on
+2026-09-07, 204 on 2026-09-25); now the third good solve is accepted and only
+the two before it are refused (on 2026-09-07 the night's own wrong solve is
+still refused). A night of one solve (2026-06-19) cannot recover: 3 are needed.
+The web server's port has the same change.
+**How to check.** `tests/workers/test_astrometry_controller.py::test_a_wrong_first_solve_cannot_refuse_every_later_good_one_s55`
+(the good solves refused for ever on the code before the fix) and
+`::test_the_reference_moves_only_on_three_agreeing_solves_s55`.
 
 ## Wording
 

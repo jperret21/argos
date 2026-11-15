@@ -130,6 +130,21 @@ def test_review_loads_persisted_comparison_quality(tmp_path) -> None:
     assert review.comparison_quality["comparison_stars"][0]["status"] == "stable"
 
 
+def test_review_reads_a_vetting_file_that_names_its_filter_s57(tmp_path) -> None:
+    """S57's additive ``filter`` key: Review reads the file as before, no warning."""
+    root = tmp_path / "20261114T010203Z_XX_Cyg"
+    root.mkdir()
+    (root / "session.json").write_text(json.dumps({"object": "XX Cyg", "frames": []}))
+    (root / "photometry_quality.json").write_text(
+        json.dumps({"criteria": {"min_points": 10}, "comparison_stars": [], "filter": "ir"})
+    )
+
+    review = load_session(root, read_temperature=False)
+
+    assert review.comparison_quality["filter"] == "ir"
+    assert review.warnings == []
+
+
 def _engine_like_session(tmp_path, *, with_targets: bool = True):
     """A run folder as the engine writes it: role-prefixed per-star CSVs."""
     from argos.core.catalog.targets import TargetSet, TargetStar

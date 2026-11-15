@@ -409,7 +409,10 @@ class PhotometryWindow(QWidget):
         if summary.saturated_excluded:
             excluded.append(f"{summary.saturated_excluded} saturated")
         if summary.suspect_excluded:
-            excluded.append(f"{summary.suspect_excluded} suspect (cosmic ray / hot pixel)")
+            # S43, S56: a point measured without a verified lock is flagged suspect too.
+            excluded.append(
+                f"{summary.suspect_excluded} suspect (cosmic ray / hot pixel, or no verified lock)"
+            )
         text = f"{summary.rows} observation(s) written to {Path(path).name}."
         if excluded:
             text += "\nLeft out: " + ", ".join(excluded) + " point(s)."

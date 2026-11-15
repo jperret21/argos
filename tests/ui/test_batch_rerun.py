@@ -191,3 +191,33 @@ def test_batch_summary_never_says_tracked_when_the_field_was_lost() -> None:
 
     assert not any("tracked the field" in msg for _level, msg in logs), logs
     assert any(level == "WARN" and "28" in msg and "flagged" in msg for level, msg in logs), logs
+
+
+def test_batch_summary_says_how_many_frames_had_no_verified_lock_s58() -> None:
+    """S58: a re-run of a field steered by fewer than 3 anchors with no fresh
+    solution flags its points; the end-of-run message says so, never "tracked"."""
+    import argos.ui.pages.imaging_page as ip
+    from argos.core.photometry.lightcurve import LcPoint, LightCurve
+    from argos.workers.photometry_batch_worker import BatchResult
+
+    logs: list[tuple[str, str]] = []
+    page = SimpleNamespace(
+        _batch_dialog=None,
+        _batch_worker=object(),
+        _batch_total=22,
+        log_message=SimpleNamespace(emit=lambda level, msg: logs.append((level, msg))),
+        _engine=SimpleNamespace(adopt_curves=lambda curves: None),
+        _open_photometry=lambda: None,
+        _cfg=lambda key, default: default,
+    )
+    curve = LightCurve(auid="T", name="T", role="target")
+    curve.append(LcPoint(jd_utc=2461281.71, mag=10.2, mag_err=0.02))
+    result = BatchResult(curves={"T": curve}, frames_done=22, rotation_deg=1.5, shift_px=12.0)
+    result.frames_unverified = 22
+    ip.ImagingPage._on_batch_done(page, result)
+
+    assert not any("tracked the field" in msg for _level, msg in logs), logs
+    assert any(
+        level == "WARN" and "22 frame(s)" in msg and "no verified lock" in msg
+        for level, msg in logs
+    ), logs
