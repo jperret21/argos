@@ -249,9 +249,12 @@ def test_read_fits_2d_equals_qt(files_client):
     pytest.importorskip("PyQt6.QtWidgets")
     from argos.ui.analysis_window import read_fits_2d as qt_read
 
+    # Qt's read_fits_2d scales a float frame in [0, 1] to counts (S65); the server
+    # reads the raw pixels (A71 serves them) and scales on the measuring path.
     for data in (_raw_frame(), _raw_frame().astype(np.float32) / 65535.0):
         path = write_frame(files_client.root / f"f{data.dtype}.fits", data=data)
-        assert np.array_equal(files_module.read_fits_2d(path), qt_read(str(path)))
+        counts, _scaled = files_module.to_counts(files_module.read_fits_2d(path))
+        assert np.array_equal(counts, qt_read(str(path)))
 
 
 # ---------------------------------------------------------------------------
