@@ -448,7 +448,10 @@ KEYS: tuple[KeyMeta, ...] = (
        "after as many back inside it.",
        "alerts", used_by=("attention rules",), min=1, max=20, step=1, unit="frames"),
     _k("alerts.baseline_frames", "int", 20, "Baseline frames",
-       "The HFD and star-count baselines are the medians of a filter's first frames.",
+       "The HFD and star-count baselines are the medians of a filter's first frames, "
+       "carried to the later runs of the same object and filter (the star count: also "
+       "the same exposure and gain) until 12 h pass without such a frame or the server "
+       "restarts.",
        "alerts", used_by=("attention rules",), min=5, max=200, step=1, unit="frames"),
     _k("alerts.hfd_factor", "float", 1.5, "HFD rise",
        "Alert when the HFD exceeds this multiple of its baseline.",

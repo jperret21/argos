@@ -493,6 +493,103 @@ def test_an_opened_file_is_not_held_to_the_camera_scale_s50(field_client, tmp_pa
     assert hub.field._scale_ref[0] == pytest.approx(7.35 * 0.8)
 
 
+def test_a_wrong_first_solve_cannot_refuse_every_later_good_one_s55(field_client):
+    """Release S55: S50's reference was the session's first good solve, so a wrong
+    first solve refused every later good one until the camera reconnected. The
+    reference moves to the mean of 3 consecutive solves that agree within 0.3 %."""
+    field_client.astap.set("solve", wcs=_scaled(7.093 / 7.342))  # a wrong first solve
+    take_frame(field_client)
+    assert solve(field_client)["state"] == "done"
+    field_client.astap.set("solve", wcs=_scaled(1.0))
+    for _ in range(2):
+        take_frame(field_client)
+        assert solve(field_client)["state"] == "failed"  # refused: 3.5 % above
+    take_frame(field_client)
+    assert solve(field_client)["state"] == "done"  # failed for ever before the fix
+    reference = field_client.hub.field._scale_ref
+    assert reference[0] == pytest.approx(7.35)
+    assert any("reference moves" in m for m in log_messages(field_client))
+    field_client.astap.set("solve", wcs=_scaled(7.093 / 7.342))
+    take_frame(field_client)
+    assert solve(field_client)["state"] == "failed"  # the wrong scale is now the refused one
+
+
+def test_a_solution_the_photometry_anchors_do_not_confirm_is_refused_s54(field_client, monkeypatch):
+    """Release S54: a camera frame's new solution on which fewer than half the
+    photometry tracker's anchors show a star is refused, the last good one kept;
+    a tracker of an earlier solution (or none, after a slew) is no reference."""
+    import argos.server.photometry as photometry
+
+    hub = field_client.hub
+    take_frame(field_client)
+    assert solve(field_client)["state"] == "done"
+    seen = {"n": 0}
+    monkeypatch.setattr(photometry, "anchors_seen", lambda *a, **k: seen["n"])
+    stars = [TargetStar("comparison", *GREEN_WCS.pixel_to_world_deg(20.0, 15.0), auid="A1")]
+    stars.append(TargetStar("comparison", *GREEN_WCS.pixel_to_world_deg(60.0, 45.0), auid="A2"))
+
+    def tracker_for(generation: int) -> None:
+        phot = hub.photometry
+        with phot._lock:
+            phot._tracker = object()
+            phot._tracker_anchor_stars = list(stars)
+            phot._tracker_generation = generation
+
+    tracker_for(hub.field._generation)
+    take_frame(field_client)
+    job = solve(field_client)
+    assert job["state"] == "failed"  # accepted before the fix
+    field = field_client.get("/api/field", headers=AUTH).json()
+    assert (
+        field["generation"] == 1 and "0 of the 2 anchor stars" in field["last_attempt"]["message"]
+    )
+    assert any("Solve: solution refused" in m for m in log_messages(field_client))
+    seen["n"] = 1  # ceil(2/2) = 1 seen: confirmed
+    take_frame(field_client)
+    assert solve(field_client)["state"] == "done"
+    seen["n"] = 0
+    tracker_for(hub.field._generation - 1)  # built for an earlier solution: no check
+    take_frame(field_client)
+    assert solve(field_client)["state"] == "done"
+    tracker_for(hub.field._generation)
+    hub.field.invalidate("slew")  # a slew drops the tracker with the solution
+    assert hub.photometry._tracker is None and hub.photometry._tracker_anchor_stars == []
+    take_frame(field_client)
+    assert solve(field_client)["state"] == "done"
+
+
+def test_three_agreeing_refused_solutions_are_accepted_as_a_re_pointing_s54(
+    field_client, monkeypatch
+):
+    """Release S54 as amended (2026-11-15), through the field: a field moved without a
+    reported slew had every correct solution refused against the previous anchors.
+    The third of 3 consecutive refused solutions that agree is accepted and logged.
+    The reference keeps the frame it was solved on (S56: a solution of this sub or
+    the previous one)."""
+    import argos.server.photometry as photometry
+
+    hub = field_client.hub
+    take_frame(field_client)
+    assert solve(field_client)["state"] == "done"
+    wcs, _generation = hub.field.reference_solution()
+    assert hub.field.reference_frame_seq(wcs) == hub.field._ref_seq is not None
+    assert hub.field.reference_frame_seq(object()) is None  # no longer the reference
+    monkeypatch.setattr(photometry, "anchors_seen", lambda *a, **k: 0)
+    stars = [TargetStar("comparison", *GREEN_WCS.pixel_to_world_deg(20.0, 15.0), auid="A1")]
+    stars.append(TargetStar("comparison", *GREEN_WCS.pixel_to_world_deg(60.0, 45.0), auid="A2"))
+    phot = hub.photometry
+    with phot._lock:
+        phot._tracker = object()
+        phot._tracker_anchor_stars = list(stars)
+        phot._tracker_generation = hub.field._generation
+    states = []
+    for _ in range(3):
+        take_frame(field_client)
+        states.append(solve(field_client)["state"])
+    assert states == ["failed", "failed", "done"]  # refused for ever before the amendment
+    assert any("re-pointing the mount did not report" in m for m in log_messages(field_client))
+
+
 # -- A46, A47: catalogue and layers ------------------------------------------------
 
 

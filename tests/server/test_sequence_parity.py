@@ -40,6 +40,7 @@ from tests.server.conftest import AUTH, science_client, wait_for  # noqa: E402
 from tests.server.test_field import FakeAstap  # noqa: E402
 from tests.server.test_photometry import (  # noqa: E402
     EGAIN,
+    core_has_s57,
     requires_s49_core,
     OBJECT,
     SITE,
@@ -293,9 +294,10 @@ def test_a_sequence_gives_the_qt_files_and_points(make_client, tmp_path):
     assert without_time(ours / "photometry_selection.json") == without_time(
         theirs / "photometry_selection.json"
     )
-    assert without_time(ours / "photometry_quality.json") == without_time(
-        theirs / "photometry_quality.json"
-    )
+    quality = without_time(ours / "photometry_quality.json")
+    if not core_has_s57():  # GUARD: the Qt core's vetting file names its filter after the merge
+        assert quality.pop("filter") == "ir"
+    assert quality == without_time(theirs / "photometry_quality.json")
     csvs = sorted(p.name for p in (ours / "photometry").iterdir())
     assert csvs == sorted(p.name for p in (theirs / "photometry").iterdir()) and len(csvs) == 7
     for name in csvs:

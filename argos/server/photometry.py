@@ -22,7 +22,13 @@ A Qt-free port of the live photometry half of ``AcquisitionEngine``
 - **0.5.0 S48** (release branch): the lock check of each measured frame
   (fewer than ceil(n/2) anchors showing a star where the tracked solution puts
   them: no point, a re-solve due at once); **S49**: one curve and one CSV per
-  (star, filter), the filter in the file name, the comparisons vetted per filter.
+  (star, filter), the filter in the file name, the comparisons vetted per filter;
+  **S54**: a new solution must show the tracker's anchors (:meth:`solution_refusal`,
+  called by the field before it applies one), unless 3 consecutive refused ones
+  agree (a re-pointing the mount did not report); **S56**: a lock on fewer than 3
+  anchors is unverified, its points flagged suspect and a re-solve due at once,
+  unless the frame is measured within 2 px of a solution of this sub or the
+  previous one; **S57**: every vetting file names its filter.
 
 One deliberate difference with the Qt 0.5.0 code: the series FWHM is frozen
 on the **first** measured frame. Qt read it before ``_diagnostics`` reset it on
@@ -102,6 +108,47 @@ LOCK_LOST_TEXT = (
 #: S48: an anchor is seen at SNR 5 or more (S35's threshold); the lock holds when
 #: ceil(n/2) of the n anchors are seen (S43's rule).
 LOCK_MIN_SNR = 5.0
+#: S56 (release ``_LOCK_VERIFY_MIN_ANCHORS``): with fewer anchors ceil(n/2) is met by
+#: the very anchor that moved the solution: the lock is unverified...
+LOCK_VERIFY_MIN_ANCHORS = 3
+#: ...unless the frame is measured through a solution of this sub or the previous one
+#: and the tracker moved no aperture of the set this many green px or more from where
+#: that solution puts it (release ``_LOCK_FRESH_MAX_SHIFT_PX``, S56 as amended).
+LOCK_FRESH_MAX_SHIFT_PX = 2.0
+#: S56 (release ``lock_unverified_text``), once per episode: until a verified frame,
+#: a slew or invalidation, or a set change.
+LOCK_UNVERIFIED_TEXT = (
+    "Photometry: only {n} anchor star{s} steer the apertures — the lock cannot be"
+    " verified; points are flagged suspect while fewer than 3 anchor stars steer the"
+    " apertures (except within 2 px of a solution of this sub or the previous one)."
+    " Re-solving."
+)
+#: S54 as amended (release ``_REPOINT_SOLVES``, ``_REPOINT_AGREE_PX``): 3 consecutive
+#: solutions refused by the anchor check that agree within 20 green px are a
+#: re-pointing the mount did not report: the third is accepted.
+REPOINT_SOLVES = 3
+REPOINT_AGREE_PX = 20.0
+REPOINT_TEXT = (
+    "Solve: {k} consecutive solutions agree within {span:.1f} px on a field where the"
+    " anchor stars are not ({seen} of {anchors} seen) — accepted as a re-pointing the"
+    " mount did not report"
+)
+
+
+def solutions_span_px(solutions: list, green_shape: tuple[int, int]) -> float:
+    """S54 (release ``solutions_span_px``): the largest distance (green px) between where
+    the solutions put the newest one's frame centre."""
+    h, w = green_shape
+    ra_h, dec = solutions[-1].pixel_to_radec((w - 1) / 2.0, (h - 1) / 2.0)
+    pts = [
+        tuple(float(v) for v in s.world_to_pixel_deg(float(ra_h) * 15.0, float(dec)))
+        for s in solutions
+    ]
+    return max(
+        (math.hypot(a[0] - b[0], a[1] - b[1]) for i, a in enumerate(pts) for b in pts[i + 1 :]),
+        default=0.0,
+    )
+
 
 STATUS_TEXT = {
     "no_target": "No target star: choose one on the image or in the Variables list.",
@@ -347,6 +394,9 @@ class MeasureRequest:
     #: The frame's filter (S49): a sub's read-back FILTER, an opened file's FILTER
     #: card, a live frame's Camera form; None: the wheel's settled slot, else the form.
     filter_name: str | None = None
+    #: S56: the seq of the frame ``wcs`` was solved on (None: unknown). A solution
+    #: of this frame or the previous one (seq - 1) is fresh.
+    solved_seq: int | None = None
 
 
 class PhotometryService:
@@ -376,6 +426,13 @@ class PhotometryService:
         #: WCS or the tracked solution frozen at a set change), then that freeze (S52).
         self._tracker_base: tuple[Any, Any] | None = None
         self._rebase: tuple[Any, Any] | None = None
+        #: S54: the field generation of the solution the tracker was built for.
+        self._tracker_generation: int | None = None
+        #: S56: the current unverified-lock episode was logged (once per episode: until
+        #: a verified frame, a slew or invalidation, or a set change).
+        self._unverified_logged = False
+        #: S54: the consecutive solutions refused by the anchor check (their WCS).
+        self._repoint_refused: list[Any] = []
         #: S48: the last lock check ({frame_seq, anchors, seen, needed, held}), or None.
         self._lock_state: dict[str, Any] | None = None
         #: S49: the first filter measured since the curves were cleared (its vetting
@@ -465,12 +522,79 @@ class PhotometryService:
         # reference for its tracker (_on_reference_solved). A run's sub is never measured
         # again here: its solve may finish after the run ended (wave 6b integration: the
         # run's last sub got a second point under no filter, a one-point curve and CSV).
+        with self._lock:
+            self._repoint_refused = []  # S54: a solution was accepted
         if owner in ("sequence", "autofocus") or request.origin == "sequence":
             with self._lock:
                 self._tracker = None
                 self._rebase = None
             return
         self.submit(replace(request, reset_tracker=True))
+
+    def on_field_invalidated(self) -> None:
+        """The solution was dropped (a slew, another source or geometry): the tracker
+        and its anchors go with it (release ``invalidate_astrometry`` →
+        ``_reset_tracker``), so the next field's first solution is not held to the
+        previous field's anchors (S54)."""
+        with self._lock:
+            self._tracker = None
+            self._tracker_anchor_stars = []
+            self._tracker_anchors = 0
+            self._rebase = None
+            self._tracker_generation = None
+            self._unverified_logged = False  # S56: a slew or invalidation ends the episode
+            self._repoint_refused = []
+
+    def solution_refusal(self, raw: np.ndarray, wcs: Any, generation: int) -> str | None:
+        """Why a camera frame's new solution is refused (S54), or None to accept it.
+
+        Release ``AcquisitionEngine._solution_refusal``: a new solution rebuilds
+        the tracker from the stars seen where it puts them, so a wrong match passes
+        the S48 check by construction (XX Cyg 2026-09-07 045156Z frame 1: 1 anchor
+        of 6 seen, the next frame measured 24 px off every star). Fewer than
+        ceil(k/2) of the current tracker's k anchors showing a star (SNR >= 5)
+        where the new solution puts them on the frame it solved refuses it. Only a
+        tracker built for the field's current solution (``generation``) counts:
+        none after a slew, an opened file or a set change. Called by the field's
+        solve thread, never with the hub lock held.
+
+        3 consecutive refused solutions that agree within ``REPOINT_AGREE_PX`` (S54
+        as amended on 2026-11-15, as S55 moves the scale reference): the field
+        moved without a reported slew, the third is accepted and logged.
+        """
+        with self._lock:
+            if self._tracker is None or self._tracker_generation != generation:
+                return None
+            stars = list(self._tracker_anchor_stars)
+        if not stars or raw is None:
+            return None
+        params = PhotometryParams.from_config(self._hub.config.get, egain=self._hub.targets.egain())
+        if not params.track_apertures:
+            return None
+        green = green_plane(raw)
+        seen = anchors_seen(green, wcs, stars, params, min_snr=LOCK_MIN_SNR)
+        needed = max(1, math.ceil(len(stars) / 2))
+        with self._lock:
+            if seen >= needed:
+                self._repoint_refused = []
+                return None
+            self._repoint_refused = (self._repoint_refused + [wcs])[-REPOINT_SOLVES:]
+            streak = list(self._repoint_refused)
+        if len(streak) == REPOINT_SOLVES:
+            span = solutions_span_px(streak, green.shape)
+            if span <= REPOINT_AGREE_PX:
+                with self._lock:
+                    self._repoint_refused = []
+                text = REPOINT_TEXT.format(
+                    k=REPOINT_SOLVES, span=span, seen=seen, anchors=len(stars)
+                )
+                self._hub.log("warning", text, source="field", topic="field")
+                return None
+        return (
+            f"only {seen} of the {len(stars)} anchor stars show a star where it places them"
+            f" ({needed} needed: a wrong match, or the field is not there); the previous"
+            " solution is kept"
+        )
 
     def measure_saved_frame(self, request: MeasureRequest) -> None:
         """A sequence's saved sub (``_on_seq_frame_saved``, 793-797; wave 6)."""
@@ -497,6 +621,9 @@ class PhotometryService:
             if tracker is not None and self._tracker_anchors and base is not None:
                 self._rebase = (base[0], TrackedWCS(base[1], copy.copy(tracker)))
             self._tracker = None
+            self._tracker_anchor_stars = []  # release _anchors_changed (S54: no check)
+            self._repoint_refused = []
+            self._unverified_logged = False  # S56: a set change ends the episode
             if keys != self._measured_keys:
                 self._outcome = None
         field = getattr(self._hub, "field", None)
@@ -808,8 +935,12 @@ class PhotometryService:
             alignment = self._hub._mount_state.alignment
         return alignment not in ("eq", "eq_gem")
 
-    def _wcs_for_frame(self, green, tset: TargetSet, params: PhotometryParams, wcs):
-        """``_wcs_for_frame`` (1542-1567, with the release branch's S35 and S52). Lock held."""
+    def _wcs_for_frame(
+        self, green, tset: TargetSet, params: PhotometryParams, wcs, generation: int | None = None
+    ):
+        """``_wcs_for_frame`` (1542-1567, with the release branch's S35 and S52). Lock held.
+        ``generation``: the field generation of ``wcs`` (S54 checks only a tracker
+        built for the current solution)."""
         if not params.track_apertures:
             return wcs
         # After a set change, the tracked solution frozen then (S52).
@@ -823,6 +954,7 @@ class PhotometryService:
             )
             self._tracker_anchors = len(self._tracker_anchor_stars)
             self._tracker_base = (wcs, base)
+            self._tracker_generation = generation
         self._tracker.update(green, allow_rotation=self._allow_rotation())
         return TrackedWCS(base, self._tracker)
 
@@ -883,8 +1015,46 @@ class PhotometryService:
             "seen": int(seen),
             "needed": needed,
             "held": seen >= needed,
+            # S56: 1 or 2 anchors verify nothing (the anchor that moved the solution).
+            "verified": seen >= needed and len(stars) >= LOCK_VERIFY_MIN_ANCHORS,
         }
         return seen >= needed
+
+    def _lock_unverified(
+        self, params: PhotometryParams, tset: TargetSet, tracked, request: MeasureRequest
+    ) -> bool:
+        """The tracker steers on fewer than 3 anchors (S56, release ``_lock_unverified``).
+
+        With n = 1 or 2, ceil(n/2) = 1 anchor must be seen and the anchor whose
+        centroid moved the solution is seen by construction. Verified all the same
+        (S56 as amended on 2026-11-15) near a fresh solution (:meth:`_fresh_lock`).
+        Lock held.
+        """
+        n = len(self._tracker_anchor_stars)
+        if not (params.track_apertures and self._tracker is not None):
+            return False
+        if not 0 < n < LOCK_VERIFY_MIN_ANCHORS:
+            return False
+        return not self._fresh_lock(tset, tracked, request)
+
+    @staticmethod
+    def _fresh_lock(tset: TargetSet, tracked, request: MeasureRequest) -> bool:
+        """The frame is measured through a solution of this sub or the previous one
+        (``solved_seq`` = ``frame_seq`` or ``frame_seq - 1``), and the tracker moved no
+        aperture of the set ``LOCK_FRESH_MAX_SHIFT_PX`` or more from where that
+        solution puts it (release ``_fresh_lock``): the largest distance, over the
+        set's stars, between the raw and the tracked solution's positions."""
+        if request.solved_seq is None or not 0 <= request.frame_seq - request.solved_seq <= 1:
+            return False
+        shift = 0.0
+        for star in tset.stars:
+            x0, y0 = request.wcs.world_to_pixel_deg(star.ra_deg, star.dec_deg)
+            x1, y1 = tracked.world_to_pixel_deg(star.ra_deg, star.dec_deg)
+            d = math.hypot(float(x1) - float(x0), float(y1) - float(y0))
+            if not math.isfinite(d):
+                return False
+            shift = max(shift, d)
+        return shift < LOCK_FRESH_MAX_SHIFT_PX
 
     def _frame_filter(self, request: MeasureRequest) -> str:
         """The measured frame's filter name (S49).
@@ -952,7 +1122,7 @@ class PhotometryService:
             fwhm = self._phot_fwhm or DEFAULT_FWHM
             frame_no = self._diag_frame
             self._diag_frame += 1
-            tracked = self._wcs_for_frame(green, tset, params, request.wcs)
+            tracked = self._wcs_for_frame(green, tset, params, request.wcs, request.generation)
             lost = None
             if self._field_lost(params):
                 # No point on blank sky (S35); the service lock, then the hub's.
@@ -970,6 +1140,27 @@ class PhotometryService:
                 if field is not None and hasattr(field, "resolve_due"):
                     field.resolve_due(request.frame_seq, now=request.origin == "sequence")
                 return 0
+            unverified = self._lock_unverified(params, tset, tracked, request)
+            if self._lock_state is not None:
+                self._lock_state["verified"] = not unverified  # S56 as amended
+            if unverified:
+                # S56: points flagged suspect and a solve due at once, away from a fresh
+                # solution (release ``_measure_photometry``).
+                n = len(self._tracker_anchor_stars)
+                diag.record("event", frame=frame_no, what="lock_unverified", anchors=n)
+                if not self._unverified_logged:
+                    self._unverified_logged = True  # once per episode
+                    self._hub.log(
+                        "warning",
+                        LOCK_UNVERIFIED_TEXT.format(n=n, s="s" if n != 1 else ""),
+                        source="photometry",
+                        topic="photometry",
+                    )
+                field = getattr(self._hub, "field", None)
+                if field is not None and hasattr(field, "resolve_due"):
+                    field.resolve_due(request.frame_seq, now=request.origin == "sequence")
+            else:
+                self._unverified_logged = False  # a verified frame ends the episode
             if self._primary_filter is None:
                 self._primary_filter = token
             bundled_iers_only()  # BJD_TDB offline (S37)
@@ -1002,7 +1193,7 @@ class PhotometryService:
                 if not (has_mag or has_ratio):
                     continue
                 point = self._emit_live_point(
-                    tset, res, jd, air, fwhm, (lat, lon, elev), request, t_iso, token
+                    tset, res, jd, air, fwhm, (lat, lon, elev), request, t_iso, token, unverified
                 )
                 kept += 1
                 if res.star.role == ROLE_TARGET and target_point is None:
@@ -1049,10 +1240,21 @@ class PhotometryService:
         return kept
 
     def _emit_live_point(
-        self, tset, res, jd, air, fwhm, site, request, t_iso, token: str = "clear"
+        self,
+        tset,
+        res,
+        jd,
+        air,
+        fwhm,
+        site,
+        request,
+        t_iso,
+        token: str = "clear",
+        unverified: bool = False,
     ) -> LcPoint:
         """``_emit_live_point`` (1700-1765): the point, its (star, filter) curve (S49),
-        its CSV, its event."""
+        its CSV, its event. ``unverified``: the frame's lock rests on fewer than 3
+        anchors, the point is flagged ``suspect`` (S56)."""
         lat, lon, elev = site
         bjd = (
             bjd_tdb(jd, res.star.ra_deg, res.star.dec_deg, float(lat), float(lon), float(elev))
@@ -1075,7 +1277,7 @@ class PhotometryService:
             comps_used=res.diff.comps_used if res.diff else 0,
             relative_comps_used=res.relative.comps_used if res.relative else 0,
             saturated=bool(res.phot and res.phot.saturated),
-            suspect=bool(res.phot and res.phot.suspect),
+            suspect=bool(res.phot and res.phot.suspect) or unverified,
             formal_mag_err=(
                 res.diff.formal_mag_err or res.diff.mag_err
                 if res.diff and res.diff.mag_err is not None
@@ -1167,8 +1369,8 @@ class PhotometryService:
     ) -> None:
         """``_write_live_quality_report`` (1669-1698): every frame (S17), the comparisons
         of the measured frame's filter only (S49): the run's first filter in
-        ``photometry_quality.json``, another in ``photometry_quality_<filter>.json``.
-        Lock held."""
+        ``photometry_quality.json``, another in ``photometry_quality_<filter>.json``,
+        each naming its filter in a ``filter`` key (S57). Lock held."""
         by_star = {
             key.rpartition("@")[0]: curve
             for key, curve in self._curves.items()
@@ -1196,7 +1398,10 @@ class PhotometryService:
             else f"photometry_quality_{token}.json"
         )
         try:
-            save_comparison_quality_report(request.run_root / name, report)
+            # S57: the file says which filter it vets (additive; written here, so the
+            # server needs no core change: release save_comparison_quality_report's
+            # filter_token writes the same key, last).
+            save_comparison_quality_report(request.run_root / name, {**report, "filter": token})
         except OSError as exc:
             self._hub.log(
                 "warning",

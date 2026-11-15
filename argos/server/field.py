@@ -25,10 +25,13 @@ State is guarded by the hub lock and published with ``Hub._publish`` under
 it, so events leave in the order of the changes.
 
 0.5.0 S50 (release ``AstrometryController._on_worker_solved``): a camera frame's
-solution whose plate scale is more than 1 % from the first good solve of the
-session (the active profile and frame geometry) is refused, the last good
-solution kept. S48: the photometry's lock check makes the next solve due at
-once (:meth:`FieldService.resolve_due`).
+solution whose plate scale is more than 1 % from the session's reference (the
+active profile and frame geometry) is refused, the last good solution kept; the
+reference is the first good solve, moved to the mean of 3 consecutive solves that
+agree within 0.3 % (S55). S54: a camera frame's solution on which fewer than half
+the photometry tracker's anchors show a star is refused the same way
+(``PhotometryService.solution_refusal``). S48: the photometry's lock check makes
+the next solve due at once (:meth:`FieldService.resolve_due`).
 """
 
 from __future__ import annotations
@@ -168,6 +171,10 @@ class Frame:
 #: good solve is refused (release ``astrometry_controller.SCALE_TOLERANCE``). The
 #: owner's 270 solves span 0.3 % around their night's first; the wrong one, 3.4 %.
 SCALE_TOLERANCE = 0.01
+#: S55 (release ``SCALE_AGREE_SOLVES``, ``SCALE_AGREEMENT``): the reference moves to the
+#: mean of this many consecutive camera solves that agree within this fraction.
+SCALE_AGREE_SOLVES = 3
+SCALE_AGREEMENT = 0.003
 
 
 @dataclass
@@ -260,6 +267,8 @@ class FieldService:
         self._closed = False
         #: S50: the first good solve of a camera frame: (″ per green px, profile, geometry).
         self._scale_ref: tuple[float, Any, tuple[int, int]] | None = None
+        #: S55: the scales of the last camera solves for that reference (refused ones too).
+        self._scale_recent: list[float] = []
         #: S48: the photometry lost the field: the next frame is due at once.
         self._resolve_due_flag = False
         self._frame_cond = threading.Condition()
@@ -496,6 +505,13 @@ class FieldService:
             if self._wcs is None:
                 return None
             return self._wcs, self._generation
+
+    def reference_frame_seq(self, wcs: Any) -> int | None:
+        """The seq of the frame the reference solution ``wcs`` was solved on, or None
+        when ``wcs`` is no longer the reference (S56: a solution of this sub or the
+        previous one is fresh; release ``AstrometryController.solved_raw``)."""
+        with self._hub._lock:
+            return self._ref_seq if self._wcs is wcs else None
 
     def _tracked_wcs(self):
         """``tracked_wcs`` (``acquisition_engine.py:1584-1593``). Lock held."""
@@ -768,6 +784,7 @@ class FieldService:
         new plate-scale reference (S50, release ``reset_scale_reference``)."""
         with self._hub._lock:
             self._scale_ref = None
+            self._scale_recent = []
 
     def resolve_due(self, frame_seq: int, *, now: bool = False) -> None:
         """The photometry lost the field (S35 or the S48 lock check): solve again at once.
@@ -951,14 +968,23 @@ class FieldService:
             self._hub.log("error", f"Solve: {message}", source="field", topic="field")
             raise ApiError(409, "not_solved", message)
         refusal = self._scale_refusal(wcs, gs, frame)
+        why = "plate scale"
+        if refusal is None and _origin_family(frame.origin) == "camera":
+            # S54: the photometry's anchors must show a star where it puts them.
+            with self._hub._lock:
+                generation = self._generation
+            check = getattr(self._hub.photometry, "solution_refusal", None)
+            refusal = check(frame.raw, wcs, generation) if check is not None else None
+            why = "anchor stars"
         if refusal is not None:
-            # S50: a wrong match (XX Cyg 2026-09-07, 3.4 % off) is worse than no new
-            # solution: the last good one is kept, as after a failed solve.
+            # S50, S54: a wrong match (XX Cyg 2026-09-07, 3.4 % off, 1 anchor of 6 seen)
+            # is worse than no new solution: the last good one is kept, as after a
+            # failed solve.
             message = f"solution refused — {refusal}"
             self._end_attempt(mode, "failed", message, claim)
             self._hub.log("warning", f"Solve: {message}", source="field", topic="field")
             self._hub.set_activity(
-                "Field identification refused (plate scale)",
+                f"Field identification refused ({why})",
                 source="field",
                 topic="field",
                 log=False,
@@ -1096,6 +1122,7 @@ class FieldService:
                 origin=newest.origin,
                 egain=newest.egain,
                 filter_name=newest.filter_name,
+                solved_seq=frame.seq,  # S56: a solution of this frame or the previous one
             )
         )
         return solution
@@ -1140,9 +1167,12 @@ class FieldService:
 
         The reference is the first good solve of a camera frame for the active
         profile and frame geometry (the profile's nominal scale is 1.8 % above
-        every measured one); another profile or geometry starts a new one. An
-        opened file is never gated and never sets it (another instrument).
-        Called before the solution is applied; the reference is kept here.
+        every measured one); another profile or geometry starts a new one. It
+        moves to the mean of the last 3 camera solves (refused ones included)
+        when they agree within 0.3 % (S55, release ``_scale_refusal``): a wrong
+        first solve no longer refuses every later good one. An opened file is
+        never gated and never sets it (another instrument). Called before the
+        solution is applied; the reference is kept here.
         """
         if _origin_family(frame.origin) != "camera":
             return None
@@ -1150,11 +1180,28 @@ class FieldService:
         if scale is None:
             return None
         profile = self._hub.config.get("hardware.profile", None)
+        moved_text = None
         with self._hub._lock:
             ref = self._scale_ref
             if ref is None or ref[1] != profile or ref[2] != gs:
                 self._scale_ref = (scale, profile, gs)
+                self._scale_recent = [scale]
                 return None
+            self._scale_recent = (self._scale_recent + [scale])[-SCALE_AGREE_SOLVES:]
+            recent = self._scale_recent
+            if len(recent) == SCALE_AGREE_SOLVES and max(recent) <= min(recent) * (
+                1.0 + SCALE_AGREEMENT
+            ):
+                moved = sum(recent) / len(recent)
+                if abs(moved / ref[0] - 1.0) > SCALE_TOLERANCE:
+                    moved_text = (
+                        f"Solve: the plate-scale reference moves from {ref[0] / 2.0:.3f}″/px"
+                        f" to {moved / 2.0:.3f}″/px — {len(recent)} solves agree; the earlier"
+                        " reference was a wrong match"
+                    )
+                ref = self._scale_ref = (moved, profile, gs)
+        if moved_text is not None:
+            self._hub.log("warning", moved_text, source="field", topic="field")
         deviation = scale / ref[0] - 1.0
         if abs(deviation) <= SCALE_TOLERANCE:
             return None
@@ -1193,6 +1240,9 @@ class FieldService:
             self._announce_invalidation(reason)
 
     def _announce_invalidation(self, reason: str) -> None:
+        # The photometry's tracker goes with the solution (S54: never held to the
+        # previous field's anchors; release ``invalidate_astrometry``).
+        self._hub.photometry.on_field_invalidated()
         self._hub.log("info", INVALIDATION_TEXT[reason], source="field", topic="field")
         self._hub.targets.publish()  # positions: off the solution
         self._hub.photometry.refresh_status()  # waiting for a solution

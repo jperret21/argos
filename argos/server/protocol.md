@@ -1810,8 +1810,40 @@ Grid = {"lines": [[[x, y], …], …],                  // polyline segments (br
   0.3 % of their night's first, one refused (XX Cyg 2026-09-07 `045156Z`
   frame 1, its second, 7.093″ per green px against 7.341-7.343). The S48 lock
   check is not a guard against a wrong solution (a new solution rebuilds the
-  tracker from the stars it shows); a wrong solution at the right scale is an
-  open owner decision (wave 6b report).
+  tracker from the stars it shows): S54 below is.
+  **The reference moves** (release S55): when the last 3 camera solves of that
+  reference (refused ones included) agree with each other within 0.3 % (max /
+  min − 1), the reference becomes their mean, so a wrong first solve no longer
+  refuses every later good one: the third agreeing solve is accepted, WARN
+  "Solve: the plate-scale reference moves from 3.546″/px to 3.671″/px — 3 solves
+  agree; the earlier reference was a wrong match" (only when it moves by more
+  than the 1 % tolerance; within it the re-centring is silent). On the owner's
+  270 solves it changes no decision.
+- **Solutions the photometry's anchors do not confirm are refused** (release
+  S54; `AcquisitionEngine._solution_refusal`): a camera frame's solution on
+  which fewer than ceil(k/2) of the photometry tracker's k anchor stars show a
+  star (aperture SNR ≥ 5) where it places them, on the frame it solved, is
+  refused as above: WARN "Solve: solution refused — only 1 of the 6 anchor
+  stars show a star where it places them (3 needed: a wrong match, or the field
+  is not there); the previous solution is kept", activity "Field
+  identification refused (anchor stars)". The tracker and its points stay on
+  the previous solution. Only a tracker built for the field's current
+  solution (its `generation`) counts: none on the first solve, after an
+  invalidation (which drops the photometry's tracker, as Qt's
+  `invalidate_astrometry`), an opened file or a set change. XX Cyg 2026-09-07
+  `045156Z` frame 1: 1 anchor of 6 seen (S50 refuses it first, by its scale).
+  **A re-pointing the mount did not report** (S54 as amended, owner decision
+  2026-11-15): 3 consecutive solutions refused by this check (failed solves and
+  S50 refusals between them neither count nor break the count) that agree with
+  each other within 20 green px (the largest distance between where they put
+  the newest one's frame centre) are a field that moved without a slew
+  (camera only, another app): the third is accepted, WARN "Solve: 3 consecutive
+  solutions agree within 8.0 px on a field where the anchor stars are not (0 of
+  6 seen) — accepted as a re-pointing the mount did not report". 20 px is twice
+  the largest span of 3 consecutive good solves on the owner's runs (10.4 px,
+  RR Lyr 2026-09-25: 4.3 px of drift per sub; the subs across its two mount
+  jumps span 22.7 and 145 px); a solution passing the check, an accepted one,
+  an invalidation or a set change restarts the count.
 - **Automatic identification** (`PUT /api/field/auto`,
   `astrometry_controller.py:82-85, 121-154`): per new frame (latest wins,
   on the field thread) a live solve (`live=True`: bounded timeout,
@@ -1824,7 +1856,8 @@ Grid = {"lines": [[[x, y], …], …],                  // polyline segments (br
   (Q-O12) through `FieldService.arm_for_sequence()` / `disarm_after_sequence()`,
   which restore the observer's choice afterwards (`auto_source: "sequence"`).
   `FieldService.resolve_due(frame_seq, now=)` (release S48, wave 6b): the
-  photometry lost the field (`field_lost`, `lock_lost`): the next frame is due
+  photometry lost the field (`field_lost`, `lock_lost`) or its lock is
+  unverified (S56): the next frame is due
   whatever the cadence; with `now` (a sequence sub) the frame in hand is solved
   at once when it is still the newest and no solve runs.
 - **Invalidation** (`_clear_astrometry` `imaging_page.py:2501-2563`,
@@ -2233,6 +2266,26 @@ saturated ensemble, no comparison) gives no point that frame.
   solution, whose rebuilt tracker anchors on the stars it shows. The status record's
   `lock` gives the last check (`PhotometryStatus` below); the attention rule
   `tracker_lost` counts both reasons.
+- **Unverified lock** (release S56): with 1 or 2 anchors, ceil(n/2) is met by the
+  very anchor that moved the solution, so the check verifies nothing. Such a
+  frame is **verified all the same** (S56 as amended, owner decision 2026-11-15)
+  when it is measured through a solution of this sub or the previous one (the
+  solved frame's seq is the measured one's or one less) and the tracker moved no
+  aperture of the set **2 green px or more** from where that solution puts it
+  (the largest distance, over the set's stars, between their positions through
+  the raw and the tracked solution: the tracker's own outlier floor; between two
+  subs the owner's fields drift 1-5 px, a neighbour locked after a jump or a
+  stale rebuild moves them 22-36 px); no re-solve is made due then. Otherwise
+  the frame keeps its points, each flagged **`suspect`** (the point's existing
+  flag: the CSV's `suspect` column, `photometry_point.point.suspect`, drawn
+  hollow as the other suspect points, left out of an AAVSO export), and the next
+  solve is due at once as after `lock_lost` (in a run the sub in hand). WARN
+  "Photometry: only 2 anchor stars steer the apertures — the lock cannot be
+  verified; points are flagged suspect while fewer than 3 anchor stars steer
+  the apertures (except within 2 px of a solution of this sub or the previous
+  one). Re-solving." once per episode (a verified frame, an invalidation or a
+  set change ends it; a solve that lands does not), a `lock_unverified` event
+  (`anchors`) per flagged frame in the flight recorder, `lock.verified: false`.
 - **One curve per (star, filter)** (release S49, wave 6b): the filter of the
   measured frame is a sub's read-back `FILTER`, an opened file's `FILTER` card
   (none: `clear`), a live frame's wheel slot when the wheel reports one
@@ -2253,7 +2306,8 @@ saturated ensemble, no comparison) gives no point that frame.
   curve after each new point (`_apply_systematic_floor`, 1767-1795; the
   client recomputes the earlier bars the same way from `sigma_syst`);
   `saturated` (aperture peak ≥ `camera.linearity_max_adu`), `suspect`
-  (hot pixel / cosmic, `aperture.py:109-136`), never used to drop a point.
+  (hot pixel / cosmic, `aperture.py:109-136`; or the frame's lock rests on fewer
+  than 3 anchors, release S56), never used to drop a point.
 - **Time and airmass** (X2): `jd_utc` of the midpoint; with a site set
   (`observing_site`: a name, or coordinates other than 0/0) `bjd_tdb` from
   astropy for the star's own RA / Dec and the site, and the star's own
@@ -2278,7 +2332,9 @@ saturated ensemble, no comparison) gives no point that frame.
   (`star`, `ensemble`, `frame` records). The leave-one-out report is written
   to `<run>/photometry_quality.json` inside a run only (S17); with several
   filters, that file vets the run's first filter and
-  `<run>/photometry_quality_<filter>.json` each other one (S49).
+  `<run>/photometry_quality_<filter>.json` each other one (S49). Each file names
+  the filter it vets in an additive last key `"filter"` (the token, release S57;
+  readers ignore unknown keys: Qt Review, the session list).
 
 ### Live photometry (A54)
 
@@ -2367,7 +2423,8 @@ ComparisonQuality = {"type": "comparison_quality", "revision": int,
                      "filter": string|null,       // the filter whose comparisons it vets (S49)
                      "report": Report|null}
 Report = {… comparison_quality_report (quality.py:22-98) as written to
-          photometry_quality.json: schema, generated_utc, selection_status
+          photometry_quality.json (the file adds its "filter", S57; here it is
+          the record's): schema, generated_utc, selection_status
           ("insufficient_data"|"not_ready"|"live_preview_consistent"),
           scientific_note, criteria {min_points, max_scatter_mag,
           max_formal_error_mag}, comparison_stars [Entry] …}
@@ -2396,7 +2453,9 @@ PhotometryStatus = {"type": "photometry",
                              "anchors": int,             //   the tracker's anchor stars
                              "seen": int,                //   showing a star (SNR ≥ 5)
                              "needed": int,              //   ceil(anchors / 2)
-                             "held": bool}|null,         //   null: tracking off, S35, reset
+                             "held": bool,               //   seen ≥ needed
+                             "verified": bool}|null,     //   S56: held, and 3 anchors or more or within 2 px of a fresh solution
+                                                         //   null: tracking off, S35, reset
                     "revision": int}
 ```
 
@@ -3247,7 +3306,7 @@ AttentionItem  = {"id": string,             // "<rule>-<run_id or 'server'>-<n>"
                   "title": string,            // the rule and the numbers, never an interpretation alone
                   "short": string,            // Watch headline (read from 2 m): the value and the factor only
                   "detail": string,           // the rule, its threshold and the frames that fired it
-                  "values": {string: number|string|null},
+                  "values": {string: number|string|null}, // hfd_rise, star_drop: + the baseline's origin (Baselines, below)
                   "since": ISO,               // when the cause began (the firing sub's DATE-OBS, or when found)
                   "raised_utc": ISO, "updated_utc": ISO,
                   "frame": int|null,          // the run's sub number (1-based, as frames_done) that fired it
@@ -3267,10 +3326,18 @@ AttentionState = {"active": [AttentionItem],  // critical, then attention, then 
                              "unacked": int}, // active, not acknowledged, level ≠ info (the status-bar chip)
                   "sound": {"level": "off"|"soft"|"normal", "info": bool, "repeat_s": int},
                   "thresholds": {…the alerts.* values in force},
+                  "baselines": [RunBaseline], // the run's HFD and star baselines, one entry per filter with either (the last run's until the next Start; [] before the first)
                   "last_change": {"change": "raised"|"updated"|"reopened"|"cleared"|"acked",
                                   "id": string}|null,
                   "revision": int}
 AckBody        = {"by"?: string (≤ 64)}       // who acknowledged (the client's label); default "observer"
+RunBaseline    = {"filter": string, "object": string,
+                  "hfd_px": number|null, "stars": number|null, // null: none yet (or no value among its subs)
+                  "hfd_from": BaselineFrom|null, "stars_from": BaselineFrom|null}
+BaselineFrom   = {"frames": int,              // B of the run that made it
+                  "origin": "this_run"|"earlier_run",
+                  "run_id": string|null, "run_utc": ISO|null, // the run whose first B subs made it, and its start
+                  "exposure_s"?: number|null, "gain"?: int|null} // stars_from only: the setup it was made with
 ```
 
 - **Levels by mark and word** (D3): critical = filled disc, attention =
@@ -3313,8 +3380,8 @@ AckBody        = {"by"?: string (≤ 64)}       // who acknowledged (the client'
 | `rule` | Level | Kind | Fires | Clears | Action |
 |---|---|---|---|---|---|
 | `no_frame` | critical | condition | running or pausing, and `now − save of the last sub` > max(F × c, c + M) s, c = median save-to-save interval of the run's subs since the last break (pause, autofocus, new step): a client learns of a frame when it is saved (`frame_saved` `t`); before two saves since the break, > F × f + M s, f = the larger of the planned `cadence_s` and the newest sub's start-to-save time (a Seestar's 10 s sub costs 20-45 s), counted from the start or the resume before the first save. Counted from the sub's start (before the wave 6b fix) it fired at the start of all 9 of the owner's runs; from the save: 0 false alarms, worst 0.77 of the limit, the real freeze of RR Lyr 2026-09-25 still fires (112 s after the last save) | a sub is saved; the run pauses or ends | Watch |
-| `hfd_rise` | attention | condition | after the first B Light subs of a filter: HFD > H × the median HFD of those B, K in a row | K in a row at or under | Focus |
-| `star_drop` | attention | condition | stars < S × the median of the first B Light subs of the filter, K in a row | K in a row at or over | — |
+| `hfd_rise` | attention | condition | HFD > H × the filter's HFD baseline (the median of B Light subs: below), K in a row | K in a row at or under | Focus |
+| `star_drop` | attention | condition | stars < S × the filter's star baseline (the median of the same B subs), K in a row | K in a row at or over | — |
 | `comps_low` | attention | condition | the target's point used fewer than C comparisons, K measured subs in a row (subs without a target point do not count) | K in a row with C or more | Field |
 | `tracker_lost` | attention | condition | K Light subs in a row got no point because the stars are not where the solution puts them: photometry `reason` `field_lost` (S35) or `lock_lost` (S48, below) | K subs in a row measured | Field |
 | `altitude` | attention | condition | the target is below `site.min_altitude_deg` (30° when unset) now, or will be within A min (checked every 60 s; Light runs only: a plan with no enabled Light step has none, as the preflight's "Calibration frames only"). "Now" is the mount's altitude when the mount points within 1° of the target, else the Settings site's; "within A min" is extrapolated from the Settings site only while the site check (`site_check.state`) is not `mismatch`. With a mismatching site and no mount reading on the target: no verdict (RR Lyr 2026-09-25: 13.9° from the wrong site while the mount read 75°). The detail says where "now" came from | above the limit + 0.5° and not below within A min | Run |
@@ -3347,6 +3414,54 @@ Thresholds are config keys, category `alerts` (`GET /api/config` meta;
 
 Defaults are `functional-spaces.md` §4.10 (replayed on the 2026-09-25
 run: the HFD rise fires at frame 150; no star, comparison or silence alarm).
+
+**Baselines carried over runs** (owner decisions 2026-11-14 and
+2026-11-15). The HFD and star baselines of a filter are the medians of B
+Light subs. A run's first sub of a filter looks for baselines the **server
+session** already holds: the **HFD baseline for the same object and
+filter**, the **star baseline for the same object, filter, exposure and
+gain** (star counts follow exposure and gain: 2 217 at 20 s gain 80 against
+3 455 at 60 s gain 100 on 2026-09-07; object names compare without case or
+extra spaces; an unnamed object, "Unknown", never carries):
+
+- found: that baseline is **carried** and its rule judges the filter from
+  its first sub (the owner restarts runs after trouble: 7 of the 9 runs of
+  the three nights had fewer than B + K = 23 subs, so per run they were
+  never judged);
+- not found: the run makes its own from its first B subs of the filter, as
+  before, and the session keeps it for the later runs of that setup (the
+  star baseline only when those B subs share one exposure and gain). A
+  carried baseline is never replaced by a later run's.
+- **12 hours without a sub of its setup** (sub DATE-OBS; for the HFD, any
+  sub of the object and filter): the baseline is no longer carried (a server
+  left running would carry one night's seeing into the next). On the owner's
+  three nights in one server it changes one thing: 2026-09-07 040723Z is not
+  judged against 2026-08-29's 6.55 px (it fired at sub 20, 04:34:43 UTC,
+  without the rule; with it, at sub 23 on its own 7.60 px, as per run).
+- A later step that changes the exposure or gain under a carried star
+  baseline starts that baseline again as at the filter's first sub (an open
+  `star_drop` item clears: "frame n changed the exposure or gain; its
+  baseline starts again."); the HFD baseline stays.
+- **A server restart starts fresh**: the session's baselines live in the
+  server process only (never in a file).
+
+The texts name a carried baseline's origin: "HFD 11.1 px = 1.7× the first
+20 frames of the run of 05:01 UTC" (the log line is "HFD rise: " + that
+title), the detail ends "Baseline: the first 20 frames of the run of 05:01
+UTC, same object and filter." (a star item's: "…, same object, filter,
+exposure and gain."); a run's own baseline keeps
+"… the first 20 frames". The items' `values` add `baseline_frames`,
+`baseline_origin` (`"this_run"` | `"earlier_run"`), `baseline_run_id` and
+`baseline_run_utc` (that run's start), and `AttentionState.baselines`
+lists the run's baselines in force (`RunBaseline`) so a client draws the
+threshold the server compares with before any item fires (a new snapshot is
+sent when one is set). Replayed on the owner's three nights
+(`web/spec/wave6b-attention-replay.md`, "Baselines carried over runs"):
+two new alerts, both HFD rises on a carried baseline: 2026-08-29 053540Z
+sub 4 (05:39:38 UTC, 11.1 px = 1.7× the 6.55 px of 050148Z) and the
+degraded 2026-09-07 045626Z run (60 s, gain 100) at sub 3 (05:00:02 UTC,
+39.2 px = 5.2× the 7.60 px of 040723Z, 20 s, gain 80); no star alert, no
+other change, the same with one server for the three nights.
 
 **Hook agreed with the photometry half (S48).** A Light sub refused by the
 S48 lock check (fewer than ceil(n/2) anchors show a star of SNR ≥ 5 where

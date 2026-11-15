@@ -16,7 +16,12 @@ rules.ts:65-152); here the same thresholds run per frame with hysteresis:
   the cadence and the silence measured between saves (a client learns of a
   frame when it is saved); before two saves 2 × floor + 60 s;
 - the HFD and star-count baselines: the median of the first 20 frames
-  (rules.ts:88-121), here per filter (one curve per filter, S49);
+  (rules.ts:88-121), here per filter (one curve per filter, S49), carried
+  over the runs of one server session (owner decisions 2026-11-14 and
+  2026-11-15: a run restarted after trouble is judged from its first sub):
+  the HFD baseline when object and filter match, the star-count baseline when
+  object, filter, exposure and gain match, never after 12 h without a sub of
+  its setup; per run otherwise; a server restart starts fresh;
 - comparisons used below 3, K frames in a row (rules.ts:124-138);
 - every message states the rule and the numbers (rules.ts:7-8).
 
@@ -309,27 +314,183 @@ class Sub:
     filter: str = ""
     #: When the file was saved (unix s): what a client sees arrive. None: ``t``.
     saved: float | None = None
+    #: The baseline's key with ``filter`` (``frame_saved`` ``object``, ``exposure_s``, ``gain``).
+    object: str = ""
+    exposure: float | None = None
+    gain: int | None = None
+
+
+#: Owner decision 2026-11-15: a baseline not fed a sub of its setup for this long is no
+#: longer carried (seeing changes from night to night; a server left running).
+CARRY_MAX_IDLE_S = 12 * 3600.0
+
+
+def _object_key(sub: Sub) -> str | None:
+    """The object, without case or extra spaces; None when unnamed ("Unknown": two
+    unnamed runs may be two fields)."""
+    name = " ".join(str(sub.object or "").split()).casefold()
+    return None if not name or name == "unknown" else name
+
+
+def hfd_baseline_key(sub: Sub) -> tuple[str, str] | None:
+    """What must match for the HFD baseline to be carried: object and filter (owner
+    decision 2026-11-15: the HFD of a field does not follow exposure or gain the way
+    the star count does). None: never carried, never stored."""
+    name = _object_key(sub)
+    return None if name is None else (name, str(sub.filter))
+
+
+def baseline_key(sub: Sub) -> tuple[str, str, float, int] | None:
+    """What must match for the star-count baseline to be carried: object, filter,
+    exposure and gain (2 217 stars at 20 s gain 80 against 3 455 at 60 s gain 100 on
+    2026-09-07). None (never carried, never stored) when one is unknown or the object
+    unnamed. Exposures compare to the millisecond.
+    """
+    name = _object_key(sub)
+    if name is None or sub.exposure is None or sub.gain is None:
+        return None
+    try:
+        exposure = round(float(sub.exposure), 3)
+    except (TypeError, ValueError):
+        return None
+    return (name, str(sub.filter), exposure, int(sub.gain)) if math.isfinite(exposure) else None
+
+
+#: The two baselines of a filter: the metric's name and what its carry key is.
+_METRICS = ("hfd", "stars")
+
+
+@dataclass(frozen=True)
+class Baseline:
+    """One baseline of a filter (``metric``: the HFD's or the star count's) and the run
+    whose first subs made it."""
+
+    metric: str  # "hfd" | "stars"
+    value: float  # px or stars, NaN: none among those subs
+    frames: int  # B, the subs it is the median of
+    run_id: str | None
+    run_t: float | None  # that run's start (unix s), else its first baseline sub's DATE-OBS
+    object: str
+    filter: str
+    exposure: float | None
+    gain: int | None
+
+    def origin(self, carried: bool) -> str:
+        """Words for the texts: "the first 20 frames" or "… of the run of 04:07 UTC"."""
+        words = f"the first {self.frames} frames"
+        if carried:
+            when = f"the run of {_hhmm(self.run_t)} UTC" if self.run_t is not None else "a run"
+            words += f" of {when}"
+        return words
+
+    def values(self, carried: bool) -> dict[str, Any]:
+        """The origin in an item's ``values`` (protocol.md: number|string|null)."""
+        return {
+            "baseline_frames": self.frames,
+            "baseline_origin": "earlier_run" if carried else "this_run",
+            "baseline_run_id": self.run_id,
+            "baseline_run_utc": _iso(self.run_t),
+        }
+
+    def record(self, carried: bool) -> dict[str, Any]:
+        """Its origin in the snapshot's ``baselines`` (``hfd_from``, ``stars_from``)."""
+        out: dict[str, Any] = {
+            "frames": self.frames,
+            "origin": "earlier_run" if carried else "this_run",
+            "run_id": self.run_id,
+            "run_utc": _iso(self.run_t),
+        }
+        if self.metric == "stars":
+            out["exposure_s"], out["gain"] = self.exposure, self.gain
+        return out
+
+
+class BaselineStore:
+    """The server session's finished baselines, carried over its runs.
+
+    The HFD baseline by :func:`hfd_baseline_key`, the star-count one by
+    :func:`baseline_key`. A baseline is stored by the run that made it when no
+    other is held for its key (a carried one is never replaced by a later run's),
+    and dropped once no sub of its setup came for ``CARRY_MAX_IDLE_S`` (sub
+    DATE-OBS). In the server process only: a restart starts fresh.
+    """
+
+    def __init__(self) -> None:
+        self._held: dict[str, dict[tuple, list]] = {m: {} for m in _METRICS}
+
+    def get(self, metric: str, key: tuple | None, t: float) -> Baseline | None:
+        """The baseline carried for ``key`` at sub time ``t``, or None."""
+        held = self._held[metric]
+        entry = held.get(key) if key is not None else None
+        if entry is None:
+            return None
+        if t - entry[1] > CARRY_MAX_IDLE_S:
+            del held[key]  # 12 h without a sub of its setup: not carried
+            return None
+        return entry[0]
+
+    def put(self, metric: str, key: tuple | None, base: Baseline, t: float) -> None:
+        if key is not None and self.get(metric, key, t) is None:
+            self._held[metric][key] = [base, t]
+
+    def seen(self, metric: str, key: tuple | None, t: float) -> None:
+        """A sub of that setup at ``t``: its baseline stays carried 12 h more."""
+        entry = self._held[metric].get(key) if key is not None else None
+        if entry is not None and t > entry[1] and t - entry[1] <= CARRY_MAX_IDLE_S:
+            entry[1] = t
+
+    def baselines(self, metric: str) -> dict[tuple, Baseline]:
+        """The held baselines of a metric by key (tests, replays)."""
+        return {k: e[0] for k, e in self._held[metric].items()}
+
+
+class _Part:
+    """One baseline of a filter in a run: its carry key, the run's own first subs,
+    the baseline in force and whether an earlier run made it, its streak."""
+
+    def __init__(self) -> None:
+        self.key: tuple | None = None  # None: unknown or mixed setup: never stored
+        self.first: list[float] = []
+        self.base: Baseline | None = None
+        self.carried = False
+        self.streak = _Streak()
+
+    @property
+    def value(self) -> float:
+        return self.base.value if self.base is not None else math.nan
 
 
 class _FilterSeries:
     """The HFD and star-count baselines and streaks of one filter."""
 
-    def __init__(self) -> None:
+    def __init__(self, first_t: float) -> None:
         self.count = 0
-        self.hfd0: list[float] = []
-        self.stars0: list[float] = []
-        self.hfd_base = math.nan
-        self.stars_base = math.nan
-        self.hfd_streak = _Streak()
-        self.star_streak = _Streak()
         self.recent: deque[Sub] = deque(maxlen=20)
+        self.first_t = first_t
+        self.hfd = _Part()
+        self.stars = _Part()
+
+    def part(self, metric: str) -> _Part:
+        return self.hfd if metric == "hfd" else self.stars
 
 
 class NightRules:
-    """The frame and timed rules of one run (no items, no I/O)."""
+    """The frame and timed rules of one run (no items, no I/O).
 
-    def __init__(self, thresholds: Thresholds | None = None) -> None:
+    ``baselines`` is the server session's :class:`BaselineStore` (shared by the
+    runs, filled here; None: per-run only).
+    """
+
+    def __init__(
+        self,
+        thresholds: Thresholds | None = None,
+        baselines: BaselineStore | None = None,
+    ) -> None:
         self.th = thresholds or Thresholds()
+        self.carry = baselines
+        #: The run (its baselines' origin): set by the service once known.
+        self.run_id: str | None = None
+        self.run_t: float | None = None
         self._series: dict[str, _FilterSeries] = {}
         self.comps_streak = _Streak()
         self._comps_recent: deque[tuple[int | None, int]] = deque(maxlen=20)
@@ -356,24 +517,40 @@ class NightRules:
         arrived = sub.saved if sub.saved is not None else sub.t
         self._starts.append(arrived)
         self.last_start, self.last_saved, self.last_n = sub.t, arrived, sub.n
-        series = self._series.setdefault(sub.filter, _FilterSeries())
+        out: list[Signal] = []
+        keys = {"hfd": hfd_baseline_key(sub), "stars": baseline_key(sub)}
+        series = self._series.get(sub.filter)
+        if series is None:
+            series = self._series[sub.filter] = _FilterSeries(sub.t)
+            for metric in _METRICS:
+                self._begin(series, metric, keys[metric], sub)
+        else:
+            for metric in _METRICS:
+                if keys[metric] != series.part(metric).key:
+                    out += self._rekey(series, metric, keys[metric], sub)
         series.count += 1
         series.recent.append(sub)
+        if self.carry is not None:
+            for metric in _METRICS:
+                self.carry.seen(metric, keys[metric], sub.t)
         tag = f"{sub.filter}: " if len(self._series) > 1 else ""
-        out: list[Signal] = []
-        if series.count <= th.baseline:
-            # rules.ts:89: the first B records are the baseline, never judged.
-            series.hfd0.append(sub.hfd if sub.hfd is not None else math.nan)
-            series.stars0.append(float(sub.stars) if sub.stars is not None else math.nan)
-            if series.count == th.baseline:
-                series.hfd_base = _median(series.hfd0)
-                series.stars_base = _median(series.stars0)
-            return out
+        judged = {
+            metric: self._feed(series, metric, sub.hfd if metric == "hfd" else sub.stars, sub)
+            for metric in _METRICS
+        }
         k = th.consecutive
-        hfd0 = series.hfd_base
-        if sub.hfd is not None and math.isfinite(sub.hfd) and math.isfinite(hfd0) and hfd0 > 0:
+        part = series.hfd
+        hfd0 = part.value
+        origin, how, whence = self._origin(part, "same object and filter")
+        if (
+            judged["hfd"]
+            and sub.hfd is not None
+            and math.isfinite(sub.hfd)
+            and math.isfinite(hfd0)
+            and hfd0 > 0
+        ):
             limit = th.hfd_factor * hfd0
-            verdict = series.hfd_streak.feed(sub.hfd > limit, k)
+            verdict = part.streak.feed(sub.hfd > limit, k)
             cause = f"hfd_rise:{sub.filter}"
             if verdict == "fire":
                 tail = [x for x in series.recent if x.hfd is not None][-k:]
@@ -384,17 +561,19 @@ class NightRules:
                         cause,
                         "hfd_rise",
                         True,
-                        title=f"{tag}HFD {_fixed(sub.hfd, 1)} px = {_fixed(ratio, 1)}× the "
-                        f"first {th.baseline} frames",
+                        title=f"{tag}HFD {_fixed(sub.hfd, 1)} px = {_fixed(ratio, 1)}× "
+                        f"{origin}",
                         short=f"HFD {_fixed(sub.hfd, 1)} px · {_fixed(ratio, 1)}× baseline",
                         detail=f"Rule: HFD above {th.hfd_factor:g} × {_fixed(hfd0, 2)} px for "
-                        f"{k} frames in a row ({hfds} px, frames {_span(tail[0].n, sub.n)}).",
+                        f"{k} frames in a row ({hfds} px, frames {_span(tail[0].n, sub.n)})."
+                        f"{how}",
                         values={
                             "hfd_px": sub.hfd,
                             "baseline_px": hfd0,
                             "ratio": ratio,
                             "factor": th.hfd_factor,
                             "filter": sub.filter,
+                            **whence,
                         },
                         since=sub.t,
                         frame=sub.n,
@@ -410,9 +589,11 @@ class NightRules:
                         f"{k} frames (frame {sub.n}: {_fixed(sub.hfd, 1)} px).",
                     )
                 )
-        stars0 = series.stars_base
-        if sub.stars is not None and math.isfinite(stars0) and stars0 > 0:
-            verdict = series.star_streak.feed(sub.stars < th.star_factor * stars0, k)
+        part = series.stars
+        stars0 = part.value
+        origin, how, whence = self._origin(part, "same object, filter, exposure and gain")
+        if judged["stars"] and sub.stars is not None and math.isfinite(stars0) and stars0 > 0:
+            verdict = part.streak.feed(sub.stars < th.star_factor * stars0, k)
             cause = f"star_drop:{sub.filter}"
             if verdict == "fire":
                 ratio = sub.stars / stars0
@@ -421,17 +602,17 @@ class NightRules:
                         cause,
                         "star_drop",
                         True,
-                        title=f"{tag}{_int(sub.stars)} stars = {_fixed(ratio, 2)}× the first "
-                        f"{th.baseline} frames",
+                        title=f"{tag}{_int(sub.stars)} stars = {_fixed(ratio, 2)}× {origin}",
                         short=f"{_int(sub.stars)} stars · {_fixed(ratio, 2)}× baseline",
                         detail=f"Rule: fewer than {th.star_factor:g} × {_int(stars0)} stars "
-                        f"for {k} frames in a row.",
+                        f"for {k} frames in a row.{how}",
                         values={
                             "stars": sub.stars,
                             "baseline": stars0,
                             "ratio": ratio,
                             "factor": th.star_factor,
                             "filter": sub.filter,
+                            **whence,
                         },
                         since=sub.t,
                         frame=sub.n,
@@ -447,6 +628,91 @@ class NightRules:
                         f"more (frame {sub.n}: {_int(sub.stars)}).",
                     )
                 )
+        return out
+
+    def _begin(self, series: _FilterSeries, metric: str, key: tuple | None, sub: Sub) -> None:
+        """A filter's first sub (or a new setup): the session's baseline for its key, else
+        this run's own from its next B subs."""
+        part = series.part(metric)
+        part.key, part.first, part.base, part.carried = key, [], None, False
+        carried = self.carry.get(metric, key, sub.t) if self.carry is not None else None
+        if carried is not None:
+            part.base, part.carried = carried, True
+
+    def _rekey(
+        self, series: _FilterSeries, metric: str, key: tuple | None, sub: Sub
+    ) -> list[Signal]:
+        """A sub of another setup (the exposure or gain changed: the star baseline's key).
+
+        Under a carried baseline the metric starts again as at the filter's first sub,
+        its open item cleared (owner decision 2026-11-14); under the run's own, its
+        subs are mixed: that baseline is never stored.
+        """
+        part = series.part(metric)
+        if not part.carried:
+            part.key = None
+            return []
+        rule = "hfd_rise" if metric == "hfd" else "star_drop"
+        out = []
+        if part.streak.on:
+            why = f"frame {sub.n} changed the exposure or gain; its baseline starts again."
+            out.append(Signal(f"{rule}:{sub.filter}", rule, False, why=why))
+        part.streak = _Streak()
+        self._begin(series, metric, key, sub)
+        return out
+
+    def _feed(self, series: _FilterSeries, metric: str, value: float | None, sub: Sub) -> bool:
+        """One sub for a metric's baseline: True when the sub is judged against it.
+
+        rules.ts:89: the B subs that make a run's own baseline are never judged;
+        a carried baseline judges from the first sub.
+        """
+        part = series.part(metric)
+        if part.base is not None:
+            return True
+        part.first.append(float(value) if value is not None else math.nan)
+        if len(part.first) == self.th.baseline:
+            part.base = Baseline(
+                metric=metric,
+                value=_median(part.first),
+                frames=self.th.baseline,
+                run_id=self.run_id,
+                run_t=self.run_t if self.run_t is not None else series.first_t,
+                object=sub.object,
+                filter=sub.filter,
+                exposure=sub.exposure,
+                gain=sub.gain,
+            )
+            if self.carry is not None:
+                self.carry.put(metric, part.key, part.base, sub.t)
+        return False
+
+    @staticmethod
+    def _origin(part: _Part, same: str) -> tuple[str, str, dict[str, Any]]:
+        """A baseline's words for the title and detail, and its ``values``."""
+        if part.base is None:
+            return "", "", {}
+        origin = part.base.origin(part.carried)
+        how = f" Baseline: {origin}, {same}." if part.carried else ""
+        return origin, how, part.base.values(part.carried)
+
+    def baselines(self) -> list[dict[str, Any]]:
+        """The run's baselines in force, one entry per filter (the snapshot's ``baselines``)."""
+        out = []
+        for f, s in self._series.items():
+            if s.hfd.base is None and s.stars.base is None:
+                continue
+            base = s.hfd.base or s.stars.base
+            out.append(
+                {
+                    "filter": f,
+                    "object": base.object if base is not None else "",
+                    "hfd_px": s.hfd.value if math.isfinite(s.hfd.value) else None,
+                    "stars": s.stars.value if math.isfinite(s.stars.value) else None,
+                    "hfd_from": s.hfd.base.record(s.hfd.carried) if s.hfd.base else None,
+                    "stars_from": s.stars.base.record(s.stars.carried) if s.stars.base else None,
+                }
+            )
         return out
 
     def add_measured(self, comps_used: int | None, n: int | None, t: float | None) -> list[Signal]:
@@ -669,6 +935,11 @@ class AttentionService:
         self._revision = 0
         self._last_change: dict[str, Any] | None = None
         self._run: _RunWatch | None = None
+        #: The server session's finished baselines, carried over its runs (owner
+        #: decisions 2026-11-14 and 2026-11-15); a restart starts fresh.
+        self._baselines = BaselineStore()
+        #: The snapshot's ``baselines``: the run's (worker thread writes, lock held).
+        self._baseline_view: list[dict[str, Any]] = []
         self._seq_state = "idle"
         self._thread: threading.Thread | None = None
         self._closed = False
@@ -751,6 +1022,7 @@ class AttentionService:
             "sound": sound,
             "thresholds": self.thresholds().to_dict() if hasattr(self._hub, "config") else {},
             "last_change": dict(self._last_change) if self._last_change else None,
+            "baselines": [dict(b) for b in self._baseline_view],
             "revision": self._revision,
         }
 
@@ -874,10 +1146,10 @@ class AttentionService:
             "repeat_s": repeat if level == "critical" and repeat > 0 else None,
         }
 
-    def _apply(self, signals: list[Signal], kind: str = "condition") -> None:
-        """Turn rule verdicts into item changes, log them, publish once."""
+    def _apply(self, signals: list[Signal], kind: str = "condition") -> bool:
+        """Turn rule verdicts into item changes, log them, publish once (True: published)."""
         if not signals:
-            return
+            return False
         logs: list[tuple[str, str]] = []
         changed = False
         now_dt = self.clock()
@@ -900,6 +1172,7 @@ class AttentionService:
             self._hub.log(level, text, source="attention", topic="attention")  # type: ignore[arg-type]
         if changed:
             self._publish()
+        return changed
 
     def _raise(self, sig: Signal, kind: str, now, now_dt, logs) -> bool:
         """Lock held: a new item, a reopened one, or an update of the open one."""
@@ -1042,6 +1315,10 @@ class AttentionService:
             return
         if rec.get("run_id") and run.run_id != rec.get("run_id"):
             run.run_id = rec.get("run_id")
+        run.rules.run_id = run.run_id
+        started = _parse(rec.get("started_utc"))
+        if started is not None:
+            run.rules.run_t = started.timestamp()
         run.object_name = str(rec.get("object_name") or "")
         run.planned_cadence = rec.get("cadence_s")
         run.frames_total = int(rec.get("frames_total") or 0)
@@ -1076,9 +1353,12 @@ class AttentionService:
             if moved:
                 self._last_change = {"change": "cleared", "id": moved[-1]["id"]}
             self._cleared.clear()
-        if moved:
+            dropped = bool(self._baseline_view)
+            self._baseline_view = []
+        if moved or dropped:
             self._publish()
-        run = _RunWatch(run_id=rec.get("run_id"), rules=NightRules(self.thresholds()))
+        rules = NightRules(self.thresholds(), baselines=self._baselines)
+        run = _RunWatch(run_id=rec.get("run_id"), rules=rules)
         try:
             devices = self._hub.devices()
         except Exception:
@@ -1242,6 +1522,8 @@ class AttentionService:
             record = ev.get("record") or {}
             hfd = record.get("hfd")
             stars = record.get("star_count")
+            exposure = ev.get("exposure_s")
+            gain = ev.get("gain")
             signals += run.rules.add_sub(
                 Sub(
                     n=run.subs,
@@ -1250,11 +1532,19 @@ class AttentionService:
                     stars=int(stars) if isinstance(stars, (int, float)) else None,
                     filter=str(ev.get("filter") or ""),
                     saved=arrived,
+                    object=str(ev.get("object") or run.object_name or ""),
+                    exposure=float(exposure) if isinstance(exposure, (int, float)) else None,
+                    gain=int(gain) if isinstance(gain, (int, float)) else None,
                 )
             )
         else:
             run.rules.last_start, run.rules.last_saved, run.rules.last_n = t, arrived, run.subs
-        self._apply(signals)
+        view = run.rules.baselines()
+        with self._lock:
+            moved = view != self._baseline_view
+            self._baseline_view = view
+        if not self._apply(signals) and moved:
+            self._publish()  # a baseline set: the clients' threshold lines (snapshot)
         self._check_disk(run)
 
     def _counting(self) -> _RunWatch | None:
@@ -1553,10 +1843,14 @@ class AttentionService:
 
 __all__ = [
     "AttentionService",
+    "Baseline",
+    "BaselineStore",
     "NightRules",
     "RULE_LEVELS",
     "RULE_NAMES",
     "Signal",
     "Sub",
     "Thresholds",
+    "baseline_key",
+    "hfd_baseline_key",
 ]

@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from argos.server.attention import NightRules, Signal, Sub, Thresholds
+from argos.server.attention import BaselineStore, NightRules, Signal, Sub, Thresholds
 from tests.server.conftest import AUTH, TOKEN, log_messages, receive_until, wait_for
 
 # ---------------------------------------------------------------------------
@@ -393,8 +393,17 @@ class Night:
         self.publish("sequence", seq_record("running"))
         return self.settle()
 
-    def sub(self, n: int, hfd: float = 6.25, stars: int = 2982, filter_name: str = "IR") -> int:
-        t = RUN_START + 51.5 * (n - 1)
+    def sub(
+        self,
+        n: int,
+        hfd: float = 6.25,
+        stars: int = 2982,
+        filter_name: str = "IR",
+        t0: float = RUN_START,
+        **extra,
+    ) -> int:
+        """A Light sub saved; ``extra``: more ``frame_saved`` keys (object, exposure_s, gain)."""
+        t = t0 + 51.5 * (n - 1)
         self.clock.t = t + 20
         self.frame_seq += 1
         self.publish(
@@ -409,6 +418,7 @@ class Night:
                 "path": "/nonexistent/sub.fit",
                 "run_root": None,
                 "record": {"hfd": hfd, "star_count": stars},
+                **extra,
             },
         )
         return self.frame_seq
@@ -533,6 +543,8 @@ def test_a_client_joining_mid_run_receives_the_list_and_its_history(night):
         event = receive_until(ws, lambda m: m.get("type") == "attention")
     assert active_rules(event) == ["hfd_rise", "run_started"]
     assert event["counts"]["unacked"] == 1
+    (base,) = event["baselines"]  # the run's own (these subs give no exposure or gain)
+    assert (base["hfd_px"], base["hfd_from"]["origin"]) == (6.25, "this_run")
     assert event["sound"] == {"level": "normal", "info": False, "repeat_s": 30}
     assert event["thresholds"]["alerts.hfd_factor"] == 1.5
 
@@ -964,3 +976,252 @@ def test_alert_numbers_follow_the_ui_conventions():
     assert "fewer than 0.7 × 3\u202f500 stars" in fired[0].detail
     fired = feed(NightRules(), _subs([6.0] * 20 + [17.5, 17.6, 23.6]))
     assert "frames 21 … 23" in fired[0].detail
+
+
+# ---------------------------------------------------------------------------
+# Baselines carried over the runs of one server session (owner decisions 2026-11-14,
+# 2026-11-15: HFD by object and filter, stars by the four, 12 h without a sub: dropped)
+# ---------------------------------------------------------------------------
+
+XX_KEY = {"object": "XX Cyg", "exposure": 15.0, "gain": 80}
+RUN_A = datetime(2026, 8, 29, 5, 1, 48, tzinfo=timezone.utc).timestamp()
+RUN_B = datetime(2026, 8, 29, 5, 35, 40, tzinfo=timezone.utc).timestamp()
+HOUR = 3600.0
+
+
+def _run_subs(hfds, t0, start_n=1, stars=3000, **change):
+    key = {**XX_KEY, **change}
+    filter_name = key.pop("filter_name", "IR")
+    return [
+        Sub(n=start_n + i, t=t0 + 50.0 * i, hfd=h, stars=stars, filter=filter_name, **key)
+        for i, h in enumerate(hfds)
+    ]
+
+
+def _first_run(store, hfd=6.55, **change) -> NightRules:
+    rules = NightRules(baselines=store)
+    rules.run_id, rules.run_t = "20260829T050148Z", RUN_A
+    assert feed(rules, _run_subs([hfd] * 22, RUN_A, **change)) == []
+    return rules
+
+
+def _second_run(store, t0=RUN_B) -> NightRules:
+    rules = NightRules(baselines=store)
+    rules.run_id, rules.run_t = "20260829T053540Z", t0
+    return rules
+
+
+def test_a_baseline_is_carried_to_the_next_run_of_the_same_setup():
+    store = BaselineStore()
+    first = _first_run(store)
+    (hfd,) = store.baselines("hfd").values()
+    (stars,) = store.baselines("stars").values()
+    assert (hfd.value, hfd.frames, hfd.run_id) == (6.55, 20, "20260829T050148Z")
+    assert (stars.value, stars.run_id) == (3000, "20260829T050148Z")
+    assert first.baselines()[0]["hfd_from"]["origin"] == "this_run"
+    second = _second_run(store)
+    # Judged from its first sub: a run restarted after trouble (functional-spaces §4.10).
+    fired = feed(second, _run_subs([10.5, 11.0, 11.7], RUN_B))
+    assert [(s.rule, s.frame) for s in fired] == [("hfd_rise", 3)]
+    sig = fired[0]
+    assert sig.title == "HFD 11.7 px = 1.8× the first 20 frames of the run of 05:01 UTC"
+    assert sig.detail.endswith(
+        "Baseline: the first 20 frames of the run of 05:01 UTC, same object and filter."
+    )
+    assert sig.values["baseline_px"] == 6.55 and sig.values["baseline_frames"] == 20
+    assert sig.values["baseline_origin"] == "earlier_run"
+    assert sig.values["baseline_run_id"] == "20260829T050148Z"
+    assert sig.values["baseline_run_utc"] == "2026-08-29T05:01:48.000Z"
+    (view,) = second.baselines()
+    assert (view["hfd_px"], view["stars"]) == (6.55, 3000)
+    assert view["hfd_from"]["origin"] == view["stars_from"]["origin"] == "earlier_run"
+    assert (view["stars_from"]["exposure_s"], view["stars_from"]["gain"]) == (15.0, 80)
+    # The carried baseline stays the session's: the second run never builds its own.
+    feed(second, _run_subs([6.0] * 25, RUN_B + 500, start_n=4))
+    assert store.baselines("hfd")[("xx cyg", "IR")].run_id == "20260829T050148Z"
+    # The star count is carried with it, on the same four keys.
+    third = _second_run(store)
+    fired = feed(third, _run_subs([6.5] * 3, RUN_B, stars=826))
+    assert [s.title for s in fired] == [
+        "826 stars = 0.28× the first 20 frames of the run of 05:01 UTC"
+    ]
+    assert fired[0].detail.endswith(
+        "Baseline: the first 20 frames of the run of 05:01 UTC, same object, filter, "
+        "exposure and gain."
+    )
+
+
+@pytest.mark.parametrize(
+    "change", [{"object": "RR Lyr"}, {"filter_name": "LP"}], ids=["object", "filter"]
+)
+def test_no_baseline_is_carried_to_another_object_or_filter(change):
+    store = BaselineStore()
+    _first_run(store)
+    second = _second_run(store)
+    assert feed(second, _run_subs([11.7] * 3, RUN_B, **change)) == []  # its own baseline first
+    assert second.baselines() == []
+    fired = feed(second, _run_subs([11.7] * 17 + [30.0] * 3, RUN_B, start_n=4, **change))
+    assert [(s.rule, s.frame) for s in fired] == [("hfd_rise", 23)]
+    assert fired[0].title == "HFD 30.0 px = 2.6× the first 20 frames"  # this run's own
+    assert fired[0].values["baseline_origin"] == "this_run"
+    assert len(store.baselines("hfd")) == len(store.baselines("stars")) == 2  # each its own
+
+
+@pytest.mark.parametrize("change", [{"exposure": 60.0}, {"gain": 100}], ids=["exposure", "gain"])
+def test_the_hfd_baseline_is_carried_across_exposure_and_gain_the_stars_are_not(change):
+    """Owner decision 2026-11-15: the degraded 2026-09-07 045626Z run (60 s, gain 100,
+    3 subs) is judged on 040723Z's HFD (20 s, gain 80); star counts follow exposure
+    and gain (2 217 stars at 20 s against 3 455 at 60 s), so that baseline is not."""
+    store = BaselineStore()
+    _first_run(store, hfd=7.60)
+    second = _second_run(store)
+    fired = feed(second, _run_subs([26.5, 24.7, 39.2], RUN_B, stars=100, **change))
+    assert [(s.rule, s.frame) for s in fired] == [("hfd_rise", 3)]  # nothing before
+    assert fired[0].title == "HFD 39.2 px = 5.2× the first 20 frames of the run of 05:01 UTC"
+    (view,) = second.baselines()
+    assert view["hfd_from"]["origin"] == "earlier_run" and view["stars_from"] is None
+    assert view["stars"] is None  # 100 stars, 0.03× the 20 s count: no star alert
+    calm = feed(second, _run_subs([7.0] * 17, RUN_B + 150, start_n=4, stars=100, **change))
+    assert [(x.rule, x.on) for x in calm] == [("hfd_rise", False)]  # HFD back; stars: own
+    fired = feed(second, _run_subs([7.0] * 3, RUN_B + 1000, start_n=21, stars=50, **change))
+    assert [s.rule for s in fired if s.on] == ["star_drop"]  # its own star baseline (100)
+    assert fired[0].values["baseline_origin"] == "this_run"
+    assert len(store.baselines("stars")) == 2 and len(store.baselines("hfd")) == 1
+
+
+def test_object_names_match_without_case_or_spaces_and_unnamed_runs_never_carry():
+    store = BaselineStore()
+    _first_run(store)
+    fired = feed(_second_run(store), _run_subs([12.0] * 3, RUN_B, object=" xx  cyg "))
+    assert [s.rule for s in fired] == ["hfd_rise"]
+    for unnamed in ("Unknown", ""):
+        store = BaselineStore()
+        _first_run(store, object=unnamed)
+        assert store.baselines("hfd") == {} and store.baselines("stars") == {}
+        assert feed(_second_run(store), _run_subs([12.0] * 3, RUN_B, object=unnamed)) == []
+
+
+def test_no_baseline_is_carried_after_12_hours_without_a_sub_of_its_setup():
+    """Owner decision 2026-11-15: a server left running carries no baseline into the
+    next night (seeing changes); a sub of the setup keeps it 12 h more."""
+    last = RUN_A + 50.0 * 21  # the first run's last sub
+    store = BaselineStore()
+    _first_run(store)
+    late = _second_run(store, last + 12 * HOUR + 1.0)
+    assert feed(late, _run_subs([12.0] * 3, last + 12 * HOUR + 1.0)) == []  # fired before
+    assert store.baselines("hfd") == {} and store.baselines("stars") == {}
+    store = BaselineStore()
+    _first_run(store)
+    _second_run(store, last + 11 * HOUR)  # a run of that setup 11 h later...
+    feed(_second_run(store), _run_subs([6.6], last + 11 * HOUR))
+    later = _second_run(store, last + 22 * HOUR)  # ...keeps it to 22 h after the first
+    fired = feed(later, _run_subs([12.0] * 3, last + 22 * HOUR))
+    assert [s.rule for s in fired] == ["hfd_rise"]
+
+
+def test_a_changed_exposure_under_a_carried_star_baseline_starts_it_again():
+    store = BaselineStore()
+    _first_run(store)
+    second = _second_run(store)
+    fired = feed(second, _run_subs([12.0] * 3, RUN_B, stars=800))
+    assert sorted(s.rule for s in fired if s.on) == ["hfd_rise", "star_drop"]
+    fired = feed(second, _run_subs([12.0], RUN_B + 150, start_n=4, stars=800, exposure=30.0))
+    assert [(s.cause, s.on) for s in fired] == [("star_drop:IR", False)]
+    assert fired[0].why == "frame 4 changed the exposure or gain; its baseline starts again."
+    (view,) = second.baselines()  # the HFD baseline stays (object and filter)
+    assert view["hfd_from"]["origin"] == "earlier_run" and view["stars_from"] is None
+
+
+def test_a_run_whose_first_subs_mix_two_setups_never_carries_its_star_baseline():
+    store = BaselineStore()
+    rules = NightRules(baselines=store)
+    feed(rules, _run_subs([6.0] * 10, RUN_A) + _run_subs([6.0] * 12, RUN_A, start_n=11, gain=100))
+    assert store.baselines("stars") == {}
+    assert list(store.baselines("hfd")) == [("xx cyg", "IR")]  # one object, one filter
+    assert rules.baselines()[0]["stars_from"]["origin"] == "this_run"  # still this run's own
+
+
+# -- through the service ----------------------------------------------------------------
+
+KEY_EVENT = {"object": "XX Cyg", "exposure_s": 15.0, "gain": 80}
+RUN_2 = RUN_START + 3600.0  # 21:04:53
+
+
+def _run(night: Night, run_id: str, t0: float, hfds, **change) -> dict:
+    night.publish(
+        "sequence",
+        seq_record("running", run_id=run_id, started_utc=iso(t0), object_name="XX Cyg"),
+    )
+    for n, h in enumerate(hfds, 1):
+        night.sub(n, hfd=h, t0=t0, **{**KEY_EVENT, **change})
+    return night.settle()
+
+
+def test_the_service_carries_the_baseline_and_says_where_it_comes_from(night):
+    state = _run(night, RUN_ID, RUN_START, [7.6] * 22)
+    own = {"frames": 20, "origin": "this_run", "run_id": RUN_ID}
+    own["run_utc"] = "2026-09-25T20:04:53.000Z"
+    assert state["baselines"] == [
+        {
+            "filter": "IR",
+            "object": "XX Cyg",
+            "hfd_px": 7.6,
+            "stars": 2982,
+            "hfd_from": own,
+            "stars_from": {**own, "exposure_s": 15.0, "gain": 80},
+        }
+    ]
+    night.end()
+    # The degraded 2026-09-07 045626Z run: 3 subs, HFD 26.5, 24.7, 39.2 px.
+    state = _run(night, "20260925T210453Z", RUN_2, [26.5, 24.7, 39.2])
+    item = next(i for i in state["active"] if i["rule"] == "hfd_rise")
+    assert item["frame"] == 3 and item["run_id"] == "20260925T210453Z"
+    assert item["title"] == "HFD 39.2 px = 5.2× the first 20 frames of the run of 20:04 UTC"
+    assert item["values"]["baseline_run_id"] == RUN_ID
+    assert item["values"]["baseline_origin"] == "earlier_run"
+    assert (
+        "HFD rise: HFD 39.2 px = 5.2× the first 20 frames of the run of 20:04 UTC"
+        in log_messages(night.client)
+    )
+    assert state["baselines"][0]["hfd_from"]["origin"] == "earlier_run"
+    # The mid-run snapshot a joining client receives says the same.
+    with night.client.websocket_connect(f"/ws/events?token={TOKEN}") as ws:
+        event = receive_until(ws, lambda m: m.get("type") == "attention")
+    assert [i["title"] for i in event["active"] if i["rule"] == "hfd_rise"] == [item["title"]]
+    assert event["baselines"] == state["baselines"]
+
+
+def test_the_service_carries_the_hfd_baseline_to_a_run_of_another_gain(night):
+    """The 2026-09-07 case (owner decision 2026-11-15): 045626Z (60 s, gain 100) fires
+    on 040723Z's HFD baseline (20 s, gain 80); its star baseline is its own."""
+    _run(night, RUN_ID, RUN_START, [7.6] * 22)
+    night.end()
+    state = _run(night, "20260925T210453Z", RUN_2, [26.5, 24.7, 39.2], exposure_s=60.0, gain=100)
+    assert "hfd_rise" in active_rules(state)
+    (base,) = state["baselines"]
+    assert base["hfd_from"]["origin"] == "earlier_run" and base["stars_from"] is None
+
+
+def test_a_new_baseline_is_sent_in_a_snapshot_with_no_item(night):
+    """A baseline set with no item changing still reaches the clients (the Run band
+    and Watch draw the threshold the server compares with)."""
+    night.start()
+    for n in range(1, 20):
+        night.sub(n, hfd=6.25)
+    assert night.settle()["baselines"] == []
+    with night.client.websocket_connect(f"/ws/events?token={TOKEN}") as ws:
+        receive_until(ws, lambda m: m.get("type") == "attention")  # the join snapshot
+        night.sub(20, hfd=6.25)
+        event = receive_until(ws, lambda m: m.get("type") == "attention" and m.get("baselines"))
+    assert event["baselines"][0]["hfd_px"] == 6.25
+    assert active_rules(event) == ["run_started"]  # no new item
+
+
+def test_a_server_restart_starts_fresh(make_client, tmp_path):
+    first = Night(make_client(config_dir=tmp_path / "config"))
+    _run(first, RUN_ID, RUN_START, [7.6] * 22)
+    first.end()
+    first.client.__exit__(None, None, None)  # the server stops
+    second = Night(make_client(config_dir=tmp_path / "config"))
+    state = _run(second, "20260925T210453Z", RUN_2, [26.5, 24.7, 39.2])
+    assert "hfd_rise" not in active_rules(state) and state["baselines"] == []

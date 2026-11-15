@@ -66,6 +66,17 @@ requires_s49_core = pytest.mark.skipif(
 )
 
 
+def core_has_s57() -> bool:
+    """GUARD (pending merge of release/0.5.0): the Qt core writes the vetting file's
+    ``filter`` key (S57: ``save_comparison_quality_report(..., filter_token=)``). Before
+    the merge the Qt file has no such key; the server's always does."""
+    import inspect
+
+    from argos.core.photometry.quality import save_comparison_quality_report
+
+    return "filter_token" in inspect.signature(save_comparison_quality_report).parameters
+
+
 def _star(curves, star_key: str):
     """The one curve of a star (S49: keys are ``<star>@<filter>``)."""
     (curve,) = [c for c in curves if c["key"].rpartition("@")[0] == star_key]
@@ -1312,6 +1323,261 @@ def test_each_filter_has_its_own_curve_csv_and_vetting_s49(phot_client, tmp_path
     assert quality[-1]["filter"] == "v"  # the last sub's filter
     assert all(e["key"].endswith("@v") for e in quality[-1]["report"]["comparison_stars"])
     assert live["status"]["last"]["filter"] == "v"
+
+
+# -- 0.5.0 S54, S56, S57 (release branch; ported) --------------------------------------
+
+
+def test_a_new_solution_the_anchors_do_not_confirm_is_refused_s54(phot_client):
+    """Release S54: a new solution rebuilt the tracker from the stars seen where it
+    put them, so a wrong match passed S48 (XX Cyg 2026-09-07 045156Z frame 1: 1
+    anchor of 6 seen). Fewer than half the current tracker's anchors showing a star
+    where a new solution puts them now refuses it; only a tracker built for the
+    field's current solution counts."""
+    tset = target_set()
+    tset.save(phot_client.sessions_path / "targets" / "SYN_Var.json")
+    set_object(phot_client)
+    hub = phot_client.hub
+    raw = synthetic_raw(0, drift=False)
+    assert hub.photometry.measure(MeasureRequest(1, raw, GREEN_WCS, T0, 1, fwhm=2.4)) == 7
+    anchors = len(hub.photometry._tracker_anchor_stars)
+    assert anchors >= 3
+    wrong = frame_wcs({**WCS_FIELDS, "CRPIX1": WCS_FIELDS["CRPIX1"] + 25.0}, (GH, GW))
+    refusal = hub.photometry.solution_refusal(raw, wrong, 1)
+    assert refusal is not None and f"of the {anchors} anchor stars" in refusal
+    assert hub.photometry.solution_refusal(raw, GREEN_WCS, 1) is None  # the right one
+    shifted = frame_wcs({**WCS_FIELDS, "CRPIX1": WCS_FIELDS["CRPIX1"] + 30.0}, (GH, GW))
+    moved = np.roll(raw, 60, axis=1)  # the field jumped 30 px: its own solution passes
+    assert hub.photometry.solution_refusal(moved, shifted, 1) is None
+    assert hub.photometry.solution_refusal(raw, wrong, 2) is None  # another solution's tracker
+
+
+def test_a_lock_on_fewer_than_three_anchors_flags_its_points_s56(phot_client, tmp_path):
+    """Release S56: with 1 or 2 anchors the S48 check is met by the very anchor that
+    moved the solution, so it verifies nothing. The points are flagged ``suspect``
+    (the stream's flag, the CSV's column), a re-solve is due at once, the status's
+    ``lock.verified`` is false, and the log says so once per episode."""
+    from argos.core.photometry.lightcurve import LightCurve
+
+    full = target_set()
+    two = TargetSet(
+        object_name=OBJECT,
+        stars=[
+            s for s in full.stars if s.role == "target" or s.auid in ("000-SYN-C1", "000-SYN-C2")
+        ],
+    )
+    two.save(phot_client.sessions_path / "targets" / "SYN_Var.json")
+    set_object(phot_client)
+    hub = phot_client.hub
+    run = tmp_path / "20260925T200000Z_SYN_Var"
+    (run / "photometry").mkdir(parents=True)
+    with phot_client.websocket_connect(f"/ws/events?token={TOKEN}") as ws:
+        for i in range(2):
+            request = MeasureRequest(
+                i + 1,
+                synthetic_raw(i),
+                GREEN_WCS,
+                T0 + timedelta(minutes=i),
+                1,
+                fwhm=2.4,
+                run_root=run,
+                origin="sequence",
+            )
+            assert hub.photometry.measure(request) == 3  # kept, flagged
+        seen: list[dict] = []
+        receive_until(ws, lambda m: m["type"] == "photometry" and m["points"] == 6, seen=seen)
+    assert len(hub.photometry._tracker_anchor_stars) == 2
+    points = [m for m in seen if m["type"] == "photometry_point"]
+    assert len(points) == 6 and all(m["point"]["suspect"] for m in points)  # unflagged before
+    status = phot_client.get("/api/photometry/live", headers=AUTH).json()["status"]
+    assert status["lock"]["held"] and status["lock"]["verified"] is False
+    assert hub.field._resolve_due_flag  # a re-solve at once
+    texts = [m for m in log_messages(phot_client) if "cannot be verified" in m]
+    assert len(texts) == 1
+    csv = run / "photometry" / "target_SYN_Var_clear_SYN_Var.csv"
+    assert [p.suspect for p in LightCurve.from_csv(csv).points] == [True, True]
+
+
+def test_a_lock_on_three_anchors_or_more_is_verified_s56(phot_client):
+    tset = target_set()
+    tset.save(phot_client.sessions_path / "targets" / "SYN_Var.json")
+    set_object(phot_client)
+    hub = phot_client.hub
+    request = MeasureRequest(1, synthetic_raw(0), GREEN_WCS, T0, 1, fwhm=2.4, origin="sequence")
+    assert hub.photometry.measure(request) == 7
+    live = phot_client.get("/api/photometry/live", headers=AUTH).json()
+    assert live["status"]["lock"]["verified"] is True
+    assert not any(p["suspect"] for c in live["curves"] for p in c["points"])
+    assert not hub.field._resolve_due_flag
+
+
+def _two_anchor_set(client) -> None:
+    """Target, C1 and C2: a tracker of 2 anchors (S56)."""
+    full = target_set()
+    two = TargetSet(
+        object_name=OBJECT,
+        stars=[
+            s for s in full.stars if s.role == "target" or s.auid in ("000-SYN-C1", "000-SYN-C2")
+        ],
+    )
+    two.save(client.sessions_path / "targets" / "SYN_Var.json")
+    set_object(client)
+
+
+def _measure_target(hub, seq: int, raw, solved_seq, *, reset: bool = False) -> bool:
+    """One sub measured through GREEN_WCS (solved on frame ``solved_seq``): its target
+    point's ``suspect`` flag."""
+    request = MeasureRequest(
+        seq,
+        raw,
+        GREEN_WCS,
+        T0 + timedelta(minutes=seq),
+        1,
+        fwhm=2.4,
+        origin="sequence",
+        reset_tracker=reset,
+        solved_seq=solved_seq,
+    )
+    assert hub.photometry.measure(request) == 3
+    (curve,) = [c for k, c in hub.photometry._curves.items() if k.startswith(OBJECT)]
+    return curve.points[-1].suspect
+
+
+def test_a_few_anchor_lock_near_a_fresh_solution_is_verified_s56(phot_client):
+    """Release S56 as amended (2026-11-15): with 1-2 anchors a frame is verified when
+    it is measured through a solution of this sub or the previous one and the
+    tracker moved no aperture 2 px or more from where it puts it (XX Cyg 2026-08-29
+    050148Z: 2 anchors, all 22 points flagged before, 21 within 2 px of the star).
+    No re-solve is due then. Two subs after the solve, or 3 px from it: flagged."""
+    _two_anchor_set(phot_client)
+    hub = phot_client.hub
+    raw = synthetic_raw(0, drift=False)
+    assert _measure_target(hub, 1, raw, 1) is False  # this sub's solution
+    assert len(hub.photometry._tracker_anchor_stars) == 2
+    assert not hub.field._resolve_due_flag
+    assert _measure_target(hub, 2, raw.copy(), 1) is False  # the previous sub's
+    live = phot_client.get("/api/photometry/live", headers=AUTH).json()
+    assert live["status"]["lock"]["verified"] is True
+    assert not hub.field._resolve_due_flag
+    assert _measure_target(hub, 3, raw.copy(), 1) is True  # two subs after it
+    assert hub.field._resolve_due_flag
+    for seq, (shift, flagged) in enumerate(((1, False), (3, True)), start=10):
+        hub.field._resolve_due_flag = False
+        moved = np.roll(raw, 2 * shift, axis=1)  # the field drifted ``shift`` green px
+        assert _measure_target(hub, seq, moved, seq - 1, reset=True) is flagged, shift
+        assert hub.field._resolve_due_flag is flagged
+
+
+def test_the_unverified_lock_warns_once_per_episode_s56(phot_client):
+    """Release S56 as amended: one log line per episode; a solve that lands does not
+    end it (it warned on every sub of a field that never reaches 3 anchors), a
+    verified frame, an invalidation or a set change does."""
+    _two_anchor_set(phot_client)
+    hub = phot_client.hub
+    raw = synthetic_raw(0, drift=False)
+
+    def warnings() -> list[str]:
+        return [m for m in log_messages(phot_client) if "cannot be verified" in m]
+
+    assert _measure_target(hub, 1, raw, None) is True
+    assert _measure_target(hub, 2, raw, None) is True
+    hub.photometry.on_solved(
+        MeasureRequest(2, raw, GREEN_WCS, T0, 1, origin="sequence", solved_seq=0)
+    )
+    assert _measure_target(hub, 3, raw, 0) is True  # a solve of an older frame
+    assert _measure_target(hub, 4, raw, 0) is True
+    assert len(warnings()) == 1, warnings()  # 2 before the amendment
+    assert "while fewer than 3 anchor stars steer the apertures" in warnings()[0]
+    assert _measure_target(hub, 5, raw, 5, reset=True) is False  # verified: ends it
+    assert _measure_target(hub, 6, raw, 4, reset=True) is True
+    assert len(warnings()) == 2
+    hub.photometry.on_field_invalidated()
+    assert hub.photometry._unverified_logged is False
+
+
+def test_the_anchor_check_needs_half_the_anchors_s54(phot_client, monkeypatch):
+    """Release S54's threshold is ceil(k/2) of the tracker's k anchors: 1 of 4 seen
+    refuses the solution (045156Z frame 1 was 1 of 6), 2 of 4 accept it."""
+    import argos.server.photometry as photometry
+
+    comps = {f"000-SYN-C{i}" for i in (1, 2, 3, 4)}
+    four = TargetSet(
+        object_name=OBJECT,
+        stars=[s for s in target_set().stars if s.role == "target" or s.auid in comps],
+    )
+    four.save(phot_client.sessions_path / "targets" / "SYN_Var.json")
+    set_object(phot_client)
+    hub = phot_client.hub
+    raw = synthetic_raw(0, drift=False)
+    assert hub.photometry.measure(MeasureRequest(1, raw, GREEN_WCS, T0, 1, fwhm=2.4)) == 5
+    assert len(hub.photometry._tracker_anchor_stars) == 4
+    monkeypatch.setattr(photometry, "anchors_seen", lambda *a, **k: 1)
+    reason = hub.photometry.solution_refusal(raw, GREEN_WCS, 1)
+    assert reason is not None and "only 1 of the 4 anchor stars" in reason
+    assert "(2 needed" in reason
+    monkeypatch.setattr(photometry, "anchors_seen", lambda *a, **k: 2)
+    assert hub.photometry.solution_refusal(raw, GREEN_WCS, 1) is None
+
+
+def test_three_agreeing_refused_solutions_are_a_re_pointing_s54(phot_client, monkeypatch):
+    """Release S54 as amended (2026-11-15): when the field moved without a reported
+    slew, the previous anchors are off the frame and every correct solution was
+    refused. 3 consecutive refused solutions that agree within 20 px are accepted
+    and logged; 3 that disagree stay refused."""
+    import argos.server.photometry as photometry
+
+    tset = target_set()
+    tset.save(phot_client.sessions_path / "targets" / "SYN_Var.json")
+    set_object(phot_client)
+    hub = phot_client.hub
+    raw = synthetic_raw(0, drift=False)
+    assert hub.photometry.measure(MeasureRequest(1, raw, GREEN_WCS, T0, 1, fwhm=2.4)) == 7
+    monkeypatch.setattr(photometry, "anchors_seen", lambda *a, **k: 0)  # the field moved
+
+    def solution(dx: float):
+        return frame_wcs({**WCS_FIELDS, "CRPIX1": WCS_FIELDS["CRPIX1"] + dx}, (GH, GW))
+
+    for dx in (300.0, 400.0, 500.0, 600.0, 604.0):  # 3 disagree, then 2 of a new field
+        assert hub.photometry.solution_refusal(raw, solution(dx), 1) is not None, dx
+    assert hub.photometry.solution_refusal(raw, solution(608.0), 1) is None  # refused before
+    texts = [m for m in log_messages(phot_client) if "re-pointing the mount did not" in m]
+    assert len(texts) == 1 and "agree within 8.0 px" in texts[0]
+    assert hub.photometry._repoint_refused == []
+
+
+def test_every_vetting_file_names_its_filter_s57(phot_client, tmp_path):
+    """Release S57: ``photometry_quality.json`` vets the run's first filter and did
+    not say which. Each vetting file now carries an additive ``filter`` key (the
+    S49 token); the session list still reads the run."""
+    from argos.server.sessions import summarise
+
+    tset = target_set()
+    tset.save(phot_client.sessions_path / "targets" / "SYN_Var.json")
+    set_object(phot_client)
+    hub = phot_client.hub
+    run = tmp_path / "20260925T200000Z_SYN_Var"
+    (run / "photometry").mkdir(parents=True)
+    for i, filt in enumerate(["IR", "LP", "IR"]):
+        request = MeasureRequest(
+            i + 1,
+            synthetic_raw(i),
+            GREEN_WCS,
+            T0 + timedelta(minutes=i),
+            1,
+            fwhm=2.4,
+            run_root=run,
+            origin="sequence",
+            filter_name=filt,
+        )
+        assert hub.photometry.measure(request) == 7
+    first = json.loads((run / "photometry_quality.json").read_text())
+    other = json.loads((run / "photometry_quality_lp.json").read_text())
+    assert first["filter"] == "ir" and other["filter"] == "lp"  # no key before the fix
+    assert list(first)[-1] == "filter"  # last, as the release core writes it
+    (run / "session.json").write_text(json.dumps({"object": OBJECT, "frames": []}))
+    summary = summarise(run)
+    assert summary["has_quality"]
+    assert not any("photometry_quality" in issue for issue in summary["issues"])
 
 
 def _core_filter_token():

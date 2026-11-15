@@ -1517,6 +1517,7 @@ class SequenceService:
                 run_root=run_root,
                 origin="sequence",
                 filter_name=filter_actual,  # its read-back FILTER: its curve (S49)
+                solved_seq=hub.field.reference_frame_seq(wcs),  # S56: fresh when seq - 1
             )
         )
 
