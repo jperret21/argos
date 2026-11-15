@@ -1,0 +1,27 @@
+[package]
+name = "argos-desktop"
+# Keep in step with argos/__init__.py (__version__) and tauri.conf.json.
+version = "0.4.2"
+description = "ARGOS desktop app: the web UI in a Tauri window, the headless Python server as its sidecar"
+license = "GPL-3.0-or-later"
+edition = "2021"
+rust-version = "1.90"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+# Owner decision (W8, 2026-11-15): tauri, tauri-build and
+# tauri-plugin-window-state only. The sidecar is spawned with std::process,
+# not tauri-plugin-shell; signals go through a few libc symbols declared in
+# src/sidecar.rs (no libc crate).
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-window-state = "2"
+
+[profile.release]
+# Any panic is fatal: the hook in main.rs stops the sidecar, then the
+# process aborts (no half-alive shell left over a dead thread).
+panic = "abort"
+lto = "thin"
+strip = true

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main window. Core defaults only; W8 adds what the title bar, the menu and the window-state reset need.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

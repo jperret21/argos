@@ -13,13 +13,15 @@
     "screenshot": "node scripts/screenshot.mjs",
     "audit:night-red": "node scripts/audit-png.mjs --night-red",
     "audit:brass": "node scripts/audit-png.mjs --brass",
-    "capture:lab": "node scripts/capture-lab.mjs"
+    "capture:lab": "node scripts/capture-lab.mjs",
+    "tauri": "tauri"
   },
   "dependencies": {
     "uplot": "^1.6.32"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
+    "@tauri-apps/cli": "^2.12.4",
     "puppeteer-core": "^25.16.0",
     "svelte": "^5.57.3",
     "svelte-check": "^4.7.7",

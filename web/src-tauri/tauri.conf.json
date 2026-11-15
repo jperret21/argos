@@ -1,0 +1,54 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ARGOS",
+  "version": "0.4.2",
+  "identifier": "org.argos.argos",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [],
+    "withGlobalTauri": false,
+    "security": {
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' data: blob: http://127.0.0.1:*",
+        "media-src": "'self' data: blob:",
+        "font-src": "'self' data:",
+        "connect-src": "'self' ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:*",
+        "worker-src": "'self' blob:",
+        "object-src": "'none'",
+        "base-uri": "'none'",
+        "form-action": "'none'",
+        "frame-ancestors": "'none'"
+      },
+      "devCsp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.icns"
+    ],
+    "externalBin": ["binaries/argos-server"],
+    "copyright": "GNU GPL v3 — free software, with no warranty",
+    "license": "GPL-3.0-or-later",
+    "shortDescription": "Astrophotography control and differential photometry for Seestar telescopes",
+    "longDescription": "ARGOS controls ZWO Seestar telescopes over ASCOM Alpaca and measures variable stars by differential photometry. The web interface runs in this window; the ARGOS server runs alongside it on this computer only.",
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "-",
+      "hardenedRuntime": false
+    }
+  }
+}
