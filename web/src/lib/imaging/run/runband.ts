@@ -6,13 +6,18 @@
  *
  * The rules run on the server (argos/server/protocol.md "Night (wave 6b)"); the band only
  * draws them, read-only, with "Change rule…" to Settings › Alerts (PROPOSAL 3.2). A drawn
- * threshold is the server's own number when its item carries one (`values.threshold`),
- * else the rule's definition applied to the run's subs: factor × the median of the first B
- * Light subs (alerts.hfd_factor, alerts.star_factor, alerts.baseline_frames; protocol table
- * "hfd_rise", "star_drop"), the same numbers the server compares with.
+ * threshold is the server's own number when its item carries one (`values.threshold`), else
+ * factor × the server's baseline for the run (AttentionState.baselines: carried from an earlier
+ * run of the server session, the HFD's for the same object and filter, the star count's for the
+ * same object, filter, exposure and gain, or the run's own first B subs; protocol "Baselines
+ * carried over runs"), else the rule's definition applied to the run's subs: factor ×
+ * the median of the first B Light subs (alerts.hfd_factor, alerts.star_factor,
+ * alerts.baseline_frames; protocol table "hfd_rise", "star_drop").
  */
 
+import { timeOf, type BaselineOrigin, type RunBaseline } from '../../api/attention';
 import type { SequenceState } from '../../api/sequence';
+import { clockUtc } from '../../format/time';
 
 /** An attention item as the band needs it (structurally a subset of api/attention's AttentionItem). */
 export interface RunAttention {
@@ -104,6 +109,25 @@ export function baselineMedian(t: ArrayLike<number>, v: ArrayLike<number>, n: nu
   return got.length % 2 ? got[m] : (got[m - 1] + got[m]) / 2;
 }
 
+/**
+ * The server's baseline the run's rule lines use: the one of `filter` (the filter being taken,
+ * compared without case), or the only one when the filter is not known; null when none fits (the
+ * lines fall back to the run's own subs). Another filter's baseline is never drawn: with IR's
+ * baseline set and LP's not yet, LP subs got IR's threshold line.
+ */
+export function pickBaseline(baselines: readonly RunBaseline[] | null | undefined, filter: string | null | undefined): RunBaseline | null {
+  if (!baselines?.length) return null;
+  if (!filter) return baselines.length === 1 ? baselines[0] : null;
+  const want = filter.toLowerCase();
+  return baselines.find((b) => b.filter.toLowerCase() === want) ?? null;
+}
+
+/** Where a carried baseline comes from ("baseline from the run of 05:01 UTC"); null: the run's own. */
+export function baselineFrom(b: Pick<BaselineOrigin, 'carried' | 'runT'> | null | undefined): string | null {
+  if (!b?.carried) return null;
+  return b.runT !== null ? `baseline from the run of ${clockUtc(b.runT, false)} UTC` : 'baseline from an earlier run';
+}
+
 export interface Threshold {
   value: number;
   /** "the server's" (an item said it) or "the rule's" (factor × baseline here). */
@@ -114,7 +138,8 @@ export interface Threshold {
 
 /**
  * The threshold a mini chart draws for its rule: the newest item's `values.threshold` (or
- * `threshold_px`, `threshold_stars`), else factor × the median of the run's first B subs.
+ * `threshold_px`, `threshold_stars`), else factor × the server's `baseline` for the run (see
+ * pickBaseline), else factor × the median of the run's first B subs.
  */
 export function metricThreshold(
   metric: RuleMetric,
@@ -122,6 +147,7 @@ export function metricThreshold(
   thresholds: Record<string, unknown> | null | undefined,
   cols: { t: ArrayLike<number>; v: ArrayLike<number>; n: number },
   from: number | null,
+  baseline: RunBaseline | null = null,
 ): Threshold | null {
   const rule = METRIC_RULE[metric];
   const unit = metric === 'hfd' ? ' px' : '';
@@ -135,13 +161,20 @@ export function metricThreshold(
     const f = a.values.factor;
     if (typeof base === 'number' && typeof f === 'number' && Number.isFinite(base * f)) {
       const value = base * f;
-      return { value, source: 'server', text: `rule ${f} × ${base.toFixed(digits)}${unit} = ${value.toFixed(digits)}${unit}` };
+      const whence = baselineFrom({ carried: a.values.baseline_origin === 'earlier_run', runT: timeOf(a.values.baseline_run_utc) });
+      return { value, source: 'server', text: `rule ${f} × ${base.toFixed(digits)}${unit} = ${value.toFixed(digits)}${unit}${whence ? ` · ${whence}` : ''}` };
     }
     const v = a.values.threshold;
     if (typeof v === 'number' && Number.isFinite(v)) return { value: v, source: 'server', text: `rule ${v.toFixed(digits)}${unit}` };
   }
-  if (from === null) return null;
   const factor = ruleSetting(thresholds, metric === 'hfd' ? 'hfd_factor' : 'star_factor');
+  const srv = baseline ? (metric === 'hfd' ? baseline.hfdPx : baseline.stars) : null;
+  if (srv !== null && srv > 0) {
+    const value = factor * srv;
+    const whence = baselineFrom(baseline ? (metric === 'hfd' ? baseline.hfdFrom : baseline.starsFrom) : null);
+    return { value, source: 'server', text: `rule ${factor} × ${srv.toFixed(digits)}${unit} = ${value.toFixed(digits)}${unit}${whence ? ` · ${whence}` : ''}` };
+  }
+  if (from === null) return null;
   const count = Math.round(ruleSetting(thresholds, 'baseline_frames'));
   const base = baselineMedian(cols.t, cols.v, cols.n, from, count);
   if (base === null) return null;

@@ -6,7 +6,8 @@
   - The target and check: the SERVER's points (the newest finite target point and its
     comparisons, the σ of the check's last 15 points): Watch never computes a magnitude.
     The curve has its own light-curve store fed from the photometry stream (as the drawer's).
-  - HFD and stars: the run's subs from the conditions store; the HFD rule's line (hfdRule).
+  - HFD and stars: the run's subs from the conditions store; the HFD rule's line (hfdRule, with
+    the server's baseline for the run).
   - Altitude (the mount's, when connected) against site.min_altitude_deg (30° unset).
   - The links (camera, mount, server) in words, the server's keep-awake record.
   - The most urgent open attention item replaces the first row; Acknowledge is the server's.
@@ -20,6 +21,7 @@
   import { LiveCurveStore } from '../charts/lightcurve/store';
   import { filterLabel } from '../format/filter';
   import { newestCurve, trailingStats } from '../imaging/photometry/present';
+  import { pickBaseline } from '../imaging/run/runband';
   import type { LcPoint } from '../imaging/photometry/types';
   import { endAt, isEngaged } from '../run/run';
   import type { AttentionStore } from './attention/attention.svelte';
@@ -96,7 +98,7 @@
       end: engaged && s ? endAt(s, now) : null,
       stars: series.stars,
       hfd: series.hfd,
-      hfdRef: hfdRule(attention.items, attention.thresholds, series.hfd),
+      hfdRef: hfdRule(attention.items, attention.thresholds, series.hfd, pickBaseline(attention.baselines, s?.current?.filter)),
       hfdFlag: hfdOpen,
       alt: mountOn ? (app.events.mount?.alt_deg ?? null) : null,
       altLimit: typeof limit === 'number' && Number.isFinite(limit) ? limit : 30,

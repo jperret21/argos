@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { afText, baselineMedian, curveRules, latestFinite, metricThreshold, miniLayout, miniWidth, miniWindow, pastThreshold, ruleKey, ruleSetting, runCounts, runItems, runStarted, runSuggestion, type RunAttention } from './runband';
+import type { RunBaseline } from '../../api/attention';
+import { afText, baselineFrom, baselineMedian, curveRules, latestFinite, metricThreshold, miniLayout, miniWidth, miniWindow, pastThreshold, pickBaseline, ruleKey, ruleSetting, runCounts, runItems, runStarted, runSuggestion, type RunAttention } from './runband';
 
 const item = (p: Partial<RunAttention> & Pick<RunAttention, 'id' | 'rule'>): RunAttention => ({ level: 'attention', since: 1000, active: true, ...p });
 
@@ -66,6 +67,40 @@ describe('Run band: the rules it draws (read-only, the server decides)', () => {
     expect(pastThreshold('hfd', 4, rule)).toBe(true);
     expect(pastThreshold('stars', 100, { value: 120, source: 'rule', text: '' })).toBe(true);
     expect(pastThreshold('hfd', null, rule)).toBe(false);
+  });
+
+  it('draws the server’s baseline for the run, carried from an earlier run (owner decisions 2026-11-14, 2026-11-15)', () => {
+    const t = Float64Array.from({ length: 3 }, (_, i) => 100 + i);
+    const hfd = Float64Array.from([9.7, 11.7, 11.4]);
+    const RUN_A = Date.UTC(2026, 7, 29, 5, 1, 48) / 1000;
+    const fromA = { frames: 20, carried: true, runId: '20260829T050148Z', runT: RUN_A };
+    const own = { frames: 20, carried: false, runId: 'r2', runT: RUN_A + 3600 };
+    const ir: RunBaseline = { filter: 'IR', hfdPx: 6.55, stars: 1986, hfdFrom: fromA, starsFrom: fromA };
+    const lp: RunBaseline = { filter: 'LP', hfdPx: 9, stars: 700, hfdFrom: own, starsFrom: own };
+    expect(pickBaseline([ir], null)).toBe(ir); // the only one, the filter not known
+    expect(pickBaseline([ir], 'ir')).toBe(ir);
+    expect(pickBaseline([ir], 'LP')).toBeNull(); // IR's line on LP subs before the fix
+    expect(pickBaseline([ir, lp], 'LP')).toBe(lp);
+    expect(pickBaseline([ir, lp], null)).toBeNull();
+    expect(pickBaseline([], 'IR')).toBeNull();
+    expect(baselineFrom(ir.hfdFrom)).toBe('baseline from the run of 05:01 UTC');
+    expect(baselineFrom(lp.hfdFrom)).toBeNull(); // the run's own
+    // Each line names its own baseline's origin: the HFD carried, the star count the run's own.
+    const mixed: RunBaseline = { ...ir, starsFrom: own, stars: 900 };
+    expect(metricThreshold('stars', [], null, { t, v: hfd, n: 3 }, null, mixed)!.text).toBe('rule 0.7 × 900 = 630');
+    // 3 subs only: the run's own subs give no line, the carried baseline does (the server judges them).
+    expect(metricThreshold('hfd', [], { hfd_factor: 1.5 }, { t, v: hfd, n: 3 }, 100)).toBeNull();
+    const th = metricThreshold('hfd', [], { hfd_factor: 1.5 }, { t, v: hfd, n: 3 }, 100, ir)!;
+    expect(th.source).toBe('server');
+    expect(th.value).toBeCloseTo(9.825, 12);
+    expect(th.text).toBe('rule 1.5 × 6.55 px = 9.82 px · baseline from the run of 05:01 UTC');
+    const stars = metricThreshold('stars', [], null, { t, v: hfd, n: 3 }, null, lp)!;
+    expect(stars.value).toBeCloseTo(490, 9);
+    expect(stars).toMatchObject({ source: 'server', text: 'rule 0.7 × 700 = 490' });
+    // The item's values say the same origin.
+    const values = { hfd_px: 11.1, baseline_px: 6.55, factor: 1.5, baseline_origin: 'earlier_run', baseline_run_utc: '2026-08-29T05:01:48.000Z' };
+    const fromItem = metricThreshold('hfd', [item({ id: 'h3', rule: 'hfd_rise', values })], null, { t, v: hfd, n: 3 }, 100, null)!;
+    expect(fromItem.text).toBe('rule 1.5 × 6.55 px = 9.82 px · baseline from the run of 05:01 UTC');
   });
 });
 

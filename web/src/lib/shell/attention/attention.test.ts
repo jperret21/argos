@@ -244,6 +244,19 @@ describe('AttentionStore', () => {
     expect(store.pending.size).toBe(0);
   });
 
+  it('keeps the run\'s baselines of the newest snapshot (the rule lines), an item alone leaves them', () => {
+    const { store, handlers } = setup();
+    expect(store.baselines).toEqual([]);
+    const from = { frames: 20, origin: 'earlier_run', run_id: 'r1', run_utc: '2026-08-29T05:01:48Z' };
+    const wire = { filter: 'IR', hfd_px: 6.55, stars: 1986, hfd_from: from, stars_from: from };
+    handlers.get('attention')!({ type: 'attention', active: [], history: [], baselines: [wire], revision: 1 });
+    expect(store.baselines.map((b) => [b.filter, b.hfdPx, b.hfdFrom?.carried])).toEqual([['IR', 6.55, true]]);
+    handlers.get('attention')!({ type: 'attention', item: { id: 'x', level: 'info', rule: 'run_started', title: 'Run started' } });
+    expect(store.baselines).toHaveLength(1);
+    handlers.get('attention')!({ type: 'attention', active: [], history: [], baselines: [], revision: 2 });
+    expect(store.baselines).toEqual([]); // a new run: none yet
+  });
+
   it('keeps the refusal in words', async () => {
     const { store, handlers } = setup();
     handlers.get('attention')!({ type: 'attention', items: [{ id: 'a', level: 'attention', rule: 'r', title: 'T' }] });

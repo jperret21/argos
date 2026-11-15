@@ -12,7 +12,8 @@
  * `attention` event on every change and once to a client that connects, `GET
  * /api/attention`, and the answer of `POST /api/attention/{id}/ack` and `…/ack-all` are all
  *   {"active": [AttentionItem], "history": [AttentionItem], "counts": {…},
- *    "sound": {"level", "info", "repeat_s"}, "thresholds": {…}, "last_change": {…}, "revision"}
+ *    "sound": {"level", "info", "repeat_s"}, "thresholds": {…}, "last_change": {…},
+ *    "baselines": [RunBaseline], "revision"}
  * An item: {id, rule, cause, name, level, kind, title, short, detail, values, since,
  * raised_utc, updated_utc, frame, run_id, action: {to, label} | null, active, cleared_utc,
  * cleared_reason, acked, acked_utc, acked_by, occurrences, tone, sound, repeat_s}.
@@ -136,6 +137,50 @@ export function checkAttentionItem(v: unknown): AttentionItem | null {
   };
 }
 
+/** Where one baseline comes from (protocol.md BaselineFrom). */
+export interface BaselineOrigin {
+  /** The subs it is the median of (alerts.baseline_frames of the run that made it). */
+  frames: number | null;
+  /** An earlier run of the server session made it. */
+  carried: boolean;
+  runId: string | null;
+  /** That run's start, unix s. */
+  runT: number | null;
+}
+
+/**
+ * One filter's HFD and star baselines in force for the run (AttentionState.baselines, protocol.md
+ * "Baselines carried over runs"): the medians the server compares with, each carried from an
+ * earlier run of the server session (the HFD's: same object and filter; the star count's: same
+ * object, filter, exposure and gain; none after 12 h without a sub of its setup), else this run's
+ * own first subs. `hfdFrom` / `starsFrom` null: that baseline does not exist yet.
+ */
+export interface RunBaseline {
+  filter: string;
+  hfdPx: number | null;
+  stars: number | null;
+  hfdFrom: BaselineOrigin | null;
+  starsFrom: BaselineOrigin | null;
+}
+
+const fin = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+function originOf(v: unknown): BaselineOrigin | null {
+  if (!isObj(v)) return null;
+  return { frames: int(v.frames), carried: v.origin === 'earlier_run', runId: str(v.run_id), runT: timeOf(v.run_utc) };
+}
+
+/** The snapshot's `baselines` (an entry without a filter is dropped); null when not sent (older server). */
+export function checkBaselines(v: unknown): RunBaseline[] | null {
+  if (!Array.isArray(v)) return null;
+  const out: RunBaseline[] = [];
+  for (const b of v) {
+    if (!isObj(b) || typeof b.filter !== 'string') continue;
+    out.push({ filter: b.filter, hfdPx: fin(b.hfd_px), stars: fin(b.stars), hfdFrom: originOf(b.hfd_from), starsFrom: originOf(b.stars_from) });
+  }
+  return out;
+}
+
 export interface AttentionBatch {
   /** Items carried by the message (one, or a snapshot's whole list). */
   items: AttentionItem[];
@@ -149,6 +194,8 @@ export interface AttentionBatch {
   unacked: number | null;
   /** The alerts.* values in force on the server (the Run band draws the rules with them); null: not sent. */
   thresholds: Record<string, unknown> | null;
+  /** The run's baselines in force (a snapshot's); null or absent: not sent. */
+  baselines?: RunBaseline[] | null;
 }
 
 function listOf(v: unknown): AttentionItem[] {
@@ -176,6 +223,7 @@ export function checkAttentionBatch(m: unknown): AttentionBatch | null {
       sound: level ? { level, info: snd?.info === true, repeatS: int(snd?.repeat_s) } : null,
       unacked: counts ? int(counts.unacked) : null,
       thresholds: isObj(m.thresholds) ? m.thresholds : null,
+      baselines: checkBaselines(m.baselines),
     };
   }
   const one = checkAttentionItem(isObj(m.item) ? m.item : m);

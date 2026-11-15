@@ -146,3 +146,115 @@ Rows that remain with the fixed rules, for the owner to mark:
 | 14 | 20260925T200453Z_RR_Lyr | — | 22:54:42 | Device lost (mount) | critical | |
 | 15 | 20260925T200453Z_RR_Lyr | 195 | 22:56:29 | No new frame | critical | |
 | B1, B2 | 20260925T200453Z_RR_Lyr (variant B) | 141, 185 | 22:08:58, 22:46:14 | Comparisons used | attention | |
+
+## Baselines carried over runs (owner decision 2026-11-14)
+
+The rows above are untouched. This section replays the one change of 2026-11-14: the HFD-rise
+and star-drop baselines (the medians of 20 subs of a filter) are carried over the runs of one
+server session when object, filter, exposure and gain match; any other run makes its own, as
+before; a server restart starts fresh (`argos/server/protocol.md`, "Baselines carried over
+runs"; tests `tests/server/test_attention.py`, "Baselines carried over the runs").
+
+How this replay was made:
+
+- **Code under test.** The server's `AttentionService` (main tree, 2026-11-14), fed the
+  `sequence` and `frame_saved` events of each run synchronously with a scripted clock: one
+  service per night (one server session all night), against a new service for every run (the
+  per-run baselines of the rows above).
+- **Per-sub inputs.** Core `frame_metrics` (`hfd`, `star_count`) on APFS clones of the raw
+  frames (deleted after reading); DATE-OBS, FILTER, EXPTIME, GAIN and OBJECT from their
+  headers; the save time is the original's mtime (read-only `stat`), as above.
+- **Only the two baseline rules change.** No other rule reads a baseline, so rows #1-15, B1 and
+  B2 stand. RR Lyr 2026-09-25 200453Z (195 subs) was not re-measured: the session held no
+  baseline when it started (195307Z, the same setup, had 5 subs), so its rules are the per-run
+  ones and row #13 is unchanged.
+- **Scripts** stayed in the role's scratch folder (`metrics.py`, `replay.py`); they are not in
+  the repo.
+
+Setup and baseline of each run:
+
+| Run | Subs | Filter, exposure, gain | Baseline, carried over runs | Before (per run) |
+|---|---|---|---|---|
+| 20260829T050148Z_XX_Cyg | 22 | IR, 15 s, 80 | its own: subs 1-20, 6.55 px, 1 986 stars; kept by the session | its own |
+| 20260829T052943Z_XX_Cyg | 4 | IR, 15 s, 80 | carried from 050148Z | none (4 subs) |
+| 20260829T053540Z_XX_Cyg | 4 | IR, 15 s, 80 | carried from 050148Z | none (4 subs) |
+| 20260907T040723Z_XX_Cyg | 24 | IR, 20 s, 80 | its own: 7.60 px, 2 217 stars; kept by the session | its own |
+| 20260907T044527Z_XX_Cyg | 2 | IR, 60 s, 80 | none: no baseline of that setup | none |
+| 20260907T045156Z_XX_Cyg | 3 | IR, 60 s, 100 | none: no baseline of that setup | none |
+| 20260907T045626Z_XX_Cyg | 3 | IR, 60 s, 100 | none: 045156Z, the only earlier run of that setup, had 3 subs | none |
+| 20260925T195307Z_RR_Lyr | 5 | IR, 10 s, 80 | none | none |
+| 20260925T200453Z_RR_Lyr | 195 | IR, 10 s, 80 | its own (8.65 px), as before | its own |
+
+New alert with carried baselines (the only one; same columns as the main table):
+
+| # | Run | Sub | UTC raised | Rule | Level | Value | Threshold | Owner | Reviewer's reading |
+|---|---|---|---|---|---|---|---|---|---|
+| C1 | 20260829T053540Z_XX_Cyg | 4 | 05:39:38 | HFD rise | attention | HFD 11.7, 11.4, 11.1 px (subs 2-4) = 1.7×. Title: "HFD 11.1 px = 1.7× the first 20 frames of the run of 05:01 UTC" | 1.5 × 6.55 px = 9.83 px (median of 050148Z's subs 1-20, same object, IR, 15 s, gain 80) | | T likely: the HFD of 050148Z rose from about 6.5 px to 9.5-12.1 px at its sub 16 and stayed there through 052943Z and 053540Z. 052943Z (9.7, 11.0, 10.6, 9.5 px) has 2 subs in a row above 9.83 px, not 3: no alert there |
+
+No star-drop alert is new: the carried 1 986 stars give a limit of 1 390, and 052943Z and
+053540Z counted 1 916-1 978. No alert disappears.
+
+Correction to "Alerts expected but not fired" (not edited above):
+
+- **20260829T052943Z / 053540Z.** "7 of 8 subs above 1.5×" is 5 of 8 with these metrics: 9.5,
+  9.7 and 9.7 px are 1.45-1.48× the 6.55 px.
+- **20260907T045626Z, the degraded run, is still not judged** with the decided keys. Its setup
+  (60 s, gain 100) differs from 040723Z's (20 s, gain 80), whose 7.60 px and 2 217 stars the
+  review compared it with. functional-spaces §4.10 is corrected to say so.
+
+What-if, not adopted (an owner decision): an HFD baseline carried on object and filter alone
+(exposure and gain ignored; the star baseline kept on all four, since star counts scale with
+the exposure: 2 217 at 20 s, gain 80 against 3 455 at 60 s, gain 100 that night):
+
+| # | Run | Sub | UTC raised | Rule | Level | Value | Threshold | Owner | Reviewer's reading |
+|---|---|---|---|---|---|---|---|---|---|
+| W1 | 20260907T045626Z_XX_Cyg | 3 | 05:00:02 | HFD rise | attention | HFD 26.5, 24.7, 39.2 px (subs 1-3) = 5.2× | 1.5 × 7.60 px = 11.40 px (040723Z, 20 s, gain 80) | | T likely (the degraded run). Only with the what-if; no other alert: 044527Z 7.1, 8.9 px; 045156Z 8.2, 12.5, 12.6 px (2 in a row above 11.40 px, not 3) |
+
+A single server session over several nights would carry a baseline from one night to the next.
+On these nights it changes nothing: 2026-08-29 (15 s) and 2026-09-07 (20 s and 60 s) never
+share a setup, and RR Lyr is another object.
+
+### Owner decision 2026-11-15: the HFD baseline on object and filter, 12 h
+
+The rows above are untouched. The owner adopted W1's rule on 2026-11-15: the HFD baseline is
+carried on object and filter only, the star baseline keeps the four keys (object, filter,
+exposure, gain), and no baseline is carried after 12 h without a sub of its setup (sub
+DATE-OBS; for the HFD, any sub of that object and filter). Replayed as above (the same
+per-sub metrics, the server's `AttentionService` of 2026-11-15) in three ways: one service per
+night, one service for the three nights (a server left running), and that with the 12 h rule
+switched off.
+
+Baselines of each run with these rules (one server session per night):
+
+| Run | HFD baseline | Star baseline |
+|---|---|---|
+| 20260829T050148Z_XX_Cyg | its own, 6.55 px | its own, 1 986 |
+| 20260829T052943Z_XX_Cyg, 053540Z | carried from 050148Z | carried from 050148Z (same 15 s, gain 80) |
+| 20260907T040723Z_XX_Cyg | its own, 7.60 px | its own, 2 217 |
+| 20260907T044527Z_XX_Cyg (60 s, gain 80) | carried from 040723Z | none (2 subs) |
+| 20260907T045156Z_XX_Cyg, 045626Z (60 s, gain 100) | carried from 040723Z | none (3 subs each) |
+| 20260925T195307Z_RR_Lyr, 200453Z | as before (195307Z had 5 subs; 200453Z its own) | as before |
+
+Alerts that differ from the per-run rows (same columns as the main table):
+
+| # | Run | Sub | UTC raised | Rule | Level | Value | Threshold | Owner | Reviewer's reading |
+|---|---|---|---|---|---|---|---|---|---|
+| D1 | 20260829T053540Z_XX_Cyg | 4 | 05:39:38 | HFD rise | attention | as C1: 11.7, 11.4, 11.1 px (subs 2-4) = 1.7×. Title: "HFD 11.1 px = 1.7× the first 20 frames of the run of 05:01 UTC" | 1.5 × 6.55 px = 9.83 px (050148Z) | | as C1 |
+| D2 | 20260907T045626Z_XX_Cyg | 3 | 05:00:02 | HFD rise | attention | as W1: 26.5, 24.7, 39.2 px (subs 1-3). Title: "HFD 39.2 px = 5.2× the first 20 frames of the run of 04:07 UTC" | 1.5 × 7.60 px = 11.40 px (040723Z, 20 s, gain 80) | | T likely (the degraded run) |
+
+No other alert appears or disappears: 044527Z (7.1, 8.9 px) and 045156Z (8.2, 12.5, 12.6 px:
+2 in a row above 11.40 px, not 3) stay silent on the carried 7.60 px; 040723Z keeps row #5 (sub
+23, 04:38:59, on its own baseline); no star-drop alert (the only carried star baseline,
+050148Z's 1 986 stars for 052943Z and 053540Z, gives a limit of 1 390; they counted 1 916-1 978).
+
+One server for the three nights gives the same alerts, D1 and D2 and row #5: the HFD key
+(XX Cyg, IR) is shared by 2026-08-29 and 2026-09-07, and the 12 h rule drops 08-29's 6.55 px
+before 09-07 (the correction to the last paragraph above, written for the four keys). With the
+12 h rule switched off it would differ:
+
+| # | Run | Sub | UTC raised | Rule | Level | Value | Threshold | Owner | Reviewer's reading |
+|---|---|---|---|---|---|---|---|---|---|
+| W2 | 20260907T040723Z_XX_Cyg | 20 | 04:34:43 | HFD rise | attention | 14.5 px = 2.2× 6.55 px (08-29's 050148Z, 9 days earlier), instead of row #5 at sub 23 on its own 7.60 px | 1.5 × 6.55 px = 9.83 px | | what the 12 h rule prevents (not raised with it); D2 would read 6.0× instead of 5.2× |
+
+Scripts: `att_replay.py` (the role's `replay.py` with these three modes) in the fixer's scratch
+folder, not in the repo.

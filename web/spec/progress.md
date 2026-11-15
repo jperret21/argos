@@ -2021,33 +2021,70 @@ send the GoTo again from Stellarium."
   injectable clock per sub, which would have broken the guarded Qt parity test after the
   merge: timed with `time.monotonic()` (the parity test passes on the post-merge snapshot).
 
-### 5. Owner decisions reported by the roles (not implemented)
+### 5. Owner decisions reported by the roles, decided on 2026-11-14 and 2026-11-15
 
-- **S48 is not a second guard against a wrong plate solution** (decisions role): a new
-  solution rebuilds the tracker from its own stars. Options A (count the lock over every
-  comparison: loses 23 good XX Cyg frames), B (refuse a new solution on which fewer than
-  half of the previous tracker's anchors show a star: only the wrong solve refused, 0 false
-  refusals on 257 frames × 2 schedules), C (S50 alone). Recommendation: B.
-- **S50's reference** is the session's first good solve; a wrong first solve would refuse
-  every later good one until the camera reconnects. Recommendation: move the reference when
-  3 consecutive solves agree within 0.3 %.
-- **AAVSO export with two filters**: Qt now refuses curves of two filters (S53, section 7);
-  the web Review (W7) needs the same rule (one filter's curves per export).
-- **S48 with fewer than 3 anchors** (science review, with S52): ceil(n/2) for n = 1 or 2 is
-  met by the very anchor that moved the solution. Recommendation: treat fewer than 3
-  anchors as unverified, make a re-solve due and flag those points suspect until it lands.
-  Not implemented (it changes which points are flagged).
-- **Attention baselines per run** (science review): a run shorter than 23 subs is never
-  judged for HFD rise or star drop; the owner restarts runs after trouble (7 of the 9 runs
-  of the three nights had at most 24 subs), so the degraded 2026-09-07 045626Z run fires
-  nothing. Options: A, carry the baseline over the runs of one server session when object,
-  filter, exposure and gain match (else per run); B, a shorter baseline (5 subs) for short
-  runs; C, keep per-run baselines and correct functional-spaces §4.10. Recommendation: A.
-- **The vetting file's filter** (science review, file format): `photometry_quality.json`
-  vets the run's first filter and does not say which. Recommendation: an additive `filter`
-  key (the token) in every vetting file, Qt and server.
-- **The alert thresholds**: the owner marks each row of `wave6b-attention-replay.md` true
-  or false before the defaults are kept or moved.
+The owner took every recommendation below (2026-11-14), then the recommendations of that
+run's reports (2026-11-15). Qt fixes are in `release/0.5.0` (worktree, uncommitted, notes
+`notes/release_0_5_0.md`), the server's in this tree; `argos/core` here gets S54-S59 at the
+next merge of release/0.5.0 (section 6). Replays on the 8 runs of the tracker study (257
+frames, Argos's live solves) with a solve before every sub ("every sub") and with one solve
+per run plus re-solves when due ("per run").
+
+- **A second guard against a wrong plate solution: S54** (option B; refined 2026-11-15). A
+  new camera solution on which fewer than ceil(k/2) of the tracker's k anchors show a star
+  (SNR ≥ 5) where it puts them is refused, the previous solution kept; 3 consecutive
+  refused solutions that agree within 20 green px are accepted as a re-pointing the mount
+  did not report (the owner's 3 consecutive good solves span at most 10.4 px). Every sub:
+  265 solves, one refusal (XX Cyg 2026-09-07 045156Z frame 1, by S50; with S50 off, S54
+  alone: 1 of 6 anchors seen), 0 false; per run: 34 solves, none refused; no re-pointing
+  accepted on the owner's runs. Real RR Lyr subs moved 500 px without a slew: refused for
+  ever before, the third solution accepted after (they agree within 9.4 px). Boundary tests
+  pin ceil(k/2) (1 of 4 refused, 2 of 4 accepted) in both trees.
+- **S50's reference moves: S55.** When the last 3 camera solves agree within 0.3 %, the
+  reference becomes their mean. The owner's 270 solves: no decision changes; a wrong first
+  solve (3.4 % low) put before each night: 32, 33 and 204 good solves refused before, 2, 3
+  and 2 after (the third agreeing one is accepted; 2026-09-07's 3 include its own wrong
+  solve).
+- **A lock on fewer than 3 anchors: S56** (refined 2026-11-15). Such a frame is verified
+  only when measured through a solution of this sub or the previous one with the tracker
+  moving no aperture 2 px or more from it (no re-solve then); otherwise its points are
+  flagged `suspect` (the stream's existing flag, drawn hollow) and a re-solve is due. One
+  WARN per episode (a verified frame, a slew or invalidation, a set change ends it; a landed
+  solve does not); status `lock.verified`. Cost on the owner's runs: every sub, 3 of 255
+  target points flagged (XX Cyg 2026-08-29 050148Z frames 0 and 13, 052943Z frame 0;
+  25 before the refinement; frame 13 is the one 3.4 px off the star, the 22 verified
+  2-anchor frames are 0.24-1.83 px from it); per run, 14 flagged (every other sub of those
+  two runs) and 24 re-solves (34 before). The dangerous case stays flagged: RR Lyr
+  2026-09-25 frames 4, 7, 8, 10, 11 of the set-change replay (S52 off, 1 anchor, 29.5-35.8
+  px off the star, solution 3-10 subs old). Server and fixed Qt in one process on a
+  post-merge snapshot: 050148Z every sub and per run (118 points, 12 and 66 suspect), RR
+  Lyr 0-39 (272 points, 42 suspect) and 40-79 with an injected wrong solve (306 points,
+  S54 refusal text identical): 0 differences.
+- **S58** (2026-11-15): the batch re-run's S43 check gets S56's rule (a frame of 1-2
+  anchors is re-solved when no solution of it or the previous frame verifies it, else
+  flagged). Re-running 050148Z: before, 4 unflagged target points 2.5-4.5 px off the star;
+  after, 12 re-solves, none flagged, all within 1.89 px (no solver: all 22 flagged). The
+  server has no batch re-run.
+- **S59** (review finding): a camera frame after an opened FITS drops the file's tracker
+  (else S54 held the camera's solutions to the file's anchors).
+- **The vetting file's filter: S57.** Every `photometry_quality*.json` gets an additive
+  last key `"filter"` (the token), Qt and server; Qt Review and the session list read it.
+- **Attention baselines carried over runs** (option A; refined 2026-11-15, server only).
+  The HFD baseline is carried over the runs of one server session on object and filter, the
+  star baseline on object, filter, exposure and gain, none after 12 h without a sub of its
+  setup; a restart starts fresh. Replay of the three nights: two new HFD alerts, 2026-08-29
+  053540Z sub 4 (05:39:38 UTC, 11.1 px = 1.7× 6.55 px) and the degraded 2026-09-07 045626Z
+  run at sub 3 (05:00:02 UTC, 39.2 px = 5.2× 7.60 px); no star alert, no other change, the
+  same with one server for the three nights (without the 12 h rule 040723Z would have been
+  judged on 08-29's 6.55 px). Rows D1, D2, W2 appended to `wave6b-attention-replay.md`
+  for the owner's marks; `functional-spaces.md` §4.10 says the same.
+- **Web**: the readout says "suspect (hot pixel, or unverified lock)"; the Run band and
+  Watch draw a filter's server baseline only for that filter (another filter's line was
+  drawn on LP subs before).
+- **Still open**: the AAVSO export with two filters (Qt refuses them, S53; W7's Review
+  needs the same rule); the alert thresholds (the owner marks `wave6b-attention-replay.md`);
+  the owner decisions of the 2026-11-15 fixer report (S56 on a field drifting more than
+  2 px per sub, S56 after an unreported jump, anchors on the solved frame).
 
 ### 6. Known gaps, and the guards to check after the merge
 
@@ -2061,7 +2098,10 @@ on a new snapshot, section 7; no guard was added by the fixes):
 - `tests/server/test_photometry.py::test_the_filter_token_is_the_cores_s49`
   (`argos.core.imaging.fits_writer.filter_token`).
 - `tests/server/test_sequence_parity.py::test_a_sequence_gives_the_qt_files_and_points`
-  (`requires_s49_core`; passes after the merge with fix (b) of section 4).
+  (`requires_s49_core`; passes after the merge with fix (b) of section 4). Since S57 it also
+  branches on `core_has_s57()` (`save_comparison_quality_report` takes `filter_token`):
+  before the merge it drops the server's `"filter"` key before comparing the vetting file
+  with Qt's, after it compares the whole file.
 - `tests/server/test_sequence_plan.py::test_the_two_filter_warning_is_the_qt_editors_s49`
   (`argos.core.imaging.sequencer.light_filters_warning`).
 - `tests/server/test_site_check.py::test_horizontal_at_sweep_against_astropy` and the
@@ -2226,7 +2266,8 @@ Screenshots: the scenes the fixes changed were re-captured into
   `{role}_{object}_{filter}_{star}.csv` (`target_RR_Lyr_ir_000-BCG-719.csv`), the live
   preview's `<object>_<start>_<filter>_<star>.csv`; the vetting is
   `photometry_quality.json` for the run's first filter and `photometry_quality_<filter>.json`
-  for the others (no `filter` key yet: owner decision, section 5). The filter token is the
+  for the others, each naming its filter in a last key `"filter"` (S57; a file without it was
+  written before 0.5.0: one-filter runs only, else both bands mixed). The filter token is the
   core's `fits_writer.filter_token` ("ir", "lp", "irc", "clear"); curves are keyed
   `<AUID or name>@<token>`. Review reads both names: a new name's curve is the star's in
   that filter, an old name has no filter (Qt `review._curve_filter`). Label a series
@@ -2238,4 +2279,10 @@ Screenshots: the scenes the fixes changed were re-captured into
   from the run's median after a set change, until the next solve; Review could flag them.
 - **The attention history**: the server keeps 200 items and the items of the last 20 runs
   (`run_summary`), which a run's review can show beside its curve.
-- The owner decisions of section 5 and the replay marks.
+- **Suspect points** (S56, S58): `suspect` also marks a point whose lock rested on 1-2
+  anchors with no solution of its sub or the previous one within 2 px; a Review re-run
+  must carry S43 and S58 (re-solve such a frame, else flag it), and keep them out of the
+  AAVSO export as Qt does.
+- **Attention baselines** (section 5): carried within one server session only; a Review of
+  a past run shows the items as raised, with `values.baseline_origin`.
+- The open owner decisions of section 5 and the replay marks.

@@ -20,6 +20,7 @@
 -->
 <script lang="ts">
   import { filterLabel } from '../../format/filter';
+  import type { RunBaseline } from '../../api/attention';
   import type { SequenceState } from '../../api/sequence';
   import type { ConditionsStore } from '../../charts/conditions.svelte';
   import { observedCadence } from '../../charts/conditions';
@@ -63,6 +64,8 @@
     /** Attention items (the server's; the band keeps this run's). */
     items?: readonly RunAttention[];
     thresholds?: Record<string, unknown> | null;
+    /** The run's baselines in force on the server (AttentionState.baselines). */
+    baselines?: readonly RunBaseline[];
     onrule?: (rule: string) => void;
     /** The curve has no point: why, in words (the live status line). */
     emptyText?: string | null;
@@ -90,6 +93,7 @@
     conditions,
     items = [],
     thresholds = null,
+    baselines = [],
     onrule,
     emptyText = null,
     clock = () => Date.now() / 1000,
@@ -209,7 +213,7 @@
       <LightCurvePlot {store} {view} facets={['target', 'check']} variant="band" {rules} {expecting} {theme} {targetKey} {checkKey} {notify} {clock} {hooks} label="Live light curve" {emptyText} />
     </div>
     {#if minisW}
-      <RunMinis {seq} {now} {frameTimes} {marks} {afStep} {conditions} {span} items={mine} {thresholds} {height} {theme} {expecting} {onrule} />
+      <RunMinis {seq} {now} {frameTimes} {marks} {afStep} {conditions} {span} items={mine} {thresholds} {baselines} {height} {theme} {expecting} {onrule} />
     {/if}
   </div>
 {/if}

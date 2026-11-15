@@ -740,13 +740,31 @@ interpretation alone:
 | Rule | Default | Tested on the 2026-09-25 run **[data]** |
 |---|---|---|
 | No new frame | after max(2 x median start-to-start, median + 60 s) | median 51.5 s gives 111.5 s; the longest real gap was 74.6 s: no false alarm |
-| HFD rise | HFD > 1.5 x median of the first 20 frames, 3 frames in a row | fires at frame 150, 22:16:14 UTC; no false alarm before |
-| Star count drop | stars < 0.7 x median of the first 20 frames, 3 frames in a row | lowest single frame 0.70: no alarm; the degraded 2026-09-07 run (826 stars against about 3 500) would fire |
+| HFD rise | HFD > 1.5 x median of the first 20 frames, 3 frames in a row; that baseline is carried to the later runs of one server session with the same object and filter (below) | fires at frame 150, 22:16:14 UTC; no false alarm before. The degraded 2026-09-07 045626Z run fires at its frame 3 (05:00:02 UTC, 39.2 px = 5.2 x the 7.60 px of 040723Z) |
+| Star count drop | stars < 0.7 x median of the first 20 frames, 3 frames in a row; carried with the same object, filter, exposure and gain | lowest single frame 0.70: no alarm. The degraded 2026-09-07 045626Z run (826 stars against the 3 455 of 045156Z's 3 frames) does **not** fire on stars: no 20-frame star baseline of its setup (60 s, gain 100) exists; it fires on HFD (row above). Corrected 2026-11-14 and 2026-11-15, see below |
 | Comparisons used | fewer than 3 for 3 frames in a row | frames 53, 186, 188, 190 and 192 had 2, never two in a row: no alarm; four of the five fall in the HFD event, a reason to keep the rule |
 | Tracker lost | `frames_lost` > 0 for 3 frames (needs an event, see below) | not recorded |
 | Altitude | below the site limit now (info, once) or within 15 min (attention) | not usable on this run: the Settings site was wrong (finding 3) |
 | Disk | free space < frames for 30 min at the observed cadence | 16.6 MB per S30 Pro frame |
 
+- **Baselines over runs** (owner decisions 2026-11-14 and 2026-11-15;
+  `argos/server/protocol.md` "Baselines carried over runs"; replay in
+  `web/spec/wave6b-attention-replay.md`). The owner restarts runs after trouble, and a
+  run shorter than 23 frames was never judged (20 for the baseline, 3 in a row). A run's
+  filter now starts from the baselines the server session already holds: the HFD baseline
+  of the same object and filter, the star baseline of the same object, filter, exposure
+  and gain (star counts follow exposure and gain: 2 217 at 20 s, gain 80 against 3 455 at
+  60 s, gain 100 that night); else it makes its own from its first 20 frames. No baseline
+  is carried after 12 h without a frame of its setup, and a server restart starts fresh.
+  On the owner's three nights this adds two HFD alerts and no star alert: 2026-08-29
+  053540Z, frame 4 (05:39:38 UTC), 11.1 px = 1.7 x the 6.55 px of 050148Z's first 20
+  frames; the degraded 2026-09-07 045626Z run (HFD 26.5, 24.7, 39.2 px; 2 273, 1 414,
+  826 stars), frame 3 (05:00:02 UTC), 39.2 px = 5.2 x the 7.60 px of 040723Z (20 s,
+  gain 80). So that run **fires**, as this section first said, but on its HFD: its star
+  count is not judged (no 20-frame star baseline of 60 s, gain 100 exists; 045156Z, the
+  only earlier run of that setup, had 3 frames). Without the 12 h rule, one server left
+  running from 2026-08-29 would have judged 2026-09-07 040723Z against 08-29's 6.55 px
+  (an alert at its frame 20, 04:34:43 UTC, instead of frame 23 on its own 7.60 px).
 - **Sound** through the Web Audio API: short synthesized tones (no sound files, no
   dependency), volume and a per-level choice in Settings › Alerts (new category, owner
   decision); sound never carries information found nowhere else (BRAND 7). Sound is the only

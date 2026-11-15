@@ -230,11 +230,13 @@ export function runSeries(t: ArrayLike<number>, v: ArrayLike<number>, n: number,
 /**
  * The HFD rule's threshold for Watch's sparkline (px): the server's own numbers when an
  * `hfd_rise` item carries them (`values.baseline_px` × `values.factor`, protocol table), else
- * the rule's definition on the run's subs: `alerts.hfd_factor` × the median of the first
- * `alerts.baseline_frames` HFD values (the server takes the baseline per filter: a run with
- * two filters may differ until the item fires). Null before the baseline exists.
+ * `alerts.hfd_factor` × the server's HFD baseline for the run (`baseline`: AttentionState.baselines,
+ * carried from an earlier run of the same object, filter, exposure and gain, or the run's own;
+ * runband pickBaseline), else the rule's definition on the run's subs: `alerts.hfd_factor` × the
+ * median of the first `alerts.baseline_frames` HFD values (the server takes the baseline per
+ * filter: a run with two filters may differ until the item fires). Null before a baseline exists.
  */
-export function hfdRule(items: readonly { rule: string; active: boolean; values: Record<string, unknown> | null }[], thresholds: Record<string, unknown> | null | undefined, hfd: readonly number[]): number | null {
+export function hfdRule(items: readonly { rule: string; active: boolean; values: Record<string, unknown> | null }[], thresholds: Record<string, unknown> | null | undefined, hfd: readonly number[], baseline: { hfdPx: number | null } | null = null): number | null {
   const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
   for (const a of items) {
     if (a.rule !== 'hfd_rise' || !a.active || !a.values) continue;
@@ -243,6 +245,8 @@ export function hfdRule(items: readonly { rule: string; active: boolean; values:
     if (base !== null && f !== null) return base * f;
   }
   const factor = num(thresholds?.['alerts.hfd_factor']) ?? 1.5;
+  const srv = num(baseline?.hfdPx);
+  if (srv !== null && srv > 0) return factor * srv;
   const count = Math.round(num(thresholds?.['alerts.baseline_frames']) ?? 20);
   if (count < 1 || hfd.length < count) return null;
   const first = hfd.slice(0, count).sort((x, y) => x - y);

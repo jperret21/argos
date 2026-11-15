@@ -94,11 +94,26 @@ describe('attention items on the wire', () => {
     const both = checkAttentionBatch({ history: [{ ...WIRE, acked: false }], active: [{ ...WIRE, acked: true }] })!;
     expect(both.items).toHaveLength(1);
     expect(both.items[0].acked).toBe(true);
-    expect(checkAttentionBatch({ items: [] })).toEqual({ items: [], replace: true, revision: null, sound: null, unacked: null, thresholds: null });
+    expect(checkAttentionBatch({ items: [] })).toEqual({ items: [], replace: true, revision: null, sound: null, unacked: null, thresholds: null, baselines: null });
     expect(checkAttentionBatch({ type: 'attention' })).toBeNull();
     // The snapshot's sound and thresholds in force (protocol.md AttentionState).
     const snap = checkAttentionBatch({ active: [], history: [], counts: { critical: 0, attention: 0, info: 0, unacked: 0 }, sound: { level: 'soft', info: true, repeat_s: 0 }, thresholds: { 'alerts.hfd_factor': 1.5, 'alerts.baseline_frames': 20 }, revision: 7 })!;
     expect(snap).toMatchObject({ revision: 7, unacked: 0, sound: { level: 'soft', info: true, repeatS: 0 }, thresholds: { 'alerts.hfd_factor': 1.5, 'alerts.baseline_frames': 20 } });
+    // The run's baselines in force (protocol.md RunBaseline): each carried from an earlier run, or its own.
+    const earlier = { frames: 20, origin: 'earlier_run', run_id: '20260907T040723Z', run_utc: '2026-09-07T04:07:23.000Z' };
+    const carried = checkAttentionBatch({
+      active: [],
+      baselines: [
+        // 045626Z (60 s, gain 100): the HFD carried on object and filter, its star count not yet.
+        { filter: 'IR', object: 'XX Cyg', hfd_px: 7.6, stars: null, hfd_from: earlier, stars_from: null },
+        { filter: 'LP', hfd_px: null, stars: 900, hfd_from: null, stars_from: { frames: 20, origin: 'this_run', run_id: null, run_utc: null, exposure_s: 10, gain: 80 } },
+        { hfd_px: 3 },
+      ],
+    })!;
+    expect(carried.baselines).toEqual([
+      { filter: 'IR', hfdPx: 7.6, stars: null, hfdFrom: { frames: 20, carried: true, runId: '20260907T040723Z', runT: Date.UTC(2026, 8, 7, 4, 7, 23) / 1000 }, starsFrom: null },
+      { filter: 'LP', hfdPx: null, stars: 900, hfdFrom: null, starsFrom: { frames: 20, carried: false, runId: null, runT: null } },
+    ]);
   });
 
   it('words a rule id when the server sends no label', () => {

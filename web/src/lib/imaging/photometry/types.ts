@@ -31,7 +31,8 @@ export interface LcPoint {
   /** Comparisons behind `relative_flux` (the ratio path also drops suspect stars). */
   relative_comps_used: number;
   saturated: boolean;
-  /** Aperture peak without PSF support (hot pixel?): recorded, never dropped. */
+  /** Aperture peak without PSF support (hot pixel?), or a lock on fewer than 3 anchor stars not
+   * verified (release S56): recorded, never dropped. */
   suspect: boolean;
   /** Exposure midpoint, ISO 8601 UTC (server convenience). */
   t?: string | null;

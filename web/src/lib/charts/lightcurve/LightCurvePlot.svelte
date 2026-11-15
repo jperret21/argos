@@ -1196,7 +1196,7 @@
                     <button type="button" class="key" aria-pressed={!hidden.ensBand} onclick={() => (hidden.ensBand = !hidden.ensBand)}><CurveKey shape="square" color="var(--chart-2)" variant="band" />± rms</button>
                   {/if}
                   {#if counts[id]?.suspect}
-                    <span class="key static" use:tooltip={{ text: 'Aperture peak without PSF support (hot pixel or cosmic ray?): kept, the observer decides' }}><CurveKey shape={FACET_SHAPE[id]} color="var({TOKEN[id]})" variant="hollow" />suspect <b class="num">{counts[id].suspect}</b></span>
+                    <span class="key static" use:tooltip={{ text: 'Aperture peak without PSF support (hot pixel or cosmic ray?), or a lock on fewer than 3 anchor stars not verified (S56): kept, the observer decides' }}><CurveKey shape={FACET_SHAPE[id]} color="var({TOKEN[id]})" variant="hollow" />suspect <b class="num">{counts[id].suspect}</b></span>
                   {/if}
                   {#if counts[id]?.saturated}
                     <span class="key static" use:tooltip={{ text: 'Saturated: the aperture holds clipped pixels, the value is wrong' }}><CurveKey shape={FACET_SHAPE[id]} color="var({TOKEN[id]})" variant="cross" />saturated <b class="num">{counts[id].saturated}</b></span>

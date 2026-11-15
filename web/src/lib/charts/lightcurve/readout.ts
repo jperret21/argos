@@ -49,7 +49,7 @@ export interface PointReadout {
 export function flagWords(f: number): string[] {
   const out: string[] = [];
   if (f & FLAG_SATURATED) out.push('saturated');
-  if (f & FLAG_SUSPECT) out.push('suspect (hot pixel?)');
+  if (f & FLAG_SUSPECT) out.push('suspect (hot pixel, or unverified lock)');
   return out;
 }
 

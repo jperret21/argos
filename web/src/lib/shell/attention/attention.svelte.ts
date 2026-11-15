@@ -16,7 +16,7 @@
  * Critical item still active and open repeats every 30 s until acknowledged.
  */
 
-import { attentionApi, checkAttentionBatch, type AttentionBatch, type AttentionClient, type AttentionItem, type AttentionLevel } from '../../api/attention';
+import { attentionApi, checkAttentionBatch, type AttentionBatch, type AttentionClient, type AttentionItem, type AttentionLevel, type RunBaseline } from '../../api/attention';
 import { chipView, newToneState, nextTone, openItems, sortItems, type ChipView, type SoundPrefs } from './model';
 import { alertSound, AlertSound, armOnGesture } from './sound';
 
@@ -40,6 +40,8 @@ export class AttentionStore {
   supported = $state(true);
   /** The alerts.* thresholds in force on the server (the snapshot's): the Run band draws the rules with them. */
   thresholds: Record<string, unknown> | null = $state.raw(null);
+  /** The run's HFD and star baselines in force on the server (the snapshot's): the rule lines. */
+  baselines: readonly RunBaseline[] = $state.raw([]);
   /** The last tone played (level and unix s): the gallery and the checks read it. */
   lastTone: { level: AttentionLevel; t: number } | null = $state.raw(null);
 
@@ -121,6 +123,7 @@ export class AttentionStore {
     if (b.replace) this.byId = new Map(b.items.map((a) => [a.id, a]));
     else for (const a of b.items) this.byId.set(a.id, a);
     if (b.thresholds) this.thresholds = b.thresholds;
+    if (b.baselines) this.baselines = b.baselines;
     if (b.sound && !this.prefsSet) this.prefs = { level: b.sound.level, info: b.sound.info, ...(b.sound.repeatS !== null ? { repeatS: b.sound.repeatS } : {}) };
     this.items = sortItems(this.byId.values());
     this.first = false;

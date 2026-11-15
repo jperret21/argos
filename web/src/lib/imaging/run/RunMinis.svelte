@@ -29,7 +29,8 @@
   import { endAt } from '../../run/run';
   import AttentionMark from '../../shell/attention/AttentionMark.svelte';
   import { LEVEL_WORD } from '../../shell/attention/model';
-  import { afText, latestFinite, metricThreshold, miniLayout, pastThreshold, ruleName, runCounts, METRIC_RULE, type RuleMetric, type RunAttention } from './runband';
+  import type { RunBaseline } from '../../api/attention';
+  import { afText, latestFinite, metricThreshold, miniLayout, pastThreshold, pickBaseline, ruleName, runCounts, METRIC_RULE, type RuleMetric, type RunAttention } from './runband';
 
   interface Props {
     seq: SequenceState | null;
@@ -46,6 +47,8 @@
     items?: readonly RunAttention[];
     /** The alerts.* values in force (AttentionState.thresholds). */
     thresholds?: Record<string, unknown> | null;
+    /** The run's baselines in force on the server (AttentionState.baselines): the rule lines. */
+    baselines?: readonly RunBaseline[];
     /** Content height, CSS px. */
     height: number;
     theme?: unknown;
@@ -55,7 +58,7 @@
     onrule?: (rule: string) => void;
   }
 
-  let { seq, now, frameTimes = [], marks = [], afStep = null, conditions, span, items = [], thresholds = null, height, theme, expecting = false, onrule }: Props = $props();
+  let { seq, now, frameTimes = [], marks = [], afStep = null, conditions, span, items = [], thresholds = null, baselines = [], height, theme, expecting = false, onrule }: Props = $props();
 
   const L = $derived(miniLayout(height));
   let colW = $state(0);
@@ -90,7 +93,8 @@
   const th = $derived.by(() => {
     void conditions.version;
     const out = {} as Record<RuleMetric, ReturnType<typeof metricThreshold>>;
-    for (const m of ['hfd', 'stars'] as const) out[m] = metricThreshold(m, items, thresholds, { t: cols.t, v: cols[m], n: cols.n }, from);
+    const base = pickBaseline(baselines, seq?.current?.filter);
+    for (const m of ['hfd', 'stars'] as const) out[m] = metricThreshold(m, items, thresholds, { t: cols.t, v: cols[m], n: cols.n }, from, base);
     return out;
   });
   /** The newest item of a rule (active first): its level mark beside the row. */

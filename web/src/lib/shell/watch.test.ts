@@ -65,6 +65,10 @@ describe('Watch values', () => {
     expect(hfdRule([], null, hfd)).toBeNull(); // 20 baseline subs by default: not yet
     expect(hfdRule([{ rule: 'hfd_rise', active: true, values: { baseline_px: 8.63, factor: 1.5 } }], null, hfd)).toBeCloseTo(12.945, 6);
     expect(hfdRule([{ rule: 'hfd_rise', active: false, values: { baseline_px: 8.63, factor: 1.5 } }], { 'alerts.baseline_frames': 3 }, hfd)).toBe(1.5 * 9);
+    // The server's baseline for the run (carried from an earlier run): a line from the first sub.
+    expect(hfdRule([], null, [9.7, 11.7], { hfdPx: 6.55 })).toBeCloseTo(9.825, 12);
+    expect(hfdRule([], { 'alerts.hfd_factor': 2 }, [], { hfdPx: 6.55 })).toBe(13.1);
+    expect(hfdRule([], null, [9.7], { hfdPx: null })).toBeNull();
   });
 
   it('names the state; Pause only while exposing', () => {

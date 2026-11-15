@@ -1081,6 +1081,7 @@
                   conditions={app.conditions}
                   items={app.attention.items}
                   thresholds={app.configValues}
+                  baselines={app.attention.baselines}
                   onrule={(rule) => app.openSettings('alerts', ruleKey(rule))}
                   emptyText={photTarget ? photLine.text : PICK_TARGET}
                 />
