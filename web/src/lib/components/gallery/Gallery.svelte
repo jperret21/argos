@@ -25,6 +25,8 @@
   import WorkspaceGallery from '../../imaging/modes/gallery/WorkspaceGallery.svelte';
   import ToolsGallery from '../../viewer/tools/gallery/ToolsGallery.svelte';
   import NightGallery from '../../shell/attention/gallery/NightGallery.svelte';
+  import ReviewFilesGallery from '../../review/gallery/FilesGallery.svelte';
+  import ReviewGallery from '../../review/gallery/ReviewGallery.svelte';
   import RailFooter from '../../shell/RailFooter.svelte';
   import ShortcutSheet from '../../shell/ShortcutSheet.svelte';
   import StartupScreen from '../../shell/StartupScreen.svelte';
@@ -260,6 +262,12 @@
       onchange={(t: Theme) => saveTheme(t)}
     />
   </header>
+
+  <!-- Wave 7, Review R1: the session review (toolbar, plot wall, rail, drawer) in every state, the rail cards, menus, health strip, large session. -->
+  <ReviewGallery />
+
+  <!-- Wave 7, Review files: R0 landing, Frames tab, R2 frame inspector, Re-run / Export AAVSO / Export CSV dialogs, job strip. -->
+  <ReviewFilesGallery />
 
   <!-- Wave 6b, Observe Run mode: the Run band, the drawer's tab row with the curve tools, the Run suggestion. -->
   <RunModeGallery />

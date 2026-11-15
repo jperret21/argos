@@ -108,7 +108,7 @@ import type { AttentionTarget } from '../api/attention';
 import { AttentionStore } from '../shell/attention/attention.svelte';
 import { ALERT_KEYS, prefsFrom, type SoundLevel } from '../shell/attention/model';
 import { checkKeepAwake } from '../shell/watch';
-import type { FieldCommands, NightCommands, PhotometryCommands, SequenceCommands } from '../shell/commandIndex';
+import type { FieldCommands, NightCommands, PhotometryCommands, ReviewCommands, SequenceCommands } from '../shell/commandIndex';
 import { openLayers, setReservedKeys, topModalIndex } from '../components/layers';
 import type { FsLister } from '../components/filepicker';
 import type { BundleRequest, BundleResult } from '../components/supportbundle';
@@ -126,6 +126,13 @@ import { type StartupFailure, startupView, type StartupView } from './startup';
 import { deviceUsable } from './status';
 import { loadTheme, nextTheme, parseCssColor, saveTheme, THEME_STORAGE_KEY, type Theme } from './theme';
 import { applyDensity, type Density, loadDensity, saveDensity, seedFromQt } from './viewerprefs';
+import { LiveCurveStore } from '../charts/lightcurve/store';
+import { ReviewExportApi } from '../review/dialogs/api';
+import { binaryFetch, InspectorApi } from '../review/inspector/api';
+import { InspectorStore, r2ViewerTools } from '../review/inspector/inspector.svelte';
+import { LandingStore } from '../review/landing/landing.svelte';
+import { WallLayoutState } from '../review/layout.svelte';
+import { ReviewSource as ReviewR1, type ReviewLoader } from '../review/session.svelte';
 
 export const SECTIONS = ['connection', 'imaging', 'sequencer', 'analyze', 'configuration'] as const;
 export type Section = (typeof SECTIONS)[number];
@@ -333,6 +340,29 @@ export class ArgosApp {
   keepAwake: ReturnType<typeof checkKeepAwake> = $state.raw(null);
   /** The palette asked Plan to open one of its popovers (Plan clears it once shown). */
   planRequest: 'presets' | 'preflight' | null = $state(null);
+
+  // -- Wave 7: Review (R0 sessions, R1 a session or the live run, R2 a frame) ---------------
+  /** The screen of the Review section. */
+  reviewScreen: 'r0' | 'r1' | 'r2' = $state('r0');
+  /** R1: the source under review (A68 + A69, A70, or the live run) and the wall's layout. */
+  readonly review = new ReviewR1();
+  readonly reviewLayout = new WallLayoutState();
+  /** R0's list and recent items (per viewer). */
+  readonly landing: LandingStore;
+  /** R2: the file, its header, solve (A74), catalogue (A75), measure (A73); its own viewer tools. */
+  readonly r2: InspectorStore;
+  readonly r2Tools = r2ViewerTools();
+  /** A76-A79: re-run plan / start, AAVSO preview / export, CSV export. */
+  readonly reviewExports: ReviewExportApi;
+  /** Mod+O in Review bumps it: R0's FITS picker opens (07 R0, WF-D). */
+  reviewPickFits = $state(0);
+  /** The palette asked R1 for a dialog (ReviewScreen hands it to R1 once shown). */
+  reviewAsk: { kind: 'rerun' | 'export-aavso' | 'export-csv'; n: number } | null = $state.raw(null);
+  /** Jobs this page started from Review: their outcome stays in the job strip until dismissed. */
+  reviewJobIds: string[] = $state.raw([]);
+  /** R1 shows the log in its own drawer (Frames · Ensemble · Log): set by ReviewScreen while R1 is shown. */
+  reviewLog: { shown(): boolean; set(open: boolean): void } | null = $state.raw(null);
+  private reviewLiveOff: (() => void) | null = null;
   autoStretch = $state(true);
   /** Manual levels; used while autoStretch is off. */
   manual: StretchParams | null = $state.raw(null);
@@ -441,6 +471,9 @@ export class ArgosApp {
       onError: (err) => this.log.push('warning', `Frame dropped: ${err.message}`, { source: 'web', topic: 'camera' }),
     });
     this.jobs = new JobStore({ cancel: (id) => this.client.cancelJob(id) });
+    this.landing = new LandingStore((q, o) => this.client.sessions(q, o));
+    this.r2 = new InspectorStore(new InspectorApi(this.client, binaryFetch(this.config)), this.jobs);
+    this.reviewExports = new ReviewExportApi(this.client);
     this.observe = new ObserveWorkspace({
       onreset: (what, undo) => this.undo.push({ title: what, detail: 'Its panels, band and drawer are back to the preset', undo }),
       transition: viewTransition,
@@ -731,7 +764,8 @@ export class ArgosApp {
         untrack(() => this.followCamera(cam));
       });
       $effect(() => {
-        this.shortcuts.setScopes([this.section]);
+        // Review's screens have their own keys (keymap scopes analyze.r0 / .r1 / .r2).
+        this.shortcuts.setScopes(this.section === 'analyze' ? ['analyze', `analyze.${this.reviewScreen}`] : [this.section]);
       });
       // The link held by connected devices decides the mode shown.
       $effect(() => {
@@ -766,6 +800,10 @@ export class ArgosApp {
       stopKeys();
       this.events.stop();
       this.frames.stop();
+      this.landing.dispose();
+      this.r2.dispose();
+      this.reviewLiveOff?.();
+      this.review.destroy();
       this.frameStats?.dispose();
       this.frameStats = null;
       for (const t of this.toastTimers.values()) clearTimeout(t);
@@ -812,6 +850,8 @@ export class ArgosApp {
       .jobs()
       .then((answer) => {
         this.jobs.snapshot(answer.jobs, jobMarks);
+        // A job awaited across the reconnection may have finished, or be lost.
+        for (const id of [...this.jobWaiters.keys()]) this.settleWaiters(id);
         this.adoptRunningDiscovery();
       })
       .catch(quiet('Jobs'));
@@ -1178,10 +1218,14 @@ export class ArgosApp {
       // Wave 6b (D3): W opens Watch; inside it, Watch's own keys close it (only W, Esc, ?, Mod+K act).
       this.shortcuts.handle('observe.watch', () => (this.watchOpen = !this.watchOpen)),
       this.shortcuts.handle('motion.abort', () => this.abortMotion()),
-      // D19: Open FITS image opens into Observe from every section (Review's inspector is wave 7).
+      // D19: Open FITS image opens into Observe, except in Review where it opens R2 (07 R0, WF-D).
       this.shortcuts.handle('file.open-fits', () => {
-        if (!this.stale) this.openFitsOpen = true;
+        if (this.stale) return;
+        if (this.section === 'analyze') this.reviewPickFits++;
+        else this.openFitsOpen = true;
       }),
+      // M103: Mod+Shift+O shows the Review sessions (R0) from anywhere.
+      this.shortcuts.handle('review.sessions', () => this.showReviewSessions()),
     ];
     const detach = typeof window === 'undefined' ? () => {} : this.shortcuts.attach(window);
     setReservedKeys((e) => this.shortcuts.reserves(e));
@@ -1238,7 +1282,14 @@ export class ArgosApp {
             this.jobs.ingest(job);
             this.settleWaiters(id);
           })
-          .catch(() => {});
+          .catch((err) => {
+            // A restarted server (or an expired job) answers 404: the job is lost, and
+            // its waiters settle on that rather than polling for ever.
+            if (!(err instanceof ApiError) || err.status !== 404) return;
+            const held = this.jobs.get(id);
+            if (held) this.jobs.snapshot([], { [id]: held.seq });
+            this.settleWaiters(id);
+          });
       }, 3000);
     });
   }
@@ -1481,6 +1532,8 @@ export class ArgosApp {
   setLogOpen(open: boolean): void {
     // Observe: the drawer belongs to the current task mode (D1).
     if (this.section === 'imaging') this.observe.setDrawer(open ? { drawerOpen: true, drawerTab: 'log' } : { drawerOpen: false });
+    // Review R1: the Log tab of its drawer (Frames · Ensemble · Log).
+    else if (this.section === 'analyze' && this.reviewLog) this.reviewLog.set(open);
     else this.logOpen = open;
     this.log.markSeen();
   }
@@ -1488,6 +1541,7 @@ export class ArgosApp {
   /** The full activity log is on screen: the drawer, or on Connection its log region widened to every topic. */
   get logShown(): boolean {
     if (this.section === 'imaging') return this.observe.layout.drawerOpen && this.observe.layout.drawerTab === 'log';
+    if (this.section === 'analyze' && this.reviewLog) return this.reviewLog.shown();
     return this.section === 'connection' ? this.connectionLogAll : this.logOpen;
   }
 
@@ -1500,7 +1554,7 @@ export class ArgosApp {
       this.observe.toggleDrawer('log');
       this.log.markSeen();
     } else {
-      this.setLogOpen(!this.logOpen);
+      this.setLogOpen(!this.logShown);
     }
   }
 
@@ -2060,6 +2114,107 @@ export class ArgosApp {
       ackAll: () => att.ackAll().catch((err) => this.reportError('Acknowledge all alerts', err)),
       sound: att.prefs.level,
       setSound: (level) => this.setAlertSound(level),
+    };
+  }
+
+  // -- Wave 7: Review ------------------------------------------------------------------------
+
+  /** M103: Mod+Shift+O, the palette and R1's Sessions button: R0, its list read again. */
+  showReviewSessions(): void {
+    this.go('analyze');
+    this.reviewScreen = 'r0';
+    void this.landing.load();
+  }
+
+  /** A job this page started from Review (the job strip keeps its outcome until dismissed). */
+  noteReviewJob(start: { job_id: string; job: unknown }): void {
+    this.jobs.ingest(start.job);
+    if (!this.reviewJobIds.includes(start.job_id)) this.reviewJobIds = [...this.reviewJobIds.slice(-19), start.job_id];
+  }
+
+  /**
+   * A68 as its job (`session_open`, progress in the job strip, cancellable), then A69 once the
+   * session is read (the curves come from the same cache). Rejects with the server's words.
+   */
+  private reviewLoader(): ReviewLoader {
+    let opened: Promise<unknown> = Promise.resolve(null);
+    const q = (path: string) => `path=${encodeURIComponent(path)}`;
+    return {
+      session: (path, signal) =>
+        (opened = (async () => {
+          const start = await this.client.request<{ job_id: string; job: unknown }>('POST', '/api/review/session', { path }, { signal });
+          this.noteReviewJob(start);
+          const cancel = () => void this.jobs.cancel(start.job_id).catch(() => undefined);
+          signal?.addEventListener('abort', cancel, { once: true });
+          try {
+            const job = await this.waitJob(start.job_id);
+            // The job's result names the open; the record comes from the cache it filled.
+            if (job.state === 'done') return this.client.request('GET', `/api/review/session?${q(path)}`, undefined, { signal, timeoutMs: 60_000 });
+            throw new Error(job.state === 'cancelled' ? 'Opening cancelled' : (job.error?.message ?? job.message ?? 'The session could not be read'));
+          } finally {
+            signal?.removeEventListener('abort', cancel);
+          }
+        })()),
+      curves: async (path, signal) => {
+        await opened;
+        return this.client.request('GET', `/api/review/session/curves?${q(path)}`, undefined, { signal, timeoutMs: 60_000 });
+      },
+    };
+  }
+
+  /** R0 → R1: a session folder (atomic: the previous source stays on failure, which rejects). */
+  async openReviewSession(path: string): Promise<void> {
+    await this.review.open(this.reviewLoader(), path);
+    this.stopReviewLive();
+  }
+
+  /** R0 → R1: one curve CSV (A70; a 422 says why it is not a curve file). */
+  async openReviewCsv(path: string): Promise<void> {
+    const raw = await this.client.request<unknown>('POST', '/api/review/import-csv', { path });
+    this.stopReviewLive();
+    this.review.openImport(raw, path);
+  }
+
+  /** R0 → R1: the live run (D3), read-only; its own curve store fed by the live stream. */
+  openReviewLive(): void {
+    const store = new LiveCurveStore();
+    this.stopReviewLive();
+    this.reviewLiveOff = this.photometry.feed({ load: (s) => store.load(s), apply: (ev) => store.apply(ev), reset: (ev) => store.reset(ev) });
+    store.applyTargets(this.field.targets?.stars ?? [], this.photometry.live?.band ?? null);
+    const live = this.photometry.live;
+    // The target set gives the Ensemble its catalogue magnitudes (the live run has no targets.json yet).
+    this.review.openLive(store, {
+      object: live?.object_name ?? this.sequence.state?.object_name ?? '',
+      targets: [...(this.field.targets?.stars ?? [])],
+      chartId: live?.chart_id ?? null,
+      obscode: live?.obscode ?? null,
+    });
+  }
+
+  private stopReviewLive(): void {
+    this.reviewLiveOff?.();
+    this.reviewLiveOff = null;
+  }
+
+  /** The palette's Review entries (W7, M8 "Re-run subs…", M92): R1's dialogs. */
+  reviewCommands(): ReviewCommands {
+    const r = this.review;
+    const none = r.kind === null ? 'open a session or the live run first (Review, F4)' : null;
+    let curves = false;
+    for (const s of r.store.stars.values()) if (s.n) curves = true;
+    const ask = (kind: 'rerun' | 'export-aavso' | 'export-csv') => {
+      this.go('analyze');
+      this.reviewScreen = 'r1';
+      this.reviewAsk = { kind, n: (this.reviewAsk?.n ?? 0) + 1 };
+    };
+    return {
+      source: r.info ? (r.kind === 'live' ? `${r.info.object || 'Live run'} · live run` : r.info.folder) : null,
+      rerunReason: none ?? (r.kind === 'import' ? 'an imported file has no frames to measure' : null),
+      exportReason: none ?? (curves ? null : 'no curve in this source'),
+      rerun: () => ask('rerun'),
+      exportAavso: () => ask('export-aavso'),
+      exportCsv: () => ask('export-csv'),
+      sessions: () => this.showReviewSessions(),
     };
   }
 

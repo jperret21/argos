@@ -632,6 +632,8 @@ export interface SessionSummary {
   curves: { target: number; comparison: number; check: number };
   has_quality: boolean;
   has_targets: boolean;
+  /** photometry_quality.json's verdict: comparisons "stable" of those vetted (absent: no report). */
+  quality?: { stable: number; total: number } | null;
   issues: string[];
 }
 

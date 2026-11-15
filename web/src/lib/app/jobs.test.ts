@@ -110,6 +110,13 @@ describe('job state reducer', () => {
     expect(s.byId.j1.error?.code).toBe('lost');
   });
 
+  it('one job answered 404 is declared lost alone (waitJob after a server restart)', () => {
+    let s = apply(EMPTY_JOBS, job({ id: 'j1', seq: 5 }), job({ id: 'j2', seq: 2 }));
+    s = jobsReducer(s, { type: 'snapshot', jobs: [], before: { j1: 5 } });
+    expect([s.byId.j1.state, s.byId.j1.error?.code]).toEqual(['failed', 'lost']);
+    expect(s.byId.j2.state).toBe('running');
+  });
+
   it('a job that moved on after the request is not lost either', () => {
     let s = apply(EMPTY_JOBS, job({ id: 'j1', seq: 5 }));
     const marks = { j1: 5 };

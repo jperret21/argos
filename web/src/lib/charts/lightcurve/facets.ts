@@ -9,13 +9,19 @@
  * server's DiffResult.zero_point, mean of catalogue − instrumental over the
  * comparisons used) ± its rms: up = more light (a clearer sky), as the
  * relative-flux view's transmission 10^(0.4 (zp − median zp)).
+ *
+ * The comparison facet (Review wall, wave 7) is one comparison star's own curve as Qt's
+ * Review draws it (lightcurve_panel.py `_refresh_series`, view "comparison"): its
+ * leave-one-out magnitude minus its own median ("Δmag from own median", the median of
+ * the unsaturated finite values, else of every finite value), or in the relative-flux
+ * view its flux over the same S16 baseline minus 1 ("Δ relative flux").
  */
 
 import { CHECK_WINDOW, type LiveCurveStore, type StarCurve } from './store';
 import { fluxBaseline, medianOf } from './trailing';
-import { FLAG_SATURATED, type Shape } from '../uplot/markers';
+import { FLAG_RECORDER, FLAG_SATURATED, FLAG_SUSPECT, type Shape } from '../uplot/markers';
 
-export type FacetId = 'target' | 'check' | 'ensemble';
+export type FacetId = 'target' | 'check' | 'ensemble' | 'comparison';
 export type YMode = 'mag' | 'flux';
 
 export interface FacetData {
@@ -27,13 +33,14 @@ export interface FacetData {
   band: { mean: Float64Array; hi: Float64Array; lo: Float64Array } | null;
 }
 
-export const FACET_SHAPE: Record<FacetId, Shape> = { target: 'circle', check: 'triangle', ensemble: 'square' };
+export const FACET_SHAPE: Record<FacetId, Shape> = { target: 'circle', check: 'triangle', ensemble: 'square', comparison: 'square' };
 
 /** Smallest y span per facet (noise is never blown up to full height). */
 export const FACET_MIN_SPAN: Record<FacetId, Record<YMode, number>> = {
   target: { mag: 0.08, flux: 0.02 },
   check: { mag: 0.04, flux: 0.02 },
   ensemble: { mag: 0.04, flux: 0.02 },
+  comparison: { mag: 0.04, flux: 0.02 },
 };
 
 const EMPTY = new Float64Array(0);
@@ -41,6 +48,28 @@ const EMPTY = new Float64Array(0);
 export function baselineOf(s: StarCurve): number {
   const c = s.cols;
   return fluxBaseline(c.flux, c.n, (i) => (c.flags[i] & FLAG_SATURATED) !== 0);
+}
+
+/**
+ * A comparison's magnitude baseline (Qt `_refresh_series`): the median of its unsaturated
+ * finite magnitudes, else of every finite one; NaN when it has none. Memoised per curve
+ * state (the readout asks for it at every hover).
+ */
+const magBase = new WeakMap<StarCurve, { n: number; edits: number; v: number }>();
+export function magBaselineOf(s: StarCurve): number {
+  const c = s.cols;
+  const m = magBase.get(s);
+  if (m && m.n === c.n && m.edits === c.edits) return m.v;
+  let v = medianOf(c.mag, c.n, (i) => (c.flags[i] & FLAG_SATURATED) === 0);
+  if (!Number.isFinite(v)) v = medianOf(c.mag, c.n);
+  magBase.set(s, { n: c.n, edits: c.edits, v });
+  return v;
+}
+
+function shifted(a: Float64Array, n: number, by: number): Float64Array {
+  const out = new Float64Array(n);
+  for (let i = 0; i < n; i++) out[i] = a[i] - by;
+  return out;
 }
 
 function divided(a: Float64Array, n: number, base: number): Float64Array {
@@ -55,6 +84,8 @@ export interface CurveKeys {
   check?: string | null;
   /** S49: only the curves of this filter (null: every curve, as before S49). */
   filter?: string | null;
+  /** The comparison star of a 'comparison' facet (curve key or star key; default: the first). */
+  comparison?: string | null;
 }
 
 /** The series a facet draws, or null when the run has none (no check star, no comparison). */
@@ -87,6 +118,21 @@ export function facetData(store: LiveCurveStore, id: FacetId, mode: YMode, keys:
       lo[i] = Number.isFinite(rms[i]) ? 10 ** (0.4 * (zp[i] - rms[i] - med)) : NaN;
     }
     return { n, x: c.view('t'), y, err: null, flags: null, band: { mean: y, hi, lo } };
+  }
+  if (id === 'comparison') {
+    const s = store.primary('comparison', keys.comparison, keys.filter);
+    if (!s || !s.n) return null;
+    const c = s.cols;
+    const n = c.n;
+    if (mode === 'mag') {
+      const base = magBaselineOf(s);
+      return { n, x: c.view('t'), y: shifted(c.mag, n, Number.isFinite(base) ? base : NaN), err: c.view('err'), flags: c.flagsView(), band: null };
+    }
+    const base = baselineOf(s);
+    if (!(base > 0)) return { n, x: c.view('t'), y: new Float64Array(n).fill(NaN), err: null, flags: c.flagsView(), band: null };
+    const y = divided(c.flux, n, base);
+    for (let i = 0; i < n; i++) y[i] -= 1;
+    return { n, x: c.view('t'), y, err: divided(c.fluxErr, n, base), flags: c.flagsView(), band: null };
   }
   const s = store.primary(id, id === 'target' ? keys.target : keys.check, keys.filter);
   if (!s || !s.n) return null;
@@ -160,6 +206,35 @@ export function yExtent(d: FacetData, a: number, b: number): [number, number] | 
     }
   }
   return Number.isFinite(lo) ? [lo, hi] : null;
+}
+
+/**
+ * A wall cell's y range (design review): the values neither saturated, suspect nor on a
+ * recorder-flagged frame, trimmed to their 0.5–99.5 % quantiles (from 50 points). Points
+ * outside are drawn as chevrons on the edge they passed. Null: nothing to range on.
+ */
+export function robustExtent(d: FacetData, a: number, b: number): [number, number] | null {
+  const [i0, i1] = visibleRange(d.x, d.n, a, b);
+  const vals: number[] = [];
+  for (let i = i0; i <= i1; i++) {
+    const v = d.y[i];
+    if (!Number.isFinite(v)) continue;
+    if (d.flags && d.flags[i] & (FLAG_SATURATED | FLAG_SUSPECT | FLAG_RECORDER)) continue;
+    vals.push(v);
+  }
+  if (!vals.length) return null;
+  vals.sort((p, q) => p - q);
+  const at = (q: number) => vals[Math.min(vals.length - 1, Math.max(0, Math.round(q * (vals.length - 1))))];
+  let [lo, hi] = vals.length >= 50 ? [at(0.005), at(0.995)] : [vals[0], vals[vals.length - 1]];
+  if (d.band) {
+    for (let i = i0; i <= i1; i++) {
+      const bh = d.band.hi[i];
+      const bl = d.band.lo[i];
+      if (Number.isFinite(bh) && bh > hi && bh - hi < 2 * (hi - lo + 1e-3)) hi = bh;
+      if (Number.isFinite(bl) && bl < lo && lo - bl < 2 * (hi - lo + 1e-3)) lo = bl;
+    }
+  }
+  return [lo, hi];
 }
 
 /** The check star's scatter: the trailing band's sigma at its newest valid row (BRAND 10: in the readout). */

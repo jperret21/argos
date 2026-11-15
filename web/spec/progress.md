@@ -2315,3 +2315,343 @@ Screenshots: the scenes the fixes changed were re-captured into
 - **Attention baselines** (section 5): carried within one server session only; a Review of
   a past run shows the items as raised, with `values.baseline_origin`.
 - The open owner decisions of section 5 and the replay marks.
+
+## Wave 7: Review (2026-11-15)
+
+Scope (README section 7, row W7; waves.md §5 W7; PROPOSAL §6 W7 rows; 07 and 08): the
+Review section: R0 sessions landing (A67 list, recent items, Open folder, Import CSV
+(A70), Open FITS, the live run while a sequence runs), R1 a session, an imported CSV or
+the live run (plot wall with one linked time axis, health strip, cell menu, expand pane;
+Selected point, Ensemble, Session and AAVSO export rail cards; drawer Frames, Ensemble
+and Log tabs), R2 the frame inspector (previous / next, FITS header, measure star,
+Identify field, catalogue layers with Settings › Catalogues inside), the Re-run dialog
+(M50), the Export AAVSO and Export CSV dialogs, the job strip; NavRail Review (F4),
+Mod+Shift+O to R0, Mod+O into R2 while in Review; the palette's Review entries. Server
+A67-A79 on the job machinery (A80). Built by four roles (sessions backend A67-A75,
+exports and re-run backend A76-A79 with the Qt fixes S60-S63, plot wall UI, inspector /
+dialogs UI) and integrated here (`lib/review/ReviewScreen.svelte` hosts R0 / R1 / R2, the
+dialogs and the job strip; `ArgosApp` holds the stores). Screenshots:
+`web/screenshots/2026-11-15_wave7-review/` (44 shots: 26 scenes in Observatory 1 440 x
+900, 6 main scenes in Charcoal and Night Red 1 440 x 900 and Observatory 1 280 x 800, with
+a manifest).
+
+**Status: done 2026-11-15 (integrated, reviewed, fixed); exit criterion (a) and (b)
+checked through the UI on clones of the owner's three sessions (section 2; the
+independent checks in `spec/wave7-independent-checks.md`); the design, technical and
+science reviews' findings fixed or answered (section 7); six owner decisions and two Qt
+defects open (section 5); nothing committed (release/0.5.0 holds S60-S65 uncommitted).**
+
+Verification (2026-11-15, server on port 8773 with temporary `HOME`, `TMPDIR`,
+`--config-dir` and `--log-dir`; the sessions folder holds APFS clones of
+`20260829T050148Z_XX_Cyg`, `20260907T040723Z_XX_Cyg` and `20260925T200453Z_RR_Lyr`;
+the observer code replaced by a fake one (XYZ); the Settings site copied from the owner's
+configuration and never printed; vite on 5173, one headless Chrome; the live run is a
+`--simulator --sim-replay` run on 14 clones of RR Lyr lights 1-14 with the owner's
+saved RR Lyr target set copied; Gaia DR3, SIMBAD and NASA unreachable, VSX and VSP from
+a clone of the cache; every run, re-run and replay folder deleted after its numbers were
+read):
+
+- Python, whole suite (temporary HOME and TMPDIR, `QT_QPA_PLATFORM=offscreen`):
+  **1 613 passed, 75 skipped** (1 537 / 73 at the base `04ae0cb`). ruff and black clean on
+  the server files touched here.
+- `npm run check` 0 errors, 0 warnings (772 files, `src/lab` included); `npm test` **1 090
+  passed** (89 files; 1 001 at the base); `npm run build` OK (JS 1 445 kB, 470 kB gzip);
+  `src/lib` imports nothing from `src/lab`.
+- Screenshots: 44, every scene read (2 x 2 contact sheets and originals for the scenes
+  fixed); `npm run audit:night-red`: 6 of 6 Night Red originals pass (rule A 0 px, rule
+  B 0 px); `npm run audit:brass`: 0-770 accent px per screen outside dialogs, about
+  2 200 in a dialog (its primary button), the rest is the target's own colour on the plots.
+- No page error in any capture; Chrome logs the expected `404` of `GET
+  /api/files/solution` for a frame never solved and the `409 file_exists` behind
+  "Replace?".
+
+### 1. Rows closed by the wave
+
+| Row | Web | Status |
+|---|---|---|
+| R0, M94, M103 | `review/landing/SessionsLanding.svelte` + `LandingStore`: the list (A67), Recent, Open folder / Import CSV / Open FITS through the FilePicker, the live run row; a failed open stays on R0 with the server's words; F4, Mod+Shift+O (`review.sessions`, global), Mod+O opens R0's FITS picker while in Review | Done |
+| R1, M80-M92, M96, M97 | `review/SessionReview.svelte` + `PlotWall`, `HealthStrip`, `ConditionsCell`, the four rail cards, the drawer (Frames: `frames/FramesTable` on `VirtualTable`; Ensemble; Log with the L key); a session opens through its `session_open` job (A68) then A69; the toolbar's U, M, F, + / −, ← / →, Enter, D, P bound in scope `analyze.r1` | Done |
+| R2, M100-M102 | `review/inspector/FrameInspector.svelte` + `InspectorStore` (A71-A75): from a Frames row, a point's Open frame or Open FITS; PageUp / PageDown through the session's lights, Alt+← back to R1; keys in scope `analyze.r2` (fill, levels, statistics and labels stay `planned`: R2 has no handler) | Done |
+| M8 (re-run), M50, D2 | Re-run dialog (A76 plan, then the job) from R1's toolbar and the palette ("Re-run photometry…", found by "re-run subs"); the job strip with Cancel; the result's "Open the new run"; a warning in the dialog when the session's site check said mismatch | Done |
+| M92, A77-A79 | Export AAVSO (preview, refusals, one filter, Replace?) and Export CSV from the toolbar, the AAVSO card and the palette; a download starts by itself; a toast names the file | Done |
+| M93, M95, M98, M99 | Floating windows dropped (D27); PhotometryWindow dissolved (D8); Settings › Photometry; Observe drawer | Done (as decided) |
+| D3 live run | `ArgosApp.openReviewLive()`: R1 on its own curve store fed by the live stream, the target set's catalogue magnitudes, Preview chip, read-only | Done (replay) |
+
+### 2. Exit criterion and its evidence
+
+Evidence files (scratch, kept small): `w7/integration/evidence/` (`r1_vs_a69.json`,
+`ui_exports*.json`, `ui_exports_check*.json`, `rerun_check_rrlyr.json`,
+`siril_photometry_rerun_*.json`, `ui_rerun_*.json`, `r2_*.json`, `live_observatory.json`)
+and the roles' `w7/backend-exports/evidence/` and `w7/backend-sessions/`.
+
+**(a) Correctness against references that do not depend on Qt.**
+
+- **R1 shows what A69 serves.** The Selected point card (each cell's value at that time)
+  read at 7 points per session (first, second, third, a third, half, last two) against
+  A69: JD to the 5 decimals shown, magnitude and error to 0.001, airmass to 0.001, all
+  equal on the three sessions (21 of 21); the airmass is the FITS header's on RR Lyr
+  (A68 `airmass_source: header`, e.g. 1.033 with "CSV 4.088" beside it) and the CSV's on
+  both XX Cyg runs. The live run: the UI's 4th point (7.357 ± 0.005) is A69 live's
+  (7.3573, 0.0051).
+- **Times** (the sessions role and the exports role, astropy from DATE-OBS + EXPTIME/2):
+  `jd_utc` at mid-exposure to 1 ms on the three sessions, BJD_TDB to 1 ms for the site
+  ARGOS used. The re-run started from the dialog here: `jd_utc` and `bjd_tdb` minus
+  astropy ≤ 0.00004 s on 195 points.
+- **Airmass.** RR Lyr 2026-09-25: the CSV airmass (and so the AAVSO AMASS) is 1.514-4.088
+  where the truth is 1.033-1.364 (the Settings site was not the run's; the header AIRMASS
+  agrees with astropy at the mount's site to ≤ 0.0004). **New:** the owner's current
+  Settings site is still not that run's site, so a re-run started from the dialog writes
+  airmass 1.518-4.112 (Pickering at the Settings site to 0.0006; up to 3.08 from the
+  header): same cause, same open decision (section 5); the dialog now says so before
+  Start. XX Cyg: the CSV airmass is the mount's (≤ 0.0004), 2.1° from the Settings site.
+- **AAVSO files written through the UI** (`check_ui_exports.py`, the exports role's
+  checker written from the Extended File Format field list; the aavso.org page answered
+  403, so the rules are the published ones as known offline): **0 errors** on 4 files
+  (RR Lyr 195 rows, XX Cyg 09-07 24, XX Cyg 08-29 22, and an RR Lyr copy with a check
+  star 195); warnings: ENSEMBLE without a check star (the owner's runs have none), CHART
+  na (targets.json written before chart recording). Fields: `#TYPE=EXTENDED`,
+  `#OBSCODE`, `#SOFTWARE=Argos`, `#DELIM=,`, `#DATE=JD`, `#OBSTYPE=CCD`, JD at
+  mid-exposure, FILT TG, TRANS NO, MTYPE STD, CNAME ENSEMBLE, GROUP na, no JD 0. RR Lyr's
+  AMASS and its 2 blank-sky rows (_00053, _00176) are wrong: owner decisions (section 5).
+- **Check star** (the RR Lyr copy with comparison 000-BCG-523 relabelled check: its
+  leave-one-out curve gives KMAG): mean 7.0216 (median 7.0246) against VSP V 7.015,
+  offset +0.007 ± 0.004 (median +0.010); robust scatter 0.0255 against a median error
+  0.0208 (χ² ≈ 1.5). The exports role's re-run with it as a true check: +0.017 ± 0.002,
+  the colour term predicting +0.009; XX Cyg 09-07 (000-BJV-169): −0.061 ± 0.017, the
+  tracker defect of section 5.
+- **Magnitudes against the Siril reductions** (the re-run started from the dialog, the
+  session's 1 target + 6 comparisons, 195 of 195 matched by time, worst 0.043 s): against
+  `RR_Lyr_green_argos_2comps` median offset −0.0112, robust scatter 0.0173 (std 0.0235)
+  for a median combined error 0.0283 (χ² 0.67: both measure the same photons), drift
+  −0.002; against `RR_Lyr_argos_2comps` −0.0187 / 0.0304; against `RR_Lyr_apass_5comps`
+  −0.0497 / 0.032, drift −0.021. The −0.011 is the comparison set (6 against the
+  reference's 2: −0.0097 between the exports role's 6- and 2-comparison re-runs, the colour
+  term predicting +0.007 of it, the rest the four extra comparisons' catalogue zero
+  points); the other two offsets add the channel and the comparison set; the APASS drift
+  is colour and differential extinction over airmass 1.03-1.36. The re-run minus the live
+  CSV: −0.0001 (robust 0.0012) apart from the two blank-sky frames, which the re-run
+  re-solved (S43). The template fit (`rrlyrae_template_fit.json`) was not compared (the
+  template library is offline).
+
+**(b) Non-regression where (a) found nothing wrong: byte identity with the fixed Qt.**
+
+- AAVSO through the UI = Qt's Photometry window Export AAVSO after Analyze's Open curve
+  CSV on the target CSV (obscode and band as Settings): RR Lyr, XX Cyg 09-07, XX Cyg
+  08-29 identical (on 08-29 against `target_XX_Cyg_000-BCK-301.csv`, the file the session
+  reader keeps; its alias `target_XX_Cyg_XX_Cyg.csv` has another σ_sys, 0.1145 against
+  0.1121, so Qt opening that one writes other MERR values). The copy with a check star =
+  Qt's Export measurements → Open → Export AAVSO (KNAME / KMAG filled), identical.
+  RR Lyr's identity covers the AMASS and blank-sky rows that (a) found wrong.
+- CSV through the UI (every curve of the filter) = `load_session_curves` +
+  `write_curves_csv`: 4 of 4 identical (1 285, 214, 115 and 1 285 rows).
+- Re-run through the dialog (195 frames, 15-17 s) = Qt's `PhotometryBatchWorker` on the
+  same frames, reference solve and base gain: 7 of 7 CSVs and `targets.json` identical
+  (ASTAP solved for real on both sides, 2 frames re-solved by S43 on both). It wrote
+  `photometry_rerun_<UTC>/` inside the session clone; the strip showed "Re-run · 57 / 195
+  frames · ETA … · Cancel"; a second run cancelled from the strip after 25 frames ended
+  `cancelled` with no curve (its per-frame notes kept, diagnostics being on, see section 3).
+- The exports role's level (b) on the other sources (imported CSV, target-only CSV, the
+  XX Cyg re-run with a check) and the sessions role's A67-A75 smoke stand as reported.
+
+**R0, R1, R2 through the UI** on the three sessions: opened from R0 (RR Lyr in about 1 s
+with its 195 header reads), the wall, cards and both drawer tabs; R2 from a Frames
+double-click on light 10, PageDown / PageUp (10 → 11 → 10 of 195), the FITS header (64
+cards), Identify field (ASTAP about 0.1 s: RA 19h 25m 42.2s, Dec +42° 36′ 43″, 3.67″/px),
+the catalogue layers (VSX 127, VSP 55 detected, 7 selected; Gaia, SIMBAD and NASA said
+unreachable), RR Lyr measured (FWHM 3.46 px, 12.71″, SNR 792), Alt+← back to R1.
+
+### 3. Fixed during the integration (found in the running UI)
+
+- **A cancelled re-run said "nothing saved" and showed the last frame's name** while its
+  per-frame notes stay when diagnostics are on (`_discard` keeps the flight recorder):
+  the job's last message and the log now say "Cancelled after n/N frame(s): no curve
+  saved; the per-frame notes are kept in <folder>/" (`argos/server/rerun.py`,
+  `protocol.md`; tests `test_rerun_cancel_writes_nothing` extended and
+  `test_rerun_cancel_keeps_only_the_flight_recorder_and_says_so`, both failing before);
+  the dialog's line says "a cancelled run saves no curve (only its per-frame notes)".
+- **The job strip did not fit R1's toolbar** (Cancel and Dismiss clipped at 1 440 px): the
+  strip is its own size container (the running stage goes below 440 px, the ETA below
+  360 px, the title shortens last), takes the room of the zoom name and the spacer, the
+  titles are short (Re-run, Export, Opening), "Open the new run" is an icon with its
+  tooltip, an export's result names the file only.
+- A `session_open` outcome hid R1's identity after every open: the strip shows it only
+  while it runs.
+- The palette could not run R1's keys (scope `analyze.r1` under `analyze`): in its section
+  a key is checked against the active scopes; the palette gained Re-run photometry…,
+  Export AAVSO… and Export CSV… with their reasons.
+- The re-run plan's S63 counts (`outside_lights`, `duplicates`) were dropped by the client:
+  typed, and the dialog says "390 outside lights/" on RR Lyr.
+- The Re-run dialog now warns when the session's site check said mismatch (above).
+- The live run as a source carries the target set (the Ensemble's catalogue magnitudes).
+- Keymap: the Review keys are live; `drawer.toggle.other` is R1's only (Plan has no
+  drawer), `rail.toggle.other` R1's and R2's; R0's Enter is the table's (`local`).
+
+### 4. PROPOSAL section 6, W7 promotions
+
+| Lab | Promoted to | Status |
+|---|---|---|
+| `charts/charts/PlotWall.svelte` (health strip, cell menu) | `review/PlotWall.svelte`, `review/HealthStrip.svelte`, `review/ConditionsCell.svelte` | Done |
+| `core/export.ts` | `charts/export.ts` (copy TSV, PNG at the device scale) | Done; the Tauri save route is W8 |
+| `research/table/*` for Frames | `review/frames/FramesTable.svelte` on `components/VirtualTable.svelte` | Done |
+
+### 5. Open: owner decisions, Qt defects, guards
+
+Reported by the roles, not implemented (they change science results or file formats):
+
+- **OWNER DECISION, AMASS of a run whose Settings site was wrong** (RR Lyr 2026-09-25):
+  (a) use the header AIRMASS when the session's site check says mismatch, (b) write na,
+  (c) keep the wrong values with the warning (now). Recommended (a), with the matching
+  Qt fix. **Extended here:** a re-run uses the Settings site too, so with the owner's
+  current Settings its airmass is wrong for that run; the dialog warns.
+- **OWNER DECISION, the two blank-sky target points** (_00053, _00176, SNR 1.5 and 1.9):
+  (a) leave low_snr / zp_outlier target points out of the AAVSO file with a note,
+  (b) warn only (now), (c) a per-point opt-out. Recommended (a).
+- **OWNER DECISION / QT DEFECT, the tracker under-rotates on an alt-az run** (XX Cyg
+  2026-09-07: −15.37° tracked against −16.49° solved; outer apertures 5.7-8.5 green px off
+  by the last frame, unflagged; the check star 0.061 mag low). Recommended: centroid every
+  measured star each frame and drop a comparison off by more than 1 px, plus a re-solve
+  past about 2° of rotation.
+- **QT DEFECT (with the tracker): the batch worker anchors with the Camera's e-/ADU**, not
+  the frame's (S41 residue); fix given in the exports role's report.
+- **OWNER DECISION (minor), `#OBSTYPE=CCD` for a CMOS one-shot-colour camera.**
+  (`#SOFTWARE=Argos` without a version is fixed: S64, section 7.)
+- **GUARD** (exports role, feature checks): `exports.py` treats the core as having S60 when
+  `AavsoExportSummary` has `undated_excluded`, else drops undated points itself;
+  `MIN_AAVSO_JD` from the core when present, else 2 400 000. No guard from the
+  integration.
+- **Qt fixes S60-S65** sit uncommitted in `release/0.5.0` (S60 undated points, S61 Export
+  measurements refuses two filters, S62 the batch keeps the target's object, S63 a
+  session's frames are its lights/ only, S64 the AAVSO `#SOFTWARE` line names the
+  version, S65 the Frame Viewer measures a [0, 1] float frame in counts).
+- The science review's further findings (section 7) add three owner decisions: the S56
+  old-file rule in the export, the unweighted ensemble zero point, the noise model.
+
+### 6. Known gaps
+
+- "Open the new run" opens the re-run's target CSV as an import: a re-run folder has no
+  `session.json`, so R1 shows that one curve and an AAVSO export from it has no KNAME /
+  KMAG. A Source for a re-run folder (server) would open all its curves.
+- ~~RR Lyr's two blank-sky points stretch the magnitude range of every cell~~ (fixed,
+  section 7: robust range, edge chevrons).
+- R0 counts curve files: XX Cyg 2026-08-29 reads "2 T" (the alias target file), R1 one
+  target (the reader keeps one per star).
+- A session open's progress shows only as R0's row spinner (the strip lives in R1).
+- ~~R2: the next frame is not identified until S again; catalogue failures show the
+  server's raw exception text~~ (fixed, section 7).
+- The live run in R1 has no vetting report (the live leave-one-out is Observe's Ensemble).
+- Not checked live: Gaia, SIMBAD, NASA (unreachable); the RR Lyr template fit; the
+  desktop save dialog (W8).
+
+### 7. Reviews and fixes (2026-11-15)
+
+Three reviews ran on the integrated wave (design: 3 high, 10 medium, 7 low; technical:
+5 medium, 6 low; science: 3 high, 1 medium, 3 low). The fixer applied every high and
+medium finding that does not change a science result or a file format, the cheap lows,
+and fixed the two Qt defects that are safe (S64, S65); the rest is section 5.
+
+Verification (2026-11-15, server on 8778 and vite on 5178 with temporary `HOME`,
+`TMPDIR`, config and log folders; APFS clones of the three sessions; a fake observer code
+and a fake site; the live run a `--simulator --sim-replay` run of 14 RR Lyr light clones
+with the session's target set; every run, re-run and replay folder deleted):
+
+- Python, main tree: **1 625 passed, 75 skipped** (1 613 / 75 before the fixes; 12 new
+  tests). release/0.5.0: **688 passed, 46 skipped** (685 / 46; S64 and S65 tests fail on
+  the code before). ruff and black clean on `argos` and `tests` in both trees (the
+  release tree's `legacy/`, `scripts/`, `tools/` findings are older and untouched).
+- `npm run check` 0 / 0 (774 files); `npm test` **1 096 passed** (1 090; 6 new); `npm run
+  build` OK (JS 1 462 kB, 475 kB gzip).
+- Screenshots: the 44 of `2026-11-15_wave7-review` re-captured (every scene changed),
+  captions updated, gallery rebuilt; `audit:night-red` 6 of 6 pass (rule A 0 px, rule
+  B 0 px); `audit:brass` 44 of 44 pass (accent 0-785 px outside dialogs; R2's strip adds
+  the target's own colour, about 3 100 px).
+
+**Science** (`spec/wave7-independent-checks.md`, section 9):
+
+- The release notes' S56 old-file rule is applied in Review: A69 flag `few_anchors`
+  (fewer than 3 comparison or check records at SNR 10, unsaturated), readiness
+  `unverified_lock`, the AAVSO preview's `unverified_lock` warning. On the owner's
+  files: all 22 frames of XX Cyg 2026-08-29, RR Lyr frames 52 and 175 (the notes' own
+  counts, asserted by a test). Display and warnings only: the file is unchanged.
+- The AAVSO preview carries `warnings` (AMASS at a wrong site, recorder-flagged rows,
+  unverified-lock rows) shown with the warning glyph, and `flagged_points` naming each
+  row (time, value); the rail card lists AMASS and the flagged rows.
+- **QT FIX S64**: the AAVSO `#SOFTWARE` line names the version (`argos.SOFTWARE_ID`) in
+  the core writer; the server and Qt stay byte-identical in each tree.
+- **QT FIX S65**: the Frame Viewer reads a float frame in [0, 1] in counts; A73 does the
+  same (`scale: "converted"`); R2 labels `snr` "Peak/σ" (it is not the curves' SNR).
+
+**Technical**:
+
+- A68: points link to their frame by bisection (same answers as the linear `min()`,
+  tested on 2 000 random times with ties; 33 s → milliseconds on 6 000 frames); the
+  cancel flag is honoured while the curves are linked; the `session_open` job's result is
+  a short summary (the record is read with `GET /api/review/session`).
+- `read_fits_2d` picks the image HDU from the headers and checks the size before reading
+  pixels; the re-run's reference frame and every measured frame too.
+- A74: a truncated file is `invalid_fits`, not `internal_error`.
+- A76: the frame scan is kept while no FITS below changes (one scan for the plan and the
+  start); a file as `session` and a non-FITS `reference_frame` are `400`; the output
+  folder goes inside the session even when the frames are elsewhere; a cancel during the
+  reference solve says so.
+- A78 / A79: `409 protected_path` for the export's own sources and a session's data
+  folders and records; the file is written beside and renamed.
+- Client: a job awaited across a server restart settles as lost (404 or the reconnect's
+  snapshot) instead of polling for ever; the re-run plan, start and the AAVSO preview wait
+  60 s.
+
+**Design**:
+
+- Wall cells: Expand and the menu never cut (the numbers give way; a status dot in a
+  narrow cell; no "n 195" prefix); robust y range on good points (0.5-99.5 %), recorder-
+  flagged frames hollow with half-ink error bars, off-range points as open chevrons; the
+  "newest" ring on live sources only; Conditions beside the target, titled by its metric
+  picker ("HFD (px) ⌄"), hollow diamonds, the median and 1.5 × lines labelled; the
+  health strip's HFD episodes hatched, lanes named at the 10 px micro-label size.
+- Rail: Selected point compact (comparisons folded), the AAVSO export card second (in
+  the first screen at 1 440 x 900), Session card summary as labelled rows with units;
+  Ensemble tab without the duplicate AUID and "From" columns, σ at 3 decimals.
+- R0: Issues agree with R1 (site check on the first light's header, recorder counts);
+  Quality shows the vetting verdict ("6/6 stable", "3/8", with a dot).
+- R1 toolbar: the job strip takes the spacer's room beside the identity and badge (the
+  job name never cut; Re-run and Export CSV keep only their icons meanwhile); no toast
+  for a job finished while in Review; Re-run drops its label at 1 280 px before the
+  identity is cut.
+- Frames tab: a leading flag column (sortable), Comps, a Flagged quick filter.
+- R2: the band rule (the session strip under the frame: the target's curve, this frame
+  marked, a click opens a frame; a summary row under 120 px), the rail at 25 % at most so
+  the image keeps 75 % of the width; the HUD forgets the previous frame's readout; the
+  next frame is identified automatically after S; catalogue failures in one line each;
+  file names cut in the middle; the counter on one line; coordinates grouped.
+- Dialogs: path fields show the file name; the re-run parameters as a key / value grid;
+  plurals spelled out in the W7 server strings.
+
+**Skipped, with the reason**:
+
+- Design: the initial focus on Cancel while a science warning stands (the design review
+  itself defers it to the AMASS decision); the done strip folding into the Log after
+  10 s (the strip no longer hides anything); the cell tooltip's "2 off scale" count
+  (the chevrons show them).
+- Technical: discovery inside the re-run job (the cache and the 60 s timeout remove the
+  failure; a cold 6 000-frame folder still takes about 23 s to plan).
+- Science: everything that changes a written value (section 5).
+
+**GUARD**: none new. The exports role's two stand (S60 by `AavsoExportSummary.
+undated_excluded`, `MIN_AAVSO_JD` from the core when present). S64 needs none (the
+server passes no `software=`).
+
+### 8. What W8 inherits
+
+- The owner decisions of section 5: AMASS of a wrong-site run (recommended: the header
+  AIRMASS on a site mismatch, Qt first), the flagged rows in the AAVSO file (recommended:
+  leave `low_snr` / `zp_outlier` rows out with a note; the S56 rule is conservative, so
+  confirm it separately), the tracker (centroid each measured star, a re-solve past 2°),
+  the ensemble weighting (inverse-variance with clipping on normalised residuals), the
+  noise model (green-plane gain, black level), `#OBSTYPE`. The QT DEFECT of the batch
+  worker's e-/ADU goes with the tracker.
+- Commit release/0.5.0's S60-S65 and merge it: `#SOFTWARE` then names the version in
+  both writers; the S60 guard then reads the core.
+- Gaps: a Source for a re-run folder ("Open the new run" opens one CSV); R0 counts curve
+  files (the alias target of XX Cyg 2026-08-29); a session open's progress only in R0's
+  row; the live run has no vetting report; the desktop save route.
+- Not checked live: Gaia DR3, SIMBAD, NASA (unreachable here); the RR Lyr template fit
+  (no reference); `OBSTYPE=CMOS` against the live AAVSO list (aavso.org answered 403).

@@ -1717,5 +1717,55 @@
     "metaphor": "A callout: a card 9.75-20.25 x 3.75-12.75 (radius 1.5, its lower-left corner square) with two value rows, and a 45-degree leader from that corner to a bright star (r=2.25) at (4.5, 18). Redrawn from the lab's sheet with a star, which was a near-twin of log and metadata at 16 px.",
     "display": "icon",
     "note": "Web UI only (wave 4)."
+  },
+  {
+    "id": "frame-prev",
+    "labels": [
+      "Previous frame"
+    ],
+    "sources": [
+      "web/spec/07-review-analysis.md §2.2 (proposed)",
+      "web/spec/README.md §5"
+    ],
+    "group": "B",
+    "concept": "Step to the previous light frame of the session in the Review frame inspector (R2).",
+    "metaphor": "The sensor frame as a portrait rounded rectangle (9.75-20.25 x 5.25-18.75, radius 2.25) holding one standard star (r=1.5) at its centre, with an open chevron (arms 3.75, 90 degrees) pointing left beside it, 1.5 clear of the frame: one frame back. The jog chevrons stay reserved for mount directions.",
+    "display": "icon",
+    "shortcut": "PageUp",
+    "shortcut_origin": "proposed",
+    "note": "Web UI only (wave 7)."
+  },
+  {
+    "id": "frame-next",
+    "labels": [
+      "Next frame"
+    ],
+    "sources": [
+      "web/spec/07-review-analysis.md §2.2 (proposed)",
+      "web/spec/README.md §5"
+    ],
+    "group": "B",
+    "concept": "Step to the next light frame of the session in the Review frame inspector (R2).",
+    "metaphor": "The mirror of frame-prev: the sensor frame (3.75-14.25 x 5.25-18.75, radius 2.25) with its star, and the open chevron pointing right beside it, 1.5 clear of the frame.",
+    "display": "icon",
+    "shortcut": "PageDown",
+    "shortcut_origin": "proposed",
+    "note": "Web UI only (wave 7)."
+  },
+  {
+    "id": "expand-pane",
+    "labels": [
+      "Expand",
+      "Restore the wall"
+    ],
+    "sources": [
+      "web/spec/07-review-analysis.md §2.2 (proposed expand-plot)",
+      "web/spec/README.md §5"
+    ],
+    "group": "B",
+    "concept": "Expand one pane (a plot cell of the Review wall) to fill its region, and restore it; drawn toggled while expanded.",
+    "metaphor": "The region as a rounded rectangle (2.25-21.75 x 3.75-20.25, radius 2.25) holding a small pane at its lower left (5.25-11.25 x 12.75-17.25, radius 0.75), and a 45-degree arrow from beside the pane to the region's upper right corner (open head, arms 3.75): this pane grows to the whole region. zoom-fill keeps fitting an image, panels the rail.",
+    "display": "icon",
+    "note": "Web UI only (wave 7); renamed from expand-plot (README §5) so the drawer can use it too."
   }
 ]

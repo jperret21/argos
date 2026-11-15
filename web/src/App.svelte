@@ -12,7 +12,8 @@
     screen with Retry. It never comes back once the UI started: a later
     link loss shows in the status bar and the Link card.
   - Sections: Connection (wave 1), Observe and Settings (wave 2), Plan (wave 6a)
-    are built; Review says what it will hold. Every section has the Log
+    and Review (wave 7: R0 sessions, R1 a session or the live run, R2 a frame;
+    lib/review/ReviewScreen.svelte) are built. Every section has the Log
     drawer (L).
   - The mount-motion interlock (wave 6a, D2): one InterlockDialog for every section; every
     mount control goes through app.interlock.
@@ -24,17 +25,17 @@
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { ArgosApp, provideApp, type Section } from './lib/app/state.svelte';
+  import { ArgosApp, provideApp } from './lib/app/state.svelte';
   import ConnectionScreen from './lib/connection/ConnectionScreen.svelte';
   import ImagingScreen from './lib/imaging/ImagingScreen.svelte';
   import PlanScreen from './lib/plan/PlanScreen.svelte';
+  import ReviewScreen from './lib/review/ReviewScreen.svelte';
   import InterlockDialog from './lib/run/InterlockDialog.svelte';
   import SettingsScreen from './lib/settings/SettingsScreen.svelte';
   import CommandPalette from './lib/shell/CommandPalette.svelte';
   import KeyHintBanner from './lib/shell/KeyHintBanner.svelte';
   import SupportBundle from './lib/shell/SupportBundle.svelte';
   import OpenFits from './lib/shell/OpenFits.svelte';
-  import EmptySection from './lib/shell/EmptySection.svelte';
   import LogDrawer from './lib/shell/LogDrawer.svelte';
   import NavRail, { type NavEntry } from './lib/shell/NavRail.svelte';
   import StartupScreen from './lib/shell/StartupScreen.svelte';
@@ -85,15 +86,6 @@
     },
   ];
 
-  type Placeholder = Exclude<Section, 'imaging' | 'connection' | 'configuration' | 'sequencer'>;
-  const PLACEHOLDERS: Record<Placeholder, { title: string; text: string; items: string[] }> = {
-    analyze: {
-      title: 'Review the session',
-      text: 'The differential light curve of the session, the frames behind every point, and the AAVSO export.',
-      items: ['Light curve with comparison and check stars', 'Frame inspection from any point', 'AAVSO extended-format export'],
-    },
-  };
-
   onMount(() => app.start());
 
   // The start-up screen fades out once (--duration-base), then leaves the DOM.
@@ -114,17 +106,12 @@
       <ConnectionScreen />
     {:else if app.section === 'sequencer'}
       <PlanScreen />
-    {:else if app.section === 'configuration'}
+    {:else if app.section === 'analyze'}
+      <ReviewScreen />
+    {:else}
       <div class="placeholder" style:grid-template-rows="minmax(0, 1fr) {app.logOpen ? '216px' : '0px'}">
         <SettingsScreen />
         {#if app.logOpen}<LogDrawer label="Settings drawer" />{/if}
-      </div>
-    {:else}
-      {@const p = PLACEHOLDERS[app.section]}
-      {@const nav = NAV.find((n) => n.id === app.section)}
-      <div class="placeholder" style:grid-template-rows="minmax(0, 1fr) {app.logOpen ? '216px' : '0px'}">
-        <EmptySection icon={nav?.icon ?? 'nav-imaging'} title={p.title} text={p.text} items={p.items} />
-        {#if app.logOpen}<LogDrawer label="{nav?.label ?? 'Section'} drawer" />{/if}
       </div>
     {/if}
   </main>

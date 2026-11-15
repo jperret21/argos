@@ -42,3 +42,13 @@ export function middleEllipsis(path: string, max: number): string {
   }
   return build(a, b);
 }
+
+/**
+ * A file name in at most `max` characters, cut in its middle: the start says what it is,
+ * the end (frame number, extension) tells two frames apart ("RR_Lyr_ir_light_e…_00010.fit").
+ */
+export function middleName(name: string, max: number, tail = 10): string {
+  if (name.length <= max) return name;
+  if (max <= tail + 2) return ELLIPSIS + name.slice(name.length - (max - 1));
+  return name.slice(0, max - tail - 1) + ELLIPSIS + name.slice(name.length - tail);
+}

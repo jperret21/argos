@@ -13,7 +13,7 @@
 import { DASH, fixed, mag, signed } from '../../format/number';
 import { clockUtc, julian } from '../../format/time';
 import { FLAG_SATURATED, FLAG_SUSPECT } from '../uplot/markers';
-import { baselineOf, type CurveKeys, type YMode } from './facets';
+import { baselineOf, magBaselineOf, type CurveKeys, type YMode } from './facets';
 import type { LiveCurveStore, StarCurve } from './store';
 
 export interface SeriesReadout {
@@ -43,6 +43,8 @@ export interface PointReadout {
   target: SeriesReadout | null;
   check: SeriesReadout | null;
   ensemble: SeriesReadout | null;
+  /** The comparison of `keys.comparison` (Review wall), as its facet draws it; null when none asked. */
+  comparison?: SeriesReadout | null;
   airmass: string | null;
 }
 
@@ -71,10 +73,12 @@ export function readoutAt(
 ): PointReadout | null {
   const tgt = store.primary('target', keys.target, keys.filter);
   const chk = store.primary('check', keys.check, keys.filter);
+  const cmp = keys.comparison !== undefined ? store.primary('comparison', keys.comparison, keys.filter) : null;
   const it = rowAt(tgt, t, tol);
   const ic = rowAt(chk, t, tol);
-  const anchor = it >= 0 ? tgt!.cols : ic >= 0 ? chk!.cols : null;
-  const ia = it >= 0 ? it : ic;
+  const ik = rowAt(cmp, t, tol);
+  const anchor = it >= 0 ? tgt!.cols : ic >= 0 ? chk!.cols : ik >= 0 ? cmp!.cols : null;
+  const ia = it >= 0 ? it : ic >= 0 ? ic : ik;
   if (!anchor) return null;
   const tt = anchor.t[ia];
   const jd = anchor.jd[ia];
@@ -114,7 +118,21 @@ export function readoutAt(
     const rms = Number.isFinite(c.zpRms[it]) ? ` · σ ${fixed(c.zpRms[it], 3)}` : '';
     ensemble = { value: `ZP ${fixed(c.zp[it], 3)}${rms}`, what: used, flags: [] };
   }
-  const am = it >= 0 ? tgt!.cols.airmass[it] : ic >= 0 ? chk!.cols.airmass[ic] : NaN;
+  let comparison: SeriesReadout | null = null;
+  if (ik >= 0) {
+    // As the comparison facet draws it (facets.ts): Δ from its own median, or Δ relative flux.
+    const s = cmp!;
+    const c = s.cols;
+    if (mode === 'mag') {
+      const d = c.mag[ik] - magBaselineOf(s);
+      comparison = { value: Number.isFinite(d) ? `${signed(d, 3)} ± ${fixed(c.err[ik], 3)}` : DASH, what: `Δ from own median · ${fixed(c.mag[ik], 3)}`, flags: flagWords(c.flags[ik]) };
+    } else {
+      const b = baselineOf(s);
+      const d = b > 0 ? c.flux[ik] / b - 1 : NaN;
+      comparison = { value: Number.isFinite(d) ? (Number.isFinite(c.fluxErr[ik]) ? `${signed(d, 4)} ± ${fixed(c.fluxErr[ik] / b, 4)}` : signed(d, 4)) : DASH, what: 'Δ rel. flux', flags: flagWords(c.flags[ik]) };
+    }
+  }
+  const am = it >= 0 ? tgt!.cols.airmass[it] : ic >= 0 ? chk!.cols.airmass[ic] : ik >= 0 ? cmp!.cols.airmass[ik] : NaN;
   return {
     t: tt,
     utc: clockUtc(tt),
@@ -126,6 +144,7 @@ export function readoutAt(
     target,
     check,
     ensemble,
+    ...(keys.comparison !== undefined ? { comparison } : {}),
     airmass: Number.isFinite(am) ? fixed(am, 3) : null,
   };
 }

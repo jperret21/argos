@@ -492,8 +492,13 @@ npm run capture:lab -- controls --out /tmp/lab --only buttons-night-red
 - Connection, Observe (Framing, Focus, Field, Run), Plan (wave 6a: plans, sequences, the
   interlock, the Run card), Watch (W), the attention system (server rules, status-bar chip
   and list, tones Off / Soft / Normal; Settings › Alerts), keep-awake during a run and the
-  end-of-night wrap-up (wave 6b) and Settings exist; Review is a placeholder (wave 7). What
-  is done and what is missing, row by row: `spec/progress.md`. The attention thresholds
+  end-of-night wrap-up (wave 6b), Review (wave 7: sessions, the live run, the plot wall,
+  the frame inspector, the AAVSO and CSV exports, the batch re-run) and Settings exist.
+  What is done and what is missing, row by row: `spec/progress.md`; the wave 7 checks
+  against independent references: `spec/wave7-independent-checks.md`. Review flags old
+  runs by the release notes' rules but writes AAVSO files as the fixed Qt does until the
+  owner decides (AMASS of a run with a wrong site, flagged rows: `spec/progress.md`
+  Wave 7 §5). The attention thresholds
   wait for the owner's marks in `spec/wave6b-attention-replay.md`.
 - Keep-awake was checked live on macOS only (`caffeinate`, `pmset -g assertions`); Linux
   (`systemd-inhibit`) and Windows (`SetThreadExecutionState`) are tested with fakes. A

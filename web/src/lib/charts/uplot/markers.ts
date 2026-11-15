@@ -29,11 +29,15 @@
 
 import uPlot from 'uplot';
 
-export type Shape = 'circle' | 'square' | 'triangle' | 'dot';
+export type Shape = 'circle' | 'square' | 'triangle' | 'dot' | 'diamond';
 
 /** Flag bits of a light-curve point (lightcurve/columns.ts). */
 export const FLAG_SUSPECT = 1;
 export const FLAG_SATURATED = 2;
+/** A frame the run's flight recorder marks as no detection or a zero point > 1 mag off (A69). */
+export const FLAG_RECORDER = 4;
+/** Drawn hollow: a CSV suspect point, or a recorder-flagged frame's point. */
+const HOLLOW = FLAG_SUSPECT | FLAG_RECORDER;
 
 type PathLike = Pick<Path2D, 'moveTo' | 'lineTo' | 'arc' | 'rect'>;
 
@@ -44,6 +48,13 @@ export function addShape(p: PathLike, shape: Shape, x: number, y: number, r: num
   } else if (shape === 'square') {
     const s = r * 0.886; // same area as the circle
     p.rect(x - s, y - s, 2 * s, 2 * s);
+  } else if (shape === 'diamond') {
+    const s = r * 1.253; // same area as the circle (half-diagonal r·√(π/2))
+    p.moveTo(x, y - s);
+    p.lineTo(x + s, y);
+    p.lineTo(x, y + s);
+    p.lineTo(x - s, y);
+    p.lineTo(x, y - s);
   } else {
     const s = r * 1.347; // same area, centroid on the point
     p.moveTo(x, y - s);
@@ -94,6 +105,10 @@ export interface MarkerOptions {
    * fixed-scale facet: the check's ±rung), so it is never silently cut.
    */
   carets?: () => boolean;
+  /** Every marker as an outline (a neutral series that is not a star: the Conditions cell). */
+  outline?: boolean;
+  /** The carets as open chevrons (a wall cell's robust range), not filled ones. */
+  openCarets?: () => boolean;
 }
 
 /** What one draw would add to each path, without a canvas (the logic the tests check). */
@@ -123,7 +138,7 @@ export function planMarkers(
     if (y == null || !Number.isFinite(y)) continue;
     const f = flags ? flags[i] : 0;
     if (f & FLAG_SATURATED) plan.cross.push(i);
-    else if (f & FLAG_SUSPECT) plan.hollow.push(i);
+    else if (f & HOLLOW) plan.hollow.push(i);
     else plan.solid.push(i);
     const e = errs ? errs[i] : NaN;
     if (e > 0 && 2 * e > minBar) plan.bars.push(i);
@@ -200,10 +215,15 @@ export function markers(o: MarkerOptions): uPlot.Plugin {
           // Bars (and bands, elsewhere) stop at the plot box; the glyphs and rings below do not:
           // a point at the edge keeps its whole marker (the plot's margin holds its centre).
           if (errs) {
+            // A recorder-flagged frame's bar (no detection: ±0.8 mag) at half the error ink, so
+            // it does not draw a full-height line through the curve (W7 design review).
             const bars = new Path2D();
+            const faint = new Path2D();
+            const fl = o.flags?.() ?? null;
             const caps = i1 - i0 < CAPS_BELOW;
             const cw = 2.5 * dpr;
             let any = false;
+            let anyFaint = false;
             for (let i = i0; i <= i1; i++) {
               const y = ys[i];
               const e = errs[i];
@@ -212,23 +232,30 @@ export function markers(o: MarkerOptions): uPlot.Plugin {
               const yb = yAt(y + e);
               if (Math.abs(yb - ya) < 2 * r + 2 * dpr) continue; // hidden by the marker anyway
               const x = Math.round(xAt(i)) + 0.5;
-              bars.moveTo(x, ya);
-              bars.lineTo(x, yb);
+              const path = fl && fl[i] & FLAG_RECORDER ? faint : bars;
+              path.moveTo(x, ya);
+              path.lineTo(x, yb);
               if (caps) {
-                bars.moveTo(x - cw, Math.round(ya) + 0.5);
-                bars.lineTo(x + cw, Math.round(ya) + 0.5);
-                bars.moveTo(x - cw, Math.round(yb) + 0.5);
-                bars.lineTo(x + cw, Math.round(yb) + 0.5);
+                path.moveTo(x - cw, Math.round(ya) + 0.5);
+                path.lineTo(x + cw, Math.round(ya) + 0.5);
+                path.moveTo(x - cw, Math.round(yb) + 0.5);
+                path.lineTo(x + cw, Math.round(yb) + 0.5);
               }
-              any = true;
+              if (path === faint) anyFaint = true;
+              else any = true;
             }
+            const alpha = o.errorAlpha?.() ?? 0.55;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = dpr;
             if (any) {
-              ctx.globalAlpha = o.errorAlpha?.() ?? 0.55;
-              ctx.strokeStyle = color;
-              ctx.lineWidth = dpr;
+              ctx.globalAlpha = alpha;
               ctx.stroke(bars);
-              ctx.globalAlpha = 1;
             }
+            if (anyFaint) {
+              ctx.globalAlpha = alpha / 2;
+              ctx.stroke(faint);
+            }
+            ctx.globalAlpha = 1;
           }
 
           ctx.restore();
@@ -272,14 +299,21 @@ export function markers(o: MarkerOptions): uPlot.Plugin {
               cross.moveTo(px - k, py + k);
               cross.lineTo(px + k, py - k);
               nCross++;
-            } else if (f & FLAG_SUSPECT) {
+            } else if (f & HOLLOW) {
               addShape(open, o.shape, px, py, r * 1.05);
+              nOpen++;
+            } else if (o.outline) {
+              addShape(open, o.shape, px, py, r);
               nOpen++;
             } else if (!dense || grid.mark(px, py)) addShape(solid, o.shape, px, py, r);
           }
           ctx.fillStyle = color;
           ctx.fill(solid);
-          if (nCaret) ctx.fill(carets);
+          if (nCaret && o.openCarets?.()) {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1.25 * dpr;
+            ctx.stroke(carets);
+          } else if (nCaret) ctx.fill(carets);
           ctx.strokeStyle = color;
           if (nOpen) {
             ctx.lineWidth = 1.25 * dpr;
@@ -320,5 +354,6 @@ export function markers(o: MarkerOptions): uPlot.Plugin {
 export function shapePath(shape: Shape): string {
   if (shape === 'circle' || shape === 'dot') return 'M15 10a5 5 0 1 1-10 0a5 5 0 1 1 10 0Z';
   if (shape === 'square') return 'M5.6 5.6h8.8v8.8H5.6Z';
+  if (shape === 'diamond') return 'M10 3.7L16.3 10L10 16.3L3.7 10Z';
   return 'M10 3.3l5.8 10.1H4.2Z';
 }

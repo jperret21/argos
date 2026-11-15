@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ELLIPSIS, middleEllipsis } from './path';
+import { ELLIPSIS, middleEllipsis, middleName } from './path';
 
 const BUNDLE = '/Users/observer/Desktop/argos-support-0.5.0-20261102T202437Z.zip';
 
@@ -33,5 +33,13 @@ describe('middleEllipsis', () => {
     for (let max = 0; max < BUNDLE.length + 2; max++) {
       expect(middleEllipsis(BUNDLE, max).length, String(max)).toBeLessThanOrEqual(Math.max(0, max));
     }
+  });
+});
+
+describe('middleName', () => {
+  it('keeps the start and the frame number of a long file name', () => {
+    expect(middleName('RR_Lyr_ir_light_e010000ms_g080_00010.fit', 32)).toBe(`RR_Lyr_ir_light_e0100${ELLIPSIS}_00010.fit`);
+    expect(middleName('RR_Lyr_ir_light_e010000ms_g080_00010.fit', 32)).toHaveLength(32);
+    expect(middleName('short.fit', 32)).toBe('short.fit');
   });
 });

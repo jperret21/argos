@@ -283,12 +283,15 @@ describe('ShortcutRegistry', () => {
     const rows = browser.sheet().flatMap((g) => g.rows.map((r) => r.id));
     expect(rows).toContain('log.toggle');
     expect(rows).toContain('help.shortcuts');
-    expect(rows).not.toContain('review.sessions'); // planned (Review, wave 7)
+    expect(rows).toContain('review.sessions'); // built in wave 7 (M103)
+    expect(rows).toContain('r2.frame-next'); // R2 (wave 7)
+    expect(rows).not.toContain('r2.view.levels'); // R2 has no task band: kept planned
     expect(rows).toContain('file.open-fits'); // built in wave 3
     expect(rows).not.toContain('nav.observe.desktop'); // desktop only
     const desktop = new ShortcutRegistry(KEYMAP, { mac: true, desktop: true });
     expect(desktop.sheet().flatMap((g) => g.rows.map((r) => r.id))).toContain('nav.observe.desktop');
-    expect(browser.keyFor('review.sessions')).toBeUndefined();
+    expect(browser.keyFor('review.sessions')).toBe('Mod+Shift+O');
+    expect(browser.keyFor('r2.view.levels')).toBeUndefined();
     expect(browser.keyFor('log.toggle')).toBe('L');
   });
 

@@ -40,6 +40,8 @@
     oncopy?: (tsv: string, rows: number) => void;
     /** Rows kept rendered above and below the view. */
     overscan?: number;
+    /** Rows drawn dimmed (a frame whose file is missing): still listed, still selectable. */
+    muted?: (row: T) => boolean;
   }
 
   let {
@@ -58,6 +60,7 @@
     onhover,
     oncopy,
     overscan = 8,
+    muted,
   }: Props = $props();
 
   const uid = `vt-${Math.random().toString(36).slice(2, 9)}`;
@@ -224,6 +227,7 @@
             class="tr"
             class:selected={key === selected}
             class:hl={key === highlight}
+            class:muted={muted?.(row) ?? false}
             role="row"
             aria-rowindex={n + 2}
             aria-selected={key === selected}
@@ -343,6 +347,9 @@
   .tr:hover,
   .tr.hl {
     background: var(--hover-bg);
+  }
+  .tr.muted {
+    color: var(--text-muted);
   }
   .tr.selected {
     background: var(--toggled-bg);

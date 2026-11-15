@@ -15,7 +15,7 @@
  * one.
  */
 
-import { FLAG_SATURATED, FLAG_SUSPECT } from '../uplot/markers';
+import { FLAG_RECORDER, FLAG_SATURATED, FLAG_SUSPECT } from '../uplot/markers';
 import { JD_UNIX_EPOCH } from '../uplot/axes';
 
 /** An `LcPoint` on the wire (null = Python None or NaN). */
@@ -30,6 +30,8 @@ export interface LcPoint {
   comps_used?: number | null;
   saturated?: boolean | null;
   suspect?: boolean | null;
+  /** Review only: the run's flight recorder flags this frame (no detection, zero point off). */
+  recorder_flag?: boolean | null;
   formal_mag_err?: number | null;
   sigma_syst?: number | null;
   relative_flux?: number | null;
@@ -270,7 +272,7 @@ export class CurveColumns {
     this.frameSeq[i] = num(p.frame_seq);
     this.zp[i] = num(p.zero_point);
     this.zpRms[i] = num(p.zp_rms);
-    this.flags[i] = (p.suspect ? FLAG_SUSPECT : 0) | (p.saturated ? FLAG_SATURATED : 0);
+    this.flags[i] = (p.suspect ? FLAG_SUSPECT : 0) | (p.saturated ? FLAG_SATURATED : 0) | (p.recorder_flag ? FLAG_RECORDER : 0);
     return { index: i, how };
   }
 

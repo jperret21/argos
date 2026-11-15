@@ -33,6 +33,8 @@ export const SCOPE_TITLES: Record<string, string> = {
 
 const OBSERVE = 'imaging';
 const R2 = 'analyze.r2';
+/** Viewer keys R2 does not bind (Observe only). */
+const R2_PLANNED = new Set(['view.fill', 'view.levels', 'view.statistics', 'field.labels']);
 
 /** Viewer tools shared by Observe and the Review frame inspector (R2). */
 const VIEWER: ShortcutDef[] = [
@@ -72,7 +74,7 @@ export const KEYMAP: readonly ShortcutDef[] = [
   { id: 'nav.settings.desktop', keys: ['Mod+5'], label: 'Settings', scope: 'global', desktopOnly: true },
   { id: 'nav.settings.mod', keys: ['Mod+,'], label: 'Settings', scope: 'global' },
   { id: 'file.open-fits', keys: ['Mod+O'], label: 'Open FITS image', scope: 'global' },
-  { id: 'review.sessions', keys: ['Mod+Shift+O'], label: 'Review sessions', scope: 'global', planned: true },
+  { id: 'review.sessions', keys: ['Mod+Shift+O'], label: 'Review sessions', scope: 'global' },
   { id: 'app.quit', keys: ['Mod+Q'], label: 'Quit ARGOS', scope: 'global', desktopOnly: true, planned: true },
   { id: 'help.shortcuts', keys: ['?'], label: 'Keyboard shortcuts', scope: 'global' },
   // Command palette (PROPOSAL 3.1, W2 end): every action with its key or its
@@ -90,15 +92,15 @@ export const KEYMAP: readonly ShortcutDef[] = [
 
   // -- Sections ----------------------------------------------------------------
   { id: 'drawer.toggle', keys: ['D'], label: 'Bottom drawer', scope: OBSERVE },
-  { id: 'drawer.toggle.other', keys: ['D'], label: 'Bottom drawer', scope: ['sequencer', 'analyze'], planned: true },
+  // Plan has no drawer of its own (the Log is L): D acts in Review R1 only.
+  { id: 'drawer.toggle.other', keys: ['D'], label: 'Bottom drawer', scope: 'analyze.r1' },
   { id: 'rail.toggle', keys: ['P'], label: 'Instrument rail', scope: OBSERVE },
-  { id: 'rail.toggle.other', keys: ['P'], label: 'Right rail', scope: ['sequencer', 'analyze.r1', R2], planned: true },
+  { id: 'rail.toggle.other', keys: ['P'], label: 'Right rail', scope: ['analyze.r1', R2] },
   {
     id: 'search.focus',
     keys: ['/'],
     label: 'Focus the search field',
     scope: 'analyze.r0',
-    planned: true,
   },
   { id: 'plan.search', keys: ['/'], label: 'Focus the source search', scope: 'sequencer' },
   { id: 'settings.filter', keys: ['/'], label: 'Filter the settings', scope: 'configuration' },
@@ -127,18 +129,21 @@ export const KEYMAP: readonly ShortcutDef[] = [
   },
 
   // -- Review ----------------------------------------------------------------------
-  ...VIEWER.map((d) => ({ ...d, id: `r2.${d.id}`, scope: R2, planned: true })),
-  { id: 'r1.zoom-in', keys: ['+'], label: 'Zoom the time axis in', scope: 'analyze.r1', planned: true },
-  { id: 'r1.zoom-out', keys: ['-'], label: 'Zoom the time axis out', scope: 'analyze.r1', planned: true },
-  { id: 'r1.fit', keys: ['F'], label: 'Fit all plots', scope: 'analyze.r1', planned: true },
-  { id: 'r1.error-bars', keys: ['U'], label: 'Error bars', scope: 'analyze.r1', planned: true },
-  { id: 'r1.flux', keys: ['M'], label: 'Magnitude / relative flux', scope: 'analyze.r1', planned: true },
-  { id: 'r1.point', keys: ['ArrowLeft', 'ArrowRight'], label: 'Previous / next point', scope: 'analyze.r1', planned: true },
-  { id: 'r1.open-frame', keys: ['Enter'], label: 'Open the frame of the selected point', scope: 'analyze.r1', planned: true },
-  { id: 'r0.open', keys: ['Enter'], label: 'Open the selected session', scope: 'analyze.r0', planned: true },
-  { id: 'r2.frame-prev', keys: ['PageUp'], label: 'Previous frame', scope: R2, planned: true },
-  { id: 'r2.frame-next', keys: ['PageDown'], label: 'Next frame', scope: R2, planned: true },
-  { id: 'r2.back', keys: ['Alt+ArrowLeft'], label: 'Back to the session', scope: R2, planned: true },
+  // R2 binds the viewer keys it has; fill, the task band, the statistics card and labels are
+  // Observe's only (R2 has no handler: kept planned so the "?" sheet lists live keys only).
+  ...VIEWER.map((d) => ({ ...d, id: `r2.${d.id}`, scope: R2, planned: R2_PLANNED.has(d.id) || undefined })),
+  { id: 'r1.zoom-in', keys: ['+'], label: 'Zoom the time axis in', scope: 'analyze.r1' },
+  { id: 'r1.zoom-out', keys: ['-'], label: 'Zoom the time axis out', scope: 'analyze.r1' },
+  { id: 'r1.fit', keys: ['F'], label: 'Fit all plots', scope: 'analyze.r1' },
+  { id: 'r1.error-bars', keys: ['U'], label: 'Error bars', scope: 'analyze.r1' },
+  { id: 'r1.flux', keys: ['M'], label: 'Magnitude / relative flux', scope: 'analyze.r1' },
+  { id: 'r1.point', keys: ['ArrowLeft', 'ArrowRight'], label: 'Previous / next point', scope: 'analyze.r1' },
+  { id: 'r1.open-frame', keys: ['Enter'], label: 'Open the frame of the selected point', scope: 'analyze.r1' },
+  // R0's Enter is the sessions table's own (Table onactivate): listed, handled where the focus is.
+  { id: 'r0.open', keys: ['Enter'], label: 'Open the selected session', scope: 'analyze.r0', local: true },
+  { id: 'r2.frame-prev', keys: ['PageUp'], label: 'Previous frame', scope: R2 },
+  { id: 'r2.frame-next', keys: ['PageDown'], label: 'Next frame', scope: R2 },
+  { id: 'r2.back', keys: ['Alt+ArrowLeft'], label: 'Back to the session', scope: R2 },
 
   // -- Plan --------------------------------------------------------------------------
   { id: 'plan.save', keys: ['Mod+S'], label: 'Save preset', scope: 'sequencer' },

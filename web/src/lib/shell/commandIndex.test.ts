@@ -86,7 +86,9 @@ describe('command palette index', () => {
     expect(idx.find((c) => c.id === 'set.site.latitude')).toMatchObject({ title: 'Observer & site › Latitude', hint: '+48.82770°' }); // ° against the number (BRAND 5)
     expect(idx.find((c) => c.id === 'set.alpaca.host')?.title).toBe('Connection › Seestar address');
     // Planned keys are not offered; Escape and the palette itself are not commands.
-    expect(idx.some((c) => c.id === 'km.review.sessions' || c.id === 'km.motion.abort' || c.id === 'km.palette.open')).toBe(false);
+    expect(idx.some((c) => c.id === 'km.r2.view.levels' || c.id === 'km.motion.abort' || c.id === 'km.palette.open')).toBe(false);
+    // W7: Review sessions (M103) is built and global.
+    expect(idx.find((c) => c.id === 'km.review.sessions')).toMatchObject({ title: 'Review sessions' });
     // W6b: Run mode and Watch are built and keep their keys.
     expect(idx.find((c) => c.id === 'km.observe.mode.run')).toMatchObject({ keys: 'Alt+4', icon: 'light-curve' });
     expect(idx.find((c) => c.id === 'km.observe.watch')).toMatchObject({ keys: 'W', icon: 'watch' });
@@ -114,6 +116,38 @@ describe('command palette index', () => {
     await ack.run();
     await busy.find((c) => c.id === 'attention.sound.soft')!.run();
     expect(calls).toEqual(['watch', 'ack-all', 'sound:soft']);
+  });
+
+  it('offers Re-run photometry (M8) and the exports with their reasons, and R1 keys in their sub-scope (W7)', async () => {
+    const calls: string[] = [];
+    const review = (source_: string | null, rerunReason: string | null, exportReason: string | null) => ({
+      source: source_,
+      rerunReason,
+      exportReason,
+      rerun: () => void calls.push('rerun'),
+      exportAavso: () => void calls.push('aavso'),
+      exportCsv: () => void calls.push('csv'),
+      sessions: () => void calls.push('sessions'),
+    });
+    const closed = buildIndex(source({ reviewCommands: () => review(null, 'open a session or the live run first (Review, F4)', 'open a session or the live run first (Review, F4)') }), none);
+    expect(closed.find((c) => c.id === 'review.rerun')).toMatchObject({ title: 'Re-run photometry…', disabled: 'open a session or the live run first (Review, F4)', hint: 'Review' });
+    const open = buildIndex(source({ reviewCommands: () => review('20260925T200453Z_RR_Lyr', null, null) }), none);
+    expect(open.find((c) => c.id === 'review.export-aavso')).toMatchObject({ disabled: null, hint: 'Review · 20260925T200453Z_RR_Lyr' });
+    await open.find((c) => c.id === 'review.rerun')!.run();
+    await open.find((c) => c.id === 'review.export-csv')!.run();
+    expect(calls).toEqual(['rerun', 'csv']);
+    // "re-run subs" (Qt's Photometry menu) finds it.
+    expect(rank('re-run subs', open)[0]?.cmd.id).toBe('review.rerun');
+    // In Review the active scopes decide: R1's keys are offered while R1 is shown.
+    const app = source({ section: 'analyze' });
+    app.registry.setScopes(['analyze', 'analyze.r1']);
+    const fit = vi.fn();
+    app.registry.handle('r1.fit', fit);
+    const idx = buildIndex(app, none);
+    const entry = idx.find((c) => c.id === 'km.r1.fit')!;
+    expect(entry.disabled).toBeNull();
+    await entry.run();
+    expect(fit).toHaveBeenCalledTimes(1);
   });
 
   it('opens Settings at a key, and runs an Observe key after opening Observe', async () => {

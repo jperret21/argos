@@ -40,15 +40,21 @@
     solved?: boolean;
     /** The field's WCS for the frame on screen (tracked), with the view: compass and scale bar. */
     sky?: { wcs: TanWcs; frame: { width: number; height: number }; turns: Turns; scale: number } | null;
+    /** A new value (R2: the file shown) forgets the last readout: no pixel of another frame. */
+    resetKey?: unknown;
   }
 
-  let { chips, cursor, mini, rect, stage, dragReadout = null, theme, solved = false, sky = null }: Props = $props();
+  let { chips, cursor, mini, rect, stage, dragReadout = null, theme, solved = false, sky = null, resetKey = null }: Props = $props();
 
   // The instruction shows only until the first pointing; afterwards the last values stay,
   // muted, so no permanent text sits over the image (design review W3).
   let last: CursorReadout | null = $state(null);
   $effect(() => {
     if (cursor) last = cursor;
+  });
+  $effect(() => {
+    void resetKey;
+    untrack(() => (last = null));
   });
   const shownCursor = $derived(cursor ?? last);
 

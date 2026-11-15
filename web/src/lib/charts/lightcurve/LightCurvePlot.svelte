@@ -55,6 +55,11 @@
   Data never enters the reactive graph: typed-array columns in the store,
   subarray views for uPlot, one batched setData + setScale per facet per
   animation frame (store.onChange -> rAF).
+
+  Review wall (wave 7): a `link` (CurveLink) puts several plots on one time axis: one
+  zoom, one crosshair, one selected time; each wall cell is one plot with one facet
+  (target, check, or a comparison: its own curve as Δ from its median, Qt's Review
+  diagnostic). `headerEnd` adds the cell's tools at the end of the facet's title row.
 -->
 <script lang="ts" module>
   export type { FacetId, YMode } from './facets';
@@ -95,9 +100,11 @@
   import CurveKey from './CurveKey.svelte';
   import CurveTools from './CurveTools.svelte';
   import { CurveView, ZOOM_STEP, type CurveDisplayLike } from './view.svelte';
-  import { CHECK_RUNGS, FACET_MIN_SPAN, FACET_SHAPE, alignedOf, checkRung, checkSigma, facetData, flagCounts, niceSplits, padPixels, visibleRange, type FacetData, type FacetId, type YMode } from './facets';
+  import { CHECK_RUNGS, FACET_MIN_SPAN, FACET_SHAPE, alignedOf, checkRung, checkSigma, facetData, flagCounts, niceSplits, padPixels, robustExtent, visibleRange, type FacetData, type FacetId, type YMode } from './facets';
   import { curveTsv, readoutAt, type PointReadout } from './readout';
   import type { LiveCurveStore } from './store';
+  import type { CurveLink } from './link.svelte';
+  import type { Snippet } from 'svelte';
 
   /** An attention rule's period on the curve (read-only; the server's rule, BRAND 10). */
   export interface CurveRule {
@@ -154,6 +161,18 @@
     onperf?: (ms: number, points: number) => void;
     /** 'modifier' inside a scrolling wall (Review): plain wheel scrolls, Ctrl / Cmd + wheel zooms. */
     wheel?: 'zoom' | 'modifier';
+    /** One time axis with other plots (the Review wall): shared zoom, crosshair and selected time. */
+    link?: CurveLink;
+    /** The comparison star of a 'comparison' facet (default: the first comparison). */
+    comparisonKey?: string | null;
+    /** The facet's name instead of the star's (the wall labels "Name [filter]" when two filters are loaded). */
+    titleOf?: (id: FacetId) => string | null;
+    /** Tools at the end of the first facet's title row (a wall cell's expand and menu). */
+    headerEnd?: Snippet;
+    /** The newest point's ring (a live curve). A finished session's wall has none: its rings are the selection's (design review). */
+    newestRing?: boolean;
+    /** Height of the facet's title row in the plot's top margin (default 16; the wall's 24 holds its tools). */
+    titlePx?: number;
   }
 
   let {
@@ -177,6 +196,12 @@
     hooks,
     onperf,
     wheel = 'zoom',
+    link,
+    comparisonKey = null,
+    titleOf,
+    headerEnd,
+    newestRing = true,
+    titlePx,
   }: Props = $props();
 
   const watchView = $derived(variant === 'watch');
@@ -223,7 +248,9 @@
   let wall: HTMLDivElement | undefined = $state();
   const hosts = new Map<FacetId, PlotHost>();
   let inks: ChartInks | null = null;
-  const syncKey = `lc-${Math.random().toString(36).slice(2, 8)}`;
+  const syncKey = untrack(() => link?.syncKey) ?? `lc-${Math.random().toString(36).slice(2, 8)}`;
+  /** Linked (Review wall): the group owns the zoom's resets and the selected time. */
+  const linked = untrack(() => !!link);
   let activeFacet: FacetId | null = null;
   let downAt: { x: number; y: number } | null = null;
 
@@ -232,12 +259,12 @@
   let cacheKey = '';
   function dataOf(id: FacetId): FacetData | null {
     const f = filterNow();
-    const key = `${store.version}|${ymode}|${targetKey}|${checkKey}|${f}`;
+    const key = `${store.version}|${ymode}|${targetKey}|${checkKey}|${comparisonKey}|${f}`;
     if (key !== cacheKey) {
       cache = new Map();
       cacheKey = key;
     }
-    if (!cache.has(id)) cache.set(id, facetData(store, id, ymode, { target: targetKey, check: checkKey, filter: f }));
+    if (!cache.has(id)) cache.set(id, facetData(store, id, ymode, { target: targetKey, check: checkKey, comparison: comparisonKey, filter: f }));
     return cache.get(id) ?? null;
   }
 
@@ -254,8 +281,10 @@
   /** The shown time range, unix s ("a,b"): `data-lc-view` for scripted checks (a kept zoom never moves). */
   let viewRange = $state('');
   let hover = $state.raw<{ t: number; left: number; top: number } | null>(null);
-  let selectedT = $state<number | null>(null);
-  let hidden = $state({ target: false, check: false, checkBand: false, ensemble: false, ensBand: false });
+  // The selected time: the group's when linked (one selection across the wall), else the plot's.
+  const ownSel = $state<{ t: number | null }>({ t: null });
+  const sel: { t: number | null } = $derived(link?.selection ?? ownSel);
+  let hidden = $state({ target: false, check: false, checkBand: false, ensemble: false, ensBand: false, comparison: false });
   /** The wall's height (px): which facets keep their floor. */
   let wallH = $state(0);
   /** The check facet's ±rung (mag), as its y range last chose it. */
@@ -264,7 +293,7 @@
   // -- Time ----------------------------------------------------------------------------
   /** The series that times the run: the target, else the check, else the ensemble. */
   function timeSeries(): { t: Float64Array; n: number } | null {
-    for (const id of ['target', 'check', 'ensemble'] as const) {
+    for (const id of ['target', 'check', 'ensemble', 'comparison'] as const) {
       const d = dataOf(id);
       if (d && d.n) return { t: d.x, n: d.n };
     }
@@ -283,7 +312,7 @@
     return Number.isFinite(a) ? [a, b] : null;
   }
 
-  const zoom = new TimeZoom({
+  const zoom: TimeZoom = untrack(() => link?.zoom) ?? new TimeZoom({
     extent: () => {
       const e = firstLast();
       if (!e) return null;
@@ -302,6 +331,19 @@
     },
   });
 
+  // Linked: the group's zoom changes reach this plot's chip, range and tools too.
+  $effect(() => {
+    const l = link;
+    if (!l) return;
+    return untrack(() =>
+      l.onZoom((m, v) => {
+        mode = m;
+        viewRange = v ? `${v[0]},${v[1]}` : '';
+        cv.setZoom(m, v);
+      }),
+    );
+  });
+
   const live = $derived.by(() => {
     void version;
     const ts = timeSeries();
@@ -316,7 +358,7 @@
   // JD / BJD axes: an integer day from the run's first point, BJD only when every point has one.
   function anchorCols() {
     const f = filterNow();
-    return store.primary('target', targetKey, f)?.cols ?? store.primary('check', checkKey, f)?.cols ?? null;
+    return store.primary('target', targetKey, f)?.cols ?? store.primary('check', checkKey, f)?.cols ?? store.primary('comparison', comparisonKey, f)?.cols ?? null;
   }
   const timeInfo = $derived.by(() => {
     void version;
@@ -339,11 +381,11 @@
   }
 
   // -- Colours and texts per facet -------------------------------------------------------
-  const TOKEN: Record<FacetId, string> = { target: '--chart-1', check: '--chart-3', ensemble: '--chart-2' };
+  const TOKEN: Record<FacetId, string> = { target: '--chart-1', check: '--chart-3', ensemble: '--chart-2', comparison: '--chart-2' };
   const colorOf = (id: FacetId) => (id === 'target' ? inks!.target : id === 'check' ? inks!.check : inks!.comparison);
 
   function seriesShown(id: FacetId): boolean {
-    return id === 'target' ? !hidden.target : id === 'check' ? !hidden.check : !hidden.ensemble;
+    return id === 'target' ? !hidden.target : id === 'check' ? !hidden.check : id === 'comparison' ? !hidden.comparison : !hidden.ensemble;
   }
   function bandShown(id: FacetId): boolean {
     return id === 'check' ? !hidden.checkBand : id === 'ensemble' ? !hidden.ensBand : false;
@@ -517,7 +559,8 @@
     const ink = inks;
     if (!ink) return [];
     const out: Annotation[] = [];
-    if (id === 'ensemble' ? ymode === 'flux' : id === 'check' && (ymode === 'flux' || deltaView(id))) {
+    if (id === 'comparison') out.push({ kind: 'hline', y: 0, color: ink.reference.a(0.55), dash: [2, 3], layer: 'under' });
+    else if (id === 'ensemble' ? ymode === 'flux' : id === 'check' && (ymode === 'flux' || deltaView(id))) {
       const zero = ymode === 'mag' ? 0 : 1;
       out.push({ kind: 'hline', y: zero, color: ink.reference.a(0.55), dash: [2, 3], layer: 'under' });
     }
@@ -530,7 +573,7 @@
       // Watch says the age at 66 px above the curve: its line alone here (a 10 px label is unread from 2 m).
       out.push({ kind: 'vline', x: now, color: ink.highlight.a(0.85), label: nowLabel && nowSide ? { text, at: nowSide, color: live.overdue ? ink.fg.a() : undefined } : undefined });
     }
-    if (selectedT !== null) out.push({ kind: 'vline', x: selectedT, color: ink.highlight.a(0.9), dash: [4, 3] });
+    if (sel.t !== null) out.push({ kind: 'vline', x: sel.t, color: ink.highlight.a(0.9), dash: [4, 3] });
     // Attention rules (read-only): the period hatched under the data, a dashed line where it fired;
     // its name only where the plot is tall enough to keep it off the points (else the host says it).
     const tall = ((hosts.get(id)?.u?.bbox.height ?? 0) / uPlot.pxRatio) >= 90;
@@ -572,19 +615,20 @@
   }
 
   function selectedIdx(id: FacetId): number | null {
-    if (selectedT === null) return null;
+    const st = sel.t;
+    if (st === null) return null;
     const d = dataOf(id);
     if (!d || !d.n) return null;
     let lo = 0;
     let hi = d.n;
     while (lo < hi) {
       const m = (lo + hi) >> 1;
-      if (d.x[m] < selectedT) lo = m + 1;
+      if (d.x[m] < st) lo = m + 1;
       else hi = m;
     }
     let best = -1;
-    for (const k of [lo - 1, lo]) if (k >= 0 && k < d.n && (best < 0 || Math.abs(d.x[k] - selectedT) < Math.abs(d.x[best] - selectedT))) best = k;
-    return best >= 0 && Math.abs(d.x[best] - selectedT) <= tolerance() ? best : null;
+    for (const k of [lo - 1, lo]) if (k >= 0 && k < d.n && (best < 0 || Math.abs(d.x[k] - st) < Math.abs(d.x[best] - st))) best = k;
+    return best >= 0 && Math.abs(d.x[best] - st) <= tolerance() ? best : null;
   }
 
   /** How far (s) a series' frame may be from a time and still be "that frame". */
@@ -615,6 +659,12 @@
       if (r !== rung) rung = r;
       return padPixels(-r, r, px, MARGIN_PX);
     }
+    // A wall cell ranges on its good points (flagged ones become chevrons on the edge).
+    if (linked) {
+      const d = dataOf(id);
+      const r = d ? robustExtent(d, u.scales.x.min ?? -Infinity, u.scales.x.max ?? Infinity) : null;
+      if (r) [min, max] = r;
+    }
     const [lo, hi] = padRange(min, max, FACET_MIN_SPAN[id][ymode], 0);
     return padPixels(lo, hi, px, MARGIN_PX);
   }
@@ -634,7 +684,8 @@
       // A band strip under 52 px of data (the Run band's summary row and its curve): two
       // ticks 13 px apart or more rather than a third step's labels on top of each other.
       if (watchView) return niceSplits(min + m, max - m, dataPx, 40, 2).splits;
-      return niceSplits(min + m, max - m, dataPx, 13, compact && dataPx < 52 ? 2 : 3).splits;
+      // A wall cell (small multiples): a tick every 24 px at most, the wall stays readable.
+      return niceSplits(min + m, max - m, dataPx, linked ? 24 : 13, compact && dataPx < 52 ? 2 : 3).splits;
     };
   }
 
@@ -651,7 +702,7 @@
       const step = splits.length > 1 ? Math.abs(splits[1] - splits[0]) : 0.01;
       // Magnitudes keep two decimals at least: "12.00", never "12".
       const digits = Math.min(4, Math.max(2, stepDigits(step)));
-      const signedView = ymode === 'mag' && deltaView(id);
+      const signedView = (ymode === 'mag' && deltaView(id)) || id === 'comparison';
       return splits.map((v) => {
         if (v == null) return '';
         const zero = Math.abs(v) < step / 2;
@@ -718,13 +769,14 @@
           seriesIdx: 1,
           shape: FACET_SHAPE[id],
           // Points beyond the check's rung: a caret on the edge, never silently cut.
-          carets: () => rungView(id),
+          carets: () => rungView(id) || linked,
+          openCarets: () => linked && !rungView(id),
           color: () => colorOf(id).a(),
           errors: () => dataOf(id)?.err ?? null,
           showErrors: () => disp.errors,
           errorAlpha: () => inks?.errorAlpha ?? 0.55,
           flags: () => dataOf(id)?.flags ?? null,
-          latest: () => (id === 'ensemble' ? null : (inks?.highlight.a() ?? null)),
+          latest: () => (id === 'ensemble' || !newestRing ? null : (inks?.highlight.a() ?? null)),
           latestGrow: watchView ? 1.5 : 1,
           selected: () => {
             const i = selectedIdx(id);
@@ -777,12 +829,12 @@
     const d = dataOf(id);
     const i = u.cursor.idx;
     if (!d || i == null || i >= d.n) {
-      selectedT = null;
+      sel.t = null;
       return;
     }
     const px = u.valToPos(d.x[i], 'x');
     const rect = u.over.getBoundingClientRect();
-    selectedT = Math.abs(px - (e.clientX - rect.left)) <= 12 ? d.x[i] : null;
+    sel.t = Math.abs(px - (e.clientX - rect.left)) <= 12 ? d.x[i] : null;
   }
 
   // -- Hosts and updates ---------------------------------------------------------------------
@@ -793,11 +845,11 @@
   /** The time axis rows the last facet carries (timeAxis size 22): its basis, so the plots share the rest. */
   const TIME_AXIS_PX = $derived(watchView ? 36 : 22);
   /** The facet title's line, in the plot's top margin. */
-  const TITLE_PX = $derived(watchView ? 40 : 16);
+  const TITLE_PX = $derived(titlePx ?? (watchView ? 40 : 16));
   /** The y tick labels' column (Watch: "7.39" at 22 px). */
   const Y_AXIS_PX = $derived(watchView ? 96 : 50);
   /** Least plot height (px) a facet is drawn with; below, it is left out (the check: in the target's title). */
-  const FLOOR: Record<FacetId, number> = { target: 48, check: 32, ensemble: 32 };
+  const FLOOR: Record<FacetId, number> = { target: 48, check: 32, ensemble: 32, comparison: 32 };
 
   // Which facets have a series (the others show why they have none).
   const withData = $derived.by(() => {
@@ -861,7 +913,7 @@
     if (!inks) return 0;
     // The band series exist only while a facet has a band: a new shape rebuilds the plot.
     const s = plotted.map((id) => `${id}:${dataOf(id)?.band ? 1 : 0}`).join(',');
-    if (!firstLast()) zoom.reset();
+    if (!linked && !firstLast()) zoom.reset();
     zoom.update();
     if (s !== shape) {
       shape = s;
@@ -884,8 +936,10 @@
     const s = store;
     return untrack(() => {
       cacheKey = '';
-      zoom.reset();
-      selectedT = null;
+      if (!linked) {
+        zoom.reset();
+        sel.t = null;
+      }
       version = s.version;
       schedule();
       return s.onChange(() => {
@@ -916,7 +970,7 @@
     void hidden.checkBand;
     void hidden.ensBand;
     void disp.errors;
-    void selectedT;
+    void sel.t;
     void live.overdue;
     void rules;
     untrack(() => {
@@ -936,8 +990,10 @@
     const f = filterNow();
     untrack(() => {
       if (lastFilter !== undefined && f !== lastFilter) {
-        zoom.reset();
-        selectedT = null;
+        if (!linked) {
+          zoom.reset();
+          sel.t = null;
+        }
         schedule();
       }
       lastFilter = f;
@@ -1000,7 +1056,7 @@
         activeFacet = facet;
         u.setCursor({ left: u.over.clientWidth * fx, top: u.over.clientHeight * 0.4 });
       },
-      select: (t) => (selectedT = t),
+      select: (t) => (sel.t = t),
       pushNow: () => push(),
       state: () => ({
         mode: zoom.mode,
@@ -1013,13 +1069,13 @@
   // -- Keyboard (the focused plot region; unhandled keys go on to the app) -------------------
   /** ← / →: select the previous / next frame of the target (the newest first); the view pans to keep it. */
   function step(dir: -1 | 1): void {
-    const id: FacetId = dataOf('target') ? 'target' : 'check';
+    const id: FacetId = facets.find((f) => f !== 'ensemble' && dataOf(f)) ?? 'target';
     const d = dataOf(id);
     if (!d || !d.n) return;
     const cur = selectedIdx(id);
     const i = cur === null ? d.n - 1 : Math.max(0, Math.min(d.n - 1, cur + dir));
     const t = d.x[i];
-    selectedT = t;
+    sel.t = t;
     const v = zoom.view;
     if (v && (t < v[0] || t > v[1])) zoom.panBy((t - (v[0] + v[1]) / 2) / (v[1] - v[0]), true);
   }
@@ -1062,7 +1118,7 @@
   // -- Words ------------------------------------------------------------------------------------
   const keys = $derived.by(() => {
     void version;
-    return { target: targetKey, check: checkKey, filter: filterNow() };
+    return facets.includes('comparison') ? { target: targetKey, check: checkKey, comparison: comparisonKey, filter: filterNow() } : { target: targetKey, check: checkKey, filter: filterNow() };
   });
   const hoverRead: PointReadout | null = $derived.by(() => {
     void version;
@@ -1070,7 +1126,7 @@
   });
   const fixedRead: PointReadout | null = $derived.by(() => {
     void version;
-    if (selectedT !== null) return readoutAt(store, selectedT, ymode, keys, tolerance());
+    if (sel.t !== null) return readoutAt(store, sel.t, ymode, keys, tolerance());
     return live.lastT !== null ? readoutAt(store, live.lastT, ymode, keys, tolerance()) : null;
   });
 
@@ -1134,13 +1190,18 @@
       if (ymode === 'flux') return 'relative flux · median-normalised';
       return stars.checkCat !== null ? `check − V ${fixed(stars.checkCat, 3)}${rung !== null ? ` · ±${rung} mag` : ''}` : 'no catalogue magnitude: drawn as measured';
     }
+    if (id === 'comparison') return ymode === 'flux' ? 'Δ relative flux · own median' : 'leave-one-out · Δmag from own median';
     if (ymode === 'flux') return 'transmission · run median = 1';
     return `zero point ± rms${stars.used ? ` · ${stars.used} comparisons` : ''}`;
   }
   function title(id: FacetId): string {
+    const named = titleOf?.(id);
+    if (named) return named;
+    if (id === 'comparison') return store.primary('comparison', comparisonKey, keys.filter)?.name ?? 'Comparison';
     return id === 'target' ? stars.target : id === 'check' ? (stars.check ?? 'Check star') : 'Ensemble';
   }
   function missing(id: FacetId): string {
+    if (id === 'comparison') return ymode === 'flux' ? 'No relative flux for this comparison' : 'No point measured for this comparison';
     if (id === 'check') return stars.check ? 'No point measured for the check star yet' : 'No check star: give one the Check role to see how stable the photometry is';
     if (id === 'ensemble') return stars.comps ? 'No ensemble zero point yet' : 'No comparison star';
     return ymode === 'flux' ? 'No relative flux for the target' : 'No magnitude for the target yet';
@@ -1165,7 +1226,7 @@
 
 <!-- A focusable chart region: its keys are listed in the header comment and on each tool's tooltip. -->
 <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
-<div class="lc" class:compact class:watch={watchView} class:nobar={!showBar} bind:this={root} role="region" aria-label="{label}: {stars.target}" tabindex="0" onkeydown={onKey} data-lc-mode={mode} data-lc-view={viewRange}>
+<div class="lc" class:compact class:watch={watchView} class:nobar={!showBar} class:cell={linked} bind:this={root} role="region" aria-label="{label}: {stars.target}" tabindex="0" onkeydown={onKey} data-lc-mode={mode} data-lc-view={viewRange}>
   {#if showBar}
     <div class="bar"><CurveTools view={cv} variant={compact ? 'band' : 'drawer'} align="start" /></div>
   {/if}
@@ -1183,7 +1244,7 @@
         {#if has || !withData.includes(id)}
           <section class="facet" class:slim={!has} style:flex-grow={has ? share(id) / shareSum : 0} style:flex-basis={has && id === plotted[plotted.length - 1] ? `${TIME_AXIS_PX}px` : null} aria-label="{title(id)}: {sub(id)}">
             <!-- The title sits in the plot's top margin (an in-plot label), never above it. -->
-            <header class:over={has}>
+            <header class:over={has} style:height={has && titlePx ? `${titlePx}px` : null}>
               <CurveKey shape={FACET_SHAPE[id]} color="var({TOKEN[id]})" size={11} />
               <h3>{title(id)}</h3>
               {#if has}<span class="sub"><NumText text={sub(id)} /></span>{/if}
@@ -1203,27 +1264,30 @@
                   {/if}
                 </span>
               {/if}
-              {#if has}
-                <!-- The newest (or selected) frame's values beside their curve, in priority order: what does not fit wraps out of sight whole, never cut inside a number. -->
-                <span class="rd num" class:sel={selectedT !== null}>
+              {#if has && (!linked || sel.t !== null)}
+                <!-- The newest (or selected) frame's values beside their curve, in priority order: what does not fit wraps out of sight whole, never cut inside a number. A wall cell (linked) shows the selected frame's value alone: the time is the Selected point card's. -->
+                <span class="rd num" class:sel={sel.t !== null}>
                   {#if id === 'target' && fixedRead?.target}
-                    <span class="v" aria-label="{selectedT !== null ? 'Selected' : 'Latest'} target value">{fixedRead.target.value}</span>
+                    <span class="v" aria-label="{sel.t !== null ? 'Selected' : 'Latest'} target value">{fixedRead.target.value}</span>
                   {:else if id === 'check' && fixedRead?.check}
-                    <span class="v" aria-label="{selectedT !== null ? 'Selected' : 'Latest'} check value">{fixedRead.check.value}</span>
+                    <span class="v" aria-label="{sel.t !== null ? 'Selected' : 'Latest'} check value">{fixedRead.check.value}</span>
+                  {:else if id === 'comparison' && fixedRead?.comparison}
+                    <span class="v" aria-label="{sel.t !== null ? 'Selected' : 'Latest'} comparison value">{fixedRead.comparison.value}</span>
                   {:else if id === 'ensemble' && fixedRead?.ensemble}
                     <span class="v">{fixedRead.ensemble.value}</span>
                   {/if}
-                  {#if id === 'check' && sigma && ymode === 'mag'}
+                  {#if id === 'check' && sigma && ymode === 'mag' && !linked}
                     <span class="v sig" use:tooltip={{ text: `Scatter of the check star over its last ${sigma.count} points (the trailing band)` }}>σ<sub>{sigma.count}</sub>&nbsp;{Number.isFinite(sigma.sigma) ? fixed(sigma.sigma, 3) : '—'}</span>
                   {/if}
-                  {#if id === plotted[0] && fixedRead}
-                    <span class="kind" use:tooltip={{ text: selectedT !== null ? 'The selected frame (← / → step, a click elsewhere clears)' : 'The newest frame (its ring on the curve)' }}>
-                      <span class="ring" aria-hidden="true"></span>{fixedRead.utc}<span class="word">{selectedT !== null ? 'selected' : 'latest'}</span>
+                  {#if id === plotted[0] && fixedRead && !linked}
+                    <span class="kind" use:tooltip={{ text: sel.t !== null ? 'The selected frame (← / → step, a click elsewhere clears)' : 'The newest frame (its ring on the curve)' }}>
+                      <span class="ring" aria-hidden="true"></span>{fixedRead.utc}<span class="word">{sel.t !== null ? 'selected' : 'latest'}</span>
                     </span>
                   {/if}
-                  {#if id === plotted[plotted.length - 1]}<span class="axis-name" use:tooltip={{ text: axisTip }}>{axisShort}</span>{/if}
+                  {#if id === plotted[plotted.length - 1] && !linked}<span class="axis-name" use:tooltip={{ text: axisTip }}>{axisShort}</span>{/if}
                 </span>
               {/if}
+              {#if headerEnd && id === facets[0]}<span class="end">{@render headerEnd()}</span>{/if}
             </header>
             {#if has}
               <div class="plot-host plot" {@attach facetHost(id)}></div>
@@ -1242,17 +1306,20 @@
         <div>BJD {hoverRead.bjd ?? '— (no site)'}{hoverRead.checkBjd ? ' target' : ''}</div>
         {#if hoverRead.checkBjd}<div>BJD {hoverRead.checkBjd} check</div>{/if}
         <hr />
-        {#if hoverRead.target}
+        {#if hoverRead.target && (!linked || facets.includes('target'))}
           <div class="row"><CurveKey shape="circle" color="var(--chart-1)" size={11} /><span class="v">{hoverRead.target.value}</span><span class="k">{hoverRead.target.what}</span></div>
         {/if}
-        {#if hoverRead.check}
+        {#if hoverRead.comparison && facets.includes('comparison')}
+          <div class="row"><CurveKey shape="square" color="var(--chart-2)" size={11} /><span class="v">{hoverRead.comparison.value}</span><span class="k">{hoverRead.comparison.what}</span></div>
+        {/if}
+        {#if hoverRead.check && (!linked || facets.includes('check'))}
           <div class="row"><CurveKey shape="triangle" color="var(--chart-3)" size={11} /><span class="v">{hoverRead.check.value}</span><span class="k">{hoverRead.check.what}</span></div>
         {/if}
         {#if hoverRead.ensemble && facets.includes('ensemble')}
           <div class="row"><CurveKey shape="square" color="var(--chart-2)" size={11} /><span class="v">{hoverRead.ensemble.value}</span><span class="k">{hoverRead.ensemble.what}</span></div>
         {/if}
         {#if hoverRead.airmass}<div>airmass <span class="v">{hoverRead.airmass}</span></div>{/if}
-        {#each [...(hoverRead.target?.flags ?? []).map((f) => `target ${f}`), ...(hoverRead.check?.flags ?? []).map((f) => `check ${f}`)] as f (f)}
+        {#each [...(!linked || facets.includes('target') ? (hoverRead.target?.flags ?? []).map((f) => `target ${f}`) : []), ...(!linked || facets.includes('check') ? (hoverRead.check?.flags ?? []).map((f) => `check ${f}`) : []), ...(facets.includes('comparison') ? (hoverRead.comparison?.flags ?? []).map((f) => `comparison ${f}`) : [])] as f (f)}
           <div class="flag">{f}</div>
         {/each}
       </div>
@@ -1359,6 +1426,60 @@
     color: var(--text-muted);
     font-size: var(--text-2xs);
     white-space: nowrap;
+  }
+  /* A wall cell (linked): the words under the name give way first, then the name (to 11
+     characters, an AUID), then the cell's numbers (ellipsis); the value and the buttons never. The
+     tiny shrink factors keep a fit item from losing a fraction of a pixel (an ellipsis on a
+     whole number) while the words still have room. */
+  .cell header.over h3 {
+    flex: 0 0.001 auto;
+    min-width: 11ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .cell header.over .sub {
+    flex: 0 10000 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* The cell's tools never shrink (their numbers cap and ellipsize inside): the name and the
+     words under it give way first. The focus ring of a button may reach out of the row. */
+  .cell .end {
+    flex: none;
+  }
+  .cell header.over {
+    overflow: clip;
+    overflow-clip-margin: 4px;
+  }
+  /* A narrow cell drops the words under the name rather than show two letters of them. */
+  .lc.cell {
+    container: lc-cell / inline-size;
+  }
+  @container lc-cell (max-width: 500px) {
+    header.over .sub {
+      display: none;
+    }
+  }
+  .cell header.over .rd {
+    flex: none;
+  }
+  /* The keys (band toggle, suspect and saturated counts) leave a cell's title row: the cell
+     says its counts in its numbers' tooltip and the health strip. */
+  .cell header.over .legend {
+    display: none;
+  }
+  /* A wall cell's tools (headerEnd): after the readout, never wrapped away; its numbers
+     (the host's .stat) may end in an ellipsis, the buttons never. */
+  .end {
+    display: inline-flex;
+    flex: 0 1 auto;
+    min-width: 0;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    padding-left: var(--space-1);
+    pointer-events: auto;
   }
 
   .wall {

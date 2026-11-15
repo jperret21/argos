@@ -88,6 +88,23 @@ export interface IndexSource {
   sequenceCommands?(): SequenceCommands | null;
   // -- Wave 6b (optional, as above): Watch, the attention list, the alert sound --
   nightCommands?(): NightCommands | null;
+  // -- Wave 7 (optional, as above): Review's dialogs --
+  reviewCommands?(): ReviewCommands | null;
+}
+
+/** What the palette needs from Review (W7; M8 "Re-run subs…", D2; M92 exports). */
+export interface ReviewCommands {
+  /** The source R1 holds, in words ("20260925T200453Z_RR_Lyr"), or null. */
+  source: string | null;
+  /** Why the Re-run dialog cannot open (null: it can). */
+  rerunReason: string | null;
+  /** Why the export dialogs cannot open (null: they can). */
+  exportReason: string | null;
+  rerun(): void;
+  exportAavso(): void;
+  exportCsv(): void;
+  /** R0, the sessions list. */
+  sessions(): void;
 }
 
 /** What the palette needs from the night (W6b, D3): Watch, acknowledge all, the sound level. */
@@ -534,6 +551,17 @@ export function buildIndex(app: IndexSource, afterMount: AfterMount): Command[] 
     }
   }
 
+  // -- Review (W7): R1's dialogs; R0 is the registry's "Review sessions" (Mod+Shift+O) --------
+  const review = app.reviewCommands?.() ?? null;
+  if (review) {
+    const on = review.source ? `Review · ${review.source}` : 'Review';
+    out.push(
+      { id: 'review.rerun', title: 'Re-run photometry…', group: 'Actions', icon: 'rerun-photometry', keywords: 're-run subs batch photometry measure again frames session new folder', hint: on, disabled: serverDown ?? review.rerunReason, run: () => review.rerun() },
+      { id: 'review.export-aavso', title: 'Export AAVSO…', group: 'Actions', icon: 'export-aavso', keywords: 'aavso extended format report submit webobs obscode', hint: on, disabled: serverDown ?? review.exportReason, run: () => review.exportAavso() },
+      { id: 'review.export-csv', title: 'Export CSV…', group: 'Actions', icon: 'export', keywords: 'csv measurements curves save export light curve', hint: on, disabled: serverDown ?? review.exportReason, run: () => review.exportCsv() },
+    );
+  }
+
   // -- Actions that work from any section ---------------------------------------------
   const cameraReason = serverDown ?? (app.canCamera ? null : 'connect the camera first (Connection, F1)');
   const direct: Record<string, Pick<Command, 'disabled' | 'run'> & { title?: string }> = {
@@ -591,8 +619,10 @@ export function buildIndex(app: IndexSource, afterMount: AfterMount): Command[] 
       continue;
     }
     const section = sectionOf(d);
-    const scopes = section ? [section] : undefined;
     const here = !section || app.section === section;
+    // In its section the active scopes decide (Review's keys live in analyze.r0 / .r1 / .r2);
+    // from elsewhere, the binding's own scopes once its section is shown.
+    const scopes = section && !here ? (typeof d.scope === 'string' ? [d.scope] : [...d.scope]) : undefined;
     out.push({
       id: `km.${d.id}`,
       title: d.label,
