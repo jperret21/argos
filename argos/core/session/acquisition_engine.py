@@ -439,6 +439,9 @@ class AcquisitionEngine(QObject):
         self._unverified_logged = False
         #: S54: the consecutive solutions refused by the anchor check (their WCS).
         self._repoint_refused: list = []
+        #: S59: the current solution is an opened FITS's (its anchors never vet a
+        #: camera frame's solution).
+        self._solution_from_file = False
 
         # Last sequence directory (for the photometry setup window).
         self._last_sequence_dir: Path | None = None
@@ -1799,9 +1802,10 @@ class AcquisitionEngine(QObject):
         wcs = self._base_wcs()
         if self._tracker is None or not self._tracker.anchor_count:
             # Also when built with no star seen (clouds, or the field had
-            # moved): try again on this frame rather than until the next solve.
+            # moved): try again rather than until the next solve, which S35
+            # makes due. The anchors are chosen on the solved frame (S56).
             self._tracker, self._tracker_anchor_stars = self._build_live_tracker(
-                green, wcs, tset, params
+                green, wcs, tset, params, chosen_on=self._anchor_frame(green)
             )
         telescope = self._session.telescope
         # The alt-az tracker needs a rigid rotation + translation.  On an EQ
@@ -1862,6 +1866,25 @@ class AcquisitionEngine(QObject):
             return False
         return not self._fresh_lock(tset, tracked)
 
+    def _verified_on_previous_solution(self, params: PhotometryParams) -> bool:
+        """A run's sub of 1 or 2 anchors verified through the previous sub's solution
+        (S56 as amended on 2026-11-15, second set): its own solve is due now.
+
+        Without it the next sub is two subs from that solution and unverified: with
+        one solve per run the subs alternated verified and flagged (XX Cyg
+        2026-08-29 050148Z: 12 of 22 flagged). Outside a run a live point follows
+        each solve, of the newest frame or the one before: nothing more is due.
+        """
+        n = len(self._tracker_anchor_stars)
+        if not (params.track_apertures and self._tracker is not None):
+            return False
+        if not 0 < n < _LOCK_VERIFY_MIN_ANCHORS:
+            return False
+        if self._camera_service.state is not CameraState.SEQUENCE:
+            return False
+        solved = self._astrometry.solved_raw
+        return solved is not None and solved is self._prev_raw and solved is not self._last_raw
+
     def _fresh_lock(self, tset: TargetSet, tracked) -> bool:
         """The frame is measured through a solution of this sub or the previous one,
         and the tracker moved the set's apertures less than 2 px from it (S56).
@@ -1898,7 +1921,11 @@ class AcquisitionEngine(QObject):
         anchors showing a star (SNR >= 5, S35's threshold) where the new solution
         puts them on the frame it solved refuses it: the previous solution and
         its tracker stay. No tracker (the first solve, after a slew, Open FITS or
-        a set change) means no check. Called by the controller (``_on_worker_solved``).
+        a set change) means no check, and neither does a camera frame's solution while
+        the reference is an opened FITS's (S59): a run's first sub is measured through
+        the file's solution with anchors chosen on the file's frame (S56), which held
+        the camera's correct solution to the file's field. Called by the controller
+        (``_on_worker_solved``).
 
         3 consecutive refused solutions that agree with each other within
         ``_REPOINT_AGREE_PX`` (S54 as amended on 2026-11-15, as S55 moves the scale
@@ -1908,6 +1935,8 @@ class AcquisitionEngine(QObject):
         stars = self._tracker_anchor_stars
         if self._tracker is None or not stars or raw is None:
             return None
+        if self._solution_from_file and raw is not self._astrometry.solved_raw:
+            return None  # S59: a file's anchors never vet a camera frame's solution
         params = PhotometryParams.from_config(self._cfg, egain=self._egain())
         if not params.track_apertures:
             return None
@@ -1943,18 +1972,47 @@ class AcquisitionEngine(QObject):
                 self._last_raw, green.shape, self._mount_radec(), self._session.target_radec
             )
 
+    def _anchor_frame(self, green):
+        """The frame the tracker's anchors are chosen on, with the solution exact there
+        (S56 as amended on 2026-11-15, second set): the frame the current solution was
+        solved on, through that raw solution, or None (unknown, or another geometry:
+        the measured frame, as before).
+
+        Chosen on the measured sub through a solution of an earlier one, only the
+        stars that happened to show at the stale positions qualified after a jump:
+        the lock check (S48, S56) then verified the very star that moved the
+        apertures (real RR Lyr subs moved 500 px without a slew: 1 anchor, 2.16 px
+        of tracker motion, the target 496 px off, flagged by a 0.16 px margin). On
+        the solved frame all the anchors qualify, and the check counts those the
+        measured sub shows (1 of 6 there: the lock is lost).
+        """
+        raw = self._astrometry.solved_raw
+        wcs = self._astrometry.wcs
+        if raw is None or wcs is None:
+            return None
+        solved = green if raw is self._last_raw else green_plane(raw)
+        if solved.shape != green.shape:
+            return None
+        return solved, wcs
+
     @staticmethod
     def _build_live_tracker(
-        green, wcs, tset: TargetSet, params: PhotometryParams
+        green, wcs, tset: TargetSet, params: PhotometryParams, chosen_on=None
     ) -> tuple[ApertureTracker, list]:
+        """The tracker of ``green`` on ``wcs`` (the raw solve or a set-change rebase,
+        S52) and its anchor stars, chosen on ``chosen_on`` = (green plane, solution)
+        when given: the solved frame, where its solution is exact (S56)."""
+        pick_green, pick_wcs = chosen_on if chosen_on is not None else (green, wcs)
         candidates = tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK)
-        anchors = select_tracking_anchors(green, wcs, candidates, params)
+        anchors = select_tracking_anchors(pick_green, pick_wcs, candidates, params)
         if not anchors:
             # Comparisons too faint to steer: any star of the set will do, a
             # variable near minimum included — but only one seen where the
             # solution places it. Taking them all unseen let the tracker lock
             # on noise when the field had moved since the solve (S35).
-            anchors = select_tracking_anchors(green, wcs, list(tset.stars), params, min_snr=5.0)
+            anchors = select_tracking_anchors(
+                pick_green, pick_wcs, list(tset.stars), params, min_snr=5.0
+            )
         xy = [wcs.world_to_pixel_deg(s.ra_deg, s.dec_deg) for s in anchors]
         h, w = green.shape
         tracker = ApertureTracker(
@@ -2015,6 +2073,10 @@ class AcquisitionEngine(QObject):
         # A fresh solve *is* the new reference — accumulated rigid error and
         # the anchor geometry are stale relative to it.
         self._reset_tracker()
+        solved = self._astrometry.solved_raw  # S59: an opened FITS's solution?
+        self._solution_from_file = solved is not None and (
+            self._last_raw_from_file and solved is self._last_raw
+        )
 
     def _measure_photometry(self) -> None:
         """Aperture-measure the target set on the solved frame → light-curve point."""
@@ -2074,6 +2136,11 @@ class AcquisitionEngine(QObject):
             self._resolve_now(green)
         else:
             self._unverified_logged = False  # a verified frame ends the episode
+            if self._verified_on_previous_solution(params):
+                # S56 (2026-11-15, second set): the sub in hand is solved too, so the
+                # next sub is measured through the previous one's solution, never two
+                # subs from it (one solve per run flagged every other sub).
+                self._resolve_now(green)
         results = measure_frame(
             green,
             tracked,

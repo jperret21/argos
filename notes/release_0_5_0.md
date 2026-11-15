@@ -74,8 +74,11 @@ moves when three solves agree), **S56** (a lock on fewer than 3 anchors is
 unverified: its points are flagged suspect) and **S57** (every vetting file names
 its filter); the owner's decisions of 2026-11-15 refine S54 (a re-pointing the
 mount did not report is accepted after three agreeing solutions) and S56 (a lock
-near a fresh solution is verified), and add **S58** (the batch re-run gets S56's
-rule) and **S59** (a camera frame after an opened FITS drops the file's tracker).
+near a fresh solution is verified, the anchors are chosen on the solved frame, and
+a run's sub verified through the previous solution is solved too), and add
+**S58** (the batch re-run gets S56's rule) and **S59** (a camera frame after an
+opened FITS drops the file's tracker, and the file's anchors never check a camera
+solution).
 
 **Several of these defects affect files you already hold.** The table says
 which; *Check your old files* below says how to find them.
@@ -138,7 +141,7 @@ which; *Check your old files* below says how to find them.
 | S56 | With 1 or 2 anchors the S48 lock check verified nothing | Points of an unverified lock unflagged (off their stars after a jump or a stale rebuild) | **yes** (XX Cyg 2026-08-29 `050148Z` and `052943Z`; replayed with a solve before every sub: 3 target points now flagged suspect; check below) |
 | S57 | `photometry_quality.json` did not say which filter it vets | A two-filter run's vetting file ambiguous (format only) | no (format: an added key) |
 | S58 | Batch re-run: with 1 or 2 anchors the S43 lock check verified nothing | Unflagged points of an unverified lock (XX Cyg `050148Z` re-run: 4 target points 2.5-4.5 px off their star) | no (none of the owner's runs was re-run) |
-| S59 | A tracker built on an opened FITS survived the return to camera frames | The camera's correct solutions refused by S54 against the file's anchor stars | no (S54 is new in 0.5.0) |
+| S59 | A tracker built on an opened FITS survived the return to camera frames (or, in a run, was rebuilt on the file's anchors) | The camera's correct solutions refused by S54 against the file's anchor stars | no (S54 is new in 0.5.0) |
 | S24 | An ASTAP database folder replaced the chosen database set | Slower or failed solves | no |
 | S29 | Two unvalidated-profile warnings, hard-coded IMX585 hint | Contradictory wording | no |
 
@@ -633,9 +636,22 @@ solutions).
 **What changed.** The first camera frame (live or a run's sub) after an opened
 FITS drops the tracker, as the web server does when the frame source changes
 (`source_changed`). The file's solution stays until the camera's own solve, as
-before.
+before. And while that solution is the reference, a camera frame's solution is
+not checked against the anchors (`AcquisitionEngine._solution_from_file`): since
+S56's second amendment (2026-11-15) the anchors are chosen on the frame the
+solution was solved on, so a run's first sub, measured through the file's
+solution, rebuilt its tracker on the file's anchors, and the sub's own solution
+was refused against them again while the camera pointed elsewhere (until S54
+accepted three agreeing solutions as a re-pointing, with no point meanwhile;
+found by the review of that amendment). That sub still gets
+no point (its lock is lost, or no anchor is found) and a re-solve is due; a
+re-solve of the opened file itself is still checked; once the camera's solution
+is the reference, its own anchors check the next solutions (S54).
 **How to check.** `tests/workers/test_acquisition_engine.py::test_a_camera_frame_after_an_opened_fits_drops_its_tracker_s59`
-(the file's tracker kept on the code before the fix).
+(the file's tracker kept on the code before the fix) and
+`::test_a_run_after_an_opened_fits_accepts_the_camera_solution_s59` (a run's
+first sub after the file: its solution refused, 0 of the 4 anchors, on the code
+before the second fix).
 
 ## Pointing and site in files
 
@@ -1260,29 +1276,42 @@ show a star where the tracked solution puts them. With n = 1 or 2 that is one
 anchor, and the anchor whose centroid moved the solution is seen by
 construction: a neighbour taken for a comparison after a jump, or a star at a
 stale position after a set change (S52), passed, and the frame was measured off
-its stars with no flag.
+its stars with no flag. The anchors themselves were chosen on the measured sub,
+through the solution of an earlier one: after a jump only the stars that
+happened to show at the stale positions qualified. Real RR Lyr 2026-09-25 subs
+moved 500 green px between two subs without a slew (S54's replay, subs 44-48
+of 41-48): the tracker rebuilt on sub 44 through sub 43's solution found a
+field star at one of the 6 comparisons' stale positions and kept it as its only
+anchor; it moved the apertures 2.16 px and the target was measured 496 px from
+the star, flagged only because 2.16 px is 0.16 px over the 2 px threshold below.
 **Who was affected.** Runs whose comparisons give fewer than 3 anchors (SNR 10,
-unsaturated, at most 6). Replaying the Qt sequence path on the 257 frames of the
-tracker study (8 runs, Argos's live solves, a solve landing before every sub;
-the solve before the run counts as one of an older frame): 3 of 255 target
-points (and every star's point of those frames) are now flagged, all on XX Cyg
-2026-08-29: `050148Z` frames 0 and 13 and `052943Z` frame 0. Those two runs have
-2 anchors on 25 of their 26 frames (only two of `050148Z`'s five comparisons
-reach SNR 10 in its 15 s subs, the others 4.3, 1.6 and 0); the other 22 of these
-are measured through the previous sub's solution with the tracker moving the
-apertures 0.30-1.57 px from it, and their target points lie 0.24-1.83 px from
-the star (an independent solve of each frame). Frame 13 is flagged at 2.66 px of tracker
-motion: its target point is 3.38 px off the star. No point is lost and the six
-other runs do not change (3 to 6 anchors). With one solve per run and re-solves
-only when due, every other sub of these two runs is flagged (14 of 255 target
-points; 24 re-solves in all against 34 when every such frame was flagged): a
-sub measured two subs after its solution is never verified. The S52 case stays
-caught: replaying RR Lyr 2026-09-25 frames 0-39 with the VSP comparison
-`000-BCG-653` added after frame 1, the next solves failing (frames 1-11) and the
-tracker rebuilt on the raw solve (as before S52), frames 4, 7, 8, 10 and 11 are
-measured through 1 anchor, 29.5-35.8 px from the star, on a solution 3-10 subs
-old: unflagged before, flagged now, and the re-solve made due lands at frame 12.
-With S52, that replay has no frame below 3 anchors.
+unsaturated, at most 6), and any run after a jump between two solves. Replaying
+the Qt sequence path on the 257 frames of the tracker study (8 runs, Argos's
+live solves, a solve landing before every sub; the solve before the run counts
+as one of an older frame): 3 of 255 target points (and every star's point of
+those frames) are now flagged, all on XX Cyg 2026-08-29: `050148Z` frames 0 and
+13 and `052943Z` frame 0. Those two runs have 1 or 2 anchors on 25 of their 26
+frames (only two of `050148Z`'s five comparisons reach SNR 10 in its 15 s subs,
+the others 4.3, 1.6 and 0); the other 22 of these are measured through the
+previous sub's solution with the tracker moving the apertures 0.26-1.57 px
+from it, and their target points lie 0.24-1.83 px from the star (an independent
+solve of each frame). Frame 13 is flagged at 2.66 px of tracker motion: its
+target point is 3.38 px off the star. No point is lost and the six other runs
+do not change (3 to 6 anchors); RR Lyr frames 52 and 175 (the 22.8 px jump and
+the blank-sky sub) stay skipped, by the S48 check now (their 5-6 anchors are
+chosen on the solved sub) rather than by S35. With one solve per run and
+re-solves only when due, the same 3 points are flagged and 35 solves made (14
+flagged, 24 solves and 13 WARN episodes when a sub verified through the
+previous sub's solution made no solve due: every other sub of these two runs
+was then two subs from a solution). The S52 case: replaying RR Lyr 2026-09-25
+frames 0-39 with the VSP comparison `000-BCG-653` added after frame 1, the next
+solves failing (frames 1-11) and the tracker rebuilt on the raw solve (as before
+S52), frames 4, 7, 8, 10 and 11 were measured through 1 anchor, 29.5-35.8 px
+from the star, on a solution 3-10 subs old (unflagged before S56, flagged by
+its first rule, frames 2 and 3 skipped); the rebuilt tracker now takes its 6
+anchors on frame 0, where the solution is exact, and follows the field 6.5-62
+px from it: every target point within 1.12 px of the star, none flagged or
+skipped. With S52, that replay has no frame below 3 anchors and no change.
 **What changed.** After the S48 check, a tracker of 1 or 2 anchors leaves the
 lock unverified unless the frame is measured through a solution of this sub or
 the previous one (the controller keeps the frame each solution describes,
@@ -1291,24 +1320,57 @@ the previous one (the controller keeps the frame each solution describes,
 set's stars, between their position through the raw solution and through the
 tracked one (a set-change rebase included), against the tracker's own outlier
 floor (`RESIDUAL_FLOOR_PX`, 2 px; the owner's fields drift 1-5 px between subs, a
-neighbour locked after a jump or a stale rebuild moved them 22-36 px). A
-verified frame makes no re-solve due. An unverified frame keeps its points, each
-flagged `suspect` (the CSV's `suspect` column: kept, left out of the AAVSO
-export, as a batch re-run flags a frame measured without the field, S43), and a
-solve is due at once (in a run the sub in hand is solved now, as after S48). A
-WARN once per episode ("Photometry: only 2 anchor stars steer the apertures —
-the lock cannot be verified; points are flagged suspect while fewer than 3
-anchor stars steer the apertures (except within 2 px of a solution of this sub
-or the previous one). Re-solving."): a verified frame, a slew or invalidation, or
-a set change ends the episode, a solve that lands does not (on a field that
-never reaches 3 anchors it was logged on every sub). A `lock_unverified` event
-per flagged frame in the flight recorder. The live plot does not draw suspect
-points apart (as before); the AAVSO export's summary now says "suspect (cosmic
-ray / hot pixel, or no verified lock)". The web server's port has the same
-change and gives the same points (XX Cyg `050148Z`, 118 points, identical with
-a solve before every sub, 12 suspect, and with one solve per run, 66 suspect;
-RR Lyr subs 0-39 above: 272 points, 42 suspect, identical). The batch re-run
-gets the same rule: S58.
+neighbour locked after a jump or a stale rebuild moved them 22-36 px; the
+threshold stays until a field drifting more is observed, owner decision of
+2026-11-15). A verified frame makes no re-solve due. An unverified frame keeps
+its points, each flagged `suspect` (the CSV's `suspect` column: kept, left out
+of the AAVSO export, as a batch re-run flags a frame measured without the
+field, S43), and a solve is due at once (in a run the sub in hand is solved now,
+as after S48). A WARN once per episode ("Photometry: only 2 anchor stars steer
+the apertures — the lock cannot be verified; points are flagged suspect while
+fewer than 3 anchor stars steer the apertures (except within 2 px of a solution
+of this sub or the previous one). Re-solving."): a verified frame, a slew or
+invalidation, or a set change ends the episode, a solve that lands does not (on
+a field that never reaches 3 anchors it was logged on every sub). A
+`lock_unverified` event per flagged frame in the flight recorder. The live plot
+does not draw suspect points apart (as before); the AAVSO export's summary now
+says "suspect (cosmic ray / hot pixel, or no verified lock)". Two more rules
+(owner decisions of 2026-11-15, second set): the tracker's anchors are chosen on
+the frame the current solution was solved on, through that solution, where it is
+exact (`AcquisitionEngine._anchor_frame`; the measured frame only when that frame
+is unknown or of another geometry), and the S48 and S56 checks count those on
+the measured sub: on the 500 px jump 1 of the 6 shows a star, the lock is lost,
+the sub gets no point and a re-solve is due (subs 45 and 46 are skipped the same
+way while S54 refuses their solutions, 2 of the 6 anchors seen where they place
+them, and accepts the third as a re-pointing; subs 47 and 48, 2 anchors inside
+the moved frame and 4.28 and 3.68 px of tracker motion on a field drifting 4.3
+px per sub, stay flagged). And in a run a sub of 1 or 2 anchors verified through
+the previous sub's solution makes its own solve due at once (the sub in hand is
+solved, as after S48), so the next sub is measured through a solution of the
+previous one: one solve per sub on such a field, what the owner's runs already
+do. This needs the sub's solve to land before the next sub is measured: with
+solves slower than one sub interval such subs stay flagged and every other sub
+is solved (no loop or stall: at most one solve starts per sub; the review's
+replay of `050148Z` with each solve landing one sub late flagged all 22 subs,
+before and after this rule). Outside a run a live point follows each solve, of the newest frame or the one
+before: nothing more is made due. `050148Z` keeps its 2 anchors on 20 of its 22
+subs and every verified frame; subs 9 and 11 have 1 (its first comparison has
+SNR 9.9 on the solved subs 8 and 10, under the anchors' SNR 10, and 12.8 and
+13.5 on subs 9 and 11), still verified at 0.26 and 0.48 px of tracker motion,
+their target points 1.01 and 0.57 px from the star (0.82 and 0.70 with 2
+anchors). Elsewhere a few frames gain or lose an anchor at 3 or more
+(`052943Z`, `053540Z`, 2026-09-07 `040723Z`, `045626Z`), with no point or flag
+changed. The batch re-run (S58) needs neither rule: it builds a tracker after a
+re-solve on the frame it has just solved, and re-solves an unverified frame
+before measuring it, so a frame two frames from a solution costs a solve, not a
+flag. Since the anchors are chosen on the solved frame, a run's first sub after an
+opened FITS takes the file's anchors: they never check the camera's solution
+(S59). The web server's port has the same changes and gives the same points as
+the fixed Qt in one process, with no difference (`050148Z` with a solve before
+every sub and with one solve per run: 118 points, 12 suspect each; RR Lyr subs
+0-39 above, with and without S52: 318 points, none suspect; the 500 px jump: 27
+points, 6 suspect, the same skips and S54 refusals). The batch re-run gets the
+fresh-solution rule: S58.
 **How to check.** `tests/workers/test_acquisition_engine.py::test_a_lock_on_fewer_than_three_anchors_flags_its_points_s56`
 (the points unflagged on the code before the fix),
 `::test_a_run_re_solves_the_sub_whose_lock_is_unverified_s56` (no re-solve
@@ -1316,9 +1378,16 @@ before the fix; a lock on 4 anchors is neither flagged nor re-solved),
 `::test_a_few_anchor_lock_near_a_fresh_solution_is_verified_s56` (this sub's or
 the previous sub's solution, 1 px of tracker motion: verified, no re-solve; two
 subs after it, or 3 px: flagged and re-solved; every such point flagged on the
-code before the 2026-11-15 amendment) and
+code before the 2026-11-15 amendment),
 `::test_the_unverified_lock_warns_once_per_episode_s56` (two WARN lines across a
-landed solve before the amendment).
+landed solve before the amendment),
+`::test_the_lock_check_uses_anchors_chosen_on_the_solved_frame_s56` (a jump: 1
+anchor, a field star 1.1 px from a comparison's solved spot, and an unflagged
+point off the star on the code before the second amendment; now 4 anchors, 1
+seen, no point, a re-solve due) and
+`::test_a_run_solves_the_sub_verified_through_the_previous_solution_s56` (no solve
+due before the second amendment, and with one solve per run every other sub
+flagged; outside a run nothing is due).
 **Check your old files.** See *Check your old files* (S56).
 
 ### S57 — Every vetting file names its filter
@@ -1632,7 +1701,10 @@ correct solution was refused and the subs after 43 were skipped or measured off
 the star (flagged); now subs 44 and 45 are refused, the solution of sub 46 is
 accepted (the three agree within 9.4 px) and sub 48 is measured 0.66 px from the
 star (flagged by S56: 2 of its comparisons are inside the moved frame, and RR Lyr
-drifts 4.3 px per sub). The web
+drifts 4.3 px per sub). With S56's anchors chosen on the solved frame (second set
+of 2026-11-15) subs 44-46 get no point (1 of the 6 anchors seen on sub 44: before,
+it had 1 anchor of 1 and a point 496 px off the star, flagged), and the refusals
+of subs 44 and 45 read "only 2 of the 6 anchor stars" ("0 of the 1" before). The web
 server's port has the same change.
 **How to check.** `tests/workers/test_acquisition_engine.py::test_a_new_solution_the_anchors_do_not_confirm_is_refused_s54`
 (the wrong solution replaced the good one on the code before the fix),
