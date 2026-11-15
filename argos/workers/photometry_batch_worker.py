@@ -67,23 +67,56 @@ _LOCK_VERIFY_MIN_ANCHORS = 3
 _LOCK_FRESH_MAX_SHIFT_PX = 2.0
 
 
-def discover_light_frames(folder: Path) -> list[Path]:
+def _object_key(name) -> str:
+    """An object name compared without case, spaces or underscores (S62)."""
+    return "".join(c for c in str(name or "").lower() if c.isalnum())
+
+
+def _session_lights_only(path: Path, top: Path) -> bool:
+    """S63: a FITS found below ``top`` is a frame of the run unless an Argos session
+    folder (one holding ``session.json`` and ``lights/``) holds it outside ``lights/``.
+    """
+    for parent in path.parents:
+        if (parent / "session.json").is_file():
+            lights = parent / "lights"
+            return not lights.is_dir() or lights in path.parents
+        if parent == top:
+            break
+    return True
+
+
+def discover_light_frames(folder: Path, object_name: str | None = None) -> list[Path]:
     """The light frames a batch re-run should measure under ``folder``.
 
     ``.fit``/``.fits``/``.fts`` files (any case) in the folder itself, or in
     its subfolders when it has none (a session root holds lights/, darks/,
     flats/, biases/). Frames whose ``IMAGETYP`` names a calibration type are
-    left out; a frame without IMAGETYP is kept. Ordered by ``DATE-OBS``,
-    frames without a readable date last, by name.
+    left out; a frame without IMAGETYP is kept. With ``object_name`` (S62),
+    frames whose ``OBJECT`` names another object are left out too (another
+    field, measured against this target set); a frame without OBJECT is kept.
+    In a subfolder search, an Argos session folder's frames are its ``lights/``
+    only, and a link to a frame already listed is that frame (S63: Siril's
+    ``process/`` beside the lights holds links to them and registered copies).
+    Ordered by ``DATE-OBS``, frames without a readable date last, by name.
     """
     from astropy.io import fits
 
     folder = Path(folder)
+    wanted = _object_key(object_name)
 
     def fits_files(paths) -> list[Path]:
         return [p for p in paths if p.is_file() and p.suffix.lower() in _FITS_SUFFIXES]
 
-    candidates = fits_files(folder.glob("*")) or fits_files(folder.rglob("*"))
+    found = fits_files(sorted(folder.glob("*"))) or [
+        p for p in fits_files(sorted(folder.rglob("*"))) if _session_lights_only(p, folder)
+    ]
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+    for path in found:
+        real = path.resolve()
+        if real not in seen:  # S63: a link to a frame already listed is that frame
+            seen.add(real)
+            candidates.append(path)
     dated: list[tuple[datetime, Path]] = []
     undated: list[Path] = []
     for path in candidates:
@@ -95,6 +128,9 @@ def discover_light_frames(folder: Path) -> list[Path]:
         imagetyp = str(header.get("IMAGETYP", "") or "").lower()
         if any(word in imagetyp for word in _CALIBRATION_WORDS):
             continue
+        frame_object = _object_key(header.get("OBJECT"))
+        if wanted and frame_object and frame_object != wanted:
+            continue  # S62: another object's frame
         try:
             start = datetime.fromisoformat(str(header.get("DATE-OBS") or "").replace("Z", "+00:00"))
         except ValueError:

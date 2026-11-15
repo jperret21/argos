@@ -52,17 +52,27 @@ logger = logging.getLogger(__name__)
 
 
 def read_fits_2d(path: str) -> np.ndarray | None:
-    """Read a FITS file into a 2-D float32 array (NaNs zeroed, cubes collapsed)."""
+    """Read a FITS file into a 2-D float32 array (NaNs zeroed, cubes collapsed).
+
+    A float frame whose values all lie in [0, 1] (a calibrated frame from Siril or
+    PixInsight, where 1 is full scale) is scaled by 65535, so Measure star reads
+    counts and Identify field hands ASTAP a visible plane (S65).
+    """
     from astropy.io import fits
 
     with fits.open(path) as hdul:
         data = next((h.data for h in hdul if getattr(h, "data", None) is not None), None)
     if data is None:
         return None
+    floating = np.issubdtype(np.asarray(data).dtype, np.floating)
     arr = np.nan_to_num(np.asarray(data, dtype=np.float32), nan=0.0)
     if arr.ndim == 3:
         arr = arr.mean(axis=0) if arr.shape[0] <= 4 else arr.mean(axis=2)
-    return arr if arr.ndim == 2 else None
+    if arr.ndim != 2:
+        return None
+    if floating and arr.size and 0.0 < float(arr.max()) <= 1.0:
+        arr = arr * np.float32(65535.0)
+    return arr
 
 
 def read_fits_meta(path: str) -> dict:

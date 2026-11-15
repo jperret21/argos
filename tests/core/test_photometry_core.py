@@ -444,6 +444,49 @@ def test_aavso_check_magnitude_ignores_flagged_check_points(tmp_path) -> None:
     assert [(row[9], row[10]) for row in rows] == [("na", "na"), ("000-KKK-222", "11.6000")]
 
 
+def test_aavso_export_leaves_out_undated_points_s60(tmp_path) -> None:
+    """S60: before S13 a batch re-run dated a frame without DATE-OBS at JD 0
+    (``jd_utc=jd or 0.0``), and those CSVs still open in Analyze: Export AAVSO
+    wrote their rows with DATE 0.000000, an observation in 4713 BC. An undated
+    point (JD not finite, or before JD 2 400 000) is left out and counted."""
+    from argos.core.photometry.lightcurve import write_aavso
+
+    target = LightCurve(name="SS Cyg", role="target")
+    target.append(LcPoint(jd_utc=2461315.50, mag=12.0, mag_err=0.02))
+    target.append(LcPoint(jd_utc=0.0, mag=12.1, mag_err=0.02))
+    target.append(LcPoint(jd_utc=float("nan"), mag=12.2, mag_err=0.02))
+    target.append(LcPoint(jd_utc=0.0, mag=9.1, mag_err=0.02, saturated=True))
+    csv_path = tmp_path / "target_SS_Cyg_SS_Cyg.csv"
+    target.to_csv(csv_path)
+    reloaded = LightCurve.from_csv(csv_path, name="SS Cyg")  # a pre-0.5.0 batch CSV, read back
+
+    path = tmp_path / "aavso.txt"
+    summary = write_aavso(path, [reloaded], obscode="TST")
+    rows = [ln.split(",") for ln in path.read_text().splitlines() if not ln.startswith("#")]
+    assert [row[1] for row in rows] == ["2461315.500000"]  # + 0.000000 and nan before
+    assert (summary.rows, summary.undated_excluded, summary.saturated_excluded) == (1, 3, 0)
+    from argos.core.photometry.lightcurve import MIN_AAVSO_JD
+
+    assert MIN_AAVSO_JD == 2_400_000.0
+
+
+def test_aavso_header_names_the_software_and_its_version_s64(tmp_path) -> None:
+    """S64: every AAVSO report said ``#SOFTWARE=Argos``; the Extended File Format
+    asks for the name and version of the software that wrote it. The default is
+    the version stamped into the FITS headers (``argos.SOFTWARE_ID``)."""
+    from argos import SOFTWARE_ID, __version__
+    from argos.core.photometry.lightcurve import write_aavso
+
+    target = LightCurve(name="SS Cyg", role="target")
+    target.append(LcPoint(jd_utc=2461315.50, mag=12.0, mag_err=0.02))
+    path = tmp_path / "aavso.txt"
+    write_aavso(path, [target], obscode="TST")
+    head = [ln for ln in path.read_text().splitlines() if ln.startswith("#SOFTWARE=")]
+    assert head == [f"#SOFTWARE={SOFTWARE_ID}"] == [f"#SOFTWARE=Argos v{__version__}"]
+    write_aavso(path, [target], obscode="TST", software="Other 1.0")
+    assert "#SOFTWARE=Other 1.0" in path.read_text().splitlines()
+
+
 _BJD_OFFLINE = """
 import json, warnings
 warnings.simplefilter("ignore")

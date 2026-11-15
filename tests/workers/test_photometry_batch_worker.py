@@ -538,6 +538,57 @@ def test_discover_light_frames_finds_fit_and_skips_calibration(tmp_path) -> None
     assert discover_light_frames(tmp_path / "darks") == []
 
 
+def test_discover_light_frames_keeps_the_object_s62(tmp_path) -> None:
+    """S62: S12 filtered the frame type only. Pointed at a folder holding two
+    objects' frames (or at the sessions folder, searched recursively), the re-run
+    measured every object's lights against one target set: blank-sky points of
+    another field. Frames whose OBJECT names another object are left out (case,
+    spaces and underscores ignored); a frame without OBJECT is kept."""
+    from argos.workers.photometry_batch_worker import discover_light_frames
+
+    a = tmp_path / "s1" / "lights" / "a.fit"
+    b = tmp_path / "s2" / "lights" / "b.fit"
+    c = tmp_path / "s1" / "lights" / "c.fit"
+    _header_only_fits(a, IMAGETYP="Light Frame", OBJECT="XX Cyg", DATE_OBS="2026-11-01T21:00:00")
+    _header_only_fits(b, IMAGETYP="Light Frame", OBJECT="RR Lyr", DATE_OBS="2026-11-01T21:00:05")
+    _header_only_fits(c, IMAGETYP="Light Frame", DATE_OBS="2026-11-01T21:00:10")
+
+    assert discover_light_frames(tmp_path, "XX_Cyg") == [a, c]  # b measured before the fix
+    assert discover_light_frames(tmp_path, "rr lyr") == [b, c]
+    assert discover_light_frames(tmp_path) == [a, b, c]  # no object named: every light
+
+
+def test_discover_light_frames_measures_a_session_s_lights_only_s63(tmp_path) -> None:
+    """S63: pointed at a session folder, the subfolder search also found the FITS
+    other programs wrote beside lights/: star_var_script's Siril ``process/`` holds
+    a link to every light and a registered copy of it (same DATE-OBS, OBJECT and
+    IMAGETYP). The owner's RR Lyr 2026-09-25 folder gave 585 frames for 195 lights:
+    every epoch measured three times. A session folder's frames are its lights/;
+    a link to a frame already listed is that frame."""
+    from argos.workers.photometry_batch_worker import discover_light_frames
+
+    session = tmp_path / "20260925T200453Z_RR_Lyr"
+    a = session / "lights" / "a.fit"
+    b = session / "lights" / "b.fit"
+    _header_only_fits(a, IMAGETYP="Light Frame", OBJECT="RR Lyr", DATE_OBS="2026-09-25T20:04:56")
+    _header_only_fits(b, IMAGETYP="Light Frame", OBJECT="RR Lyr", DATE_OBS="2026-09-25T20:06:10")
+    (session / "session.json").write_text("{}")
+    (session / "process").mkdir()
+    (session / "process" / "light_00001.fit").symlink_to(a)
+    _header_only_fits(
+        session / "process" / "r_light_00001.fit",
+        IMAGETYP="Light Frame",
+        OBJECT="RR Lyr",
+        DATE_OBS="2026-09-25T20:04:56",
+    )
+    assert discover_light_frames(session, "RR Lyr") == [a, b]  # + the link and the copy before
+    assert discover_light_frames(tmp_path, "RR Lyr") == [a, b]  # from the sessions folder too
+    loose = tmp_path / "loose"  # not a session: every FITS, each file once
+    _header_only_fits(loose / "x.fit", IMAGETYP="Light Frame", DATE_OBS="2026-09-25T21:00:00")
+    (loose / "y.fit").symlink_to(loose / "x.fit")
+    assert discover_light_frames(loose) == [loose / "x.fit"]
+
+
 def _run_batch(req, on_progress=None):
     worker = PhotometryBatchWorker(req)
     points, results = [], []
