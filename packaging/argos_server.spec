@@ -57,6 +57,9 @@ hiddenimports = (
     # What the path-loaded core review imports (not seen by the analysis).
     + ["argos.core.imaging.session_log", "argos.core.catalog.targets"]
     + ["argos.core.photometry.lightcurve"]
+    # S66 (header airmass, frozen pointing) and S67 (sigma_syst recompute).
+    + ["argos.core.imaging.sky_geometry", "argos.core.photometry.airmass"]
+    + ["argos.core.photometry.uncertainty"]
 )
 
 #: Top-level packages that must never reach the server bundle.
