@@ -1,11 +1,23 @@
-# Argos 0.5.0 — data-integrity and hardware-safety fixes
+# Argos 0.5.0 — the first beta of the new ARGOS, and the fixes found on the way
 
 > Branch: `release/0.5.0`, cut from the published `release/0.4.2`.
-> Last updated: 2026-11-15.
+> Last updated: 2026-11-16.
 
-A bug-fix release with no new features. Specifying the web UI meant taking an
-inventory of the Qt code, and that inventory turned up defects that affect
-0.4.2 users today: frames labelled with the wrong settings, a dark that is a
+ARGOS 0.5.0 is the first beta of the new ARGOS: a stable version with the new
+interface. The PyQt6 application is retired. ARGOS is now a web interface
+(`web/`) in a desktop app for macOS and Linux (`web/src-tauri`), driven by a
+headless server (`argos/server`); the Qt code stays in the repository only as
+the reference of the parity tests. The release also brings every fix listed
+below: data-integrity, hardware-safety and photometry fixes (S1–S84, H1–H17,
+X1–X3), the photometry ones checked against references independent of the old
+app (the Siril reduction of a real night, astropy, the VSP catalogue, the
+frames' own noise). Patch releases 0.5.x will follow. The web interface was
+tested with its simulator and with replays of real nights; it has not yet been
+used live on a telescope. This file lists the fixes; the interface is described
+in the documentation and in `web/spec/progress.md`.
+
+How the fixes were found. Specifying the web UI meant taking an inventory of
+the Qt code, and that inventory turned up defects that affected 0.4.2 users: frames labelled with the wrong settings, a dark that is a
 light frame, AAVSO rows naming the wrong star, a live curve that never gets a
 point. The science items of that inventory (`web/spec/README.md` §6.1) that
 were approved for this release were each reproduced on 0.4.2 before being fixed
