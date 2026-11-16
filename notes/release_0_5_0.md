@@ -8,7 +8,7 @@ interface. The PyQt6 application is retired. ARGOS is now a web interface
 (`web/`) in a desktop app for macOS and Linux (`web/src-tauri`), driven by a
 headless server (`argos/server`); the Qt code stays in the repository only as
 the reference of the parity tests. The release also brings every fix listed
-below: data-integrity, hardware-safety and photometry fixes (S1–S84, H1–H17,
+below: data-integrity, hardware-safety and photometry fixes (S1–S85, H1–H17,
 X1–X3), the photometry ones checked against references independent of the old
 app (the Siril reduction of a real night, astropy, the VSP catalogue, the
 frames' own noise). Patch releases 0.5.x will follow. The web interface was
@@ -189,6 +189,7 @@ which; *Check your old files* below says how to find them.
 | S82 | The batch re-run took an OBJECT in SIMBAD's form ("V* XX Cyg") for another object | "No frames": the run's lights not measured | no (nothing was written) |
 | S83 | Live and sequence photometry took the e-/ADU at the Camera form's gain, not the frame's | A step at another gain measured with the form's e-/ADU (since S73 26 % apart between gains 80 and 100) | only steps at another gain than the form's |
 | S84 | The noise model, its read noise and the camera's e-/ADU (gain table, photon-transfer folder) could change during a run (web Settings; Qt's photon-transfer folder) | The SNR the gates read and the formal errors changed partway through one curve | no (no released version could) |
+| S85 | The live and sequence paths wrote a target measured below SNR 3 (no detection) unflagged; only Review, the AAVSO export and a re-run flagged it (S67) | An unflagged no-detection point in the live CSV and curve, and a larger live `sigma_syst` on every row (XX Cyg 2026-09-07 `040723Z` replayed: 0.077-0.080 → 0) | **yes** (live CSVs of runs with such a frame; Review and the export already leave them out, S67) |
 | S66 | Review, Analyze and the batch re-run used the airmass computed for the Settings site, wrong on some runs (X3) | AAVSO `AMASS` 4.088-1.514 where the airmass was 1.033-1.364 (RR Lyr 2026-09-25); 0.013-0.015 high under X3's 5° tolerance (a re-run of XX Cyg 2026-08-29) | **yes** (RR Lyr 2026-09-25; Review now takes each frame's header `AIRMASS`, the files are unchanged) |
 | S67 | Review, the AAVSO export and the batch re-run kept the rows S35 now refuses (no detection) | Blank-sky rows submitted; a larger `sigma_syst` and `MERR` on every row of the run | **yes** (RR Lyr 2026-09-25: 2 frames; XX Cyg 2026-09-07 `040723Z`: its target on 1 frame) |
 | S68 | Comparisons picked before 0.4.2 never got their VSP chart | `CHART` na on every report of those objects, new runs included | **yes** (every report of the owner's objects; header lines only, no observation) |
@@ -1030,9 +1031,11 @@ unavailable during a run with the server's sentence: Photometry the noise model 
 the read noise, with S15's four, Instrument the photon-transfer folder and the
 electron gain table. Not covered, as for S15: another program editing
 `config.json` during a run (the web server re-reads the file on
-`GET /api/config`), and an edit of the photon-transfer file itself, which is read
-for every frame (OWNER DECISION, the review: resolve the e-/ADU once per gain at
-the run's start).
+`GET /api/config`).
+**Known limits (0.5.x).** An edit of the `camera_calibration*.json` file itself
+during a run applies from the next frame (the file is read for every frame);
+resolving the e-/ADU once per gain at the run's start is deferred. `site.elevation`
+(S74's scintillation) is not run-locked.
 **How to check.** `tests/ui/test_photometry_window.py::test_the_noise_model_is_locked_during_a_sequence_s84`
 (written mid-run before the fix), `tests/ui/test_shell.py::test_shell_three_mode_walkthrough`
 (the folder field enabled, and a change applied, during a run before the fix); web
@@ -2058,8 +2061,8 @@ crossing SNR 5 and 10; `050148Z` frame 5 keeps 2 comparisons after the clip, so 
 S71 flag; `052943Z` frame 3's target flagged by the hot-pixel guard at 9.9 % against
 the 10 % threshold). On the live path the cloudy `045626Z` frame, a lock lost
 before, is now measured on its one anchor with the target at SNR 0.8, unflagged in
-the live CSV; Review, the AAVSO export and a re-run leave it out (S67): OWNER
-DECISION, apply S67's per-target rule live or ask S48 for 2 anchors.
+the live CSV; Review, the AAVSO export and a re-run leave it out (S67). Since S85
+the live path flags it too, when it measures it.
 **Who was affected.** Every magnitude and error of every run: by a few mmag on
 bright stars, more on faint ones (the sawtooth scales as 1/flux).
 **How to check.** `tests/core/test_photometry_core.py::test_the_sky_is_no_quantised_median_s76`
@@ -2406,6 +2409,68 @@ lag at most and 1.29 px of fit error before, 0.074° and 0.18 px after
 `::test_consistent_pairs_keeps_a_rigid_constellation_s80`; web
 `tests/server/test_geometry_s77_s80.py::test_the_overlay_tracker_keeps_up_with_a_field_rotating_0_7_deg_per_sub`
 (two passes on the code before).
+
+### S85 — A live target point below SNR 3 is flagged when it is measured
+
+**What was wrong.** S67 flags a target measured below SNR 3 (no detection: cloud over
+it, or a field that moved) in Review, the AAVSO export and a batch re-run, but the
+live and sequence paths still wrote that point unflagged when they measured it: in
+the live CSV, the live curve and the curve's `sigma_syst` (every row's `mag_err`).
+S35 and S48 skip a frame only when the anchors show no star; a target hidden alone,
+or a frame whose lock still holds, is measured. Found by S76's validation: replaying
+the Qt sequence path on the cloudy XX Cyg 2026-09-07 `045626Z` with a solve every
+20 s, its third sub, a lost lock before S76, is measured on one anchor through its
+own solution (verified, S56: 0.18 px of tracker motion) with the target at SNR 0.85,
+12.767 ± 1.279, unflagged.
+**Who was affected.** Live and sequence runs whose target drops below SNR 3 on a
+frame the lock survives. Replaying the Qt sequence path on the 8 study runs (Argos's
+own solves, a solve every 20 s and one per run, before = the release at `964528d`):
+two target points, both now flagged, nothing else changed: `045626Z` sub 3 (above;
+with one solve per run that sub's lock is lost, S48, and it has no point, as before) and
+XX Cyg 2026-09-07 `040723Z` frame 20 (SNR 1.85, 12.948 ± 0.588 among 11.68-12.55,
+S67's frame), whose point had raised the live target's `sigma_syst` to 0.0770 (one
+solve per run) and 0.0804 (every 20 s); it is 0 without it, as in the re-run since
+S76. RR Lyr 2026-09-25 (193 points, frames 52 and 175 skipped by S35 and S48 as
+before), the five other XX Cyg runs and S56's cases (the 500 px jump with and
+without the anchor-frame rule, RR Lyr frames 0-39 with the set change, with and
+without S52) give the same points and flags.
+**What changed.** The owner's option (a) of 2026-11-16, no new threshold: the core
+review's `flag_no_detection` applies S67's per-target rule to a point when it is
+measured (`review.NO_DETECTION_SNR`, the threshold `no_detection_flags` reads through
+`below_detection`): a target below SNR 3 has its point flagged `suspect` and
+`no_detection` (kept in the curve and its CSV, the CSV's `suspect` column, left out
+of the AAVSO export and named "suspect (no detection)" there); the curve's
+`sigma_syst` is estimated without it and still added to its own error; the flight
+recorder gets a `no_detection` event naming the targets (`low_snr`), as a re-run
+records it. Only that target's own point: a second, bright target, the comparisons
+and the check keep theirs (S67's option b). S67's other half, a zero point more
+than 1 mag from the run's median, needs the run and stays with Review and the
+re-run. `AcquisitionEngine._emit_live_point` and `_apply_systematic_floor` (live
+preview and sequence subs alike). The target's flag is now the re-run's (the Qt
+batch re-run of the same clone): on `040723Z` every CSV's `suspect` column (9 stars,
+24 frames) and the target's `sigma_syst` (0) are the re-run's; on `045626Z` the live
+target CSV's column reads 0, 0, 1 like the re-run's (0, 0, 0 before), and the re-run
+also flags that sub's comparisons, by S43 (its re-solve of the cloudy sub failed),
+where the live path measured it through Argos's own solution of it. The web server's
+port is the same code (`photometry.py`, GUARD until the merge) and gives the same
+points as the fixed Qt in one process, with no difference: the 16 replays above and
+the RR Lyr set change, 3787 points field by field, the CSVs byte for byte, the two
+points above flagged on both sides with the same `sigma_syst`.
+**How to check.** `tests/workers/test_acquisition_engine.py::test_a_live_target_below_snr_3_is_flagged_no_detection_s85`
+(a faint second target at SNR 1.94 and a bright one on one frame: the faint one's
+point unflagged on the code before the fix),
+`::test_a_point_without_a_detection_sets_no_live_sigma_syst_s85` (the point
+unflagged on the code before; with only the floor's hunk reverted, the floor 0.0137
+with the point instead of 0.0014 without),
+`tests/core/test_session_old_file_rules.py::test_the_live_rule_is_s67s_per_target_rule_s85`
+(the live rule and `no_detection_flags` flag the same targets), and
+`::test_review_reads_a_live_csv_flagged_at_measurement_unchanged` (Review keeps such
+a file's flags and floor; a non-regression test, it passes on the code before); web `tests/server/test_photometry.py::test_a_live_target_below_snr_3_is_flagged_no_detection_s85`
+and `::test_live_no_detection_flags_and_floor_are_the_qt_engines_s85` (GUARD: they
+run once the release core is merged).
+**Check your old files.** As S67: Review, Analyze's **Open curve CSV** and the
+export already leave those rows out of a live CSV and recompute its `sigma_syst`
+from the run's flight recorder; a re-run flags them.
 
 ## Review and AAVSO export
 

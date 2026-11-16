@@ -605,6 +605,14 @@ At least **ten** valid measurements are needed for the automatic estimate. Below
 that, the floor is either taken from the explicit configuration value or omitted
 entirely, and the curve shows formal errors only.
 
+A target measured below SNR 3 on a frame holds no detection there (clouds over it,
+or a field that moved): its point is kept and flagged *suspect*, it is left out of
+the estimate, and its own error still takes the floor. The live curve applies this
+as each point is measured; a re-measurement of saved subs and Review apply it from
+the run's frames and flight recorder, together with a frame-wide rule the live
+curve cannot apply while the run goes on (a zero point more than 1 mag from the
+run's median flags every star of that frame).
+
 ```{admonition} One uncertainty contract
 :class: note
 
@@ -746,7 +754,7 @@ prefixes `star_id`, `role`, `name` and `auid`; the rest is the same in both.
 | `relative_flux_err` | — | its propagated error |
 | `relative_comps_used` | count | comparisons behind $\rho$ in this row |
 | `saturated` | bool | the §3.5 saturation flag |
-| `suspect` | bool | the §3.5 PSF-support flag |
+| `suspect` | bool | the §3.5 PSF-support flag; since 0.5.0 also a point the run's checks do not trust (an unverified tracker lock, a star off its aperture centre, a contradicted dominant comparison, a target measured below SNR 3: no detection, §5) |
 
 ```{note}
 **The two ensemble counts are both here because they genuinely differ.** The
