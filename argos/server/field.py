@@ -36,6 +36,7 @@ the next solve due at once (:meth:`FieldService.resolve_due`).
 
 from __future__ import annotations
 
+import inspect
 import logging
 import math
 import threading
@@ -86,6 +87,11 @@ from argos.server.jobs import JobCancelled, JobContext
 from argos.server.photometry import MeasureRequest
 from argos.server.state import utc_iso
 from argos.server.targets import pending_star, star_from_pending
+
+#: GUARD (S72, until release/0.5.0's core is merged): the core's aperture takes the
+#: noise model's black level and plane pixels (``black_adu``, ``plane_pixels``) from
+#: ``PhotometryParams``; an older core has neither.
+_APERTURE_TAKES_BLACK = "black_adu" in inspect.signature(measure_aperture).parameters
 
 if TYPE_CHECKING:  # pragma: no cover
     from argos.server.hub import Hub
@@ -1408,6 +1414,7 @@ class FieldService:
                 self.schedule_projection()
                 if result.comparisons:
                     self._hub.targets.backfill_comparisons()
+                    backfill_chart_ids(self._hub, result.comparisons)
         except Exception:
             logger.exception("Field catalogue fetch failed")
             with self._hub._lock:
@@ -1625,6 +1632,11 @@ class FieldService:
                 egain=params.egain,
                 read_noise_e=params.read_noise_e,
                 sat_adu=params.sat_adu,
+                **(
+                    {"black_adu": params.black_adu, "plane_pixels": params.plane_pixels}
+                    if _APERTURE_TAKES_BLACK
+                    else {}
+                ),
             )
             if phot is None:
                 continue
@@ -2283,6 +2295,43 @@ def _radec_rows(ra_deg: float, dec_deg: float) -> list[dict[str, str]]:
 def _mags_value(pairs) -> str | None:
     text = "  ".join(f"{band} {float(mag):.3f}" for band, mag in pairs if mag is not None)
     return text or None
+
+
+def backfill_chart_ids(hub: Any, comparisons) -> int:
+    """S68 (``AcquisitionEngine._backfill_chart_ids``): comparisons kept without a chart.
+
+    A VSP comparison saved before Argos kept the chart (0.4.1) never got one; this VSP
+    answer names it when it lists the star with the same catalogue magnitudes, in the
+    object's set and in the running run's ``targets.json``. GUARD: needs the core's
+    ``TargetSet.backfill_chart_ids`` (release/0.5.0); returns how many stars changed.
+    """
+    from argos.core.catalog.targets import TargetSet
+
+    if not hasattr(TargetSet, "backfill_chart_ids"):
+        return 0
+    targets = hub.targets
+    with targets._lock:  # TargetService's own lock and save (backfill_comparisons)
+        tset, path = targets._current()
+        changed = tset.backfill_chart_ids(comparisons)
+        if changed:
+            try:
+                targets._save(tset, path)
+            except ApiError:
+                return 0  # logged by _save
+    if not changed:
+        return 0
+    sequence = getattr(hub, "sequence", None)
+    root = sequence.run_root() if sequence is not None else None
+    snapshot = root / "targets.json" if root is not None else None
+    if snapshot is not None and snapshot.is_file():
+        try:
+            run_set = TargetSet.load(snapshot)
+            if run_set.backfill_chart_ids(comparisons):
+                run_set.save(snapshot)
+        except OSError as exc:
+            hub.log("warning", f"Save run targets: {exc}", source="photometry", topic="photometry")
+    targets.publish()
+    return changed
 
 
 def _catalogue_card(kind: str, item, hub, tset) -> tuple[str, list, dict] | None:

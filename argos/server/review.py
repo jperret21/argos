@@ -113,6 +113,9 @@ ZP_OUTLIER_MAG = 1.0
 #: nothing verified ("treat that sub's rows as suspect"; conservative, display only).
 MIN_ANCHORS = 3
 ANCHOR_SNR = 10.0
+#: S71: the ensemble is faint when its comparisons' median SNR (each comparison's median
+#: over the run, then the median of those) is below this; the zero point is then noisy.
+FAINT_ENSEMBLE_SNR = 10.0
 #: A flight-recorder frame matches a point within this (d): the recorder rounds
 #: ``jd_utc`` to 4 decimals (``diagnostics.py:_NDIGITS``), 4.3 s at most.
 _RECORDER_JD_TOL = 1.0e-4
@@ -143,6 +146,24 @@ def core_review() -> ModuleType:
             sys.modules.pop(_CORE_REVIEW_NAME, None)
             raise
         return module
+
+
+def core_rules() -> ModuleType | None:
+    """GUARD (S66, S67): the core reader once it has the old-file rules, else ``None``.
+
+    ``apply_old_file_rules`` (release/0.5.0: each Argos frame's header AIRMASS unless
+    its pointing is frozen, the flight recorder's no-detection points flagged suspect
+    per target, ``sigma_syst`` recomputed, the comparisons' median SNR) reaches this
+    tree with the merge; until then Review flags those points without changing them,
+    as before.
+    """
+    core = core_review()
+    # FrozenPointing, no_detection_flags: the S66/S67 reviews' X1 and batch rules;
+    # RecorderFrame.flags, FAINT_ENSEMBLE_SNR: the owner's options (b) and S71's warning.
+    names = ("apply_old_file_rules", "FrozenPointing", "no_detection_flags", "FAINT_ENSEMBLE_SNR")
+    if not all(hasattr(core, name) for name in names):
+        return None
+    return core if hasattr(core.RecorderFrame, "flags") else None
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +252,8 @@ class FrameHeader:
     height: int | None = None
     bayer: str | None = None
     ccd_temp: float | None = None
+    #: The core's ``FramePointing`` of this header (S66), ``None`` before the merge.
+    pointing: Any = None
 
     def record(self) -> dict[str, Any]:
         return {
@@ -259,6 +282,7 @@ def read_frame_header(path: Path) -> FrameHeader | None:
     date_obs = header.get("DATE-OBS")
     bayer = header.get("BAYERPAT")
     software = header.get("SOFTWARE") or header.get("SWCREATE")
+    rules = core_rules()
     return FrameHeader(
         date_obs=str(date_obs).strip() if date_obs else None,
         mid=mid,
@@ -276,6 +300,7 @@ def read_frame_header(path: Path) -> FrameHeader | None:
         bayer=str(bayer).strip() or None if bayer else None,
         # review.py:_fits_temperature reads the same keyword the same way.
         ccd_temp=_num(header.get("CCD-TEMP")),
+        pointing=rules.frame_pointing(header) if rules is not None else None,
     )
 
 
@@ -432,6 +457,23 @@ def _flag_recorder(frames: list[RecorderFrame]) -> None:
             rec.flags.append("few_anchors")
 
 
+def comparison_median_snr(frames: list[RecorderFrame]) -> float | None:
+    """S71: the median over the comparisons of each one's median SNR in the recorder.
+
+    None without a recorded comparison SNR. Saturated records are left out: they never
+    enter the ensemble.
+    """
+    per_star: dict[str, list[float]] = {}
+    for rec in frames:
+        for star in rec.stars:
+            snr = _num(star.get("snr"))
+            if star.get("role") != ROLE_COMPARISON or snr is None or star.get("saturated"):
+                continue
+            per_star.setdefault(str(star.get("auid") or star.get("name") or ""), []).append(snr)
+    medians = [statistics.median(values) for values in per_star.values() if values]
+    return statistics.median(medians) if medians else None
+
+
 def _anchor_count(rec: RecorderFrame) -> int:
     """S56's count: comparison or check records at SNR >= 10, not saturated."""
     return sum(
@@ -580,6 +622,11 @@ class CurveSetData:
     problems: list[str] = field(default_factory=list)
     airmass_source: str = "csv"
     revision: str = ""
+    #: What the ``airmass`` column holds: the CSV's, or each Argos frame's header
+    #: AIRMASS (S66; points without one keep the CSV's, ``old_file_rules``).
+    airmass_column: str = "csv"
+    #: The core's ``OldFileRules`` (S66, S67) applied to these curves, or ``None``.
+    rules: Any = None
 
     @property
     def filters(self) -> list[str]:
@@ -603,8 +650,47 @@ class CurveSetData:
             "multi_filter": self.multi_filter,
             "problems": list(self.problems),
             "airmass_source": self.airmass_source,
+            "airmass_column": self.airmass_column,
+            "old_file_rules": rules_record(self.rules),
             "revision": self.revision,
         }
+
+
+def rules_record(rules: Any) -> dict[str, Any] | None:
+    """The core's ``OldFileRules`` on the wire (``protocol.md`` CurveSet), or ``None``."""
+    if rules is None:
+        return None
+    return {
+        "site_mismatch": bool(rules.site_mismatch),
+        "airmass_from_header": int(rules.airmass_from_header),
+        "airmass_computed": int(rules.airmass_computed),
+        "frozen_lights": int(rules.frozen_lights),
+        "no_detection_frames": [
+            {
+                "file": f.file,
+                "frame": f.number,
+                "jd_utc": f.jd_utc,
+                "low_snr": sorted(f.low_snr),
+                "zp_outlier": f.zp_outlier,
+            }
+            for f in rules.no_detection_frames
+        ],
+        "comparison_median_snr": _num(rules.comparison_median_snr),
+        "no_detection_points": int(rules.no_detection_points),
+        "sigma_syst": {name: [before, after] for name, (before, after) in rules.floors.items()},
+        "messages": list(rules.messages()),
+    }
+
+
+def apply_rules(curves: list["ReviewCurveData"], rules: Any) -> None:
+    """After the core's rules: the ``no_detection`` display flag on the points they flagged."""
+    if rules is None:
+        return
+    for c in curves:
+        for i, p in enumerate(c.lc.points):
+            if getattr(p, "no_detection", False) and i < len(c.flags):
+                if "no_detection" not in c.flags[i]:
+                    c.flags[i].append("no_detection")
 
 
 def _wire_key(lc: LightCurve, token: str) -> str:
@@ -783,6 +869,20 @@ def open_session(root: Path, ctx: JobContext | None = None) -> SessionData:
     curves, problems, unreadable = _session_curves(
         root, targets, review, frames, headers, recorder, session_token, progress
     )
+    # S66, S67: the core's old-file rules on the curves, as load_session_curves applies
+    # them (the light headers in load_session's order, read once above). GUARD.
+    rules = None
+    core_rules_module = core_rules()
+    if core_rules_module is not None:
+        pointings = [
+            h.pointing if h is not None else None
+            for f, h in zip(frames, headers)
+            if id(f) in light_ids
+        ]
+        rules = core_rules_module.apply_old_file_rules([c.lc for c in curves], root, pointings)
+        apply_rules(curves, rules)
+        if rules.site_mismatch:
+            site = dict(site, message=rules.messages()[0])
     warnings = list(review.warnings) + unreadable
     curve_set = CurveSetData(
         source={"kind": "session", "path": str(root)},
@@ -793,6 +893,8 @@ def open_session(root: Path, ctx: JobContext | None = None) -> SessionData:
         problems=problems,
         airmass_source=airmass_source,
         revision=_revision(stamp),
+        airmass_column="header" if rules is not None and rules.airmass_from_header else "csv",
+        rules=rules,
     )
 
     # Readiness: the core's lines first (readiness_issues, review.py:76-82).
@@ -813,21 +915,29 @@ def open_session(root: Path, ctx: JobContext | None = None) -> SessionData:
         )
     if site["state"] == "mismatch":
         issues.append({"code": "site_mismatch", "level": "warn", "message": site["message"]})
+    no_detection = {"low_snr", "zp_outlier", "no_detection"}
     flagged = sum(
         1
         for c in curves
         if c.lc.role == ROLE_TARGET
         for flags in c.flags
-        if set(flags) & {"low_snr", "zp_outlier"}
+        if set(flags) & no_detection
     )
     unverified = sum(
         1
         for c in curves
         if c.lc.role == ROLE_TARGET
         for flags in c.flags
-        if "few_anchors" in flags and not set(flags) & {"low_snr", "zp_outlier"}
+        if "few_anchors" in flags and not set(flags) & no_detection
     )
     if flagged:
+        if rules is not None:
+            what = (
+                "flagged suspect and left out of the AAVSO export; sigma_syst is recomputed "
+                "without them (S67)."
+            )
+        else:
+            what = "flagged. Leave them out of any use."
         issues.append(
             {
                 "code": "flagged_points",
@@ -836,7 +946,7 @@ def open_session(root: Path, ctx: JobContext | None = None) -> SessionData:
                 "message": (
                     f"{flagged} target point{'s' if flagged != 1 else ''} measured with an SNR "
                     "below 3 or on a frame whose zero point is more than 1 mag from the "
-                    "run's (the field moved, or cloud): flagged. Leave them out of any use."
+                    f"run's (the field moved, or cloud): {what}"
                 ),
             }
         )
@@ -850,7 +960,25 @@ def open_session(root: Path, ctx: JobContext | None = None) -> SessionData:
                     f"{unverified} target point{'s' if unverified != 1 else ''} measured "
                     "while fewer than 3 comparison or check stars reached SNR 10 (S56): "
                     "nothing verified the apertures were on their stars. The rule is "
-                    "conservative; check them before an AAVSO export."
+                    "conservative: a re-run of the photometry (S58) verifies each such frame "
+                    "with a plate solve and flags only those it cannot verify."
+                ),
+            }
+        )
+    # S71: the core's median (Qt's Review warns alike) once merged, else this reader's.
+    ensemble_snr = (
+        rules.comparison_median_snr if rules is not None else comparison_median_snr(recorder)
+    )
+    if ensemble_snr is not None and ensemble_snr < FAINT_ENSEMBLE_SNR:
+        issues.append(
+            {
+                "code": "faint_comparisons",
+                "level": "warn",
+                "median_snr": round(ensemble_snr, 1),
+                "message": (
+                    f"The comparisons' median SNR is {ensemble_snr:.1f}, below 10 (S71): the "
+                    "zero point rests on the brightest of them, and its error is in each "
+                    "point's error. Brighter comparisons give a better curve."
                 ),
             }
         )
@@ -1152,6 +1280,14 @@ def import_csv(path: Path) -> CurveSetData:
         raise ApiError(422, "invalid_csv", f"{name} could not be read ({exc})") from exc
     if not any(curve.points for _identity, curve, _source, _problem in identified):
         raise ApiError(422, "invalid_csv", f"No valid photometry rows in {name}")
+    # S66, S67: a run's own CSV gets the old-file rules of its session, as Analyze's
+    # Open curve CSV applies them (apply_old_file_rules_to_file). GUARD.
+    rules = None
+    core_rules_module = core_rules()
+    if core_rules_module is not None:
+        rules = core_rules_module.apply_old_file_rules_to_file(
+            path, {str(i): curve for i, (_k, curve, _s, _p) in enumerate(identified)}
+        )
     curves: list[ReviewCurveData] = []
     keys: set[str] = set()
     session_token = _session_light_token(path)
@@ -1182,6 +1318,9 @@ def import_csv(path: Path) -> CurveSetData:
         data.snr = [None] * n
         data.flags = [[] for _ in range(n)]
         curves.append(data)
+    apply_rules(curves, rules)
+    wrong_site = rules is not None and rules.site_mismatch
+    header_column = rules is not None and rules.airmass_from_header > 0
     return CurveSetData(
         source={"kind": "import", "path": str(path)},
         object_name=(targets.object_name or None) if targets is not None else None,
@@ -1189,7 +1328,10 @@ def import_csv(path: Path) -> CurveSetData:
         targets=targets,
         curves=curves,
         problems=list(problems),
+        airmass_source="header" if wrong_site else "csv",
         revision=_revision((_stamp(path),)),
+        airmass_column="header" if header_column else "csv",
+        rules=rules,
     )
 
 

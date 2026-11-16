@@ -22,6 +22,7 @@ from argos.core.photometry.lightcurve import (
     write_curves_csv,
 )
 from argos.server.review import core_review
+from argos.server.review import core_rules as core_review_rules
 from tests.server.conftest import AUTH, wait_for
 from tests.server.test_review_sessions import make_session
 
@@ -64,6 +65,15 @@ def _preview(client, **body) -> dict:
     return response.json()
 
 
+def _qt_rules(path: Path, curves: dict) -> dict:
+    """Qt's old-file rules on a run's own CSV (S66 b, S67): what Review's
+    ``load_session_curves`` and Analyze's Open curve CSV apply (GUARD: the merged core)."""
+    rules = core_review_rules()
+    if rules is not None:
+        rules.apply_old_file_rules_to_file(path, curves)
+    return curves
+
+
 def _qt_reference(csv_paths: list[Path], out: Path, *, obscode=OBSCODE, filt="TG") -> None:
     """``write_aavso`` as Analyze's Open curve CSV + Export AAVSO call it (core chain)."""
     core = core_review()
@@ -72,7 +82,7 @@ def _qt_reference(csv_paths: list[Path], out: Path, *, obscode=OBSCODE, filt="TG
         targets = TargetSet.load(path.parent.parent / "targets.json")
         identified, problems = core.identify_curve_file(path, read_curves_csv(path), targets)
         assert not problems
-        curves.update(identified)
+        curves.update(_qt_rules(path, identified))
     write_aavso(
         out,
         [lc for lc in curves.values() if lc.points],
@@ -159,8 +169,12 @@ def test_airmass_from_a_wrong_site_is_said(export_client):
     session = make_session(export_client.root, header_site=(-30.0, 150.0), recorder=False)
     record = _preview(export_client, source=_source(session))
     assert record["airmass"]["state"] == "mismatch"
-    assert "wrong" in record["airmass"]["message"]
-    assert record["refusal"] is None  # still exported (owner decision pending)
+    assert record["refusal"] is None
+    if core_review_rules() is not None:  # S66 (GUARD): AMASS is the header AIRMASS
+        assert record["airmass"]["source"] == "header" and "S66" in record["airmass"]["message"]
+        assert "airmass_wrong_site" not in {w["code"] for w in record["warnings"]}
+    else:
+        assert "wrong" in record["airmass"]["message"]
 
 
 def test_recorder_flagged_points_are_said_not_dropped(export_client):
@@ -170,6 +184,12 @@ def test_recorder_flagged_points_are_said_not_dropped(export_client):
     session = make_session(export_client.root)  # with the recorder
     record = _preview(export_client, source=_source(session))
     (target,) = record["targets"]
+    if core_review_rules() is not None:  # S67 (GUARD): left out, counted, named
+        assert target["recorder_flagged"] == [] and record["recorder_flagged"] == 0
+        assert record["rows"] == 2 and record["excluded"]["no_detection"] == 1
+        assert record["warnings"] == [] and record["flagged_points"] == []
+        assert any("1 suspect (no detection)" in note for note in record["notes"])
+        return
     assert target["recorder_flagged"] == [2] and record["recorder_flagged"] == 1
     assert record["rows"] == 3  # still written: 4 points, 1 suspect left out
     (warning,) = record["warnings"]
@@ -226,7 +246,8 @@ def test_export_with_check_star_equals_qt_on_the_measurements_export(export_clie
     picked = []
     for name in ("target_XX_Test_v_000-AAA-001.csv", "check_XX_Test_v_000-AAA-003.csv"):
         path = session / "photometry" / name
-        picked += list(core.identify_curve_file(path, read_curves_csv(path), targets)[0].values())
+        identified = core.identify_curve_file(path, read_curves_csv(path), targets)[0]
+        picked += list(_qt_rules(path, identified).values())  # Review's curves
     measurements = tmp_path / "photometry.csv"
     write_curves_csv(measurements, picked)
     reloaded = read_curves_csv(measurements)
@@ -313,7 +334,8 @@ def test_csv_export_is_write_curves_csv(export_client, tmp_path):
     picked = []
     for name in ("target_XX_Test_v_000-AAA-001.csv", "check_XX_Test_v_000-AAA-003.csv"):
         path = session / "photometry" / name
-        picked += list(core.identify_curve_file(path, read_curves_csv(path), targets)[0].values())
+        identified = core.identify_curve_file(path, read_curves_csv(path), targets)[0]
+        picked += list(_qt_rules(path, identified).values())  # Review's curves
     reference = tmp_path / "qt.csv"
     write_curves_csv(reference, picked)
     assert out.read_bytes() == reference.read_bytes()
@@ -359,6 +381,7 @@ def test_export_equals_the_qt_review_window(export_client, tmp_path, monkeypatch
     targets = analyze_page._target_set_of_curve(csv_path)
     curves, problems = analyze_page.identify_curve_file(csv_path, curves, targets)
     assert not problems
+    _qt_rules(csv_path, curves)
     window = pw.PhotometryWindow()
     try:
         window.load_curves(curves, obscode=OBSCODE, filt="TG")

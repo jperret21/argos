@@ -77,6 +77,50 @@ def core_has_s57() -> bool:
     return "filter_token" in inspect.signature(save_comparison_quality_report).parameters
 
 
+def core_has_s71() -> bool:
+    """GUARD (pending merge of release/0.5.0): the core weighs each comparison by its
+    error and returns the zero point's error (S71: ``DiffResult.zp_err``). Before the
+    merge the zero point is the clipped plain mean."""
+    from dataclasses import fields
+
+    from argos.core.photometry.differential import DiffResult
+
+    return "zp_err" in {f.name for f in fields(DiffResult)}
+
+
+def _s71_zero_point(rows: list[tuple[float, float]]) -> tuple[float, float, float, int, int]:
+    """S71 by hand: ``rows`` are ``(cat − inst, inst_mag_err)``; weights
+    ``1/(err² + 0.01²)``, clip at 2.5 normalised residuals about the weighted median
+    (≤ 2 passes, ≥ 3 rows, never below 2 kept) → ``(zp, rms, zp_err, n, clipped)``."""
+    rows = [(d, math.hypot(e, 0.01)) for d, e in rows]
+    clipped = 0
+    for _ in range(2):
+        if len(rows) < 3:
+            break
+        ordered = sorted(rows)
+        weights = [1 / (s * s) for _d, s in ordered]
+        acc, med = 0.0, ordered[-1][0]
+        for i, w in enumerate(weights):
+            acc += w
+            if math.isclose(acc, sum(weights) / 2, rel_tol=1e-12) and i + 1 < len(ordered):
+                med = (ordered[i][0] + ordered[i + 1][0]) / 2
+                break
+            if acc > sum(weights) / 2:
+                med = ordered[i][0]
+                break
+        kept = [(d, s) for d, s in rows if abs(d - med) <= 2.5 * s]
+        if len(kept) == len(rows) or len(kept) < 2:
+            break
+        clipped += len(rows) - len(kept)
+        rows = kept
+    w = [1 / (s * s) for _d, s in rows]
+    n, total = len(rows), sum(w)
+    zp = sum(wi * d for wi, (d, _s) in zip(w, rows)) / total
+    var = sum(wi * (d - zp) ** 2 for wi, (d, _s) in zip(w, rows)) / total
+    rms = math.sqrt(var * n / (n - 1)) if n > 1 else 0.0
+    return zp, rms, max(math.sqrt(1 / total), rms / math.sqrt(n)), n, clipped
+
+
 def _star(curves, star_key: str):
     """The one curve of a star (S49: keys are ``<star>@<filter>``)."""
     (curve,) = [c for c in curves if c["key"].rpartition("@")[0] == star_key]
@@ -319,6 +363,9 @@ def _same(a, b) -> bool:
 def test_live_points_csvs_and_report_are_identical_to_the_qt_engine(
     phot_client, tmp_path, monkeypatch
 ):
+    # The Qt engine's module imports PyQt6 (the monkeypatch below loads it): a Qt-free
+    # install (the desktop app's, W8) skips this parity test.
+    pytest.importorskip("PyQt6")
     # Outside a run each curve's CSV is named after its start (S40): one clock for both.
     start = lambda: datetime(2026, 11, 9, 20, 15, tzinfo=timezone.utc)  # noqa: E731
     monkeypatch.setattr("argos.core.session.acquisition_engine._utcnow", start)
@@ -559,10 +606,26 @@ def test_leave_one_out_matches_a_hand_computation(phot_client):
             egain=EGAIN,
             read_noise_e=params.read_noise_e,
             sat_adu=params.sat_adu,
+            **(
+                {"black_adu": params.black_adu, "plane_pixels": params.plane_pixels}
+                if hasattr(params, "plane_pixels")  # GUARD: S72's core
+                else {}
+            ),
         )
         inst[star.auid] = (phot.inst_mag, phot.inst_mag_err)
     clipped = 0
     for star in comps:
+        if core_has_s71():  # GUARD: the merged core's weighted zero point (S71)
+            zp, rms, zp_err, n_used, n_clipped = _s71_zero_point(
+                [(s.mags["V"] - inst[s.auid][0], inst[s.auid][1]) for s in comps if s is not star]
+            )
+            clipped += n_clipped
+            point = curves[star.auid]["points"][0]
+            assert point["mag"] == round(inst[star.auid][0] + zp, 4), star.auid
+            assert point["formal_mag_err"] == round(math.hypot(inst[star.auid][1], zp_err), 4)
+            assert point["zero_point"] == round(zp, 4) and point["zp_rms"] == round(rms, 4)
+            assert point["comps_used"] == n_used
+            continue
         # Leave-one-out: the ensemble minus this star; ZP = mean(V - inst) after the
         # median / MAD clip (max(2.5 x 1.4826 x MAD, 0.01 mag), at most 2 passes, >= 3).
         diffs = [s.mags["V"] - inst[s.auid][0] for s in comps if s is not star]
@@ -584,7 +647,9 @@ def test_leave_one_out_matches_a_hand_computation(phot_client):
         assert point["mag"] == mag and point["formal_mag_err"] == formal, star.auid
         assert point["zero_point"] == round(zp, 4) and point["zp_rms"] == round(rms, 4)
         assert point["comps_used"] == len(diffs)
-    assert clipped  # the clip is exercised on this frame
+    # The old rule's clip is exercised on this frame; S71's normalised clip keeps every
+    # comparison here (its clip is the core's test_reddish_comparison_still_clipped_s71).
+    assert clipped or core_has_s71()
     # The report's status per comparison, by hand (quality.py:22-98 rules).
     report = live["quality"]
     for entry in report["comparison_stars"]:
@@ -1683,3 +1748,82 @@ def test_a_live_frame_takes_the_filter_of_the_settled_wheel_s49(phot_client, mon
     assert hub.photometry._frame_filter(request) == "LP"
     opened = replace(request, origin="file", filter_name=None)
     assert hub.photometry._frame_filter(opened) == ""  # an opened file says, or nothing
+
+
+# -- 0.5.0 S69 (release branch; ported) -------------------------------------------------
+
+
+def core_has_s69() -> bool:
+    """GUARD (pending merge of release/0.5.0): the core's tracker has S69's centring
+    check and rotation rule (``tracking.centring_offsets``, ``rotation_resolve_due``)."""
+    from argos.core.photometry import tracking
+
+    return hasattr(tracking, "centring_offsets") and hasattr(tracking, "rotation_resolve_due")
+
+
+requires_s69_core = pytest.mark.skipif(
+    not core_has_s69(), reason="the core has no S69 yet (release/0.5.0 not merged)"
+)
+
+
+def turned_raw(deg: float, *, moved: dict[str, tuple[float, float]] | None = None) -> np.ndarray:
+    """``synthetic_raw``'s field turned ``deg`` about the frame centre (an alt-az run);
+    ``moved``: stars whose light sits ``(dx, dy)`` green px from their catalogue place."""
+    rng = np.random.default_rng(2000 + int(deg * 10))
+    theta = math.radians(deg)
+    cx, cy = GW / 2.0, GH / 2.0
+    yy, xx = np.mgrid[0:GH, 0:GW]
+    green = np.full((GH, GW), 300.0)
+    for key, _role, gx, gy, v in STARS:
+        x = cx + math.cos(theta) * (gx - cx) - math.sin(theta) * (gy - cy)
+        y = cy + math.sin(theta) * (gx - cx) + math.cos(theta) * (gy - cy)
+        dx, dy = (moved or {}).get(key, (0.0, 0.0))
+        flux = 10 ** (-0.4 * ((target_v(0) if key == "T" else v) - 21.0))
+        green += (
+            flux
+            / (2 * math.pi * SIGMA**2)
+            * np.exp(-((xx - x - dx) ** 2 + (yy - y - dy) ** 2) / (2 * SIGMA**2))
+        )
+    green += rng.normal(0.0, 6.0, green.shape)
+    return np.kron(np.clip(green, 0, 65535), np.ones((2, 2))).astype(np.uint16)
+
+
+@requires_s69_core
+def test_a_field_turned_more_than_2_deg_since_the_solution_makes_a_solve_due_s69(phot_client):
+    """Release S69 (a): the tracker carried one solution over the whole rotation while
+    its lock held (XX Cyg 2026-09-07: 16.5° in 32 min, apertures up to 8.5 px off). A
+    solve is now due once the tracked rotation since the solution exceeds 2°; while
+    none lands, again only after 2° more (never on every frame)."""
+    target_set().save(phot_client.sessions_path / "targets" / "SYN_Var.json")
+    set_object(phot_client)
+    hub = phot_client.hub
+    due: list[float] = []
+    for seq, deg in enumerate((0.0, 1.0, 2.5, 3.5, 4.0, 4.7), start=1):
+        hub.field._resolve_due_flag = False
+        request = MeasureRequest(seq, turned_raw(deg), GREEN_WCS, T0, 1, fwhm=2.4)
+        assert hub.photometry.measure(request) == 7
+        if hub.field._resolve_due_flag:
+            due.append(deg)
+    assert due == [2.5, 4.7]  # never before the port (the lock held on 6 anchors)
+    assert abs(hub.photometry._tracker.transform.rotation_deg - 4.7) < 0.1
+    live = phot_client.get("/api/photometry/live", headers=AUTH).json()
+    assert not any(p["suspect"] for c in live["curves"] for p in c["points"])
+
+
+@requires_s69_core
+def test_an_off_centre_comparison_leaves_the_ensemble_s69(phot_client):
+    """Release S69 (b): a comparison whose centroid is more than 1 px from its aperture
+    centre is left out of the frame's ensemble and its own point is flagged suspect;
+    the target keeps its point from the other comparisons (C4's light 2.5 px from its
+    catalogue place: the tracker rejects it as an anchor)."""
+    target_set().save(phot_client.sessions_path / "targets" / "SYN_Var.json")
+    set_object(phot_client)
+    hub = phot_client.hub
+    raw = turned_raw(0.0, moved={"C4": (2.5, 0.0)})
+    assert hub.photometry.measure(MeasureRequest(1, raw, GREEN_WCS, T0, 1, fwhm=2.4)) == 7
+    live = phot_client.get("/api/photometry/live", headers=AUTH).json()
+    (target,) = [c for c in live["curves"] if c["role"] == "target"]
+    assert target["points"][-1]["comps_used"] == 4  # 5 before the port
+    assert not target["points"][-1]["suspect"]
+    assert _star(live["curves"], "000-SYN-C4")["points"][-1]["suspect"]
+    assert any("more than 1 px from the aperture centre" in m for m in log_messages(phot_client))

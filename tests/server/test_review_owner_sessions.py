@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from argos.server.files import FileService, read_fits_2d
-from argos.server.review import open_session, read_recorder
+from argos.server.review import core_rules, open_session, read_recorder
 from tests.server.test_review_sessions import assert_curves_equal_qt
 
 
@@ -106,7 +106,11 @@ def test_site_and_flags(owner_session):
         assert record["airmass_source"] == "header"
         assert {name[-9:] for name in flagged} == {"00053.fit", "00176.fit"}
         assert {name[-9:] for name in unverified} == {"00053.fit", "00176.fit"}
-        assert target.lc.points[0].airmass == pytest.approx(4.088)  # the CSV as written
+        # The CSV as written (4.088), or each frame's header AIRMASS once the merged
+        # core applies S66 (GUARD): 1.033 on the first row (astropy at the site fitted
+        # to the mount: 1.033-1.364).
+        first = 1.0333 if core_rules() is not None else 4.088
+        assert target.lc.points[0].airmass == pytest.approx(first)
         assert 1.0 < min(target.header_airmass) < max(target.header_airmass) < 1.4
     else:
         assert record["site_check"]["state"] == "ok"

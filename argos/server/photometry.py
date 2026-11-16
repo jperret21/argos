@@ -81,6 +81,7 @@ from argos.core.photometry.airmass import (
 from argos.core.photometry.lightcurve import LcPoint, LightCurve
 from argos.core.photometry.params import DEFAULT_FWHM, PhotometryParams, measure_frame
 from argos.core.photometry.quality import comparison_quality_report, save_comparison_quality_report
+from argos.core.photometry import tracking as _core_tracking
 from argos.core.photometry.tracking import (
     ApertureTracker,
     TrackedWCS,
@@ -125,6 +126,49 @@ LOCK_UNVERIFIED_TEXT = (
     " apertures (except within 2 px of a solution of this sub or the previous one)."
     " Re-solving."
 )
+#: S69 (b) (release ``off_centre_text``), once per episode: until a frame with none.
+OFF_CENTRE_TEXT = (
+    "Photometry: {n} comparison/check star{s} more than 1 px from the aperture centre"
+    " — left out of the frame's ensemble, their points flagged suspect."
+)
+
+
+def s69_core():
+    """GUARD (S69, release/0.5.0): the core's ``tracking`` module when it has S69's
+    centring check and rotation rule (``centring_offsets``, ``off_centre``,
+    ``rotation_resolve_due``, ``TrackedWCS.rotation_deg``; ``measure_frame`` and
+    ``measure_targets`` take ``exclude``) and the neighbour rule of the S69 review
+    (``neighbour_distance``; ``select_tracking_anchors`` and ``centring_offsets`` take
+    ``neighbours``, ``ApertureTracker.rejected_anchor``), else None: until the release
+    core is merged the live path, the sequence path and the re-run (rerun.py) measure
+    as before, S70 included (S70 is applied together with S69)."""
+    names = ("centring_offsets", "off_centre", "rotation_resolve_due", "neighbour_distance")
+    if all(hasattr(_core_tracking, name) for name in names):
+        return _core_tracking
+    return None
+
+
+def set_neighbours(tset) -> dict:
+    """S69 (GUARD: :func:`s69_core`): ``neighbours=`` the set's stars, targets included,
+    for ``select_tracking_anchors`` and ``centring_offsets`` (a star beside a brighter
+    one of the set is no anchor, and its centring centroid stays clear of it)."""
+    return {"neighbours": list(tset.stars)} if s69_core() is not None else {}
+
+
+def centred_anchors(anchor_stars, tracker, offsets) -> int:
+    """S69 (b) (release ``_centred_anchors``): the tracker's anchors less those more than
+    1 px off their aperture centre on this frame and the one its fit rejected (it
+    verified nothing); without the centring check (GUARD), all of them."""
+    core = s69_core()
+    if core is None:
+        return len(anchor_stars)
+    bad = core.off_centre(offsets or {})
+    rejected = getattr(tracker, "rejected_anchor", None)
+    return sum(
+        1 for index, star in enumerate(anchor_stars) if star.key() not in bad and index != rejected
+    )
+
+
 #: S54 as amended (release ``_REPOINT_SOLVES``, ``_REPOINT_AGREE_PX``): 3 consecutive
 #: solutions refused by the anchor check that agree within 20 green px are a
 #: re-pointing the mount did not report: the third is accepted.
@@ -370,7 +414,8 @@ class SessionDiagnostics:
             self._enabled = False
             self.close()
 
-    def star(self, frame: int, star, phot, x: float, y: float) -> None:
+    def star(self, frame: int, star, phot, x: float, y: float, **extra: Any) -> None:
+        """``extra``: more fields (S69's ``centroid_offset_px`` and ``off_centre``)."""
         self.record(
             "star",
             frame=frame,
@@ -388,6 +433,7 @@ class SessionDiagnostics:
             saturated=bool(phot.saturated) if phot else None,
             suspect=bool(getattr(phot, "suspect", False)) or None if phot else None,
             measured=phot is not None,
+            **extra,
         )
 
     def close(self) -> None:
@@ -456,6 +502,10 @@ class PhotometryService:
         #: S56: the current unverified-lock episode was logged (once per episode: until
         #: a verified frame, a slew or invalidation, or a set change).
         self._unverified_logged = False
+        #: S69 (a): the tracked rotation at which the last re-solve for rotation was made
+        #: due (None: none since the solution); (b): the off-centre episode logged.
+        self._rotation_attempted: float | None = None
+        self._off_centre_logged = False
         #: S54: the consecutive solutions refused by the anchor check (their WCS).
         self._repoint_refused: list[Any] = []
         #: S48: the last lock check ({frame_seq, anchors, seen, needed, held}), or None.
@@ -988,6 +1038,8 @@ class PhotometryService:
             self._tracker_anchors = len(self._tracker_anchor_stars)
             self._tracker_base = (wcs, base)
             self._tracker_generation = generation
+            if base is wcs:
+                self._rotation_attempted = None  # S69 (a): on the solution, a new count
         self._tracker.update(green, allow_rotation=self._allow_rotation())
         return TrackedWCS(base, self._tracker)
 
@@ -1015,7 +1067,9 @@ class PhotometryService:
         """
         pick_green, pick_wcs = chosen_on if chosen_on is not None else (green, wcs)
         candidates = tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK)
-        anchors = select_tracking_anchors(pick_green, pick_wcs, candidates, params)
+        anchors = select_tracking_anchors(
+            pick_green, pick_wcs, candidates, params, **set_neighbours(tset)
+        )
         if not anchors:
             anchors = select_tracking_anchors(
                 pick_green, pick_wcs, list(tset.stars), params, min_snr=5.0
@@ -1059,36 +1113,51 @@ class PhotometryService:
         }
         return seen >= needed
 
+    def _centred_anchors(self, offsets: dict[str, float] | None) -> int:
+        """S69 (b) (release ``_centred_anchors``): :func:`centred_anchors`."""
+        return centred_anchors(self._tracker_anchor_stars, self._tracker, offsets)
+
     def _lock_unverified(
-        self, params: PhotometryParams, tset: TargetSet, tracked, request: MeasureRequest
+        self,
+        params: PhotometryParams,
+        tset: TargetSet,
+        tracked,
+        request: MeasureRequest,
+        offsets: dict[str, float] | None = None,
     ) -> bool:
         """The tracker steers on fewer than 3 anchors (S56, release ``_lock_unverified``).
 
         With n = 1 or 2, ceil(n/2) = 1 anchor must be seen and the anchor whose
         centroid moved the solution is seen by construction. Verified all the same
         (S56 as amended on 2026-11-15) near a fresh solution (:meth:`_fresh_lock`).
+        S69 (b): the anchors counted are those centred within 1 px of their aperture.
         Lock held.
         """
-        n = len(self._tracker_anchor_stars)
         if not (params.track_apertures and self._tracker is not None):
             return False
-        if not 0 < n < LOCK_VERIFY_MIN_ANCHORS:
+        if not self._tracker_anchor_stars:
+            return False
+        if self._centred_anchors(offsets) >= LOCK_VERIFY_MIN_ANCHORS:
             return False
         return not self._fresh_lock(tset, tracked, request)
 
     def _verified_on_previous_solution(
-        self, params: PhotometryParams, request: MeasureRequest
+        self,
+        params: PhotometryParams,
+        request: MeasureRequest,
+        offsets: dict[str, float] | None = None,
     ) -> bool:
         """A run's sub of 1 or 2 anchors verified through the previous sub's solution
         (release ``_verified_on_previous_solution``, S56 as amended on 2026-11-15,
         second set): its own solve is due now, so the next sub is never two subs
         from a solution (one solve per run flagged every other sub of XX Cyg
         2026-08-29 050148Z: 12 of 22). Outside a run a live point follows each solve:
-        nothing more is due. Lock held."""
-        n = len(self._tracker_anchor_stars)
+        nothing more is due. S69 (b): the anchors counted are those centred. Lock held."""
         if not (params.track_apertures and self._tracker is not None):
             return False
-        if not 0 < n < LOCK_VERIFY_MIN_ANCHORS or request.origin != "sequence":
+        if not self._tracker_anchor_stars or request.origin != "sequence":
+            return False
+        if self._centred_anchors(offsets) >= LOCK_VERIFY_MIN_ANCHORS:
             return False
         return request.solved_seq is not None and request.frame_seq - request.solved_seq == 1
 
@@ -1197,13 +1266,29 @@ class PhotometryService:
                 if field is not None and hasattr(field, "resolve_due"):
                     field.resolve_due(request.frame_seq, now=request.origin == "sequence")
                 return 0
-            unverified = self._lock_unverified(params, tset, tracked, request)
+            # S69 (b) (GUARD: the release core): each comparison and check star's
+            # centroid against its aperture (release ``_measure_photometry``).
+            core = s69_core()
+            offsets: dict[str, float] = {}
+            if core is not None and tracked is not None:
+                offsets = core.centring_offsets(
+                    green,
+                    tracked,
+                    tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK),
+                    params,
+                    fwhm=fwhm,
+                    neighbours=list(tset.stars),
+                )
+            excluded = core.off_centre(offsets) if core is not None else frozenset()
+            due: bool | None = None  # S48/S56/S69: a solve due now (True: in hand too)
+            unverified = self._lock_unverified(params, tset, tracked, request, offsets)
             if self._lock_state is not None:
                 self._lock_state["verified"] = not unverified  # S56 as amended
             if unverified:
                 # S56: points flagged suspect and a solve due at once, away from a fresh
-                # solution (release ``_measure_photometry``).
-                n = len(self._tracker_anchor_stars)
+                # solution (release ``_measure_photometry``). S69 (b): the anchors
+                # counted are those centred on their apertures.
+                n = self._centred_anchors(offsets)
                 diag.record("event", frame=frame_no, what="lock_unverified", anchors=n)
                 if not self._unverified_logged:
                     self._unverified_logged = True  # once per episode
@@ -1213,27 +1298,68 @@ class PhotometryService:
                         source="photometry",
                         topic="photometry",
                     )
-                field = getattr(self._hub, "field", None)
-                if field is not None and hasattr(field, "resolve_due"):
-                    field.resolve_due(request.frame_seq, now=request.origin == "sequence")
+                due = request.origin == "sequence"
             else:
                 self._unverified_logged = False  # a verified frame ends the episode
-                if self._verified_on_previous_solution(params, request):
+                if self._verified_on_previous_solution(params, request, offsets):
                     # S56 (2026-11-15, second set): the sub in hand is solved too, so
                     # the next sub is measured through the previous one's solution.
-                    field = getattr(self._hub, "field", None)
-                    if field is not None and hasattr(field, "resolve_due"):
-                        field.resolve_due(request.frame_seq, now=True)
+                    due = True
+            rotation = (
+                tracked.rotation_deg
+                if core is not None and isinstance(tracked, TrackedWCS)
+                else 0.0
+            )
+            if core is not None and core.rotation_resolve_due(rotation, self._rotation_attempted):
+                # S69 (a): the field turned more than 2° since the solution: a solve is
+                # due (once per 2° until one lands, so a failing solver never loops).
+                self._rotation_attempted = rotation
+                diag.record(
+                    "event", frame=frame_no, what="rotation_resolve_due", rotation_deg=rotation
+                )
+                if due is None:
+                    due = request.origin == "sequence"
+            if due is not None:
+                field = getattr(self._hub, "field", None)
+                if field is not None and hasattr(field, "resolve_due"):
+                    field.resolve_due(request.frame_seq, now=due)
+            if excluded:
+                diag.record("event", frame=frame_no, what="off_centre", stars=len(excluded))
+                if not self._off_centre_logged:
+                    self._off_centre_logged = True  # once per episode
+                    n_off = len(excluded)
+                    self._hub.log(
+                        "warning",
+                        OFF_CENTRE_TEXT.format(n=n_off, s="s" if n_off != 1 else ""),
+                        source="photometry",
+                        topic="photometry",
+                    )
+            else:
+                self._off_centre_logged = False
             if self._primary_filter is None:
                 self._primary_filter = token
             bundled_iers_only()  # BJD_TDB offline (S37)
+
+            def on_star(s, phot, x, y):
+                if core is None:
+                    diag.star(frame_no, s, phot, x, y)
+                    return
+                offset = offsets.get(s.key())
+                diag.star(
+                    frame_no,
+                    s,
+                    phot,
+                    x,
+                    y,
+                    centroid_offset_px=(
+                        offset if offset is not None and math.isfinite(offset) else None
+                    ),
+                    off_centre=True if s.key() in excluded else None,
+                )
+
+            exclude = {"exclude": excluded} if core is not None else {}
             results = measure_frame(
-                green,
-                tracked,
-                tset,
-                params,
-                fwhm=fwhm,
-                on_star=lambda s, phot, x, y: diag.star(frame_no, s, phot, x, y),
+                green, tracked, tset, params, fwhm=fwhm, on_star=on_star, **exclude
             )
             tracker = self._tracker if params.track_apertures else None
             diag.record("frame", frame=frame_no, jd_utc=jd, airmass=air, fwhm=fwhm)
@@ -1255,8 +1381,10 @@ class PhotometryService:
                 has_ratio = res.relative is not None and res.relative.flux_ratio is not None
                 if not (has_mag or has_ratio):
                     continue
+                # S69 (b): an off-centre comparison or check star's own point is suspect.
+                flagged = unverified or bool(excluded and res.star.key() in excluded)
                 point = self._emit_live_point(
-                    tset, res, jd, air, fwhm, (lat, lon, elev), request, t_iso, token, unverified
+                    tset, res, jd, air, fwhm, (lat, lon, elev), request, t_iso, token, flagged
                 )
                 kept += 1
                 if res.star.role == ROLE_TARGET and target_point is None:
@@ -1340,7 +1468,11 @@ class PhotometryService:
             comps_used=res.diff.comps_used if res.diff else 0,
             relative_comps_used=res.relative.comps_used if res.relative else 0,
             saturated=bool(res.phot and res.phot.saturated),
-            suspect=bool(res.phot and res.phot.suspect) or unverified,
+            # S71: the comparison carrying the zero point disagrees with the others
+            # (release DiffResult.suspect, read with getattr: GUARD).
+            suspect=bool(res.phot and res.phot.suspect)
+            or unverified
+            or bool(getattr(res.diff, "suspect", False)),
             formal_mag_err=(
                 res.diff.formal_mag_err or res.diff.mag_err
                 if res.diff and res.diff.mag_err is not None

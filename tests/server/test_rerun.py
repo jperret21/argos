@@ -9,6 +9,7 @@ PyQt6 is installed (byte-identical CSVs).
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import threading
 from datetime import datetime, timedelta, timezone
@@ -395,7 +396,124 @@ def _request(paths, out_dir, solver=None, tset=None) -> BatchRequest:
     )
 
 
-@pytest.mark.parametrize("case", ["clouds_s43", "two_anchors_s58"])
+def _turned_wcs(deg: float) -> FrameWCS:
+    """``WCS`` turned ``deg`` about its reference pixel: an alt-az field's rotation."""
+    a = math.radians(deg)
+    cd = np.array([[WCS.cd[0], WCS.cd[1]], [WCS.cd[2], WCS.cd[3]]])
+    turned = cd @ np.array([[math.cos(a), math.sin(a)], [-math.sin(a), math.cos(a)]])
+    return FrameWCS(WCS.crval1, WCS.crval2, WCS.crpix1, WCS.crpix2, tuple(turned.ravel()))
+
+
+#: S69: the turning session's rotation per frame; comparison 105's star 2.5 green px
+#: from where its catalogue puts it, too faint to steer the tracker (SNR about 7: not
+#: an anchor, but seen), so its aperture is off-centre on every frame.
+TURN_DEG = 0.9
+OFF_AUID, OFF_PX, OFF_PEAK = "000-AAA-004", 2.5, 170.0
+
+
+def make_turning_session(root: Path, n: int = 8) -> tuple[Path, dict[bytes, FrameWCS]]:
+    """A session whose field turns ``TURN_DEG`` per frame about the frame's centre,
+    and each frame's own solution keyed by its green plane (the solver's answer)."""
+    from argos.core.imaging.green import green_plane
+
+    path = make_session(root, n=n)
+    solutions: dict[bytes, FrameWCS] = {}
+    gh, gw = GREEN
+    yy, xx = np.mgrid[0:gh, 0:gw]
+    for i in range(n):
+        wcs = _turned_wcs(-TURN_DEG * i)
+        rng = np.random.default_rng(100 + i)
+        plane = np.zeros(GREEN, dtype=np.float64)
+        for star in (TARGET, *COMPS, CHECK):
+            x, y = (float(v) for v in wcs.world_to_pixel_deg(star.ra_deg, star.dec_deg))
+            peak = PEAKS[star.auid]
+            if star.auid == OFF_AUID:
+                x, peak = x + OFF_PX, OFF_PEAK
+            plane += peak * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * 1.4**2))
+        raw = np.full((gh * 2, gw * 2), 300.0)
+        raw[0::2, 0::2] += plane
+        raw[1::2, 1::2] += plane
+        raw += rng.normal(0.0, 6.0, raw.shape)
+        frame = path / "lights" / f"XX_Test_ir_light_{i + 1:05d}.fit"
+        with fits.open(frame, mode="update") as hdul:
+            hdul[0].data = np.clip(raw, 0, 65535).astype(np.uint16)
+            green = green_plane(np.asarray(hdul[0].data, dtype=np.float32))
+        solutions[green.tobytes()] = wcs
+    return path, solutions
+
+
+def core_has_s69() -> bool:
+    """GUARD (pending merge of release/0.5.0): the core's tracker has S69's centring
+    check and rotation rule (``tracking.centring_offsets``, ``rotation_resolve_due``)."""
+    from argos.core.photometry import tracking
+
+    return hasattr(tracking, "centring_offsets") and hasattr(tracking, "rotation_resolve_due")
+
+
+requires_s69_core = pytest.mark.skipif(
+    not core_has_s69(), reason="the core has no S69 yet (release/0.5.0 not merged)"
+)
+
+
+@requires_s69_core
+def test_a_re_run_re_solves_a_turning_field_and_leaves_an_off_centre_star_out_s69(tmp_path):
+    """Release S69: (a) a frame is re-solved once the field turned more than 2° since
+    its solution (the tracker carried the reference over all 16.5° of XX Cyg
+    2026-09-07); (b) a comparison or check star more than 1 px from its aperture
+    centre leaves the frame's ensemble, its row flagged suspect, counted. A failing
+    solver is tried once per 2° of rotation, never on every frame."""
+    session, solutions = make_turning_session(tmp_path, n=8)
+    paths = discover_light_frames(session, "XX Test").paths
+    calls: list[int] = []
+
+    def solver(green):
+        calls.append(1)
+        return solutions[green.tobytes()]
+
+    result = BatchRun(_request(paths, tmp_path / "out", solver)).run()
+    assert result.ok and result.frames_done == 8
+    assert len(calls) == 2  # at 2.7° (frame 3) and frame 6; none before the port
+    target = result.curves["000-AAA-001@ir"].points
+    assert all(p.comps_used == 2 for p in target)  # 105 left out (3 before the port)
+    assert not any(p.suspect for p in target)
+    assert all(p.suspect for p in result.curves[f"{OFF_AUID}@ir"].points)
+    assert not any(p.suspect for p in result.curves["000-AAA-005@ir"].points)  # the check
+    assert result.frames_rotation_solved == 2
+    assert result.stars_off_centre == 8  # comparison 105, every frame
+    recorder = (tmp_path / "out" / "XX_Test_diagnostics.jsonl").read_text().splitlines()
+    events = [json.loads(line).get("what") for line in recorder]
+    assert events.count("re_solved_rotation") == 2
+
+    failed: list[int] = []
+    result = BatchRun(_request(paths, tmp_path / "fail", lambda g: failed.append(1))).run()
+    assert result.ok and result.frames_rotation_solved == 0
+    assert len(failed) == 2  # 2.7° (frame 3), then 5.4° (frame 6): 2° apart, of 5 frames
+    # Technical review: counted and said, never worded as flagging the points.
+    assert result.frames_rotation_unsolved == 2
+    notes = rerun_module.RerunService._notes(result, 8, tmp_path / "fail", True)
+    assert any("did not re-solve" in text for _level, text in notes)
+
+
+def _core_rules_merged() -> bool:
+    from argos.server.review import core_rules
+
+    return core_rules() is not None
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "clouds_s43",
+        "two_anchors_s58",
+        pytest.param("alt_az_s69", marks=requires_s69_core),
+        pytest.param(
+            "faint_target_s67",
+            marks=pytest.mark.skipif(
+                not _core_rules_merged(), reason="GUARD: needs release/0.5.0's S67 rules"
+            ),
+        ),
+    ],
+)
 def test_server_port_writes_the_qt_workers_bytes(tmp_path, case):
     pytest.importorskip("PyQt6")
     from PyQt6.QtWidgets import QApplication
@@ -412,16 +530,30 @@ def test_server_port_writes_the_qt_workers_bytes(tmp_path, case):
         # and flagged; the next frame is re-solved and the apertures re-anchored.
         with fits.open(session / "lights" / "XX_Test_ir_light_00003.fit", mode="update") as hdul:
             hdul[0].data = np.full_like(hdul[0].data, 300)
-    else:  # two comparisons, no check: 2 anchors, S58's verification
+    elif case == "two_anchors_s58":  # two comparisons, no check: 2 anchors, S58's rule
         tset = TargetSet(object_name="XX Test")
         for star in (TARGET, *COMPS[:2]):
             tset.set_role(star)
+    elif case == "faint_target_s67":
+        # Frame 3: the target below SNR 3 (at minimum), the field and its zero point fine.
+        bright = PEAKS[TARGET.auid]
+        PEAKS[TARGET.auid] = 0.0
+        try:
+            faint = _frame(2)
+        finally:
+            PEAKS[TARGET.auid] = bright
+        with fits.open(session / "lights" / "XX_Test_ir_light_00003.fit", mode="update") as hdul:
+            hdul[0].data = faint
+    solutions: dict[bytes, FrameWCS] = {}
+    if case == "alt_az_s69":
+        shutil.rmtree(session)
+        session, solutions = make_turning_session(tmp_path, n=8)
     paths = discover_light_frames(session, "XX Test").paths
     calls: list[str] = []
 
     def solver(green):
         calls.append("x")
-        return solution
+        return solutions.get(green.tobytes(), solution)
 
     server = BatchRun(_request(paths, tmp_path / "server", solver, tset)).run()
     server_calls = len(calls)
@@ -434,12 +566,34 @@ def test_server_port_writes_the_qt_workers_bytes(tmp_path, case):
     (qt_result,) = box
     assert server.ok and qt_result.ok
     counts = ("frames_done", "frames_resolved", "frames_unanchored", "frames_unverified")
+    if case == "alt_az_s69":
+        counts += ("frames_rotation_solved", "stars_off_centre")
+    if case == "faint_target_s67":
+        counts += ("frames_no_detection",)
     assert [getattr(server, k) for k in counts] == [getattr(qt_result, k) for k in counts]
-    assert server_calls == len(calls) - server_calls > 0  # the solver was used, alike
+    assert server_calls == len(calls) - server_calls  # the solver was used alike...
+    assert server_calls > 0 or case == "faint_target_s67"  # ...where a case needs it
     if case == "clouds_s43":
         assert (server.frames_unanchored, server.frames_resolved) == (1, 1)
         flagged = [p.suspect for p in server.curves["000-AAA-001@ir"].points]
         assert flagged == [False, False, False, False]  # no target point on the blank frame
+    elif case == "alt_az_s69":
+        assert (server.frames_rotation_solved, server.stars_off_centre) == (2, 8)
+        recorders = [tmp_path / side / "XX_Test_diagnostics.jsonl" for side in ("server", "qt")]
+        stars = [
+            [json.loads(line) for line in p.read_text().splitlines() if '"star"' in line]
+            for p in recorders
+        ]
+        keys = ("auid", "x", "y", "snr", "centroid_offset_px", "off_centre")
+        assert [[r.get(k) for k in keys] for r in stars[0]] == [
+            [r.get(k) for k in keys] for r in stars[1]
+        ]
+    elif case == "faint_target_s67":
+        # S67 in the re-run, per target: only the target's own point is flagged.
+        assert server.frames_no_detection == 1
+        for key, lc in server.curves.items():
+            flagged = [i for i, p in enumerate(lc.points) if p.no_detection]
+            assert flagged == ([2] if key == "000-AAA-001@ir" else []), key
     else:
         assert server.frames_unverified == 0 and server_calls >= 2
     names = sorted(p.name for p in (tmp_path / "qt").glob("*.csv"))

@@ -171,25 +171,31 @@ def make_session(
 
 
 def _write_recorder(
-    path: Path, times: list[datetime], blank: int = 2, few_anchors: int | None = None
+    path: Path,
+    times: list[datetime],
+    blank: int = 2,
+    few_anchors: int | None = None,
+    comp_snr: float | None = None,
 ) -> None:
     """Frame *blank* measured on blank sky: target SNR 1.5, zero point 5 mag off.
 
     Two more comparisons steer the tracker (records only, no curve): every frame has 3
     anchors at SNR 10 or more, except *few_anchors*, where they read SNR 6 (S56's rule).
+    *comp_snr*: every comparison at that SNR instead (S71's faint ensemble).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = []
     for i, when in enumerate(times):
         jd = round(julian_date(when + timedelta(seconds=EXPTIME / 2)), 4)
         snr_t = 1.5 if i == blank else 120.0
-        extra = 6.0 if i == few_anchors else 80.0
+        extra = 6.0 if i == few_anchors else (comp_snr or 80.0)
         for auid in ("000-AAA-004", "000-AAA-005"):
             lines.append(
                 {"kind": "star", "frame": i, "auid": auid, "name": auid, "role": "comparison"}
                 | {"snr": extra, "saturated": False, "measured": True}
             )
-        for star, snr in ((TARGET, snr_t), (COMP, 2.0 if i == 3 else 90.0), (CHECK, 60.0)):
+        comp = 2.0 if i == 3 else (comp_snr or 90.0)
+        for star, snr in ((TARGET, snr_t), (COMP, comp), (CHECK, 60.0)):
             lines.append(
                 {
                     "kind": "star",
@@ -440,7 +446,9 @@ def test_curves_roles_keys_filters_and_columns(review_client):
     assert target["n"] == 4
     assert all(len(cols[name]) == 4 for name in cols)
     assert cols["bjd_tdb"][0] is None and cols["bjd_tdb"][1] is not None
-    assert cols["suspect"] == [False, True, False, False]
+    # Frame 2 is blank sky in the recorder: suspect too once the core applies S67 (GUARD).
+    blank = review_module.core_rules() is not None
+    assert cols["suspect"] == [False, True, blank, False]
     assert cols["saturated"] == [False] * 4
     assert cols["comps_used"] == [1] * 4
     assert cols["frame"] == [0, 1, 2, 3]
@@ -456,16 +464,38 @@ def test_curves_roles_keys_filters_and_columns(review_client):
 def test_flags_from_the_flight_recorder(review_client):
     path = make_session(review_client.root)
     curves = {c["role"]: c for c in _curves(review_client, path)["curves"]}
+    # S67 (GUARD: the merged core): every point of a no-detection frame is flagged too.
+    nd = ["no_detection"] if review_module.core_rules() is not None else []
     # Frame 2: the target's zero point is 5 mag off: every star of that frame.
-    assert curves["target"]["columns"]["flags"] == [[], [], ["zp_outlier", "low_snr"], []]
-    assert curves["check"]["columns"]["flags"][2] == ["zp_outlier"]
+    assert curves["target"]["columns"]["flags"] == [[], [], ["zp_outlier", "low_snr", *nd], []]
+    assert curves["check"]["columns"]["flags"][2] == ["zp_outlier", *nd]
     # Frame 3: the comparison's own SNR is 2: its point only.
-    assert curves["comparison"]["columns"]["flags"] == [[], [], ["zp_outlier"], ["low_snr"]]
+    assert curves["comparison"]["columns"]["flags"] == [[], [], ["zp_outlier", *nd], ["low_snr"]]
     record = review_client.get(
         "/api/review/session", params={"path": str(path)}, headers=AUTH
     ).json()
     flagged = [i for i in record["readiness"]["issues"] if i["code"] == "flagged_points"]
     assert flagged and flagged[0]["count"] == 1
+
+
+def test_s71_a_faint_ensemble_is_named_in_readiness(review_client):
+    """S71: comparisons whose median SNR is below 10 make a noisy zero point (XX Cyg
+    2026-08-29: 1.7). Readiness says so; a bright ensemble (80-90) says nothing."""
+    path = make_session(review_client.root)
+    record = review_client.get(
+        "/api/review/session", params={"path": str(path)}, headers=AUTH
+    ).json()
+    assert "faint_comparisons" not in {i["code"] for i in record["readiness"]["issues"]}
+    rec = path / "diagnostics" / "XX_Test_live_diagnostics.jsonl"
+    times = [START + timedelta(seconds=CADENCE_S * i) for i in range(4)]
+    _write_recorder(rec, times, comp_snr=6.0)
+    record = review_client.get(
+        "/api/review/session", params={"path": str(path)}, headers=AUTH
+    ).json()
+    by_code = {i["code"]: i for i in record["readiness"]["issues"]}
+    assert by_code["faint_comparisons"]["level"] == "warn"
+    assert by_code["faint_comparisons"]["median_snr"] == 6.0
+    assert "S71" in by_code["faint_comparisons"]["message"]
 
 
 def test_s56_old_file_rule_flags_an_unverified_lock(review_client):
@@ -480,10 +510,12 @@ def test_s56_old_file_rule_flags_an_unverified_lock(review_client):
     times = [START + timedelta(seconds=CADENCE_S * i) for i in range(4)]
     _write_recorder(rec, times, few_anchors=3)
     curves = {c["role"]: c for c in _curves(review_client, path)["curves"]}
+    rules = review_module.core_rules() is not None  # GUARD: S67 in the merged core
+    nd = ["no_detection"] if rules else []
     assert curves["target"]["columns"]["flags"] == [
         [],
         [],
-        ["zp_outlier", "low_snr"],
+        ["zp_outlier", "low_snr", *nd],
         ["few_anchors"],
     ]
     assert curves["check"]["columns"]["flags"][3] == ["few_anchors"]
@@ -498,9 +530,15 @@ def test_s56_old_file_rule_flags_an_unverified_lock(review_client):
         json={"source": {"kind": "session", "path": str(path)}},
         headers=AUTH,
     ).json()
-    assert preview["unverified_lock"] == 1 and preview["recorder_flagged"] == 1
-    assert {w["code"] for w in preview["warnings"]} == {"recorder_flagged", "unverified_lock"}
-    assert sorted(p["index"] for p in preview["flagged_points"]) == [2, 3]
+    if rules:  # S67: the no-detection point is left out; the S56 point stays, named
+        assert preview["unverified_lock"] == 1 and preview["recorder_flagged"] == 0
+        assert {w["code"] for w in preview["warnings"]} == {"unverified_lock"}
+        assert "S58" in preview["warnings"][0]["message"]
+        assert sorted(p["index"] for p in preview["flagged_points"]) == [3]
+    else:
+        assert preview["unverified_lock"] == 1 and preview["recorder_flagged"] == 1
+        assert {w["code"] for w in preview["warnings"]} == {"recorder_flagged", "unverified_lock"}
+        assert sorted(p["index"] for p in preview["flagged_points"]) == [2, 3]
 
 
 def test_no_recorder_no_flags_and_far_point(review_client):
@@ -564,6 +602,12 @@ def test_site_mismatch_takes_the_header_airmass(review_client):
     assert any(i["code"] == "site_mismatch" for i in record["readiness"]["issues"])
     curves = _curves(review_client, path)
     assert curves["airmass_source"] == "header"
+    # S66 (GUARD: the merged core): the column itself is each frame's header AIRMASS.
+    rules = review_module.core_rules() is not None
+    assert curves["airmass_column"] == ("header" if rules else "csv")
+    target = next(c for c in curves["curves"] if c["role"] == "target")
+    expected = target["columns"]["header_airmass"] if rules else [1.5, 1.51, 1.52, 1.53]
+    assert target["columns"]["airmass"] == expected
 
 
 def test_unidentified_curve_is_not_exportable(review_client):

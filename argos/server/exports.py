@@ -280,10 +280,17 @@ def write_report(path: Path, sel: Selection, args: AavsoArgs):
     return write_aavso(path, curves, obscode=args.obscode, filt=args.band, chart=args.chart)
 
 
+#: The left-out counts of a report, in ``write_aavso``'s order.
+EXCLUDED_KEYS = ("saturated", "no_detection", "suspect", "nonfinite", "undated")
+
+
 def _counts(lc) -> dict[str, int]:
-    """Per-target counts with ``write_aavso``'s rules (S60 first, then non-finite, flags)."""
-    out = {"points": len(lc.points), "rows": 0, "saturated": 0, "suspect": 0}
-    out.update({"nonfinite": 0, "undated": 0})
+    """Per-target counts with ``write_aavso``'s rules (S60 first, then non-finite, flags).
+
+    ``no_detection``: suspect points of a frame without a detection in the run's flight
+    recorder (S67, ``LcPoint.no_detection``), counted apart as the writer does.
+    """
+    out = {"points": len(lc.points), "rows": 0, **{k: 0 for k in EXCLUDED_KEYS}}
     for p in lc.points:
         if undated(p):
             out["undated"] += 1
@@ -291,6 +298,8 @@ def _counts(lc) -> dict[str, int]:
             out["nonfinite"] += 1
         elif p.saturated:
             out["saturated"] += 1
+        elif p.suspect and getattr(p, "no_detection", False):
+            out["no_detection"] += 1
         elif p.suspect:
             out["suspect"] += 1
         else:
@@ -308,8 +317,9 @@ _UNVERIFIED_FLAGS = ("few_anchors",)
 def recorder_flagged(curve, codes: tuple[str, ...] = _RECORDER_FLAGS) -> list[int]:
     """Indices of ``curve``'s points that would be rows but the flight recorder flags.
 
-    The fixed Qt export writes them (it reads the CSV only, not the recorder): an
-    OWNER DECISION is pending, so the preview says so instead of leaving them out.
+    Once the core applies S67 (the merge), a no-detection frame's points are suspect
+    and left out, so none remains here; the S56 ``few_anchors`` points stay written,
+    with the preview's warning pointing to a re-run (S58).
     """
     flags = getattr(curve, "flags", None) or []
     out = []
@@ -330,6 +340,8 @@ def _excluded_note(excluded: dict[str, int]) -> str | None:
     parts = []
     if excluded["saturated"]:
         parts.append(f"{excluded['saturated']} saturated")
+    if excluded.get("no_detection"):
+        parts.append(f"{excluded['no_detection']} suspect (no detection)")  # S67
     if excluded["suspect"]:
         parts.append(f"{excluded['suspect']} suspect (cosmic ray / hot pixel, or no verified lock)")
     if excluded["nonfinite"]:
@@ -338,7 +350,7 @@ def _excluded_note(excluded: dict[str, int]) -> str | None:
         parts.append(f"{excluded['undated']} undated (JD 0)")
     if not parts:
         return None
-    total = sum(excluded[k] for k in ("saturated", "suspect", "nonfinite", "undated"))
+    total = sum(excluded.get(k, 0) for k in EXCLUDED_KEYS)
     return "Left out: " + ", ".join(parts) + (" point." if total == 1 else " points.")
 
 
@@ -408,7 +420,7 @@ class ExportService:
         """``POST /api/export/aavso/preview`` (A77): the same call, into a scratch file."""
         data, sel, args, info, refusal = self._aavso_plan(body)
         targets = []
-        total = {"saturated": 0, "suspect": 0, "nonfinite": 0, "undated": 0}
+        total = {k: 0 for k in EXCLUDED_KEYS}
         flagged_rows = unverified_rows = 0
         flagged_points: list[dict[str, Any]] = []
         for c in sel.curves:
@@ -478,6 +490,7 @@ class ExportService:
                 "kmag_rows": kmag_rows,
             }
         airmass_bad = getattr(data, "airmass_source", "csv") == "header"
+        airmass_header = getattr(data, "airmass_column", "csv") == "header"
         notes = []
         warnings: list[dict[str, Any]] = []
         excluded_note = _excluded_note(total)
@@ -508,7 +521,8 @@ class ExportService:
                         f"{plural(unverified_rows, 'point')} would be written although fewer"
                         " than 3 comparison or check stars reached SNR 10 on their frames"
                         " (S56): nothing verified the apertures. The rule is conservative:"
-                        " check them before you submit."
+                        " re-run the photometry on this session first (S58), which verifies"
+                        " each such frame with a plate solve and flags only those it cannot."
                     ),
                 }
             )
@@ -516,7 +530,29 @@ class ExportService:
         if note:
             notes.append(note)
         airmass_message = None
-        if airmass_bad:
+        if airmass_header:
+            # S66 (option b): each Argos frame's header AIRMASS; a point without one (no
+            # light within 5 s, no AIRMASS, a frozen pointing) keeps the CSV's.
+            computed = int(getattr(getattr(data, "rules", None), "airmass_computed", 0) or 0)
+            airmass_message = "AMASS is each frame's FITS header AIRMASS, from the mount (S66)."
+            if airmass_bad:
+                airmass_message += (
+                    " The site in Settings was not where the telescope was during this run."
+                )
+                if computed:
+                    airmass_message += (
+                        f" {plural(computed, 'point')} of the run without one keep the airmass"
+                        " computed for that site, which is wrong."
+                    )
+                    warnings.insert(
+                        0,
+                        {
+                            "code": "airmass_wrong_site",
+                            "count": computed,
+                            "message": airmass_message,
+                        },
+                    )
+        elif airmass_bad:
             airmass_message = (
                 "AMASS comes from the curves' airmass, computed for the site in Settings, which"
                 " was not where the telescope was during this run: these values are wrong (the"
@@ -547,7 +583,7 @@ class ExportService:
             "flagged_points": flagged_points,
             "warnings": warnings,
             "airmass": {
-                "source": "csv",
+                "source": "header" if airmass_header else "csv",
                 "state": "mismatch" if airmass_bad else "ok",
                 "message": airmass_message,
             },
@@ -637,7 +673,7 @@ class ExportService:
 
         def write(target: Path) -> dict[str, Any]:
             summary = write_report(target, sel, args)
-            excluded = {"saturated": 0, "suspect": 0, "nonfinite": 0, "undated": 0}
+            excluded = {k: 0 for k in EXCLUDED_KEYS}
             for c in sel.curves:
                 counts = _counts(c.lc)
                 for k in excluded:
