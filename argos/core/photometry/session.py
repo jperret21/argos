@@ -61,6 +61,7 @@ def measure_targets(
     min_comps: int = 2,
     on_star: Callable[[TargetStar, AperturePhot | None, float, float], None] | None = None,
     exclude: frozenset[str] = frozenset(),
+    scint_frac: Callable[[TargetStar], float] | None = None,
 ) -> list[TargetResult]:
     """Aperture-measure every saved star, then calibrate targets vs comparisons.
 
@@ -86,6 +87,9 @@ def measure_targets(
     ``exclude``: keys (``star.key()``) of comparisons left out of this frame's
     ensembles, measured and reported all the same (S69: a star whose centroid is
     more than 1 px from its aperture centre, ``tracking.centring_offsets``).
+
+    ``scint_frac``: each star's scintillation, relative flux sigma (S74), in its
+    ``inst_mag_err`` and hence in the zero point's weights and the targets' errors.
     """
     measured: list[tuple[TargetStar, AperturePhot | None]] = []
     for s in target_set.stars:
@@ -102,6 +106,7 @@ def measure_targets(
             sat_adu=sat_adu,
             black_adu=black_adu,
             plane_pixels=plane_pixels,
+            scint_frac=scint_frac(s) if scint_frac is not None else 0.0,
         )
         if on_star is not None:
             on_star(s, phot, float(x), float(y))

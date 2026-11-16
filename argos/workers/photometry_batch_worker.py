@@ -17,17 +17,24 @@ between frames.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import math
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from argos.core.catalog.targets import ROLE_CHECK, ROLE_COMPARISON, ROLE_TARGET, TargetSet
+from argos.core.catalog.targets import (
+    CATALOGUE_POSITION_SOURCES,
+    ROLE_CHECK,
+    ROLE_COMPARISON,
+    ROLE_TARGET,
+    TargetSet,
+)
 from argos.core.imaging.green import green_plane
 from argos.core.photometry.airmass import airmass_at, bjd_tdb, julian_date
 from argos.core.imaging.fits_writer import filter_token
@@ -38,7 +45,12 @@ from argos.core.photometry.lightcurve import (
     run_curve_csv_name,
     series_label,
 )
-from argos.core.photometry.params import PhotometryParams, frame_egain, measure_frame
+from argos.core.photometry.params import (
+    PhotometryParams,
+    frame_egain,
+    frame_scintillation_inputs,
+    measure_frame,
+)
 from argos.core.photometry.tracking import (
     ApertureTracker,
     TrackedWCS,
@@ -53,8 +65,10 @@ from argos.core.session.diagnostics import SessionDiagnostics
 from argos.core.session.review import (
     SITE_CHECK_TOLERANCE_DEG,
     FrozenPointing,
+    fitted_site,
     no_detection_flags,
     read_frame_pointing,
+    settings_site_reproduces,
     site_offset_deg,
 )
 from argos.core.session.types import PhotometryPoint
@@ -74,12 +88,32 @@ _LOCK_MIN_SNR = 5.0
 #: one and the tracker moved no aperture of the set this many green px or more from
 #: where that solution puts it. Otherwise it is re-solved (with a solver) or flagged.
 _LOCK_VERIFY_MIN_ANCHORS = 3
-_LOCK_FRESH_MAX_SHIFT_PX = 2.0
+_LOCK_FRESH_MAX_SHIFT_PX = 10.0  # S56 as amended on 2026-11-16 (it was 2 px)
+
+
+#: S82: SIMBAD's identifier prefixes ("V* XX Cyg", "* alf Lyr", "NAME Polaris"): an
+#: OBJECT written in SIMBAD's form names the same object as the set's plain name.
+_SIMBAD_PREFIXES = ("v*", "*", "**", "name", "cl*", "em*", "v*?", "*?", "**?")
+
+
+def call_with_cancel(lookup, tset, cancel):
+    """S77: ``lookup(tset)``, passing ``cancel`` (a callable, true to stop) when the
+    lookup takes it (``gaia_sources_for_set`` does)."""
+    try:
+        params = inspect.signature(lookup).parameters
+    except (TypeError, ValueError):
+        params = {}
+    takes = "cancel" in params or any(p.kind is p.VAR_KEYWORD for p in params.values())
+    return lookup(tset, cancel=cancel) if takes else lookup(tset)
 
 
 def _object_key(name) -> str:
-    """An object name compared without case, spaces or underscores (S62)."""
-    return "".join(c for c in str(name or "").lower() if c.isalnum())
+    """An object name compared without case, spaces or underscores (S62), nor a SIMBAD
+    identifier prefix (S82: an OBJECT of "V* XX Cyg" is XX Cyg)."""
+    words = str(name or "").replace("_", " ").split()
+    while len(words) > 1 and words[0].lower() in _SIMBAD_PREFIXES:
+        words = words[1:]
+    return "".join(c for c in " ".join(words).lower() if c.isalnum())
 
 
 def _session_lights_only(path: Path, top: Path) -> bool:
@@ -187,6 +221,10 @@ class BatchRequest:
     #: frame on which the tracker lost the field, to re-anchor the apertures.
     #: None (no ASTAP): the frames after a loss are flagged instead.
     solver: Callable[[np.ndarray], object] | None = None
+    #: S77: Gaia DR3 sources (``GaiaStar`` with proper motions) around a target set,
+    #: called once at the start when a VSX/VSP star of the set has no proper motion;
+    #: None: none is looked up (the set's own, if any, are used).
+    proper_motions: Callable[[TargetSet], list] | None = None
 
 
 @dataclass
@@ -213,7 +251,7 @@ class BatchResult:
     frames_resolved: int = 0
     frames_unanchored: int = 0
     #: S58: frames whose lock rested on 1-2 anchors with no solution of that frame or
-    #: the one before within 2 px: their points are flagged suspect.
+    #: the one before within 10 px: their points are flagged suspect.
     frames_unverified: int = 0
     #: S69 (a): frames re-solved because the tracked rotation since the solution
     #: exceeded 2°.
@@ -289,6 +327,12 @@ class PhotometryBatchWorker(QThread):
         self._frames_no_detection = 0
         # S70: the frame's params (its own e-/ADU) for the tracker, lock and measure.
         self._params = request.params
+        # S77: the set measured (with the proper motions looked up at the start), and
+        # that set at the date of the frame being measured.
+        self._base_set: TargetSet = request.target_set
+        self._tset: TargetSet = request.target_set
+        # S78: the (lat, lon) a comparison or check star's airmass is computed for.
+        self._star_site: tuple[float, float] | None = None
         # S69 (a): re-solves for rotation, the rotation of the last failed attempt.
         self._frames_rotation_solved = 0
         self._rotation_attempted: float | None = None
@@ -299,6 +343,82 @@ class PhotometryBatchWorker(QThread):
         self._stars_off_centre = 0
         self._off_centre_logged = False
         self._frames_no_target_point = 0
+
+    def _prepare_star_site(self, diag) -> None:
+        """S78: the site a comparison or check star's airmass is computed for: the one
+        fitted to the frames' header pointing (``review.fitted_site``: the mount's own
+        site, frozen pointings left out), else the Settings site of the request when it
+        reproduces that pointing (``review.settings_site_reproduces``), else none: the
+        star keeps its frame's header ``AIRMASS``, as the target (:meth:`_airmass`)."""
+        pointings = [read_frame_pointing(path) for path in self._req.fits_paths]
+        site = fitted_site(pointings)
+        kind = "fitted"
+        if site is None:
+            lat, lon, _elev = self._req.site
+            site = (
+                (float(lat), float(lon))
+                if lat is not None
+                and lon is not None
+                and settings_site_reproduces(pointings, float(lat), float(lon))
+                else None
+            )
+            kind = "settings" if site is not None else None
+        self._star_site = site
+        diag.record("event", what="star_airmass_site", site=kind)
+        if kind == "fitted":
+            logger.info(
+                "Batch photometry: comparison and check stars take their own airmass, for the"
+                " site fitted to the frames' pointing (the mount's)"
+            )
+
+    def _prepare_proper_motions(self, diag) -> None:
+        """S77: the set the re-run measures, with the proper motions of its VSX/VSP stars
+        from the request's lookup (Gaia DR3) when the set holds none for them.
+
+        The request's set is never changed; the copy is saved with the CSVs
+        (``targets.json``). A lookup that fails or finds nothing leaves the positions
+        at their catalogue epoch, and says so once.
+        """
+        tset = self._req.target_set
+        missing = [
+            s
+            for s in tset.stars
+            if s.source in CATALOGUE_POSITION_SOURCES and not s.has_proper_motion
+        ]
+        lookup = self._req.proper_motions
+        if missing and lookup is not None:
+            copy = TargetSet(object_name=tset.object_name, stars=list(tset.stars))
+            logger.info("Batch photometry: looking up proper motions (Gaia DR3)")
+            try:
+                # A cancel stops the lookup between stars (the run then ends before
+                # its first frame).
+                found = copy.backfill_proper_motions(
+                    call_with_cancel(lookup, tset, lambda: self._cancel) or []
+                )
+            except Exception as exc:  # a catalogue failure never ends the re-run
+                logger.warning(
+                    "Batch photometry: no proper motion looked up (%s); the stars are placed"
+                    " at their catalogue positions (J2000.0)",
+                    exc,
+                )
+                found = 0
+            if found:
+                tset = copy
+                logger.info(
+                    "Batch photometry: proper motion from Gaia DR3 for %d star(s) of the set;"
+                    " each frame places them at its date",
+                    found,
+                )
+        self._base_set = tset
+        self._tset = tset
+        moving = [s for s in tset.stars if s.has_proper_motion]
+        if moving:
+            diag.record(
+                "event",
+                what="proper_motions",
+                stars=[s.auid or s.display_name for s in moving],
+                sources=sorted({s.pm_source or "" for s in moving}),
+            )
 
     def cancel(self) -> None:
         """Ask the run to stop at the next frame boundary."""
@@ -325,6 +445,8 @@ class PhotometryBatchWorker(QThread):
                 track_apertures=req.params.track_apertures,
                 band=req.params.band,
             )
+            self._prepare_proper_motions(diag)
+            self._prepare_star_site(diag)
             for fpath in req.fits_paths:
                 if self._cancel:
                     break
@@ -480,16 +602,24 @@ class PhotometryBatchWorker(QThread):
             diag.record("event", what="frame_skipped", file=fpath.name, reason="no DATE-OBS")
             return False
         # S70: the frame's own e-/ADU in every SNR of the frame: the tracker's anchors,
-        # the lock checks and the measurement (it was the measurement's only).
-        params = self._req.params
-        if egain is not None and egain != params.egain:
-            params = replace(params, egain=egain)
+        # the lock checks and the measurement (it was the measurement's only). S73: the
+        # camera's measured one (``frame_egain``); S74: its exposure, airmass, height.
+        params = self._req.params.with_frame(egain=egain, **self._read_scintillation(fpath))
         self._params = params
         green = green_plane(arr)
+        self._tset = self._base_set.at_jd(jd)  # S77: proper motions at the frame's date
         wcs = self._wcs_for_frame(green, fpath.name)
         if self._series_fwhm is None:
             self._series_fwhm = self._measure_series_fwhm(arr, diag)
-        diag.record("frame", frame=frame_no, file=fpath.name, jd_utc=jd, fwhm=self._series_fwhm)
+        diag.record(
+            "frame",
+            frame=frame_no,
+            file=fpath.name,
+            jd_utc=jd,
+            fwhm=self._series_fwhm,
+            egain=float(params.egain),  # S73: the e-/ADU and where it came from
+            egain_source=params.egain_source,
+        )
         wcs, anchored = self._anchor(green, wcs, diag, frame_no, fpath.name)
         if anchored:
             wcs = self._resolve_rotation(green, wcs, diag, frame_no, fpath.name)
@@ -503,6 +633,7 @@ class PhotometryBatchWorker(QThread):
                 frame=frame_no,
                 anchors=self._tracker.anchors_used,
                 anchors_rejected=self._tracker.anchors_rejected or None,
+                anchors_inconsistent=self._tracker.anchors_inconsistent or None,  # S80
                 residual_px=self._tracker.residual_px,
                 rotation_deg=self._tracker.transform.rotation_deg,
                 shift_px=self._tracker.transform.shift_px,
@@ -536,11 +667,14 @@ class PhotometryBatchWorker(QThread):
         results = measure_frame(
             green,
             wcs,
-            self._req.target_set,
+            self._tset,
             params,
             fwhm=self._series_fwhm,
             on_star=on_star,
             exclude=excluded,
+            # S74: each star's scintillation at the airmass its row gets (S66, S78): never
+            # a frozen pointing's stale header AIRMASS (X1).
+            star_airmass=lambda star: self._airmass(jd, star),
         )
         for res in results:
             if res.diff is not None:
@@ -621,7 +755,7 @@ class PhotometryBatchWorker(QThread):
     def _centring(self, green, wcs) -> dict[str, float]:
         """S69 (b): each comparison and check star's centroid offset from its aperture
         centre on this frame through ``wcs`` (stars seen at SNR >= 5 only)."""
-        tset = self._req.target_set
+        tset = self._tset
         stars = tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK)
         return centring_offsets(
             green, wcs, stars, self._params, fwhm=self._series_fwhm, neighbours=list(tset.stars)
@@ -720,7 +854,7 @@ class PhotometryBatchWorker(QThread):
         if self._reference_index is None or self._file_index - self._reference_index > 1:
             return False
         shift = 0.0
-        for star in self._req.target_set.stars:
+        for star in self._tset.stars:
             x0, y0 = self._reference.world_to_pixel_deg(star.ra_deg, star.dec_deg)
             x1, y1 = tracked.world_to_pixel_deg(star.ra_deg, star.dec_deg)
             d = math.hypot(float(x1) - float(x0), float(y1) - float(y0))
@@ -732,13 +866,13 @@ class PhotometryBatchWorker(QThread):
     def _centred_anchors(self, offsets: dict[str, float]) -> int:
         """S69 (b): the tracker's anchors less those more than 1 px off their aperture
         centre on this frame (an anchor too faint to test counts, as before) and the
-        one its fit rejected (it verified nothing)."""
+        ones its fit rejected (they verified nothing; S80: every inconsistent one)."""
         bad = off_centre(offsets)
-        rejected = self._tracker.rejected_anchor if self._tracker is not None else None
+        rejected = self._tracker.rejected_anchors if self._tracker is not None else frozenset()
         return sum(
             1
             for index, star in enumerate(self._anchor_stars)
-            if star.key() not in bad and index != rejected
+            if star.key() not in bad and index not in rejected
         )
 
     def _verify(self, green, wcs, diag, frame_no: int, fname: str, offsets: dict[str, float]):
@@ -781,7 +915,7 @@ class PhotometryBatchWorker(QThread):
             logger.warning(
                 "%s: only %d anchor star(s) steer the apertures — the lock cannot be"
                 " verified; points are flagged suspect while fewer than 3 anchor stars steer"
-                " the apertures (except within 2 px of a solution of this frame or the"
+                " the apertures (except within 10 px of a solution of this frame or the"
                 " previous one)",
                 fname,
                 n,
@@ -848,7 +982,7 @@ class PhotometryBatchWorker(QThread):
         A target's *position* is as stable, but a variable near minimum makes a
         poor centroid — only fall back to targets when there is nothing else.
         """
-        tset = self._req.target_set
+        tset = self._tset
         wcs = self._reference
         candidates = tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK)
         # S70: the anchors' SNR >= 10 with the frame's own e-/ADU (self._params).
@@ -1005,8 +1139,16 @@ class PhotometryBatchWorker(QThread):
         astropy whatever the Settings site) when it has one and its pointing is not
         frozen (:meth:`_frame_header_airmass`); otherwise :func:`airmass_at` for the
         Settings site, which the live path uses too, so the two never drift apart.
+        S78: the header ``AIRMASS`` is the field centre's: a comparison or check star
+        takes its own, for the site fitted to the frames' pointing, else the Settings
+        site when it reproduces that pointing (:meth:`_prepare_star_site`); else it
+        keeps the header ``AIRMASS`` too.
         """
         header = self._frame_header_airmass()
+        if star.role != ROLE_TARGET and self._star_site is not None and jd is not None:
+            own = airmass_at(jd, star.ra_deg, star.dec_deg, *self._star_site)
+            if own is not None:
+                return own
         if header is not None:
             return header
         lat, lon, _elev = self._req.site
@@ -1101,6 +1243,17 @@ class PhotometryBatchWorker(QThread):
         return arr, jd, frame_egain(header, egain_table)
 
     @staticmethod
+    def _read_scintillation(fpath: Path) -> dict:
+        """The frame's ``EXPTIME``, ``AIRMASS`` and ``SITEELEV`` for its scintillation
+        (S74, ``frame_scintillation_inputs``); empty when unreadable."""
+        from astropy.io import fits
+
+        try:
+            return frame_scintillation_inputs(fits.getheader(fpath))
+        except Exception:
+            return {}
+
+    @staticmethod
     def _read_filter(fpath: Path) -> str:
         """The frame's ``FILTER`` card ("" when absent or unreadable), S49."""
         from astropy.io import fits
@@ -1129,6 +1282,6 @@ class PhotometryBatchWorker(QThread):
         if not curves:
             return
         try:
-            self._req.target_set.save(self._req.out_dir / "targets.json")
+            self._base_set.save(self._req.out_dir / "targets.json")  # S77: with its motions
         except OSError as exc:
             logger.warning("batch targets.json: %s", exc)

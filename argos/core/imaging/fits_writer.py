@@ -12,7 +12,6 @@ AIRMASS/MOONSEP/TARGRA needed by the varstar postprod pipeline.
 from __future__ import annotations
 
 import logging
-import math
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -24,6 +23,7 @@ from astropy.io import fits
 from astropy.time import Time
 
 from argos.core.hardware import active as hardware
+from argos.core.hardware import egain as camera_egain
 from argos.core.imaging import sensor_models, sky_geometry
 
 # Optics and sensor geometry come from the active telescope profile — see
@@ -171,7 +171,8 @@ class FITSWriter:
         start, end = _ensure_utc(exposure_start), _ensure_utc(exposure_end)
         mid = start + (end - start) / 2
 
-        egain, egain_source = _resolve_egain(gain, ctx.egain_driver, ctx.egain_table)
+        egain = _resolve_egain(gain, ctx.egain_driver, ctx.egain_table)
+        egain_source = egain.source
         airmass = sky_geometry.compute_airmass(ctx.altitude) if ctx.altitude is not None else None
         moon = sky_geometry.compute_moon_info(
             when_utc=start,
@@ -344,27 +345,14 @@ def _ensure_utc(dt: datetime) -> datetime:
 
 def _resolve_egain(
     gain_setting: int, driver_value: float | None, table: dict | None = None
-) -> tuple[float, str]:
-    """Return (e-/ADU, source) in the order the photometry uses (S42).
+) -> camera_egain.Egain:
+    """The e-/ADU in the order the photometry uses (S42, S73), with its ``source``.
 
-    The ``camera.egain_table`` entry for the gain setting, else the driver's
-    value, else the active sensor reference.
+    ``hardware.egain.live``: the ``camera.egain_table`` entry for the gain
+    setting, the active profile's photon-transfer measurement, the driver's
+    value, the active sensor reference.
     """
-    if isinstance(table, dict) and str(gain_setting) in table:
-        try:
-            value = float(table[str(gain_setting)])
-        except (TypeError, ValueError):
-            value = math.nan
-        if math.isfinite(value) and value > 0:
-            return value, "egain_table"
-    if driver_value and driver_value > 0:
-        return float(driver_value), "driver"
-    sensor = hardware.profile().sensor
-    model = sensor_models.for_sensor(sensor)
-    source = f"{model.SENSOR_NAME} ref"
-    if not sensor_models.is_known(sensor):
-        source += " fallback"
-    return sensor_models.lookup_egain(sensor, gain_setting), source
+    return camera_egain.live(gain_setting, table=table, driver=driver_value)
 
 
 # --------------------------------------------------------------------------- #
@@ -406,13 +394,17 @@ def _add_sensor_headers(
     sensor = hardware.profile().sensor
     model = sensor_models.for_sensor(sensor)
     rdnoise = sensor_models.lookup_read_noise(sensor, gain)
+    rdnoise_source = f"{model.SENSOR_NAME} reference"
+    measured_rn = getattr(egain, "read_noise_e", None)
+    if measured_rn:  # S73: measured with the e-/ADU, at the profile's black level
+        rdnoise, rdnoise_source = float(measured_rn), egain_source
     full_well = sensor_models.full_well_capacity(sensor, gain)
     eg = round(egain, 4)
     hdr["GAIN"] = (gain, "camera gain setting")
     hdr["EGAIN"] = (eg, f"[e-/ADU] electron gain ({egain_source})")
     hdr["EPERDN"] = (eg, "[e-/ADU] electron gain (alias)")
     hdr["GAIN_E"] = (eg, "[e-/ADU] electron gain (AAVSO alias)")
-    hdr["RDNOISE"] = (round(rdnoise, 3), f"[e-] read noise ({model.SENSOR_NAME} reference)")
+    hdr["RDNOISE"] = (round(rdnoise, 3), f"[e-] read noise ({rdnoise_source})")
     hdr["FULLWELL"] = (int(full_well), f"[e-] full-well capacity ({model.SENSOR_NAME} reference)")
     hdr["XBINNING"] = (1, "binning factor X")
     hdr["YBINNING"] = (1, "binning factor Y")

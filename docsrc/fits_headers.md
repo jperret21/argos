@@ -101,7 +101,7 @@ same.
 | `EGAIN` | [e⁻/ADU] electron gain, with its source named in the comment |
 | `GAIN_E` | [e⁻/ADU] electron gain (AAVSO alias) |
 | `EPERDN` | [e⁻/ADU] electron gain (alias) |
-| `RDNOISE` | [e⁻] read noise, from the sensor reference |
+| `RDNOISE` | [e⁻] read noise, measured with `EGAIN` (S30 Pro) or from the sensor reference; source in the comment |
 | `FULLWELL` | [e⁻] full-well capacity, from the sensor reference |
 | `XBINNING`, `YBINNING` | binning factors — always 1 |
 | `CCD-TEMP` | [°C] sensor temperature *(conditional)* |
@@ -114,26 +114,24 @@ value; `EGAIN` is the electrons-per-ADU conversion the photometry noise model
 needs. Do not use one for the other.
 ```
 
-```{admonition} Which ADU? An unresolved question — read before you trust EGAIN
-:class: danger
+```{admonition} Which ADU, and where EGAIN comes from
+:class: important
 
-The sensor is a **12-bit ADC whose output is scaled into a 16-bit file**. That
-leaves a factor of 16 hanging over every electron conversion, and this
-documentation cannot tell you which side of it `EGAIN` sits on, because the code
-does not record it.
+The sensor is a **12-bit ADC whose output is scaled into a 16-bit file** (× 16).
+`EGAIN` is in electrons per **16-bit ADU of one raw pixel**: the scale the file's
+pixel values carry. On the S30 Pro it is the camera's own photon-transfer
+measurement, 0.228 ± 0.005 e⁻/ADU at gain 80 (frame pairs of the owner's lights over
+three nights; release notes S73), scaled at 0.1 dB per gain step over gains 0-251
+(checked at gain 100); the comment says "S30 Pro PTC" or "S30 Pro PTC scaled". With
+a `camera.egain_table` entry for the gain, it is that entry; otherwise, on another
+camera or above gain 251, the driver's value or the sensor reference, named in the
+comment (not a measurement of your unit).
 
-The consistency check that ought to hold is
-$\text{EGAIN} \times (\text{saturation ADU}) \le \text{FULLWELL}$. With ARGOS's
-own reference values it fails at every shipped gain — see
-{doc}`differential_photometry` §3.5 for the table. Something in
-`EGAIN` / `FULLWELL` / `camera.linearity_max_adu` is referenced to a different
-ADU scale from the others.
-
-Until it is resolved: **`EGAIN` and `FULLWELL` are reference-table values, not
-measured calibrations of your unit.** If your reduction depends on absolute
-electrons — a real SNR, a photon-noise model — measure the gain yourself from a
-pair of flats rather than reading it out of this header. Everything
-*differential* is unaffected, because a constant gain error cancels.
+Frames of 0.4.x carry the driver's 0.8 or the reference's 1.723 e⁻/ADU at gain 80,
+3.5 and 7.6 times the measured value; Open FITS and the batch re-run take the
+measurement instead (S73). `FULLWELL` stays a reference value. Everything
+*differential* is unaffected by a constant gain error, which cancels; the errors and
+SNR are not.
 ```
 
 ## Instrument and optics

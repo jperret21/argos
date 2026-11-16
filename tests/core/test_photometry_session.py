@@ -7,21 +7,29 @@ import numpy as np
 from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
 from argos.core.photometry.session import measure_targets
 
+#: S81: a star is measured only when its sky annulus (12 px here) lies on the frame:
+#: the scenes keep their positions (10-50 px on a 60 px plane), the fake WCS and the
+#: plane both add this margin.
+_MARGIN = 4
+
 
 class _FakeWCS:
-    """Maps each (ra_deg, dec_deg) to a preset green-px (x, y)."""
+    """Maps each (ra_deg, dec_deg) to a preset green-px (x, y), plus :data:`_MARGIN`."""
 
     def __init__(self, mapping):
         self._m = mapping
 
     def world_to_pixel_deg(self, ra_deg, dec_deg):
-        return self._m[(ra_deg, dec_deg)]
+        x, y = self._m[(ra_deg, dec_deg)]
+        return x + _MARGIN, y + _MARGIN
 
 
 def _green_with_stars(positions_peaks, sky=200.0, sigma=1.5, shape=(60, 60)):
+    shape = tuple(n + 2 * _MARGIN for n in shape)
     yy, xx = np.mgrid[0 : shape[0], 0 : shape[1]]
     g = np.full(shape, sky, dtype=np.float32)
     for (cx, cy), peak in positions_peaks:
+        cx, cy = cx + _MARGIN, cy + _MARGIN
         g += peak * np.exp(-((xx - cx) ** 2 + (yy - cy) ** 2) / (2 * sigma**2))
     return g
 

@@ -19,15 +19,27 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from argos.core.imaging.session_log import SESSION_FILENAME
-from argos.core.imaging.sky_geometry import angle_between_directions, horizontal_at
+from argos.core.imaging.sky_geometry import (
+    SITE_FIT_MAX_RMS_DEG,
+    SiteFit,
+    angle_between_directions,
+    horizontal_at,
+)
 from argos.core.catalog.targets import ROLE_CHECK, ROLE_COMPARISON, ROLE_TARGET, TargetSet
-from argos.core.photometry.airmass import julian_date
+from argos.core.photometry.airmass import airmass_at, julian_date
 from argos.core.photometry.lightcurve import LightCurve, read_curves_csv
 from argos.core.photometry.uncertainty import apply_systematic_floor, estimate_systematic_floor
 
 #: X3: the Settings site is wrong when the direction of the frame's RA/DEC at DATE-OBS,
 #: seen from it, is more than this from the mount's ALTITUDE/AZIMUTH (device_session.py).
 SITE_CHECK_TOLERANCE_DEG = 5.0
+#: S78 (amended): without a fitted site, the Settings site gives a comparison or check
+#: star its own airmass only when it reproduces the mount's pointing as closely as a
+#: fitted site must (the median S66 offset of the run's lights, degrees); else the star
+#: keeps the frame's header AIRMASS, the field centre's. The owner's short runs lie
+#: 2.0-2.4° (XX Cyg) and 89° (RR Lyr 2026-09-25) off: a site 2° off moves a comparison's
+#: airmass by 0.013, ten times the header's 0.0012 (notes S78).
+STAR_SITE_MAX_OFFSET_DEG = SITE_FIT_MAX_RMS_DEG
 #: S66: a point takes the header AIRMASS of the light whose mid-exposure is this close (s).
 HEADER_AIRMASS_MATCH_S = 5.0
 #: S67 (S35's rule on old files): a frame on which a target's SNR is below this, or its
@@ -515,6 +527,25 @@ def site_mismatch(pointings: Iterable[FramePointing | None]) -> tuple[bool, floa
     return median > SITE_CHECK_TOLERANCE_DEG, median
 
 
+def settings_site_reproduces(
+    pointings: Iterable[FramePointing | None], lat: float | None = None, lon: float | None = None
+) -> bool:
+    """S78 (amended): whether the Settings site reproduces the mount's pointing well enough
+    to give a comparison or check star its own airmass: the median offset (X3,
+    :func:`site_offset_deg`) of the run's lights whose pointing is not frozen is within
+    :data:`STAR_SITE_MAX_OFFSET_DEG`. The site is ``lat``/``lon`` (a batch re-run's
+    Settings site), else each light's ``SITELAT``/``SITELONG``. False when no light can
+    tell (no Argos light with a pointing): the stars then keep their header AIRMASS."""
+    pointings = list(pointings)
+    frozen = frozen_pointings(pointings)
+    offsets = [
+        offset
+        for offset, stale in zip((site_offset_deg(p, lat, lon) for p in pointings), frozen)
+        if offset is not None and not stale
+    ]
+    return bool(offsets) and statistics.median(offsets) <= STAR_SITE_MAX_OFFSET_DEG
+
+
 def light_pointings(review: ReviewedSession) -> list[FramePointing | None]:
     """The header pointing of each light frame of ``review`` (``None``: not found)."""
     found: dict[str, Path] = {}
@@ -690,6 +721,12 @@ class OldFileRules:
     airmass_computed: int = 0
     #: S66 (X1): the lights whose header pointing is frozen (no site check, no AIRMASS).
     frozen_lights: int = 0
+    #: S78: the points of comparison and check stars given their own airmass, and the
+    #: site it is computed for: "fitted" (to the lights' ALTITUDE/AZIMUTH), "settings"
+    #: (the lights' SITELAT/SITELONG: no fit, and that site reproduces the mount's
+    #: pointing, :func:`settings_site_reproduces`), or None (the header AIRMASS).
+    airmass_own_star: int = 0
+    star_airmass_site: str | None = None
     #: S71: the comparisons' median SNR in the flight recorder (None without one).
     comparison_median_snr: float | None = None
     #: S67: the recorder frames without a detection, and the points flagged on them.
@@ -708,6 +745,11 @@ class OldFileRules:
                 "that site): fix it in Settings › Observer & site. The airmass shown and "
                 "exported is each frame's FITS header AIRMASS, from the mount (S66)."
             )
+            if self.star_airmass_site == "fitted":
+                text += (
+                    " Comparison and check stars take their own, computed for the site"
+                    " fitted to the mount's pointing (S78)."
+                )
             if self.airmass_computed:
                 text += (
                     f" {self.airmass_computed} point(s) without one (no frame within 5 s, or"
@@ -738,11 +780,16 @@ def apply_old_file_rules(
 ) -> OldFileRules:
     """The release notes' old-file rules on the curves of a run's ``photometry/`` CSVs.
 
-    S66: every point's airmass becomes the header ``AIRMASS`` of the Argos light whose
-    mid-exposure is nearest, within 5 s (the mount's, within 0.0004 of astropy); a
-    point without one (no light, no ``AIRMASS``, or a light whose pointing is frozen,
-    X1) keeps the airmass the run computed for the Settings site. The site check (X3)
-    is reported, not needed. S67 (S35): every point that the run's flight recorder
+    S66: every target point's airmass becomes the header ``AIRMASS`` (the field
+    centre's) of the Argos light whose mid-exposure is nearest, within 5 s (the
+    mount's, within 0.0004 of astropy); a point without one (no light, no ``AIRMASS``,
+    or a light whose pointing is frozen, X1) keeps the airmass the run computed for the
+    Settings site. S78: a comparison or check star's airmass is its own, computed for
+    the site fitted to the lights' pointing (:func:`fitted_site`); without a fit, for
+    the Settings site they recorded only when it reproduces the mount's pointing
+    (:func:`settings_site_reproduces`), else the header ``AIRMASS`` as the target's (a
+    wrong Settings site gave RR Lyr 2026-09-25's comparisons 4.0-4.9 for 1.03). The
+    site check (X3) is reported, not needed. S67 (S35): every point that the run's flight recorder
     shows without a detection is flagged ``suspect`` (``no_detection``,
     :meth:`RecorderFrame.flags`: every star's on a zero-point outlier, a target's own
     below SNR 3), and a curve's ``sigma_syst`` (with each ``mag_err``) is recomputed
@@ -755,8 +802,24 @@ def apply_old_file_rules(
     rules.site_mismatch, rules.site_offset_deg = site_mismatch(pointings)
     rules.frozen_lights = sum(frozen_pointings(pointings))
     find = _header_airmass_finder(pointings)
+    # S78: a comparison or check star off the field centre takes its own airmass, for
+    # the site fitted to the mount's pointing, else the run's Settings site when it
+    # reproduces that pointing; else the header AIRMASS, as the target.
+    site = fitted_site(pointings)
+    rules.star_airmass_site = "fitted" if site is not None else None
+    if site is None and settings_site_reproduces(pointings):
+        site = header_settings_site(pointings)
+        rules.star_airmass_site = "settings" if site is not None else None
+    stars = TargetSet.load(Path(root) / "targets.json") if site is not None else None
     for lc in curves:
+        star = _curve_star(lc, stars) if stars is not None and lc.role != ROLE_TARGET else None
         for point in lc.points:
+            if star is not None and math.isfinite(point.jd_utc):
+                own = airmass_at(point.jd_utc, star.ra_deg, star.dec_deg, site[0], site[1])
+                if own is not None:
+                    point.airmass = own
+                    rules.airmass_own_star += 1
+                    continue
             airmass = find(point.jd_utc)
             if airmass is None:
                 rules.airmass_computed += 1
@@ -783,6 +846,49 @@ def apply_old_file_rules(
             if floor is not None:
                 rules.floors[lc.name or lc.auid] = floor
     return rules
+
+
+def fitted_site(pointings: list[FramePointing | None]) -> tuple[float, float] | None:
+    """S78: the site (latitude, longitude) fitted to the run's Argos lights' header
+    ``RA``/``DEC``/``ALTITUDE``/``AZIMUTH`` at ``DATE-OBS`` (the mount's own site), or
+    None: fewer than 3 such lights over 10 minutes, or no site reproduces them within
+    0.1° (:class:`SiteFit`). A light whose pointing is frozen (X1) is left out."""
+    frozen = frozen_pointings(pointings)
+    fit = SiteFit()
+    for pointing, stale in zip(pointings, frozen):
+        if pointing is None or not pointing.argos or stale or pointing.jd_start is None:
+            continue
+        values = (pointing.ra_hours, pointing.dec_deg, pointing.altitude, pointing.azimuth)
+        if any(value is None for value in values):
+            continue
+        fit.add(pointing.jd_start, *values)
+    return fit.site()
+
+
+def header_settings_site(pointings: list[FramePointing | None]) -> tuple[float, float] | None:
+    """S78: the run's Settings site as its Argos lights recorded it (``SITELAT``,
+    ``SITELONG``; the median, a site changed in a run being rare), or None."""
+    sites = [
+        (p.site_lat, p.site_lon)
+        for p in pointings
+        if p is not None and p.argos and p.site_lat is not None and p.site_lon is not None
+    ]
+    if not sites:
+        return None
+    return statistics.median(s[0] for s in sites), statistics.median(s[1] for s in sites)
+
+
+def _curve_star(lc: LightCurve, targets: TargetSet):
+    """S78: the star of the run's set a curve measures (by AUID, else by name), or None."""
+    for star in targets.stars:
+        if lc.auid and star.auid == lc.auid:
+            return star
+    if lc.auid:
+        return None
+    for star in targets.stars:
+        if lc.name and lc.name in (star.name, star.display_name):
+            return star
+    return None
 
 
 def _header_airmass_finder(pointings: list[FramePointing | None]):

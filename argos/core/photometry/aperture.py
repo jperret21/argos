@@ -16,6 +16,10 @@ import numpy as np
 #: ``plane_pixels`` of S72's noise model. The default, 1, is the 0.4.x model.
 GREEN_PIXELS = 2
 
+#: Variance of a sample median over that of the mean, for Gaussian noise: the sky
+#: under the aperture is the annulus median (S75).
+MEDIAN_VARIANCE_FACTOR = math.pi / 2.0
+
 
 @dataclass(frozen=True)
 class AperturePhot:
@@ -45,6 +49,7 @@ def measure_aperture(
     sat_adu: float = 60000.0,
     black_adu: float = 0.0,
     plane_pixels: int = 1,
+    scint_frac: float = 0.0,
 ) -> AperturePhot | None:
     """Measure a star at (x, y) green px with a circular aperture + sky annulus.
 
@@ -59,20 +64,31 @@ def measure_aperture(
         black_adu: The camera's black level (ADU): the part of the sky level
             that is no photon and carries no Poisson noise (S72).
         plane_pixels: Raw pixels averaged in each value of ``green``.
+        scint_frac: Scintillation, relative flux sigma (S74), added in quadrature to
+            ``inst_mag_err`` only: ``snr`` stays the detection's (photons, sky,
+            read noise), which the gates read.
 
     S72's noise model (``plane_pixels=2``, :data:`GREEN_PIXELS`): each value of the
     (G1+G2)/2 plane holds two pixels' electrons, ``2 × egain`` per ADU, and two
     pixels' read noise, ``rn/√2`` ADU at the raw gain; the sky's Poisson term
-    counts only the electrons above ``black_adu``. With ``plane_pixels=1`` and no
-    black level it is the 0.4.x model: one raw pixel's gain, the whole sky level
-    as photons. :class:`~argos.core.photometry.params.PhotometryParams` chooses.
+    counts only the electrons above ``black_adu``; and the sky subtracted under the
+    aperture is itself an estimate, the median of ``n_sky`` annulus pixels, whose
+    error the CCD equation's ``n_pix (1 + n_pix / n_sky)`` form counts, with the
+    median's pi/2 (S75). With ``plane_pixels=1`` and no black level it is the 0.4.x
+    model: one raw pixel's gain, the whole sky level as photons, no sky-estimate
+    term. :class:`~argos.core.photometry.params.PhotometryParams` chooses.
 
     Returns:
-        An :class:`AperturePhot`, or ``None`` if the aperture falls off the frame.
+        An :class:`AperturePhot`, or ``None`` unless the aperture and the sky annulus
+        lie wholly on the frame (S81: a box clipped at the edge measured a truncated
+        aperture, up to 5 mag faint, or a truncated annulus, and the row was written
+        as a good point).
     """
     g = np.asarray(green, dtype=np.float32)
     h, w = g.shape
     r_out = max(float(r_out), float(r_ap))
+    if not _annulus_on_frame(x, y, r_out, w, h):
+        return None  # S81
     xi, yi = int(round(x)), int(round(y))
     x0, x1 = max(0, xi - int(r_out) - 1), min(w, xi + int(r_out) + 2)
     y0, y1 = max(0, yi - int(r_out) - 1), min(h, yi + int(r_out) + 2)
@@ -98,13 +114,19 @@ def measure_aperture(
 
     k = _plane_gain(egain, plane_pixels)
     flux_e = max(flux, 0.0) * k
-    var_e = flux_e + n_pix * _pixel_variance_e(sky, k, read_noise_e, black_adu, plane_pixels)
+    n_sky = int(sky_pixels.size)
+    sky_terms = float(n_pix)
+    if max(int(plane_pixels), 1) > 1 and n_sky > 0:
+        sky_terms *= 1.0 + MEDIAN_VARIANCE_FACTOR * n_pix / n_sky  # S75
+    var_e = flux_e + sky_terms * _pixel_variance_e(sky, k, read_noise_e, black_adu, plane_pixels)
     flux_err_e = math.sqrt(var_e) if var_e > 0 else 0.0
     snr = (flux_e / flux_err_e) if flux_err_e > 0 else 0.0
 
     if flux > 0.0:
         inst_mag = -2.5 * math.log10(flux)
         inst_mag_err = (1.0857 * flux_err_e / flux_e) if flux_e > 0 else None
+        if inst_mag_err is not None and scint_frac and scint_frac > 0:
+            inst_mag_err = 1.0857 * math.hypot(flux_err_e / flux_e, float(scint_frac))  # S74
     else:
         inst_mag = inst_mag_err = None
 
@@ -118,6 +140,19 @@ def measure_aperture(
         inst_mag=inst_mag if inst_mag is None else round(inst_mag, 4),
         inst_mag_err=inst_mag_err if inst_mag_err is None else round(inst_mag_err, 4),
         suspect=suspect,
+    )
+
+
+def _annulus_on_frame(x: float, y: float, r_out: float, w: int, h: int) -> bool:
+    """S81: whether every pixel centre within ``r_out`` of (x, y) lies on a ``w`` x ``h``
+    frame (the aperture and the sky annulus are whole). False for a non-finite centre."""
+    if not (math.isfinite(x) and math.isfinite(y)):
+        return False
+    return (
+        math.ceil(x - r_out) >= 0
+        and math.floor(x + r_out) <= w - 1
+        and math.ceil(y - r_out) >= 0
+        and math.floor(y + r_out) <= h - 1
     )
 
 

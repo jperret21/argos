@@ -161,83 +161,101 @@ in ADU.
 
 ### 3.3 Noise
 
-The uncertainty is the CCD equation, evaluated in electrons through the gain
-$g$ (e⁻/ADU). With $F_e = g F$, $s_e = g\tilde{s}$ and read noise $R$ (e⁻ RMS,
-default 1.5):
+The uncertainty is the CCD equation, evaluated in electrons. Since 0.5.0 the
+default model (`photometry.noise_model`: `green_plane`) is the one of the plane
+ARGOS measures: each value of the (G1+G2)/2 green plane holds two raw pixels'
+electrons, so its gain is $2g$ (e⁻/ADU, $g$ that of one raw pixel) and its read
+noise $R/\sqrt{2}$ ADU-equivalent; and only the sky level above the camera's black
+level $b$ (the telescope profile's, 1024 ADU on the S30 Pro) is photons. With
+$F_e = 2g F$, $s_e = 2g(\tilde{s} - b)$, $n$ aperture pixels and $n_\text{ann}$
+annulus pixels:
 
 $$
-\sigma_F^2 = F_e + n_\text{pix}\left(s_e + R^2\right)
+\sigma_F^2 = F_e + n\left(1 + \tfrac{\pi}{2}\,\frac{n}{n_\text{ann}}\right)
+\left(s_e + 2\left(\tfrac{R}{\sqrt{2}}\right)^2\right)
 $$
 
-The three terms are the star's own photon noise, the sky photon noise and the
-read noise, each summed over the aperture. The signal-to-noise ratio is
-$\text{SNR} = F_e / \sigma_F$.
+The terms are the star's photon noise, then the sky photon noise and the read
+noise over the aperture, each enlarged by the error of the sky level subtracted
+from it: the annulus *median*, whose variance is $\pi/2$ that of a mean (S75).
+The signal-to-noise ratio is $\text{SNR} = F_e / \sigma_F$, the one every gate
+reads. The instrumental magnitude's error then adds the star's scintillation in
+quadrature (S74):
 
-```{admonition} Source — the CCD equation
+$$
+\sigma_\text{scint}^2 = 10^{-5}\, C_Y^2\, D^{-4/3}\, t^{-1}\, X^{3}\, e^{-2h/8000\,\text{m}}
+$$
+
+with Osborn et al.'s $C_Y = 1.5$, the telescope's aperture $D$ (m; 30 mm on the
+S30 Pro), the exposure $t$ (s), the star's airmass $X$ and the site's height $h$
+(the frame's `SITEELEV`, else the Settings site's, else sea level). It is 0.017 mag
+in 10 s at airmass 1. The SNR does not include it.
+
+The model's sky σ matches the σ measured in the annuli of the owner's frames
+within 4 % (0.96-1.05 on 31 frames at gains 80 and 100); a 30 mm aperture sits
+near the Fresnel scale, where $C_Y$ is least certain: the bright RR Lyr star pairs
+measure 1.1-1.4, so bright stars' errors (and AAVSO `MERR`) are on the safe side.
+`photometry.noise_model`: `pixel` keeps the 0.4.x formula (one raw pixel's gain,
+the whole sky level as photons, neither term), for comparison only: with the
+measured $g$ it counts the black level as photons and gives 2.5-3.5 times the real
+sky noise.
+
+```{admonition} Source — the CCD equation, scintillation
 :class: seealso
 
-Merline & Howell (1995); Howell, *Handbook of CCD Astronomy* (2006). Full
-citations in {doc}`references`.
+Merline & Howell (1995); Howell, *Handbook of CCD Astronomy* (2006); Young (1967);
+Osborn et al. (2015, MNRAS 452, 1707). Full citations in {doc}`references`.
 
-Three terms of the textbook equation are absent.
-
-**The uncertainty of the sky estimate itself.** The published equation carries a
-factor $\left(1 + n_\text{pix}/n_\text{ann}\right)$ on the background terms,
-because $\tilde{s}$ is measured from a finite annulus and its own error
-propagates into every aperture pixel. ARGOS omits it. Because the sky is a
-*median* rather than a mean, the correct factor is closer to
-$1 + \tfrac{\pi}{2}\,n_\text{pix}/n_\text{ann}$. With the shipped geometry that
-is about **1.3** for a live frame at $r_\text{ap} = 4$, and about **2.3** for
-the 7.5 px fallback — so the sky-plus-read variance is understated by 30 % live,
-and by more than a factor of two on a re-measurement.
-
-**Dark current** is never measured: its *signal* is absorbed into the annulus
-median and subtracted with the sky, but its *shot noise* is not counted — small
-on short uncooled sub-exposures against a bright sky, and larger if you observe
-cold and dark.
-
-**Digitisation noise** is negligible next to a 1.5 e⁻ read noise.
-
-All three would have to be restored for a calibrated reduction. The first is the
-one that matters most here, and it means $\sigma_F$ is an **underestimate** —
-which is part of why the run-level floor of §5 exists.
+Two terms of a calibrated reduction are still absent. **Dark current** is never
+measured: its *signal* is absorbed into the annulus median and subtracted with the
+sky, but its *shot noise* is not counted — small on short uncooled sub-exposures
+against a bright sky. **The median's quantisation**: the green plane steps by 8 ADU,
+so the annulus median lands on a 4-8 ADU grid; that error (about 2 ADU per pixel)
+follows the sky level slowly and is not in $\sigma_F$ (release notes S76: the
+estimator is an open decision).
+```
 
 ```{admonition} Where does $g$ come from — and when is it wrong?
 :class: important
 
-During a live run ARGOS resolves the electron gain in order: the
-`camera.egain_table` entry for the current gain setting, else the driver's
-`ElectronsPerADU`, else the sensor reference curve for the profile's sensor.
-That value is what goes into `EGAIN` in the FITS header (before 0.5.0 the header
-skipped the table).
+ARGOS resolves the electron gain at the frame's own gain setting, in order
+(`argos/core/hardware/egain.py`, S73):
 
-A **saved frame**, opened with **Open FITS…** or re-measured with **Re-run
-subs…**, keeps its own gain: the `camera.egain_table` entry for its `GAIN`
-setting, else its `EGAIN`, so it gets the $g$ its live measurement used. Only a
-frame that records neither falls back to the live order, at the Camera form's
-gain (before 0.5.0 every saved frame did).
+1. the `camera.egain_table` entry for that gain;
+2. the telescope profile's photon-transfer measurement: the S30 Pro's
+   0.228 ± 0.005 e⁻/ADU at gain 80 (read noise 2.6 e⁻), scaled at 0.1 dB per gain
+   step over gains 0-251 (checked at gain 100: 0.183 measured, 0.181 scaled; any
+   other scaled gain is logged "scaled, not measured"); a scaled gain uses the
+   measured read noise too;
+3. the driver's `ElectronsPerADU`;
+4. the sensor reference curve (your own `camera_calibration*.json`, Settings ›
+   Photon-transfer calibrations, is read at this last step).
 
-:::{admonition} Before 0.4.2
+That value is what goes into `EGAIN` in the FITS header, with its source in the
+comment, and the measured read noise into `RDNOISE`. A **saved frame**, opened
+with **Open FITS…** or re-measured with **Re-run subs…**, takes the same order at
+its own `GAIN`: an S30 Pro frame of 0.4.x at gain 80, whose `EGAIN` says 0.8 (the
+driver) or 1.723 (the reference), takes the measured 0.228; an `EGAIN` your table
+wrote is kept. The flight recorder's `frame` record names the value and its source.
+
+:::{admonition} Before 0.5.0
 :class: warning
 
-The offline path read `camera.egain_table` alone, and that table is empty by
-default — so $g$ fell back to **1.0** and ADU were treated as electrons. Every
-SNR and every $\sigma_m$ produced by a batch re-measurement under 0.4.1 or
-earlier is wrong by the gain, which is 1.723 e⁻/ADU for an IMX585 at gain 80,
-not 1.0. Re-measure those runs rather than trusting their error bars.
+0.4.x used the frame's `EGAIN` (0.8 or 1.723 e⁻/ADU on the S30 Pro at gain 80):
+its Poisson errors were 1.9-2.7 times too small, and each SNR gate read another
+SNR (an "SNR 10" was about 7.6 on 0.4.1 frames). Before 0.4.2 the offline path
+fell back to 1.0 e⁻/ADU. Re-measure those runs with **Re-run subs…** for honest
+errors.
 :::
 ```
 
-```{admonition} The read noise is one number for three sensors
-:class: warning
+```{admonition} The read noise
+:class: note
 
-`photometry.read_noise_e` is a single configured constant, 1.5 e⁻ by default.
-The `RDNOISE` value ARGOS writes into the *same frame's* header is looked up per
-sensor and per gain, and ranges from about 0.5 to 6.9 e⁻ across the shipped
-profiles. The default matches no supported sensor at a typical gain. For
-sky-limited exposures this barely moves $\sigma_F$; for short or dark-sky
-frames it does. Set it from the sensor reference for your gain if the read term
-is not negligible.
+With the green-plane model, the read noise is the one measured with the e⁻/ADU
+(2.6 e⁻ on the S30 Pro, the ADC's quantisation included) wherever the profile gives
+the gain; elsewhere `photometry.read_noise_e` (1.5 e⁻ by default). The `pixel`
+model always uses the setting.
 ```
 
 ### 3.4 Instrumental magnitude
@@ -504,11 +522,12 @@ point, so ARGOS complements it rather than leaving the target unusable.
 Implemented in {mod}`argos.core.photometry.uncertainty`. This is the part that
 makes the error bars honest.
 
-The formal error of §3.4 counts photons, and — per §3.3 — undercounts even
-those. It does not count scintillation, guiding jitter, aperture losses,
-flat-field residuals, differential extinction or focus drift, which for a bright
-star through a small aperture are usually the dominant terms. Left alone, the
-curve would carry error bars several times too small.
+The formal error of §3.4 counts photons, the sky estimate and scintillation
+(§3.3). It does not count guiding jitter, aperture losses, flat-field residuals,
+differential extinction or focus drift. With the 0.4.x model, which left out
+scintillation and the sky estimate's error, the bright RR Lyr star pairs scattered
+2.2-2.4 times their formal errors; with 0.5.0's they scatter 0.8-1.1 times, and the
+floor below is often 0 (it is still estimated: it catches what the model misses).
 
 ARGOS measures the real scatter instead of assuming it, using **second
 differences**. For independent errors,

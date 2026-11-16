@@ -729,27 +729,298 @@ def test_frame_egain_is_the_frames_own_gain() -> None:
 def test_black_level_comes_from_the_profile_s72() -> None:
     """``photometry.noise_model = green_plane`` (S72) brings the S30 Pro's measured
     black level and the two-pixel plane to every aperture the params drive; a profile
-    without one (S30, S50) subtracts nothing. The default keeps the 0.4.x model until
-    the owner decides the e-/ADU (S73)."""
+    without one (S30, S50) subtracts nothing. Since S73 it is the default; ``pixel``
+    keeps the 0.4.x model."""
+    from argos.core.config import _DEFAULTS
     from argos.core.hardware import catalog
     from argos.core.photometry.params import PhotometryParams
 
     assert catalog.get("s30pro").black_level_adu == 1024.0
+    assert _DEFAULTS["photometry"]["noise_model"] == "green_plane"
     defaults = PhotometryParams.from_config(lambda key, default=None: default, egain=0.8)
-    assert (defaults.black_adu, defaults.plane_pixels) == (0.0, 1)
+    assert (defaults.black_adu, defaults.plane_pixels) == (1024.0, 2)
 
-    def green(profile=None):
+    def model(name, profile=None):
         def cfg(key, default=None):
             if key == "photometry.noise_model":
-                return "green_plane"
+                return name
             return profile if key == "hardware.profile" and profile else default
 
         return PhotometryParams.from_config(cfg, egain=0.8)
 
-    assert (green().black_adu, green().plane_pixels) == (1024.0, 2)
-    assert (green("s50").black_adu, green("s50").plane_pixels) == (0.0, 2)
+    pixel = model("pixel")
+    assert (pixel.black_adu, pixel.plane_pixels, pixel.scint_cy, pixel.aperture_mm) == (
+        0.0,
+        1,
+        0.0,
+        0.0,
+    )
+    assert (model("green_plane").black_adu, model("green_plane").plane_pixels) == (1024.0, 2)
+    assert (model("green_plane", "s50").black_adu, model("green_plane", "s50").plane_pixels) == (
+        0.0,
+        2,
+    )
     g = _star(20, 20, peak=2000.0, sky=1100.0)
     with_black = measure_aperture(g, 20, 20, 6, 8, 12, egain=0.8, black_adu=1024.0)
     without = measure_aperture(g, 20, 20, 6, 8, 12, egain=0.8)
     assert with_black.flux_adu == without.flux_adu  # the magnitude is unchanged
     assert with_black.snr > without.snr  # 76 ADU of sky photons, not 1100
+
+
+# --------------------------------------------------------------------------- #
+# S73: the camera's measured e-/ADU; S72 on; S74 scintillation; S75 sky term   #
+# --------------------------------------------------------------------------- #
+
+
+class _Header(dict):
+    """A FITS-header-like mapping with comments (``header.comments[key]``)."""
+
+    def __init__(self, cards: dict, comments: dict | None = None) -> None:
+        super().__init__(cards)
+        self.comments = comments or {}
+
+
+def _s30pro_header(gain=80, egain=0.8, comment="driver") -> _Header:
+    return _Header(
+        {"TELESCOP": "ZWO Seestar S30 Pro", "GAIN": gain, "EGAIN": egain},
+        {"EGAIN": f"[e-/ADU] electron gain ({comment})"},
+    )
+
+
+def test_an_s30_pro_frame_at_gain_80_uses_the_measured_egain_s73() -> None:
+    """The S30 Pro's frames at gain 80 say 0.8 (0.4.2, the driver) or 1.723 (0.4.1, the
+    IMX585 reference) e-/ADU; their photon transfer gives 0.228. The re-run of such a
+    frame (S41, S70) took the header's value: 0.8 and 1.723 before the fix."""
+    from argos.core.photometry.params import frame_egain
+
+    for written, comment in ((0.8, "driver"), (1.723, "IMX585 ref")):
+        value = frame_egain(_s30pro_header(80, written, comment))
+        assert value == pytest.approx(0.228)
+        assert value.source == "S30 Pro PTC"  # the chain records where it came from
+        assert value.read_noise_e == pytest.approx(2.6)
+    # the observer's own table still comes first; an EGAIN that table wrote is kept
+    assert frame_egain(_s30pro_header(80, 0.8), {"80": 0.25}) == 0.25
+    kept = frame_egain(_s30pro_header(80, 0.31, "egain_table"))
+    assert kept == 0.31 and "egain_table" in kept.source
+    # another camera's frame keeps its header; so does one with no TELESCOP
+    other = _Header({"TELESCOP": "Other scope", "GAIN": 80, "EGAIN": 0.8})
+    assert frame_egain(other) == 0.8 and frame_egain(other).source == "header EGAIN"
+    assert frame_egain({"GAIN": 80, "EGAIN": 0.8}) == 0.8
+
+
+def test_other_gains_scale_by_the_sensors_0p1_db_steps_s73() -> None:
+    """Gain 100 measures 0.183 e-/ADU where 0.228 x 10^(-20/200) gives 0.181; above
+    251 (the IMX585's high-conversion-gain mode) nothing is measured: the frame's
+    header, else the driver, else the reference, logged as unverified."""
+    from argos.core.hardware import catalog
+    from argos.core.hardware import egain as camera_egain
+    from argos.core.photometry.params import frame_egain
+
+    s30pro = catalog.get("s30pro")
+    m, scaled = s30pro.measured_gain(100)
+    assert scaled and m.e_per_adu == pytest.approx(0.228 * 10 ** (-0.1))
+    assert m.e_per_adu == pytest.approx(0.183, abs=0.003)
+    assert s30pro.measured_gain(0)[0].e_per_adu * 4095 * 16 == pytest.approx(38000, rel=0.02)
+    assert s30pro.measured_gain(300) is None
+    at_100 = frame_egain(_s30pro_header(100, 1.5, "IMX585 ref"))
+    assert at_100 == pytest.approx(0.181, abs=0.001)
+    # the read noise measured at gain 80 (the owner's decision, S73 amended: the
+    # 1.5 e- Settings default gave the gain-65 light 0.79 of its measured sky sigma)
+    assert at_100.source == "S30 Pro PTC scaled" and at_100.read_noise_e == pytest.approx(2.6)
+    assert frame_egain(_s30pro_header(300, 0.4, "IMX585 ref")) == 0.4
+    live = camera_egain.live(300, driver=0.42, profile=s30pro)
+    assert live == 0.42 and live.source == "driver"
+    assert camera_egain.live(80, driver=0.42, profile=s30pro) == pytest.approx(0.228)
+    asked = []
+    camera_egain.live(80, driver=lambda: asked.append(1), profile=s30pro)
+    assert not asked  # the driver is not read when the profile has the value
+    assert camera_egain.live(80, table={"80": 0.3}, profile=s30pro).source == "egain_table"
+    # unvalidated profiles have no measurement: the driver, then their reference
+    assert camera_egain.live(80, driver=0.5, profile=catalog.get("s50")).source == "driver"
+
+
+def test_a_scaled_gain_is_logged_scaled_not_measured_except_where_checked_s73(caplog) -> None:
+    """S73 amended (the owner's call on validation F2): every gain other than 80
+    (measured) and 100 (the scaling checked by its own photon transfer) is logged once
+    as "e-/ADU scaled, not measured"."""
+    from argos.core.hardware import catalog
+    from argos.core.hardware import egain as camera_egain
+
+    s30pro = catalog.get("s30pro")
+    camera_egain._warned.clear()
+    with caplog.at_level("WARNING", logger="argos.core.hardware.egain"):
+        for gain in (80, 100, 65, 65, 120):
+            camera_egain.live(gain, profile=s30pro)
+
+    lines = [r.getMessage() for r in caplog.records if "scaled, not measured" in r.getMessage()]
+    assert [line.split()[3] for line in lines] == ["65", "120"]
+
+
+def test_the_read_noise_follows_the_frames_egain_whatever_the_path_s73() -> None:
+    """S73 amended (technical review): ``with_frame`` kept the base params' read noise
+    when the frame's e-/ADU carried none, so one frame at a gain above 251 had 2.6 e- in
+    a re-run with the Camera form at 80 and the Settings 1.5 e- with the form at 300.
+    The frame's e-/ADU now brings its measured read noise, else the Settings one."""
+    from argos.core.hardware import catalog
+    from argos.core.hardware import egain as camera_egain
+    from argos.core.photometry.params import PhotometryParams
+
+    s30pro = catalog.get("s30pro")
+    cfg = {"photometry.noise_model": "green_plane", "photometry.read_noise_e": 1.5}.get
+    at_80 = camera_egain.live(80, profile=s30pro)
+    at_100 = camera_egain.live(100, profile=s30pro)
+    at_300 = camera_egain.live(300, driver=0.42, profile=s30pro)
+
+    for base in (at_80, at_100, at_300):
+        params = PhotometryParams.from_config(cfg, egain=base)
+        assert params.with_frame(egain=at_300).read_noise_e == 1.5
+        assert params.with_frame(egain=at_100).read_noise_e == pytest.approx(2.6)
+    assert PhotometryParams.from_config(cfg, egain=at_300).read_noise_e == 1.5
+    assert PhotometryParams.from_config(cfg, egain=at_100).read_noise_e == pytest.approx(2.6)
+
+
+def test_the_model_sky_sigma_is_the_measured_one_s72_s73() -> None:
+    """S72's test: the model's sky sigma within 10 % of the green-plane sigma measured
+    in the annuli of the first light of RR Lyr 2026-09-25 (sky 1176 ADU: 20.5 ADU), XX
+    Cyg 2026-09-07 (1368: 29.7) and 2026-08-29 (1400: 31.2), W7 science review. With
+    the frames' EGAIN (0.8, 1.723, 1.723) it gave 9.8, 10.0 and 10.5 (-52 to -66 %)."""
+    from argos.core.hardware import catalog
+    from argos.core.photometry.aperture import sky_sigma_adu
+    from argos.core.photometry.params import PhotometryParams, frame_egain
+
+    for level, measured, written in (
+        (1176.0, 20.5, 0.8),
+        (1368.0, 29.7, 1.723),
+        (1400.0, 31.2, 1.723),
+    ):
+        egain = frame_egain(_s30pro_header(80, written))
+        params = PhotometryParams.from_config(lambda key, default=None: default, egain=egain)
+        assert params.read_noise_e == pytest.approx(2.6)  # measured with the e-/ADU
+        model = sky_sigma_adu(
+            level,
+            egain=params.egain,
+            read_noise_e=params.read_noise_e,
+            black_adu=params.black_adu,
+            plane_pixels=params.plane_pixels,
+        )
+        assert model == pytest.approx(measured, rel=0.10), (level, model)
+    assert catalog.get("s30pro").gain_measurements[0].e_per_adu_err == pytest.approx(0.005)
+
+
+def test_scintillation_follows_young_and_osborn_s74() -> None:
+    """Young (1967) with Osborn et al. (2015)'s C_Y = 1.5: 0.0155 relative through
+    30 mm in 10 s at airmass 1, sea level; X^1.5, t^-1/2, D^-2/3, exp(-h / 8000 m)."""
+    from argos.core.photometry.uncertainty import scintillation_sigma
+
+    base = scintillation_sigma(30.0, 10.0, 1.0, 0.0)
+    assert base == pytest.approx(math.sqrt(1e-5 * 2.25 * 0.03 ** (-4 / 3) / 10.0))
+    assert base == pytest.approx(0.0155, abs=0.0002)
+    assert scintillation_sigma(30.0, 40.0, 1.0) == pytest.approx(base / 2)
+    assert scintillation_sigma(30.0, 10.0, 2.0) == pytest.approx(base * 2**1.5)
+    assert scintillation_sigma(60.0, 10.0, 1.0) == pytest.approx(base * 2 ** (-2 / 3))
+    assert scintillation_sigma(30.0, 10.0, 1.0, 8000.0) == pytest.approx(base / math.e)
+    for missing in ((0.0, 10.0, 1.0), (30.0, None, 1.0), (30.0, 10.0, None), (30.0, 0.0, 1.0)):
+        assert scintillation_sigma(*missing) == 0.0
+
+
+def test_scintillation_is_in_each_stars_error_not_its_snr_s74() -> None:
+    """A bright star's error was its photon error alone (a few mmag here, while the RR
+    Lyr bright pairs scatter 2.2-2.4 times their formal errors): with S74 the frame's
+    exposure and airmass add 1.0857 x 0.0155 mag in quadrature to every star, hence to
+    the zero point's weights and the target's error; the SNR the gates read is kept.
+    Before the fix the target's photon error, 0.0031 mag, was all of it."""
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+    from argos.core.photometry.params import PhotometryParams, measure_frame
+
+    class _WCS:  # every annulus on the frame (S81)
+        def world_to_pixel_deg(self, ra_deg, dec_deg):
+            return {1.0: (34.0, 34.0), 2.0: (14.0, 14.0), 3.0: (54.0, 54.0)}[ra_deg]
+
+    yy, xx = np.mgrid[0:68, 0:68]
+    green = np.full((68, 68), 1100.0, dtype=np.float32)
+    for cx, cy in ((34, 34), (14, 14), (54, 54)):
+        green += 20000.0 * np.exp(-((xx - cx) ** 2 + (yy - cy) ** 2) / (2 * 1.5**2))
+    ts = TargetSet(object_name="X")
+    ts.set_role(TargetStar(role=ROLE_TARGET, ra_deg=1.0, dec_deg=1.0, auid="T"))
+    for ra, auid in ((2.0, "C1"), (3.0, "C2")):
+        ts.set_role(
+            TargetStar(role=ROLE_COMPARISON, ra_deg=ra, dec_deg=1.0, auid=auid, mags={"V": 11.0})
+        )
+    params = PhotometryParams.from_config(lambda key, default=None: default, egain=0.228)
+    assert (params.aperture_mm, params.scint_cy) == (30.0, 1.5)
+    plain = {r.star.auid: r for r in measure_frame(green, _WCS(), ts, params, fwhm=2.0)}
+    frame = params.with_frame(exposure_s=10.0, airmass=1.0, site_height_m=0.0)
+    scint = {r.star.auid: r for r in measure_frame(green, _WCS(), ts, frame, fwhm=2.0)}
+    photon = plain["T"].phot.inst_mag_err
+    expected = math.hypot(photon, 1.0857 * 0.015536)
+    assert scint["T"].phot.inst_mag_err == pytest.approx(expected, abs=1e-4)
+    assert scint["T"].phot.snr == plain["T"].phot.snr  # the gates' SNR is unchanged
+    assert scint["T"].diff.mag_err > 0.02 > plain["T"].diff.mag_err
+    # each star at its own airmass (S78's per-star airmass): X^1.5
+    per_star = measure_frame(
+        green, _WCS(), ts, frame, fwhm=2.0, star_airmass=lambda s: 2.0 if s.auid == "T" else None
+    )
+    t = next(r for r in per_star if r.star.auid == "T")
+    assert t.phot.inst_mag_err == pytest.approx(
+        math.hypot(photon, 1.0857 * 0.015536 * 2**1.5), abs=1e-4
+    )
+    # the 0.4.x model has no such term
+    pixel = PhotometryParams.from_config(
+        lambda key, default=None: "pixel" if key == "photometry.noise_model" else default,
+        egain=0.228,
+    ).with_frame(exposure_s=10.0, airmass=1.0)
+    assert pixel.scint_frac() == 0.0
+
+
+def test_the_sky_estimates_own_error_is_counted_s75() -> None:
+    """The sky under the aperture is the median of n_sky annulus pixels, whose error
+    the CCD equation counts as n_ap (1 + n_ap / n_sky) with the median's pi/2. Without
+    it the model's error of a faint star measured with a small annulus is 25 % below
+    the scatter of its flux over 400 noise realisations (0.75 before the fix, 1.04 with it)."""
+    from argos.core.photometry.aperture import sky_sigma_adu
+
+    rng = np.random.default_rng(75)
+    egain, black, level = 0.228, 1024.0, 1176.0
+    sigma = sky_sigma_adu(level, egain=egain, read_noise_e=2.6, black_adu=black, plane_pixels=2)
+    star = _star(20, 20, peak=60.0, sky=0.0, sigma=1.5).astype(np.float64)
+    fluxes, errs = [], []
+    for _ in range(400):
+        g = (level + star + rng.normal(0.0, sigma, star.shape)).astype(np.float32)
+        phot = measure_aperture(
+            g, 20, 20, 5, 6, 9, egain=egain, read_noise_e=2.6, black_adu=black, plane_pixels=2
+        )
+        fluxes.append(phot.flux_adu)
+        errs.append(phot.flux_adu / phot.snr if phot.snr > 0 else np.nan)
+    measured = float(np.std(fluxes, ddof=1))
+    model = float(np.nanmedian(errs))
+    assert model == pytest.approx(measured, rel=0.08)
+    # the 0.4.x model (one pixel, no black level) keeps its arithmetic: no such term
+    g = (level + star).astype(np.float32)
+    old = measure_aperture(g, 20, 20, 5, 6, 9, egain=egain, read_noise_e=2.6)
+    n_pix = int(
+        ((np.mgrid[0:40, 0:40][0] - 20) ** 2 + (np.mgrid[0:40, 0:40][1] - 20) ** 2 <= 25).sum()
+    )
+    var = old.flux_adu * egain + n_pix * (level * egain + 2.6**2)
+    assert old.snr == pytest.approx(round(old.flux_adu * egain / math.sqrt(var), 2), abs=0.01)
+
+
+def test_an_aperture_or_annulus_off_the_frame_is_not_measured_s81() -> None:
+    """S81: the box was clipped at the frame's edge and a truncated aperture or annulus
+    measured, the row written as a good point (RR Lyr 2026-09-25 200453Z: 000-BJW-667
+    at y = -2.4 read 4.98 mag faint, at 1.5 px from the edge 0.10 mag; a truncated
+    annulus alone 0.014-0.061 mag). Now nothing is measured unless every pixel within
+    the annulus' outer radius lies on the frame."""
+    yy, xx = np.mgrid[0:60, 0:80]
+    green = np.full((60, 80), 1100.0, dtype=np.float32)
+
+    def star(x, y):
+        return green + 20000.0 * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * 1.5**2))
+
+    def phot(x, y):
+        return measure_aperture(star(x, y), x, y, 5, 6, 9, egain=0.228)
+
+    for x, y in ((40.0, -2.4), (40.0, 1.5), (40.0, 5.0), (3.0, 30.0), (75.0, 30.0), (40.0, 52.0)):
+        assert phot(x, y) is None, (x, y)
+    for x, y in ((40.0, 9.0), (9.0, 30.0), (70.0, 30.0), (40.0, 50.0)):
+        assert phot(x, y) is not None, (x, y)
+    assert measure_aperture(green, float("nan"), 30.0, 5, 6, 9) is None

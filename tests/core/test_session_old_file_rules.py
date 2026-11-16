@@ -58,6 +58,7 @@ def _session(
     faint_frame: int | None = None,
     second_target: bool = False,
     comp_snr: float = 90.0,
+    comp_offset_deg: tuple[float, float] = (0.1, 0.0),
 ):
     """A 0.4.x-like run: N lights, per-star CSVs, a flight recorder with one blank frame.
 
@@ -73,7 +74,13 @@ def _session(
     ra_h = _meridian_ra_hours(START, TRUE_SITE[1])
     dec = 40.0
     target = TargetStar("target", ra_h * 15.0, dec, auid="000-AAA-000", name="Var X")
-    comp = TargetStar("comparison", ra_h * 15.0 + 0.1, dec, auid="000-AAA-111", mags={"V": 10.0})
+    comp = TargetStar(
+        "comparison",
+        ra_h * 15.0 + comp_offset_deg[0],
+        dec + comp_offset_deg[1],
+        auid="000-AAA-111",
+        mags={"V": 10.0},
+    )
     second = TargetStar("target", ra_h * 15.0 - 0.1, dec, auid="000-AAA-222", name="Var Y")
     stars = [target, comp] + ([second] if second_target else [])
     TargetSet(object_name="Var X", stars=stars).save(root / "targets.json")
@@ -169,12 +176,16 @@ def _site_warned(review) -> bool:
 def test_review_takes_the_header_airmass_when_the_site_was_wrong_s66(tmp_path) -> None:
     """S66: the CSV airmass of a wrong Settings site reached Review and AMASS."""
     root, header_airmass, written = _session(tmp_path)
+    comp_star = TargetSet.load(root / "targets.json").by_role("comparison")[0]
     assert abs(written["t"].points[0].airmass - header_airmass[0]) > 0.3  # the wrong site's
 
     review, target, comp = _loaded(root)
 
     assert [p.airmass for p in target.points] == header_airmass
-    assert [p.airmass for p in comp.points] == header_airmass
+    # S78: the comparison's own airmass, for the site fitted to the mount's pointing.
+    assert [p.airmass for p in comp.points] == [
+        airmass_at(p.jd_utc, comp_star.ra_deg, comp_star.dec_deg, *TRUE_SITE) for p in comp.points
+    ]
     assert _site_warned(review)
     out = tmp_path / "aavso.txt"
     write_aavso(out, [target], obscode="TST01")
@@ -242,7 +253,9 @@ def test_a_frozen_light_keeps_its_computed_airmass_on_a_wrong_site_s66(tmp_path)
 
     assert [p.airmass for p in target.points[:3]] == header_airmass[:3]
     assert [p.airmass for p in target.points[3:]] == [p.airmass for p in written["t"].points[3:]]
-    assert any("X1" in line and "22 point(s) without one" in line for line in review.warnings)
+    # The target's 11 frozen points; the comparison's take their own airmass (S78), for
+    # the site fitted to the 3 lights before the freeze (10 minutes).
+    assert any("X1" in line and "11 point(s) without one" in line for line in review.warnings)
 
 
 def test_review_flags_every_point_of_a_frame_without_a_detection_s67(tmp_path) -> None:
@@ -351,3 +364,64 @@ def test_real_rr_lyr_session_gives_the_header_airmass_and_drops_two_frames(tmp_p
     assert 1.033 <= min(float(r[11]) for r in rows) and max(float(r[11]) for r in rows) <= 1.365
     assert summary.no_detection_excluded == 2 and summary.rows == 193
     assert target.points[0].sigma_syst == pytest.approx(0.01497, abs=5e-5)
+
+
+# ── S78: each comparison and check star its own airmass ─────────────────────
+
+
+def test_a_comparison_off_the_field_centre_takes_its_own_airmass_s78(tmp_path) -> None:
+    """S78: the header AIRMASS is the field centre's (the target's). A comparison 1.2°
+    away took it (S66): 0.0034 or more off its own here (RR Lyr 2026-09-25: the check
+    star up to 0.0071 off). Its airmass is now computed for the site fitted to the
+    lights' RA/DEC/ALTITUDE/AZIMUTH, the mount's (the Settings site is 60° away)."""
+    root, header_airmass, _written = _session(tmp_path, comp_offset_deg=(0.0, -1.2))
+    comp_star = TargetSet.load(root / "targets.json").by_role("comparison")[0]
+
+    review, target, comp = _loaded(root)
+
+    own = [
+        airmass_at(p.jd_utc, comp_star.ra_deg, comp_star.dec_deg, *TRUE_SITE) for p in comp.points
+    ]
+    assert [p.airmass for p in target.points] == header_airmass  # the target keeps S66's
+    assert [p.airmass for p in comp.points] == own  # the header AIRMASS before
+    assert min(abs(a - b) for a, b in zip(own, header_airmass)) > 0.003
+
+
+@pytest.mark.parametrize("settings_site", [WRONG_SITE, (TRUE_SITE[0] + 2.0, TRUE_SITE[1])])
+def test_without_a_fitted_site_a_wrong_settings_site_gives_no_comparison_its_airmass_s78(
+    tmp_path, settings_site
+) -> None:
+    """S78 amended (validation F1): 14 lights over 6.5 minutes fit no site, and the
+    Settings site the lights recorded does not reproduce the mount's pointing (60° off,
+    or 2° off as XX Cyg 2026-08-29's). The comparison keeps the frame's header AIRMASS,
+    the field centre's, within 0.002 of its own; it was computed for that site (RR Lyr
+    2026-09-25 195307Z: 4.0-4.9 for 1.03; XX Cyg 052943Z: 0.013 off for the header's
+    0.0012)."""
+    root, header_airmass, _written = _session(tmp_path, settings_site=settings_site, cadence_s=30.0)
+    comp_star = TargetSet.load(root / "targets.json").by_role("comparison")[0]
+
+    _review, _target, comp = _loaded(root)
+
+    own = [
+        airmass_at(p.jd_utc, comp_star.ra_deg, comp_star.dec_deg, *TRUE_SITE) for p in comp.points
+    ]
+    assert [p.airmass for p in comp.points] == header_airmass
+    assert max(abs(a - b) for a, b in zip(own, header_airmass)) < 0.002
+
+
+def test_without_a_fitted_site_a_comparison_takes_the_settings_sites_airmass_s78(
+    tmp_path,
+) -> None:
+    """S78: 14 lights over 6.5 minutes are too short a span to fit the site (the
+    direction's two solutions): the comparison's airmass is computed for the Settings
+    site the lights recorded, as the run did."""
+    root, _header_airmass, _written = _session(
+        tmp_path, settings_site=TRUE_SITE, cadence_s=30.0, comp_offset_deg=(0.0, -1.2)
+    )
+    comp_star = TargetSet.load(root / "targets.json").by_role("comparison")[0]
+
+    _review, _target, comp = _loaded(root)
+
+    assert [p.airmass for p in comp.points] == [
+        airmass_at(p.jd_utc, comp_star.ra_deg, comp_star.dec_deg, *TRUE_SITE) for p in comp.points
+    ]
