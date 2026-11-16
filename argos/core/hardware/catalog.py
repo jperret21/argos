@@ -64,6 +64,11 @@ S30_PRO = TelescopeProfile(
     adc_bits=12,
     full_well_adu=60000,
     linearity_max_adu=50000,
+    # Measured (S72): the photon-transfer line of the green-plane sky noise of 14
+    # sessions at gain 80, offset 0, over three nights, crosses zero signal at
+    # 982-1050 ADU (with 1.5-2.8 e- read noise); 1024 is the 12-bit code (x16)
+    # nearest their median, 1019.
+    black_level_adu=1024.0,
     filter_names=("Dark", "IR", "LP"),
     ap_host="10.0.0.1",
 )

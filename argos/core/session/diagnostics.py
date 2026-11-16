@@ -86,13 +86,14 @@ class SessionDiagnostics:
             self._enabled = False
             self._close_quietly()
 
-    def star(self, frame: int, star, phot, x: float, y: float) -> None:
+    def star(self, frame: int, star, phot, x: float, y: float, **extra: Any) -> None:
         """One measured star on one frame — target, comparison or check.
 
         ``star`` is a TargetStar, ``phot`` an AperturePhot or None (aperture
         off-frame). Recording every comparison's *raw* instrumental behaviour
         is the point: a drifting or clouded comp is invisible in the
-        calibrated target curve but obvious here.
+        calibrated target curve but obvious here. ``extra``: more fields, e.g.
+        S69's ``centroid_offset_px`` and ``off_centre``.
         """
         self.record(
             "star",
@@ -111,6 +112,7 @@ class SessionDiagnostics:
             saturated=bool(phot.saturated) if phot else None,
             suspect=bool(getattr(phot, "suspect", False)) or None if phot else None,
             measured=phot is not None,
+            **extra,
         )
 
     def close(self) -> None:

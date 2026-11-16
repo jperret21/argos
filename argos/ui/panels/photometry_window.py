@@ -426,6 +426,9 @@ class PhotometryWindow(QWidget):
             excluded.append(
                 f"{summary.suspect_excluded} suspect (cosmic ray / hot pixel, or no verified lock)"
             )
+        if summary.no_detection_excluded:
+            # S67: the run's flight recorder shows no detection on those frames (S35).
+            excluded.append(f"{summary.no_detection_excluded} suspect (no detection)")
         if summary.undated_excluded:
             # S60: a pre-0.5.0 batch re-run dated a frame without DATE-OBS at JD 0.
             excluded.append(f"{summary.undated_excluded} undated (JD 0)")

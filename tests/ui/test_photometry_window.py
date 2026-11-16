@@ -808,6 +808,83 @@ def test_aavso_export_reports_undated_points_left_out_s60(qapp, tmp_path, monkey
         qapp.processEvents()
 
 
+def test_aavso_export_names_points_without_a_detection_s67(qapp, tmp_path, monkeypatch) -> None:
+    """S67: a point of a frame on which the run's recorder shows no detection is left
+    out, and the message names it apart from the other suspect points."""
+    import argos.ui.panels.photometry_window as pw
+
+    out = tmp_path / "aavso.txt"
+    monkeypatch.setattr(pw.QFileDialog, "getSaveFileName", lambda *a, **k: (str(out), ""))
+    boxes = _MessageBoxRecorder()
+    monkeypatch.setattr(pw, "QMessageBox", boxes, raising=False)
+    win = _window_with_one_target("TST")
+    try:
+        blank = LcPoint(jd_utc=2461315.51, mag=13.4, mag_err=0.7, suspect=True, no_detection=True)
+        win.lightcurves["T"].append(blank)
+        win._export_aavso()
+        rows = [ln for ln in out.read_text().splitlines() if not ln.startswith("#")]
+        assert len(rows) == 1
+        ((kind, text),) = boxes.shown
+        assert kind == "information" and "1 suspect (no detection)" in text
+        assert "cosmic ray" not in text
+    finally:
+        win.close()
+        win.deleteLater()
+        qapp.processEvents()
+
+
+def test_open_curve_csv_of_an_older_run_applies_the_old_file_rules_s66_s67(
+    qapp, tmp_path, monkeypatch
+) -> None:
+    """S66, S67: Analyze's Open curve CSV on a run's own CSV wrote the wrong site's
+    AMASS and the blank-sky row, which Review now corrects and leaves out."""
+    from types import SimpleNamespace
+
+    import argos.ui.pages.analyze_page as ap
+    import argos.ui.panels.photometry_window as pw
+    from tests.core.test_session_old_file_rules import BLANK, N, _session
+
+    root, header_airmass, _written = _session(tmp_path)
+    shown: list[str] = []
+    monkeypatch.setattr(
+        ap,
+        "QMessageBox",
+        SimpleNamespace(
+            warning=lambda *a, **k: shown.append(str(a[2])),
+            information=lambda *a, **k: shown.append(str(a[2])),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pw, "QMessageBox", SimpleNamespace(information=lambda *a, **k: None), raising=False
+    )
+    out = tmp_path / "aavso.txt"
+    monkeypatch.setattr(pw.QFileDialog, "getSaveFileName", lambda *a, **k: (str(out), ""))
+    csv_path = root / "photometry" / "target_Var_X_000-AAA-000.csv"
+    monkeypatch.setattr(
+        ap.QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(csv_path), ""))
+    )
+    screen = SimpleNamespace(
+        _config=SimpleNamespace(sessions_path=root.parent),
+        _obscode=lambda: "TST01",
+        _band=lambda: "TG",
+        _windows=[],
+    )
+    ap.AnalyzeScreen._open_lightcurve(screen)
+    (window,) = screen._windows
+    try:
+        window._export_aavso()
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+    rows = [ln.split(",") for ln in out.read_text().splitlines() if not ln.startswith("#")]
+    assert len(rows) == N - 1
+    expected = [f"{a:.3f}" for i, a in enumerate(header_airmass) if i != BLANK]
+    assert [row[11] for row in rows] == expected
+    assert any("S66" in text and "S67" in text for text in shown)
+
+
 def test_measurements_export_refuses_curves_of_two_filters_s61(qapp, tmp_path, monkeypatch) -> None:
     """S61: the multi-curve CSV has no filter column. Since S49 a star has one curve
     per filter, and Export measurements wrote both under one ``star_id`` (its AUID):

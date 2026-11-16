@@ -2451,6 +2451,44 @@ class ImagingPage(QWidget):
                 " before within 2 px): their points are flagged suspect and left out of the"
                 " AAVSO export.",
             )
+        if result.frames_rotation_solved:
+            # S69 (a): the field turned more than 2° since its solution.
+            self.log_message.emit(
+                "INFO",
+                f"Batch photometry: the field turned more than 2° since its solution on"
+                f" {result.frames_rotation_solved} frame(s); each was re-solved.",
+            )
+        if result.stars_off_centre:
+            # S69 (b): a comparison or check star off its aperture leaves the ensemble.
+            self.log_message.emit(
+                "WARN",
+                f"Batch photometry: {result.stars_off_centre} comparison/check measurement(s)"
+                " more than 1 px from their aperture centre were left out of their frame's"
+                " ensemble; their points are flagged suspect.",
+            )
+        if result.frames_rotation_unsolved:
+            # S69 (a): the 2° re-solve failed; the tracker carried the apertures.
+            self.log_message.emit(
+                "WARN",
+                f"Batch photometry: the field turned more than 2° since its solution on"
+                f" {result.frames_rotation_unsolved} frame(s) that did not re-solve; their"
+                " apertures followed the tracker.",
+            )
+        if result.frames_no_target_point:
+            # S69 (b): every comparison off-centre leaves no ensemble.
+            self.log_message.emit(
+                "WARN",
+                f"Batch photometry: {result.frames_no_target_point} frame(s) have no target"
+                " point: every comparison was more than 1 px from its aperture centre.",
+            )
+        if result.frames_no_detection:
+            # S67: S35's rule on the re-run's own frames.
+            self.log_message.emit(
+                "WARN",
+                f"Batch photometry: {result.frames_no_detection} frame(s) show no detection"
+                " (a target below SNR 3, or a zero point more than 1 mag from the run's):"
+                " their points are flagged suspect and left out of the AAVSO export.",
+            )
         lost = result.frames_resolved or result.frames_unanchored or result.frames_unverified
         if not lost and (abs(result.rotation_deg) > 0.05 or result.shift_px > 1.0):
             self.log_message.emit(

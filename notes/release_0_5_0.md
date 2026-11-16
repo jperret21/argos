@@ -156,6 +156,14 @@ which; *Check your old files* below says how to find them.
 | S63 | The batch re-run of a session folder measured the FITS other programs wrote beside lights/ | Each epoch measured three times (links to the lights, registered copies) | no (none of the owner's runs was re-run; RR Lyr 2026-09-25 would have been) |
 | S64 | The AAVSO report's `#SOFTWARE` line named no version | `#SOFTWARE=Argos` where the format asks for the name and version | **yes** (every AAVSO report: a header line only, no observation) |
 | S65 | The Frame Viewer read a calibrated float frame in [0, 1] as is | Measure star: SNR 0, peak 0 ADU; Identify field: a black plane for ASTAP | only frames from other software (Siril's `r_light_*.fit`); display only, nothing written |
+| S71 | The ensemble zero point was the plain mean of the comparisons, whatever their SNR | Comparisons at SNR 1-4 pulled the zero point as much as a bright one; the error ignored them | **yes** (XX Cyg 2026-08-29 `050148Z`: check star +0.28 mag off its VSP V; others by a few mmag) |
+| S72 | The noise model used one raw pixel's gain and counted the black level as sky photons | SNR and `formal_mag_err` off (sky σ +86 % on RR Lyr, −6 % on XX Cyg); **in the core, off by default until S73 is decided** | **yes** (every SNR and formal error) |
+| S73 | The e-/ADU the S30 Pro writes and uses at gain 80 (driver 0.8, IMX585 reference 1.723) disagrees with its frames' photon transfer (0.20-0.25) | Poisson errors of stars 1.4-2.1× too small; with S72, sky noise 2-3× too small | **yes**; owner decision pending, not fixed |
+| S66 | Review, Analyze and the batch re-run used the airmass computed for the Settings site, wrong on some runs (X3) | AAVSO `AMASS` 4.088-1.514 where the airmass was 1.033-1.364 (RR Lyr 2026-09-25); 0.013-0.015 high under X3's 5° tolerance (a re-run of XX Cyg 2026-08-29) | **yes** (RR Lyr 2026-09-25; Review now takes each frame's header `AIRMASS`, the files are unchanged) |
+| S67 | Review, the AAVSO export and the batch re-run kept the rows S35 now refuses (no detection) | Blank-sky rows submitted; a larger `sigma_syst` and `MERR` on every row of the run | **yes** (RR Lyr 2026-09-25: 2 frames; XX Cyg 2026-09-07 `040723Z`: its target on 1 frame) |
+| S68 | Comparisons picked before 0.4.2 never got their VSP chart | `CHART` na on every report of those objects, new runs included | **yes** (every report of the owner's objects; header lines only, no observation) |
+| S69 | The tracker's centroid stayed 30-80 % of the way to its search window's centre, so on a fast-turning alt-az field the apertures lagged the stars; nothing checked them against the stars | XX Cyg 2026-09-07 `040723Z`: the field turned 16.49°, the tracker found 15.37°; comparisons 4.4-8.5 px off their stars at the end of a re-run, 0.5-3 px in the live path | **yes** (alt-az runs whose field turns fast: XX Cyg 2026-09-07 and 2026-08-29; RR Lyr 2026-09-25 by 0.5 px) |
+| S70 | The batch re-run chose the tracker's anchors and checked its lock with the request's e-/ADU, not the frame's (S41's residue) | Other anchors and lock checks than the frame's own SNR gives (XX Cyg 2026-09-07: 5 anchors at 0.8 e-/ADU, 6 at the frames' 1.723) | no (none of the owner's runs was re-run) |
 | S24 | An ASTAP database folder replaced the chosen database set | Slower or failed solves | no |
 | S29 | Two unvalidated-profile warnings, hard-coded IMX585 hint | Contradictory wording | no |
 
@@ -241,7 +249,9 @@ against the day you installed 0.5.0.
   to 1.5 while the header `AIRMASS` ran from 1.03 to 1.36. Take the airmass
   from the header `AIRMASS` (or recompute it for the real site) before
   submitting; the differential magnitudes do not depend on it, and `bjd_tdb`
-  is off by less than 0.03 s.
+  is off by less than 0.03 s. Since S66, Review and Analyze's **Open curve
+  CSV** make this check (a warning) and export each frame's header `AIRMASS`
+  themselves, whatever the site.
 - **Black Light frames (S7).** Sequence Light frames with `FILTER = Dark` were
   shot through the opaque slot. The header is truthful; the data are lost.
 - **Runs with no live curve (S14) or mixed apertures (S15).** Re-run the batch
@@ -288,7 +298,10 @@ against the day you installed 0.5.0.
   (it is estimated from every point of the run, so those rows raised it on
   every row). One real run (RR Lyr, 2026-09-25, 195 frames) had two such
   frames: the target 7.547 ± 0.757 and 6.257 ± 1.043, about 1.4 mag off its
-  neighbours, and `sigma_syst` 0.0166 instead of 0.0150.
+  neighbours, and `sigma_syst` 0.0166 instead of 0.0150. Since S67, Review,
+  Analyze's **Open curve CSV** and the batch re-run apply this rule (a zero
+  point more than 1 mag from the run's: every point of the frame; a target
+  below SNR 3: that target's points) and recompute `sigma_syst` themselves.
 - **Sequence frame times (S36).** In a sequence frame's header, `DATE-AVG`
   minus `DATE-OBS` should be `EXPTIME / 2`; it was larger by half the
   download time (+5.2 s median, +16.6 s at most, for 10 s subs over Wi-Fi). The
@@ -417,12 +430,39 @@ against the day you installed 0.5.0.
   sub) leaves 3 of them flagged: `050148Z` frames 0 and 13 (its target point
   3.4 px off the star) and `052943Z` frame 0; the other frames the rule flags are
   within 2 px of their star, or degraded or blank-sky subs, harmless to drop.
+  Rather than flagging by hand, re-run the batch measurement on the run (S58):
+  it verifies each such sub with a plate solve and flags only those it cannot
+  verify. Re-running `050148Z` with ASTAP: 22 of 22 subs verified (13 by a fresh
+  solve, the others within 2 px of the previous sub's), none flagged. Review
+  and the AAVSO export keep these rows (S67 drops only the no-detection ones)
+  and say so.
 - **Which filter a vetting file vets (S57).** A `photometry_quality.json`
   without a `filter` key was written before 0.5.0. On a one-filter run it vets
   that filter. On a two-filter run it vets both bands' points together (one
   curve per star before S49) and should not be read as either filter's;
   `photometry_quality_<filter>.json` (0.5.0 only) names its filter in the file
   name.
+- **Zero points of mixed ensembles (S71).** A run whose comparisons mix bright
+  and faint stars (Review's `faint_comparisons` warning: their median SNR below
+  10; or, in `<object>_live_diagnostics.jsonl`, comparisons at `snr` below 10
+  beside one well above) was calibrated by the plain mean of all of them. Re-run
+  it (**Re-run subs…**): XX Cyg 2026-08-29 `050148Z`'s check star moves from
+  +0.155 ± 0.079 to +0.055 ± 0.027 mag from its VSP V (+0.051 ± 0.023 with
+  S69 and S70, one frame flagged by S71's heavy-comparison rule). Ensembles of
+  similar stars move by a few mmag (RR Lyr 2026-09-25: 1-3 mmag).
+- **Apertures on a fast-turning alt-az field (S69).** A run whose field turned
+  fast (Review's re-run summary, or the `rotation_deg` of the `tracking` records
+  of a re-run's flight recorder: XX Cyg 2026-09-07 turned 0.7° per sub) was
+  measured through apertures that lagged the stars: 4.4-8.5 px off the
+  comparison stars at the end of a batch re-run of XX Cyg 2026-09-07
+  `040723Z`, 0.5-3 px in the live path with one solve per run, 0.2-1.5 px with a
+  solve before every sub (the owner's runs, as shot). Re-run the batch
+  measurement (**Re-run subs…**): the apertures then sit within 0.2 px of each
+  frame's own plate solution. On `040723Z` the check star 000-BJV-169 moves from
+  −0.045 ± 0.017 to −0.074 ± 0.009 mag from its VSP V (VSP gives that V
+  ± 0.051) and its point-to-point scatter halves; on XX Cyg 2026-08-29
+  `050148Z` it moves from +0.060 ± 0.029 to +0.051 ± 0.023 (with S71); RR Lyr
+  2026-09-25 moves by 1 mmag.
 - **Take shots after a refused filter change (H9).** When the wheel refused a
   move (an ERROR "Filter move: …" in the Activity log, the Filter selector
   greyed), 0.4.2 left the selector on the slot you had asked for, and the Take
@@ -1444,6 +1484,326 @@ replayed through the Qt sequence path: its 9 CSVs byte for byte as before, its
 `tests/core/test_photometry_quality.py::test_the_vetting_file_names_its_filter_and_is_otherwise_unchanged_s57`
 and `tests/core/test_session_review.py::test_review_reads_a_vetting_file_that_names_its_filter_s57`.
 
+### S71 — The ensemble zero point weighs each comparison by its error
+
+**What was wrong.** The zero point was the plain mean of catalogue − instrumental
+magnitude over the comparisons (after a median ± max(2.5 × 1.4826 MAD, 10 mmag)
+clip), and its error their scatter / √n: a comparison at SNR 1 counted as much
+as one at SNR 100. XX Cyg 2026-08-29 `050148Z` has one comparison at SNR 21
+(000-BJV-170) and three at SNR 0.6-4 (V 12.9-14.2): its check star 000-BJV-171
+came out +0.28 ± 0.08 mag from its VSP V on the recorder values (point-to-point
+scatter 0.43 mag), +0.155 ± 0.079 in a re-run.
+**Who was affected.** Every differential magnitude, live and re-run; by tenths
+of a magnitude when faint comparisons sat beside a bright one, by a few mmag for
+an ensemble of similar stars.
+**What changed.** Each comparison weighs 1 / (err² + (10 mmag)²), its photon
+error with a floor so that one bright star cannot take all the weight
+(`ensemble_zero_point`). The clip drops a comparison whose |d − median| exceeds
+2.5 × sqrt(err² + floor²), about the *weighted* median: with the plain median
+the clip sat among the faint comparisons and dropped the bright one on 13 of
+`050148Z`'s 22 frames (check +0.26 ± 0.10). The zero point's error,
+max(sqrt(1/Σw), weighted rms / √n), is in `formal_mag_err`, hence in `mag_err`
+and the run's `sigma_syst`. Review warns `faint_comparisons` when the
+comparisons' median SNR is below 10 (RR Lyr 2026-09-25: 101; XX Cyg 2026-09-07
+`040723Z`: 20; `050148Z`: 1.7, warned). Re-runs of the study sessions through
+the batch worker, S71 alone (check star − VSP V, mean ± its standard error):
+
+| Run | Before | After |
+|---|---|---|
+| XX Cyg 08-29 `050148Z`, check 000-BJV-171 | +0.155 ± 0.079 | +0.055 ± 0.027 (χ²ᵣ 1.09 → 0.58) |
+| Same, recorder values | +0.28 ± 0.08 | +0.059 ± 0.028; zero-point error 0.054 and 0.088 on frames 15 and 18 |
+| XX Cyg 09-07 `040723Z`, check 000-BJV-169 | −0.061 ± 0.017 | −0.036 ± 0.013 |
+| RR Lyr, 2 comparisons, check 000-BCG-523 | +0.0174 ± 0.0016 | +0.0166 ± 0.0016 |
+| RR Lyr, 2 comparisons − Siril green 2 comparisons (median, robust σ) | +0.0020, 0.0099 | +0.0004, 0.0099 |
+| RR Lyr, 6 comparisons − Siril green 2 comparisons | −0.0112, 0.0173 | −0.0083, 0.0157 |
+
+The check stars' remaining offsets are within their VSP errors (000-BJV-171
+± 0.030 and 000-BJV-170 ± 0.052, the comparison that carries 97-99 % of the
+weight; 000-BJV-169 ± 0.051; 000-BCG-523 ± 0.10). RR Lyr's 000-BCG-953 (B−V
+1.67, 0.16 mag off) is clipped on 176 of the 193 frames that measured it
+(170 before); on the other 17 the comparisons disagree by 0.05-0.1 mag, far
+beyond their photon errors, every one would be clipped, and the clip keeps
+them all (as the old rule did on 23 frames). SNR is unchanged, so are the
+re-solves, verify solves, anchors and flags of the four re-runs.
+**A comparison holding more than half the weight (technical review, the owner's
+decision).** Centred on the weighted median, the clip never drops such a
+comparison: a bright one that is variable, blended or strongly coloured set the
+zero point alone (0.30 mag off beside two good faint ones: zero point +0.25,
+nothing clipped, nothing said). After the clip, when the heaviest comparison
+holds more than half the weight and two others at least remain, its d is
+compared with the weighted mean of the others; beyond 2.5 combined σ the point
+is flagged `suspect` (left out of the AAVSO export) with the note "the
+comparison holding N % of the weight disagrees with the others (z sigma)". The
+zero point is kept as computed: the plain median would drop the bright star on
+the frames where the faint ones are wrong (above). With one other comparison
+there is no majority, only two stars that disagree, which the zero-point error
+already carries (RR Lyr's 2-comparison set would flag 27 of 195 frames). On the
+recorder values: XX Cyg 2026-08-29 frame 5 is flagged (000-BJV-170 holds 92 %
+of the weight and disagrees by 6.2σ), 1 of 22 frames; no frame of `040723Z` or
+RR Lyr; the check star over the other 21 frames +0.052 ± 0.029 (1.8σ on its
+standard error); zero-point errors on frames 15 and 18 and 000-BCG-953's clip
+unchanged. Limit: such a frame is flagged, not corrected (its point leaves the
+report). Qt's Review now warns about faint comparisons too (the comparisons'
+median SNR in the flight recorder below 10, from `load_session_curves`; the web
+server maps the same value).
+**With S69 and S70 (final re-runs, ASTAP, that night's Settings site).** Check
+000-BJV-171 +0.051 ± 0.023 (1.35σ with VSP's ±0.030 on its V, 2.2σ on its
+standard error alone), 000-BJV-169 −0.074 ± 0.009 (1.4σ with VSP's ±0.051),
+000-BCG-523 +0.0155 ± 0.0017 (0.15σ with VSP's ±0.10); RR Lyr 2 comparisons −
+Siril green 2 comparisons +0.0013, robust σ 0.0096 (χ²ᵣ 0.81 on the formal
+errors); 6 comparisons −0.0076, 0.0153.
+**How to check.** `tests/core/test_photometry_core.py::test_a_heavy_comparison_its_ensemble_contradicts_flags_the_point_s71`
+(no flag on the code before the fix), `::test_the_xx_cyg_frames_keep_their_bright_comparison_unflagged_s71`,
+`tests/core/test_session_old_file_rules.py::test_review_warns_about_faint_comparisons_s71`,
+`tests/core/test_photometry_core.py::test_zero_point_follows_the_comparisons_errors_s71`
+(the plain mean puts frames 15 and 18's zero points 0.029 and 0.052 mag from
+the bright comparison's),
+`::test_one_bright_comparison_cannot_take_all_the_weight_s71`,
+`::test_reddish_comparison_still_clipped_s71`; web
+`tests/server/test_review_sessions.py::test_s71_a_faint_ensemble_is_named_in_readiness`.
+
+### S72 — The noise model is the green plane's, above the black level
+
+**Status: in the core as decided, off by default (`photometry.noise_model`:
+`pixel`, the 0.4.x model; `green_plane`, S72), because its own test fails with
+the frames' `EGAIN` and the gates loosen (below) until S73 is decided.**
+**What was wrong.** The photometry measures the (G1+G2)/2 plane, whose values
+hold two pixels' electrons, but `measure_aperture` used one raw pixel's e-/ADU,
+one pixel's read noise, and counted the whole sky level, black level included,
+as photons. Against the green-plane noise measured on the frames (20.6 ADU RR
+Lyr, 29.9 XX Cyg 09-07, 30.7 XX Cyg 08-29), the model said 38.3, 28.1 and 28.5.
+**What changed.** With `photometry.noise_model = green_plane`: effective gain
+2 × the frame's `EGAIN`, read noise rn/√2 ADU per green pixel, and the
+telescope profile's black level (`black_level_adu`, S30 Pro 1024 ADU: the
+photon-transfer line of 14 sessions at gain 80 crosses zero signal at 982-1050
+ADU) subtracted from the sky before the Poisson term (`aperture.sky_sigma_adu`),
+in every aperture the photometry parameters drive: points, anchors, lock checks,
+comparison quality (`PhotometryParams.black_adu`, `plane_pixels`). The default
+computes SNR and photon errors exactly as before (same arithmetic).
+**Its test fails with the frames' `EGAIN`.** Sky σ of the model / measured,
+first light of each session: 9.6 / 20.6 (−54 %), 9.9 / 29.9 (−67 %),
+10.5 / 30.7 (−66 %). The frames' `EGAIN` (0.8 from the driver in 0.4.2, 1.723
+from the IMX585 reference in 0.4.1, same camera, same gain 80) is 3-9× the
+photon transfer's 0.20-0.25 (S73). With 0.20 e-/ADU (`camera.egain_table`
+`{"80": 0.20}`) the same model gives 19.7, 29.5 and 31.1 (−4 %, −1 %, +1 %).
+**With the frames' `EGAIN` the gates loosen** (re-runs through the batch
+worker): RR Lyr 2026-09-25 frames 52-53 (`_00053`, `_00054`) measured 21 px off
+every star and not flagged (the S43 lock check saw 3 and 4 of 6 anchors at
+"SNR ≥ 5" on blank sky; before: field lost at frame 52, re-solved), because the
+batch worker's lock path uses the plan's 1.723 e-/ADU (S70 removes that part);
+XX Cyg 2026-08-29 gets a third "SNR ≥ 10" anchor, so its 12 S58 verify solves
+drop to 0; XX Cyg 2026-09-07's one frame with the target below SNR 3 is no
+longer below it; star-pair scatter / formal error goes from 2.21 to 4.77 (RR Lyr,
+2 comparisons), 2.64 to 6.86 (XX Cyg 09-07), 1.37 to 7.09 (XX Cyg 08-29).
+With 0.20 e-/ADU in every path the counts are those of before (2 re-solves, 12
+verify solves, 1 low-SNR frame) and the ratios 2.37, 2.31 (pairs below SNR 20:
+1.84 against 2.00) and 1.22; the bright RR Lyr pairs stay near 2: scintillation
+(about 0.012 mag per star in 10 s through 30 mm) is in no error term.
+**Open (owner decisions, not implemented).** (1) Which e-/ADU S72 uses (S73):
+A, the frames' `EGAIN` as decided (its test fails, the gates loosen as above);
+B, the measured photon-transfer value, about 0.20 at gain 80, in the S30 Pro
+profile, the header `EGAIN` and the S41 chain, with S70 (its test passes, the
+counts are those of before, pair ratios 2.37, 2.31, 1.22); C, the sky term from
+the measured annulus σ, as IRAF `phot`, photutils and Siril do (immune to a wrong
+gain or black level; the star's Poisson term still needs the gain).
+Recommended: B, then `photometry.noise_model = green_plane`, then the S35, S56,
+S58 and S69 gates checked again. (2) A scintillation term (Young 1967 with
+Osborn's correction: about 0.012 mag per star in 10 s through 30 mm, an upper
+bound at sea level): the bright RR Lyr pairs stay at 2.2-2.4× their formal
+error under every model, their excess 0.014-0.020 mag per star, where Young/Osborn
+gives 0.015-0.025; it would also keep the S71 clip on the 17 RR Lyr frames where
+it is abandoned. Recommended. (3) The annulus-median error term (n_ap·π/2/n_sky,
+about 0.6 in variance), in no model: on XX Cyg blank apertures empirical/model is
+1.35 without it and 1.07 with it; RR Lyr shows 0.84, unexplained. (4) The sky
+estimator: the green plane steps by 8 ADU (12-bit data × 16), so the annulus
+median is quantised; on `040723Z` `_00021` the target's flux is 448, 679 or 1168
+ADU with the annulus median, mean or 12-20 px median, and a 3σ-clipped mean
+lowered the pair scatter by a median 11 % on `040723Z` (inconclusive on
+`050148Z`). Options: keep the median, a 3σ-clipped mean (photutils, Siril), a
+DAOPHOT-style mode; recommended: the clipped mean after a test over more runs.
+**How to check.** `tests/core/test_photometry_core.py::test_noise_model_is_the_green_planes_s72`
+(a synthetic (G1+G2)/2 plane: the old model's star error 313 ADU against 134
+measured), `::test_black_level_comes_from_the_profile_s72` (the switch and its
+default).
+
+### S73 — The e-/ADU at gain 80 is not the camera's
+
+**What is wrong.** Frames of the same S30 Pro at gain 80 carry `EGAIN` 0.8
+(0.4.2: the driver) or 1.723 (0.4.1: the IMX585 reference curve). The frames'
+own photon transfer (green-plane noise against sky level, 14 sessions over three
+nights, each night on a line within 0.3-1 %) gives 0.20-0.25 e-/ADU per raw
+pixel (0.39-0.50 on the green plane). Poisson errors of stars are 1.4× (0.8) to
+2.1× (1.723) too small; with S72 the sky noise is too small as well.
+An independent check (W7 science review of S66-S72) agrees: 99.92 % of the raw
+values are multiples of 16 (12-bit data scaled by 16), and the photon transfer of
+frame-pair differences (raw G1 pixels, 3 sessions, 8052 tiles) gives 0.234 e-/ADU
+with about 2.3 e- of read noise.
+**Status.** Not fixed (owner decision, options and recommendation under S72):
+the photometry and the header `EGAIN` follow S41/S42 (`camera.egain_table`, the
+frame's `EGAIN`, the driver, the reference curve).
+
+### S69 — The tracker keeps up with a fast-turning alt-az field, and checks its apertures
+
+**What was wrong.** The aperture tracker centroided each anchor star once, in a
+15 green px window centred on where the previous frame's transform put it. The
+window's background-subtracted flux is clipped at zero, so the sky noise of the
+whole window adds a flux centred on the window, and a moved star's wings are cut
+by its edge: the centroid kept 30-80 % of the distance between the prediction
+and the star (every anchor of every frame of XX Cyg 2026-09-07 `040723Z`, against
+each frame's own ASTAP solution). That field turned 0.7° per sub (4.2-7.5 px of
+motion between subs at the set's stars), so the fitted transform lagged it by
+0.4-1.2° from the second frame on: a batch re-run through frame 1's solution
+ended at 15.37° of rotation where ASTAP measured 16.49° (16.02° with the
+e-/ADU 0.8: one anchor fewer), comparisons up to 8.5 px (4.5 px) off their stars
+(aperture radius 5.45 px). The lock checks only ask whether a
+star shows in the aperture (S43, S48), so nothing flagged it. In the live path,
+with a solve before every sub, the lag was one sub's: target apertures 0.2-1.5
+px off on `040723Z`, 0.2-3.4 px on 2026-08-29 `050148Z` (the 3.4 px sub flagged
+by S56), and on RR Lyr 2026-09-25 a 0.5 px bias on every comparison.
+**Who was affected.** Every tracked measurement, live, sequence and re-run; by
+pixels on alt-az fields turning fast (XX Cyg near the meridian at 67°), by
+tenths of a pixel elsewhere.
+**What changed.** (root cause, `tracking.py`) Each anchor's centroid is
+re-centred on itself until it moves less than 0.01 px, in the search window and
+then in a 4 px window (about two FWHM, so the brighter of a close pair is not
+dragged by the fainter: 000-BJV-169, 6.9 px from 000-BJV-173, 1.5 mag fainter):
+the tracker now follows
+`040723Z` within 0.07° of ASTAP on all 24 frames, its anchors within 0.2 px.
+Two safety nets follow, in the live and sequence paths and the batch re-run:
+(a) a solve is due once the tracked rotation since the solution exceeds 2°
+(the re-run solves the frame at once; live, the sub in hand in a run); while
+none lands, again only after 2° more, so a failing or slow solver costs one
+solve per 2° of rotation, never a loop; (b) every frame, each comparison and
+check star seen at SNR ≥ 5 has its centroid measured within its aperture: one
+more than 1 px from the aperture centre is left out of the frame's ensemble,
+its own point flagged `suspect`, counted (re-run: `stars_off_centre`) and
+recorded (`centroid_offset_px`, `off_centre` in the star records); when the
+anchors that remain centred are fewer than 3, the frame is S56's (S58's) case:
+verified only near a fresh solution, else re-solved, else flagged. A star
+fainter than SNR 5 is not tested: its centroid scatters by about 1.6/SNR px per
+axis. Re-runs through the Qt batch worker, ASTAP as the solver (before: the
+committed release core with S66-S68 and S71, the e-/ADU 0.8 of W7's re-run;
+after: S69 and S70):
+
+| Run | Before | After |
+|---|---|---|
+| XX Cyg 09-07 `040723Z`: field rotation found, frames 1-24 | −16.02° (ASTAP −16.49°) | each frame within 0.07°; 7 re-solves at 2° |
+| Same: comparison and check apertures from each frame's solution, frames 1-3 / last | 0.2-2.5 / 0.6-4.5 px | 0.01-0.22 / 0.01-0.12 px |
+| Same: check 000-BJV-169 − VSP V; scatter; χ²ᵣ (mag_err) | −0.045 ± 0.017; 0.084; 1.70 | −0.071 ± 0.010; 0.046; 0.65 |
+| XX Cyg 08-29 `050148Z`: check 000-BJV-171 − VSP V | +0.060 ± 0.029 | +0.060 ± 0.024 |
+| Same: apertures from each frame's solution (median / max) | 0.5 / 2.1 px | 0.1 / 0.8 px |
+| RR Lyr, 2 comparisons − Siril green 2 comparisons (median, robust σ) | +0.0004, 0.0099 | +0.0013, 0.0096 |
+| RR Lyr: check 000-BCG-523 − VSP V; comparison apertures | +0.0166 ± 0.0016; 0.7-0.8 px | +0.0162 ± 0.0016; 0.13-0.14 px |
+
+The check star on `040723Z` is now 1.4σ from VSP once VSP's own ± 0.051 on its
+V is counted; 000-BJV-173 puts 1.0 % of the light in its aperture (−0.011 mag,
+its growth curve against isolated stars), and calibrated against each
+comparison alone it ranges from −0.008 to −0.148 mag (the comparisons'
+catalogue values). Counts on the three re-runs, before → after: S43 re-solves
+0 → 0, 0 → 0, 2 → 2; S58 verify solves 0 → 1, 10 → 13, 0 → 0; re-solves for
+rotation 7, 0, 0; points flagged 0 → 0 on every target; frames skipped 0;
+off-centre measurements 15 (000-BJV-173 beside 000-BJV-169 on 7 frames, and
+all 8 stars of the sub `_00020`, S67's no-detection frame, where two of six
+anchors locked on 000-BJV-169 and on noise), 1 and 0. A failing solver on
+`040723Z`: 7 attempts in 24 frames, the tracker alone ends 0.07° from ASTAP;
+3 s per solve: the same result in 27 s. Live and sequence paths, the replay of
+the owner's runs (Argos's own solves; one solve per run, or one per sub):
+`040723Z` target apertures 0.5-3.0 px (one solve per run) and 0.2-1.5 px (one
+per sub) from the star before, 0.01-0.17 px after but subs `_00019` (0.83 px)
+and `_00020` (2.1 px, no target point: every comparison off-centre), solves 1 →
+9 with one per run; `050148Z` 0.24-3.4 px before, 0.02-0.66 px after, with 3
+more frames flagged by S56 (frames 14-16: the field moved 2.5-3.7 px between subs,
+which the lagging tracker reported as less than S56's 2 px; their target points
+are 0.06-0.14 px from the star; owner decision); RR Lyr frames 40-79 unchanged
+(39 points, frame 52 skipped, 2 solves), its target aperture 0.8-1.2 px from
+the star as both trackers place it on the J2000 position (RR Lyr's 0.8 px of
+proper motion, not applied; `notes/tracker_comparison.md`). The web server's
+port gives the same points, CSVs, vetting files and solves on these replays,
+and the same CSVs, `targets.json` and flight-recorder records on the three
+re-runs.
+**How to check.** `tests/core/test_photometry_tracking.py::test_the_tracker_keeps_up_with_a_field_rotating_0_7_deg_per_sub_s69`
+(1.7° of lag after 24 subs on the code before the fix),
+`::test_refine_centroid_finds_a_star_away_from_the_window_centre_s69`,
+`::test_refine_centroid_is_not_dragged_by_a_neighbour_7_px_away_s69`,
+`::test_centring_offsets_find_a_star_off_its_aperture_s69`,
+`::test_a_re_solve_is_due_past_2_deg_of_rotation_and_retried_per_2_deg_s69`;
+`tests/workers/test_photometry_batch_worker.py::test_a_re_run_re_solves_once_the_field_turned_2_deg_s69`
+(no re-solve on the code before the fix),
+`::test_a_re_run_leaves_an_off_centre_star_out_of_the_ensemble_s69`,
+`::test_off_centre_anchors_leaving_fewer_than_3_make_a_re_solve_due_s69`;
+`tests/workers/test_acquisition_engine.py::test_a_field_turned_more_than_2_deg_since_the_solution_makes_a_solve_due_s69`,
+`::test_an_off_centre_comparison_leaves_the_ensemble_s69`;
+`tests/ui/test_batch_rerun.py::test_batch_summary_says_the_re_solves_for_rotation_and_off_centre_stars_s69`
+(the end of a re-run: INFO "the field turned more than 2° since its solution on N
+frame(s); each was re-solved", WARN "N comparison/check measurement(s) more than 1
+px from their aperture centre were left out …"). Every one fails on the code
+before the fix.
+**A faint star beside a brighter one (both W7 reviews of S69).** Re-centred until
+it converges, the window of a fainter star climbs onto a brighter neighbour
+within it. Two consequences, both fixed. (1) An anchor 6.9 px from a star 4.9
+times brighter (000-BJV-173 beside 000-BJV-169) was measured on its neighbour
+every frame (7.0 px off), and the fit spent its one rejection on it, so a second
+bad anchor broke the fit (sub `_00020`: 2.8 px, all 8 stars off-centre, no
+target point). A candidate with a star of the set (targets included) holding a
+quarter of its core flux or more (sky-subtracted, within 2 px) within the search
+radius plus 8 px (the largest motion between subs seen, 7.5 px) is no anchor
+(`select_tracking_anchors(neighbours=…)`), and the anchor the fit rejects no
+longer counts as a verifying one (S56, S58). (2) The centring test of S69 (b)
+flagged a faint star whose aperture sits on it: 000-BJV-173 off-centre on 7 of
+24 frames while 0.03-0.20 px from its aperture (a two-Gaussian fit, and each
+frame's ASTAP solution). Its centroid is now taken within 0.45 × the distance to
+the nearest such neighbour (not tested when that is under 2 px), and re-centred
+in 3 px rather than the aperture radius, where a star near SNR 5 wandered onto
+noise (XX Cyg 2026-08-29 000-BJV-178, frame 5: 2.68 px where a Gaussian fit puts
+it 0.08 px from its aperture). Final re-runs (ASTAP, that night's Settings site,
+S66-S71 applied): `040723Z` 000-BJV-173 is no anchor, tested on 23 of 24 frames,
+at most 0.23 px from its aperture (0.31 px by a Gaussian fit); off-centre
+measurements 15 → 0; the fit's rejection spent on 3 of 24 frames instead of
+every frame; frames 1-3 within 0.27 px of every star (Gaussian fits); 7
+re-solves for rotation; the check star −0.074 ± 0.009 from VSP. `050148Z`:
+off-centre 1 → 0 (000-BJV-178 frame 5: 0.41 px), 13 verify solves, 0 flagged by
+S58. RR Lyr (2 comparisons): no off-centre measurement; the comparisons'
+apertures 0.27-0.43 px (median) from their Gaussian centroids (the 0.13-0.14 px
+of the table are from each frame's own plate solution), the target's 1.0 px
+(RR Lyr's proper motion, not applied).
+**Messages and counts (technical review).** A failed re-solve for rotation no
+longer says "the frame did not solve — its points are flagged" (it flags
+nothing); it has its own WARN, and a later S43/S58 failure keeps its message.
+The re-run counts the failed re-solves for rotation (`frames_rotation_unsolved`:
+"the field turned more than 2° since its solution on N frame(s) that did not
+re-solve; their apertures followed the tracker") and the frames left without a
+target point because every comparison was off-centre (`frames_no_target_point`),
+in Qt's end-of-run messages, the flight recorder's `batch_end` and the web
+re-run summary.
+**Open (owner decisions, not implemented).** (1) S56's 2 px freshness
+threshold, tuned on the lagging tracker: each frame's own solve shows the field
+moving up to 5.1 px between subs on `050148Z` and 4.2-7.5 px on `040723Z`; in
+the live path `050148Z` now flags 3 more frames (14-16) whose target points are
+0.06-0.14 px from the star. Options: (a) keep 2 px (a batch re-run verifies them
+with solves); (b) a threshold between the largest motion between subs (7.5 px)
+and a neighbour lock's 22-36 px, about 10 px; (c) verify few-anchor locks by
+S69 (b)'s centring instead (weaker against a 1-anchor neighbour lock).
+Recommended: (b). (2) Proper motion: target sets hold J2000 positions; RR Lyr's
+aperture sits 1.0 px from the star (its 0.8 px of proper motion) and its re-run
+`sigma_syst` goes 0.0152 → 0.0182 while its scatter against Siril does not
+change. Options: (a) keep; (b) carry pmRA/pmDec in the target set (VSX or Gaia)
+and move each position to the frame's epoch; (c) test the target with S69 (b)
+too (noisy at minimum). Recommended: (b). (3) `040723Z`'s set pairs the check
+star 000-BJV-169 with 000-BJV-173, 6.9 px away, 1.47 mag fainter, inside its
+5.45 px aperture: remove 173 from that set, or warn when a VSP comparison has a
+brighter set star within about 2 aperture radii. Recommended: the warning.
+(4) The pair-distance rule of the web's field tracker (`field_track.consistent_pairs`)
+in the core tracker, so that more than one inconsistent anchor can be rejected,
+with its own test; and the web overlay tracker (`argos/server/field_track.py`)
+still centroids in two passes (0.31-0.44° behind on `040723Z`).
+**How to check (the review fixes).** `tests/core/test_photometry_tracking.py::test_a_star_beside_a_brighter_one_is_no_anchor_s69`,
+`::test_a_faint_star_beside_a_brighter_one_is_centred_on_its_aperture_s69`,
+`::test_an_uncatalogued_star_in_the_aperture_does_not_move_the_centroid_s69`,
+`::test_a_neighbour_outside_the_tested_stars_counts_too_s69`,
+`::test_tracker_rejects_a_bad_anchor` (each fails on the code before),
+`tests/ui/test_batch_rerun.py::test_batch_summary_says_the_re_solves_for_rotation_and_off_centre_stars_s69`.
+**Check your old files.** See *Check your old files* (S69).
+
 ## Review and AAVSO export
 
 ### S53 — The AAVSO export refuses curves of two filters
@@ -1498,6 +1858,146 @@ export call it the same way, so their files stay byte for byte the same.
 **How to check.** `tests/core/test_photometry_core.py::test_aavso_header_names_the_software_and_its_version_s64`
 (`#SOFTWARE=Argos` on the code before the fix). Old reports: the line is only
 informative; nothing to correct.
+
+### S66 — Review, Analyze and the batch re-run take the mount's airmass
+
+**What was wrong.** X3 warns when the Settings site is not where the telescope
+is, but a run already recorded with such a site keeps the airmass computed for
+it in its curve CSVs, and Review, Analyze's **Open curve CSV** and **Export
+AAVSO** wrote it as `AMASS`. A batch re-run computed every point's airmass for
+the Settings site of the day without checking it either, and within X3's 5°
+tolerance a site still errs: a re-run of XX Cyg 2026-08-29 `050148Z` with that
+night's Settings site wrote an airmass 0.013-0.015 too high at 67-71° of
+altitude. Found by the web UI's wave 7 science review, checking `AMASS` against
+astropy.
+**Who was affected.** Reports and plots of runs made with a wrong Settings site,
+and batch re-runs. One of the owner's runs: RR Lyr 2026-09-25 (`200453Z`), whose
+Settings site lies 86° of direction from where the mount pointed: `AMASS` ran
+from 4.088 to 1.514 while the airmass was 1.033 to 1.364 (astropy at
+mid-exposure, at the site fitted to the frames' `ALTITUDE`/`AZIMUTH`).
+**What changed (the owner's option b).** Every point's airmass is the header
+`AIRMASS` (the mount's) of the Argos light whose mid-exposure (`DATE-OBS` +
+`EXPTIME`/2) is nearest, within 5 s, whatever the Settings site. A point without
+one keeps the airmass the run computed for the Settings site: no light within
+5 s, a light without `AIRMASS` or not written by Argos, or a light whose pointing
+is frozen. A frozen pointing (X1, 0.3.0-0.4.2: a lost mount's last poll kept in
+every later frame) is one whose `RA`, `DEC`, `ALTITUDE`, `AZIMUTH` and `AIRMASS`
+are all those of a light a minute or more before: its `AIRMASS` is stale, and
+its direction drifts from the computed one by about 0.2° per minute, so half an
+hour after the freeze a right site looked wrong (science and technical reviews:
+RR Lyr headers frozen from frame 30 gave 165 of 195 points the stale value, up
+to 0.33 from astropy). The site check (X3 on the run's non-frozen lights, the median over
+5°) stays as a Review warning, which counts the points left with the computed
+airmass. Analyze's **Open curve CSV** does the same on a run's own CSV
+(`<session>/photometry/`); a batch re-run's CSV and a preview curve are read as
+written. The batch re-run takes each frame's header `AIRMASS` the same way,
+counts the frames (`frames_header_airmass`) and, when a frame's header says the
+Settings site in use is more than 5° off, says so once (`frames_site_wrong`).
+Nothing is rewritten in the session. The web server's Review, exports and
+re-run call the same code and write the same bytes. The header `AIRMASS` is the
+field centre's, the target's: a check or comparison star off-centre takes the
+same value (RR Lyr: check 000-BCG-523 within 0.0071 of its own airmass; an owner
+decision is open).
+**Evidence.** Review's target airmass against astropy at the fitted site: RR
+Lyr 2026-09-25 within 0.00035 over 195 points (the CSV as written: 0.15-3.05
+off); XX Cyg 2026-09-07 `040723Z` 0.00044 and 2026-08-29 `050148Z` 0.00009
+(their CSVs, from the live path: 0.0004 and 0.0001; the header's own accuracy).
+The AAVSO report of RR Lyr from Review or from the target CSV: `AMASS` 1.033 on
+its first row, 1.033-1.364 over its 193 rows, at most 0.00074 from astropy with
+the 3-decimal rounding. Batch re-runs with each night's Settings site: the
+header `AIRMASS` on 195 of 195, 24 of 24 and 22 of 22 frames, the target's
+airmass within 0.0003, 0.0004 and 0.0001 of astropy (`050148Z`: 0.013-0.015
+before); the RR Lyr re-run warns of the wrong site.
+**Check your old files.** Reports already exported from such a run: see X3 above
+(take the header `AIRMASS`); exporting again from Review or Analyze now does it.
+**How to check.** `tests/core/test_session_old_file_rules.py` (the `s66` tests;
+`::test_review_takes_the_header_airmass_when_the_site_was_right_too_s66`,
+`::test_a_point_without_a_frame_keeps_its_computed_airmass_s66` and
+`::test_a_frozen_light_keeps_its_computed_airmass_on_a_wrong_site_s66` fail on
+the code before the owner's option; `ARGOS_S66_SESSION=<copy of the RR Lyr
+session>` checks `AMASS` 1.033 on row 1, 4.088 before),
+`tests/workers/test_photometry_batch_worker.py::test_a_re_run_takes_the_header_airmass_when_the_site_is_wrong_s66`,
+`::test_a_re_run_takes_the_header_airmass_when_the_site_is_right_too_s66`,
+`::test_a_re_run_computes_the_airmass_of_frozen_frames_at_a_right_site_s66`
+and `tests/ui/test_photometry_window.py::test_open_curve_csv_of_an_older_run_applies_the_old_file_rules_s66_s67`.
+
+### S67 — Review, the AAVSO export and the batch re-run leave out the points without a detection
+
+**What was wrong.** S35 stops new runs measuring blank sky, but the rows written
+before keep no flag: Review plotted them, **Export AAVSO** wrote them, and the
+run-level `sigma_syst` estimated with them raised `mag_err` (`MERR`) on every row.
+"Check your old files" asked the observer to drop them by hand.
+**Who was affected.** Reports exported from runs that measured such frames. Two
+of the owner's runs: RR Lyr 2026-09-25 (frames `_00053`, `_00176`) and XX Cyg
+2026-09-07 `040723Z` (frame 20).
+**What changed.** Review reads the run's flight recorder
+(`diagnostics/<object>_live_diagnostics.jsonl`, S35's rule on old files): on a
+frame where a target's ensemble zero point is more than 1 mag from its median
+over the run (the field moved, or cloud), every star's point is flagged
+`suspect`; a target measured below SNR 3 has its own points flagged (the owner's
+option b: a faint variable at minimum no longer takes out a second, bright
+target's points or the comparisons'). The AAVSO export
+leaves it out and its message names it apart ("N suspect (no detection)"); a
+check star's point there gives no `KMAG`. Each curve's `sigma_syst` (and every
+row's `mag_err`) is estimated again without those points, with the same
+estimator, when the file's floor is the automatic one of its own points; a manual
+floor (`photometry.systematic_floor_mag`) does not depend on them and is kept, as
+is the floor of a curve left with fewer than ten points. Analyze's **Open curve
+CSV** on a run's own CSV does the same; the files are never rewritten. S56's
+old-file rule (fewer than 3 anchors at SNR 10) drops nothing: it over-flags (see
+"Check your old files"), and Review and the export preview point to a batch
+re-run, which verifies those frames (S58). The batch re-run (science review)
+applies the same rule to its own frames at the end of the run: those points are
+flagged `suspect`, left out of the run's `sigma_syst` and of the AAVSO export of
+its CSVs, counted (`frames_no_detection`) and recorded (a `no_detection` event
+naming the targets below SNR 3). Before, a re-run wrote such a row unflagged:
+`040723Z` frame `_00021`, target at SNR 1.6, 13.29 ± 0.75 among 11.7-12.2, in its
+export. The web server applies the same code.
+**Evidence.** RR Lyr 2026-09-25: frames 52 and 175 hold both rules (the target
+below SNR 3 and the zero point more than 1 mag off): every point of them is
+flagged; the report has 193 rows (2 left out, named); the target's `sigma_syst`
+0.01657 → 0.01497, so every row's `MERR` shrinks. XX Cyg 2026-09-07 `040723Z`:
+frame 20 has the target at SNR 1.6 and a normal zero point: its target point
+only; 23 rows, target `sigma_syst` 0.2918 → 0.2365; a re-run flags the same
+frame and its report has 23 rows. XX Cyg 2026-08-29 `050148Z`: no such frame,
+22 rows.
+**Check your old files.** As S35 above; exporting again from Review or Analyze
+now leaves those rows out and recomputes `sigma_syst`.
+**How to check.** `tests/core/test_session_old_file_rules.py` (the `s67` tests:
+no flag and the larger floor on the code before the fix;
+`::test_a_faint_target_flags_its_own_points_only_s67` fails on the frame-wide
+rule), `tests/workers/test_photometry_batch_worker.py::test_a_re_run_flags_the_points_of_a_frame_without_a_detection_s67`
+(two targets: only the faint one's point),
+`tests/ui/test_photometry_window.py::test_aavso_export_names_points_without_a_detection_s67`.
+
+### S68 — The AAVSO header and CHART: the VSP chart of older comparison sets
+
+**What was wrong.** Since 0.4.2 a comparison picked from VSP keeps the answer's
+chart, and the report names it in `CHART`; but a comparison picked before (0.4.1)
+stays in the object's set (`<sessions>/targets/<object>.json`) without one, Argos
+never adds one, and every run copies the set: `CHART` was na on every report of
+those objects, new runs included. The owner's RR Lyr and XX Cyg sets are such
+sets (no chart in any of the three study runs).
+**Who was affected.** Reports of objects whose comparisons were picked before
+0.4.2. Header field only: no observation changes.
+**What changed.** When a VSP answer arrives, a comparison of VSP origin without a
+chart takes the answer's chart if the answer lists its AUID with the same
+catalogue magnitude in every band the set holds (a revised sequence keeps none),
+in the object's set and in the running run's `targets.json`. New runs then write
+`CHART`; runs already recorded keep na (nothing records their chart). The rest
+of the header: `#SOFTWARE` names the version since S64, and the web server's
+export writes the same bytes as Analyze's; `#OBSTYPE` stays `CCD`, the AAVSO
+Extended File Format's code for a CMOS camera too (no change). The web server
+names the chart the same way.
+**Evidence.** Each of the owner's cached VSP answers for these fields lists all
+6 RR Lyr, 8 and 5 XX Cyg comparisons with the magnitudes the sets hold: every
+comparison gets that answer's chart.
+**Check your old files.** `CHART` na in a report of an older run: the VSP chart
+of the same field and sequence can be filled in by hand; the observations are
+unaffected.
+**How to check.** `tests/core/test_targets.py::test_comparisons_saved_without_a_chart_get_the_vsp_answer_s_s68`
+and `tests/workers/test_acquisition_engine.py::test_a_vsp_answer_names_the_chart_of_comparisons_kept_without_one_s68`
+(no chart on the code before the fix).
 
 ### S61 — Export measurements refuses curves of two filters
 
@@ -1726,6 +2226,30 @@ path). A folder that holds FITS itself is read as before; a folder without
 **How to check.** `tests/workers/test_photometry_batch_worker.py::test_discover_light_frames_measures_a_session_s_lights_only_s63`
 (the link and the registered copy listed on the code before the fix). In a
 re-run's CSV, look for two or three rows with the same `jd_utc`.
+
+### S70 — A batch re-run's tracker uses each frame's own gain
+
+**What was wrong.** Since S41 each frame's errors use its own e-/ADU (its
+`EGAIN`, or the gain table at its `GAIN`), but the batch re-run chose the
+tracker's anchors (SNR ≥ 10) and ran the S43 lock check (SNR ≥ 5) with the
+request's e-/ADU, the one Settings gives for the Camera form. XX Cyg 2026-09-07
+`040723Z` (frames' `EGAIN` 1.723, request 0.8): 5 anchors where the frames'
+own SNR gives 6.
+**Who was affected.** A re-run of frames whose `EGAIN` differs from the
+Camera form's (0.4.1 frames re-run under 0.4.2, or the reverse). None of the
+owner's files (no session holds a `photometry_rerun_*` folder).
+**What changed.** The frame's params (its own e-/ADU) are built before the
+tracker is updated and used for the anchors, both lock checks (S43, S58) and
+the measurement. Applied with S69 only: alone it made `040723Z` worse, the
+sixth anchor (000-BCK-396, 370 px from the centre) following the lagging fit
+(apertures 8.5 px off at the end instead of 4.5 px; tracker −15.37° instead of
+−16.02°, ASTAP −16.49°). With S69 (root cause, above): apertures within 0.2 px.
+`050148Z` (2 anchors, `EGAIN` 1.723): 2 anchors on most frames instead of 1, 13
+verify solves instead of 10, none flagged either way. RR Lyr 2026-09-25 (`EGAIN`
+0.8, as the request): unchanged.
+**How to check.** `tests/workers/test_photometry_batch_worker.py::test_the_tracker_and_lock_use_the_frames_own_gain_s70`
+(the request's 1.0 e-/ADU in the anchor choice and the lock check on the code
+before the fix).
 
 ## Plate solving
 

@@ -221,3 +221,46 @@ def test_batch_summary_says_how_many_frames_had_no_verified_lock_s58() -> None:
         level == "WARN" and "22 frame(s)" in msg and "no verified lock" in msg
         for level, msg in logs
     ), logs
+
+
+def test_batch_summary_says_the_re_solves_for_rotation_and_off_centre_stars_s69() -> None:
+    """S69: the end-of-run messages count the frames re-solved after the field turned
+    more than 2° since its solution, and the comparison/check measurements left out
+    of their ensemble for sitting more than 1 px off their aperture centre."""
+    import argos.ui.pages.imaging_page as ip
+    from argos.core.photometry.lightcurve import LcPoint, LightCurve
+    from argos.workers.photometry_batch_worker import BatchResult
+
+    logs: list[tuple[str, str]] = []
+    page = SimpleNamespace(
+        _batch_dialog=None,
+        _batch_worker=object(),
+        _batch_total=24,
+        log_message=SimpleNamespace(emit=lambda level, msg: logs.append((level, msg))),
+        _engine=SimpleNamespace(adopt_curves=lambda curves: None),
+        _open_photometry=lambda: None,
+        _cfg=lambda key, default: default,
+    )
+    curve = LightCurve(auid="T", name="T", role="target")
+    curve.append(LcPoint(jd_utc=2461290.67, mag=10.2, mag_err=0.02))
+    result = BatchResult(curves={"T": curve}, frames_done=24)
+    result.frames_rotation_solved = 7
+    result.stars_off_centre = 15
+    result.frames_rotation_unsolved = 2
+    result.frames_no_target_point = 1
+    result.frames_no_detection = 3
+    ip.ImagingPage._on_batch_done(page, result)
+
+    assert any(
+        level == "INFO" and "turned more than 2°" in msg and "7 frame(s)" in msg
+        for level, msg in logs
+    ), logs
+    assert any(
+        level == "WARN" and "15 comparison/check measurement(s)" in msg for level, msg in logs
+    ), logs
+    # S69 (a) failed re-solves, S69 (b) frames without an ensemble, S67 (tech/science review)
+    assert any(
+        level == "WARN" and "2 frame(s) that did not re-solve" in msg for level, msg in logs
+    ), logs
+    assert any(level == "WARN" and "1 frame(s) have no target point" in msg for level, msg in logs)
+    assert any(level == "WARN" and "3 frame(s) show no detection" in msg for level, msg in logs)

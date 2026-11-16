@@ -62,6 +62,10 @@ class LcPoint:
     #: ``comps_used`` (the ratio path also rejects *suspect* stars), so the two
     #: legitimately differ on the same row.
     relative_comps_used: int = 0
+    #: S67: ``suspect`` because the run's flight recorder shows no detection on this
+    #: frame (the field moved, or cloud: S35's rule on an old file). Not a CSV column:
+    #: the reason only names the point in the AAVSO export's count.
+    no_detection: bool = False
 
 
 @dataclass
@@ -271,13 +275,16 @@ class AavsoExportSummary:
     """What :func:`write_aavso` wrote: data rows, and target points left out.
 
     A point both saturated and suspect is counted as saturated; an undated point
-    (S60) as undated, whatever its flags.
+    (S60) as undated, whatever its flags. ``no_detection_excluded`` counts the suspect
+    points of a frame on which the flight recorder shows no detection (S67), apart
+    from the other suspect points.
     """
 
     rows: int = 0
     saturated_excluded: int = 0
     suspect_excluded: int = 0
     undated_excluded: int = 0
+    no_detection_excluded: int = 0
 
 
 def write_aavso(
@@ -301,7 +308,8 @@ def write_aavso(
     sequence (CHART).
 
     Target points flagged *saturated* (clipped) or *suspect* (cosmic ray, hot
-    pixel) are left out unless ``include_flagged``; when included, NOTES says
+    pixel, no verified lock, or no detection on the frame: S67) are left out
+    unless ``include_flagged``; when included, NOTES says
     which flag they carry. A flagged check point never provides KMAG. An undated
     point (``jd_utc`` not finite, or before :data:`MIN_AAVSO_JD`) is always left
     out (S60). ``software`` defaults to ``argos.SOFTWARE_ID``, the name and
@@ -323,7 +331,7 @@ def write_aavso(
         if kname
         else {}
     )
-    rows = saturated_excluded = suspect_excluded = undated_excluded = 0
+    rows = saturated_excluded = suspect_excluded = undated_excluded = no_detection = 0
     chart_field = _aavso_field(chart) or "na"
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -331,6 +339,7 @@ def write_aavso(
         f.write("#TYPE=EXTENDED\n")
         f.write(f"#OBSCODE={obscode}\n")
         f.write(f"#SOFTWARE={software}\n")
+        # OBSTYPE CCD: the format reports a CMOS camera as CCD (S68).
         f.write("#DELIM=,\n#DATE=JD\n#OBSTYPE=CCD\n")
         f.write(
             "#NAME,DATE,MAG,MERR,FILT,TRANS,MTYPE,CNAME,CMAG,KNAME,KMAG,"
@@ -356,6 +365,8 @@ def write_aavso(
                 if flags and not include_flagged:
                     if p.saturated:
                         saturated_excluded += 1
+                    elif p.no_detection:
+                        no_detection += 1  # S67: no star on that frame
                     else:
                         suspect_excluded += 1
                     continue
@@ -368,7 +379,9 @@ def write_aavso(
                     f"ENSEMBLE,na,{check_fields},{amass},na,{chart_field},{notes}\n"
                 )
                 rows += 1
-    return AavsoExportSummary(rows, saturated_excluded, suspect_excluded, undated_excluded)
+    return AavsoExportSummary(
+        rows, saturated_excluded, suspect_excluded, undated_excluded, no_detection
+    )
 
 
 def _aavso_field(value, limit: int = 20) -> str | None:
