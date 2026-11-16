@@ -13,6 +13,28 @@ The same UI runs in a browser against the server, or in the desktop app (Tauri,
 
 ## Run it (development)
 
+One command, from the repository root: the server, the Vite dev server and the
+browser opened on them (`run_web.py`; Ctrl+C stops both, the server on its graceful
+path).
+
+```sh
+.venv/bin/python run_web.py                  # your config (~/.argos) and devices
+.venv/bin/python run_web.py --sim            # the simulator, a separate dev config
+.venv/bin/python run_web.py --replay DIR     # the simulator replays DIR's FITS frames
+.venv/bin/python run_web.py --port 0 --no-browser -- --connect-timeout 5
+```
+
+- The UI reloads on every edit under `src/`; a change to the Python server needs a
+  restart of the command.
+- `--sim` / `--replay` use a dev config seeded once in `~/.argos-dev/config` whose
+  sessions, sequences, caches and logs live under `~/.argos-dev`: a fresh config would
+  otherwise default `sessions_path` to the real `~/Argos/sessions`.
+- The token is random per launch (`--token` fixes one); arguments after `--` go to
+  `python -m argos.server`; `--port 0` when 8742 is taken.
+- Once: `cd web && npm install`.
+
+The same by hand, in two terminals:
+
 ```sh
 # terminal 1, repo root: the server, with the simulator and a fixed dev token.
 # --config-dir keeps your real ~/.argos/config.json out of development runs.
