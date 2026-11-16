@@ -21,8 +21,10 @@ if [ -z "$UV" ]; then
     exit 1
 fi
 
-# Sync production dependencies only (dev extras like pytest/simulator not needed to run).
-"$UV" sync --quiet
+# The Qt app's dependencies are the "qt" extra since the web UI became the shipped
+# app (wave 8). --inexact installs what is missing and removes nothing: a plain
+# "uv sync" would strip the qt, dev and server extras from the shared .venv.
+"$UV" sync --quiet --extra qt --inexact
 
 # Prepare the venv for Qt — once per environment build, not once per launch.
 #
@@ -52,4 +54,4 @@ if [ ! -f "$STAMP" ] \
     fi
 fi
 
-exec "$UV" run python main.py "$@"
+exec "$UV" run --extra qt python main.py "$@"

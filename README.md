@@ -87,6 +87,13 @@ and an appropriate star database separately, then set both paths in
 git clone https://github.com/jperret21/argos.git
 cd argos
 uv sync --extra dev --extra qt --extra server
+(cd web && npm install)
+
+# the web UI (the server, Vite and the browser in one command; Ctrl+C stops both)
+uv run python run_web.py           # your config and devices
+uv run python run_web.py --sim     # the simulator, a separate dev config (~/.argos-dev)
+
+# the Qt app
 uv run python main.py
 ```
 

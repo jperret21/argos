@@ -66,12 +66,23 @@ docs(readme): simplify project status section
 
 ### Run the app
 
+The web UI (the shipped app since wave 8), for development: the server and the
+Vite dev server in one command, the browser opened on them (Ctrl+C stops both):
+
 ```bash
-uv run python main.py
+.venv/bin/python run_web.py            # your config and devices
+.venv/bin/python run_web.py --sim      # the simulator, a separate dev config
 ```
 
-`./run.sh` is a macOS convenience launcher. Use the explicit `uv run` command
-in documentation, CI reproductions and cross-platform instructions.
+The Qt app (kept for the parity tests; its dependencies are the `qt` extra):
+
+```bash
+uv run --extra qt python main.py
+```
+
+`./run.sh` is a macOS convenience launcher for the Qt app. Use the explicit
+`uv run` command in documentation, CI reproductions and cross-platform
+instructions.
 
 ### Run tests
 
