@@ -32,7 +32,7 @@ Scripts are in `scripts/` and outputs in `evidence/`, both in this folder.
 | S68 header, CHART | **pass**: SOFTWARE `Argos v0.4.2` (version present), OBSTYPE CCD, CHART na on old runs; today's VSP answer passes the band rule for 6/8/5 comparisons | = | fail | none |
 | S69 tracker | **pass on the root cause**: `040723Z` apertures ≤ 0.38 px from the stars on 23/24 frames (W7: 4-6 px); the degraded `_00020` is caught | = | fail | **F1**: the centring test flags a faint star beside a brighter one (7 false flags on 000-BJV-173) |
 | S70 batch gain | consistent (the S69/S70 counts reproduce) | = | fails | none |
-| S71 weighted zero point | **pass** with the role's weighted-median clip centre (re-implemented: check 171 +0.059 ± 0.028); the plain median of the decision text fails its own test (+0.262 ± 0.099), as the role reported | = | fail | confirm the deviation (owner) |
+| S71 weighted zero point | **pass** with the role's weighted-median clip centre (re-implemented: check 171 +0.059 ± 0.028); the plain median of the decision text fails its own test (+0.262 ± 0.099), as the role reported | = | fail | deviation confirmed by the owner (2026-11-16): the weighted-median clip centre, and the dominant-comparison flag only with at least two other comparisons |
 | S72 noise model | the decided model **fails** its test with the frames' EGAIN (−52 % to −66 %); with 0.20 e-/ADU it passes (−1.5 % to +0.3 %). My photon transfer gives **0.23 e-/ADU** and shows 12-bit data × 16 | n/a (off by default) | fail | **F4** (S7x confirmed), **F5** (median sky on 16-ADU steps) |
 
 ## 1. Times (astropy, from DATE-OBS + EXPTIME/2)
@@ -232,7 +232,7 @@ XX Cyg 2026-08-29 `050148Z`, live recorder: check 000-BJV-171 against 170, 176, 
 
 - **000-BCG-953 on the RR6 re-run recorder:** clipped on 194 of 195 frames under both (B) and (C).
 - **With the plain median in `differential.py`:** `test_reddish_comparison_still_clipped_s71` fails (`evidence/s71_plain_median_tests.txt`), so a test covers the deviation.
-- **Recommendation:** the owner confirms (C).
+- **Recommendation:** the owner confirms (C). **Confirmed on 2026-11-16** (S71 in `notes/release_0_5_0.md`), with the dominant-comparison flag only when at least two other comparisons remain.
 
 ## 11. Adversarial checks
 

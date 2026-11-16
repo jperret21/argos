@@ -2774,6 +2774,70 @@ the merge.
   000-BJV-173 in `040723Z`'s set, the header AIRMASS of off-centre stars (check 000-BCG-523
   0.0071 from its own airmass).
 
+### 10. Noise model and geometry (S73-S80)
+
+The owner's decisions of 2026-11-16 (S73-S80, S56/S71/S72 amended) and the follow-up of
+their validation, science and technical reviews (S81-S83, the owner's calls on F1-F8), in
+the release worktree first (`notes/release_0_5_0.md` S72-S83), ported to the server behind
+feature GUARDs (none of it is live until the main session merges release/0.5.0). Level (a)
+is checked against references independent of ARGOS; the details, scripts and every number's
+source are in `web/spec/decisions-s73-s80-independent-checks.md`.
+
+- **S73** the S30 Pro's e-/ADU at gain 80 is its photon transfer, 0.228 ± 0.005
+  (+0.010/−0.001; read noise 2.6 e-), scaled at 0.1 dB/step over gains 0-251 (checked at
+  100: 0.183 measured, 0.181 scaled); every other scaled gain is logged "scaled, not
+  measured" and carries the measured read noise; one chain (table, profile, driver,
+  reference) for the photometry, `EGAIN`/`RDNOISE` and old frames (their 0.8 or 1.723
+  replaced). **S72** the green-plane model is the default (its Settings row added to the
+  web Photometry page). **S74** scintillation (Young, Osborn C_Y = 1.5, kept:
+  conservative), each star at its row's airmass in a re-run. **S75** the sky estimate's
+  error. **S76** the median stays (an owner decision, with new evidence: the median's 8-ADU
+  quantisation).
+- **S77** proper motions (Gaia DR3) at each frame's date; the re-run's lookup gives up
+  after 5 s per star, reads the cache after a failure and takes the cancel. **S78** each
+  comparison's own airmass at the fitted site; without one, the Settings site only when it
+  reproduces the mount's pointing within 0.1°, else the header AIRMASS (F1). **S79**
+  crowded comparisons named (and logged by the server). **S80** every inconsistent anchor
+  rejected. **S56** freshness 10 px; the anchors keep SNR ≥ 10 (the owner).
+- **S81** an aperture or annulus partly off the frame is not measured; **S82** a re-run
+  reads an OBJECT in SIMBAD's form; **S83** live and sequence points take the e-/ADU at the
+  frame's own gain.
+
+Final numbers (Qt batch re-runs with ASTAP, each night's Settings site; before =
+`3e48d78`, after = every S72-S83 change):
+
+| Check | Before | After |
+|---|---|---|
+| Pair scatter / formal error, median (robust): RR Lyr 6 comparisons | 1.89 (1.63) | 0.95 (0.80) |
+| same, RR Lyr 2 comparisons + check | 2.27 (2.06) | 0.89 (0.77) |
+| same, XX Cyg `040723Z` | 1.48 (1.41) | 1.11 (1.01) |
+| same, XX Cyg `050148Z` (3 pairs) | 0.94 (1.03) | 0.71 (0.60) |
+| 000-BCG-523 − VSP V (VSP ± 0.100) | +0.0162 ± 0.0016 | +0.0167 ± 0.0016 |
+| 000-BJV-169 − VSP V (± 0.051) | −0.0735 ± 0.0090 | −0.0647 ± 0.0091 |
+| 000-BJV-171 − VSP V (± 0.030) | +0.0507 ± 0.0227 | +0.0447 ± 0.0223 |
+| RR Lyr − Siril green 2 comps, offset / robust σ | +0.0013 / 0.0096 | +0.0013 / 0.0101 |
+| RR Lyr 6 comps − Siril, offset / robust σ | −0.0076 / 0.0153 | −0.0110 / 0.0147 |
+| Model / measured sky σ: the three sessions (9 frames); gains 80 and 100 (31) | 0.34-0.48 | 0.959-1.035; 0.959-1.049 (gain 65: 0.889) |
+| RR Lyr aperture − centroid, median (90th pct) | 0.990 (1.111) px | 0.077 (0.157) px |
+| Comparison airmass − astropy at the fitted site, max: long runs; `195307Z`; `052943Z`, `053540Z` | 0.0204; 0.0017; 0.0012 (S78 as first built: 3.85; 0.013) | 0.00007; 0.0017; 0.0012 |
+| RR Lyr target `sigma_syst` (2 comparisons) | 0.0182 | 0 (the formal errors carry the scatter) |
+
+The 6-comparison offset moves 3.4 mmag because S71's weights follow the corrected errors
+(not Siril's ensemble); the 2-comparison σ moves within its own uncertainty (±0.0005). Bright
+stars' formal errors are now 1.2-1.4 times their scatter (C_Y = 1.5 kept, measured
+1.1-1.4; a refit needs more nights); faint stars' are honest (`040723Z` robust 1.01). Gates
+on every study run: no frame skipped and no S43 re-solve gained or lost; anchors fall on the
+XX Cyg 15 s subs (the true SNR), S58 verify solves `050148Z` 13 → 9, `053540Z` 4 → 2,
+`040723Z` 0 → 1; 000-BJV-172 found off-centre on `052943Z`/`053540Z` (real); `045626Z`'s
+cloud sub unanchored and its comparisons warned faint; `050148Z` sub 19 flagged with one
+solve per run (0.10 px from its star); no blank-sky frame kept; S81 removes 12 edge rows of
+RR Lyr (live replay: 000-BJW-667/668 no anchor on 19 frames). Level (b): the server's
+re-run equals the fixed Qt worker byte for byte on the owner's frames (see the decisions
+file). Open: the owner decisions listed there (S76's estimator, the ensemble's `zp_err`
+branch, the user photon-transfer file's rank, `noise_model` in the S15 lock, Review of a
+re-run folder, `site.min_altitude_deg` on the Settings page), and every GUARD until the
+merge.
+
 ## Wave 8: Desktop app and Qt retirement (2026-11-15)
 
 Scope (README section 7, row W8; waves.md §5 W8; rows M18, M20; A7, A12): the Tauri v2
