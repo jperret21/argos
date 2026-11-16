@@ -217,8 +217,9 @@ class TargetService:
     # -- geometry -------------------------------------------------------------------
 
     def egain(self, gain: int | None = None) -> float:
-        """``_egain``: config table → the profile's photon transfer (S73) → driver →
-        active sensor reference (``hardware.egain.live``; GUARD: a core without it
+        """``_egain``: config table → the observer's photon-transfer file → the profile's
+        photon transfer (S73) → driver → active sensor reference (``hardware.egain.live``,
+        the file's step on a core with ``from_calibration``; GUARD: a core without ``live``
         keeps the 0.4.x order, table → driver → reference). At ``gain``, the frame's own
         setting (S83: a sequence step's, a camera frame's), else the Camera form's."""
         with self._hub._lock:

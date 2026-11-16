@@ -1,17 +1,23 @@
 <!--
   Settings › Photometry (02 W8; Q-C4, Q-C8): apertures, comparison
   selection, the AAVSO band of every report and the error model. The
-  config-only keys of the Qt app sit under Advanced. Changing the aperture
-  geometry while a sequence runs will be refused by the server from W6
+  config-only keys of the Qt app sit under Advanced. While a sequence runs
+  the aperture geometry (S15) and the noise model (S84) are unavailable, with
+  the server's sentence (runlock.ts): the server refuses them then
   (409 run_active, Q-R10).
 -->
 <script lang="ts">
+  import { useApp } from '../../app/state.svelte';
+  import { runLockReasons } from '../runlock';
   import SettingsBlock from '../SettingsBlock.svelte';
 
   interface Props {
     query?: string;
   }
   let { query = '' }: Props = $props();
+
+  const app = useApp();
+  const locks = $derived(runLockReasons(app.sequence.state?.active ?? false));
 </script>
 
 <div class="page">
@@ -19,6 +25,7 @@
     title="Apertures"
     caption="Green-plane pixels."
     keys={['photometry.aperture_fwhm_mult', 'photometry.aperture_min_px', 'photometry.annulus_in_px', 'photometry.annulus_out_px']}
+    reasons={locks}
     {query}
     hideEmpty={!!query}
   />
@@ -46,6 +53,7 @@
       'photometry.comparison_validation_max_scatter_mag',
       'photometry.comparison_validation_max_formal_error_mag',
     ]}
+    reasons={locks}
     {query}
     hideEmpty={!!query}
   />

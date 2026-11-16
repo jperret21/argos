@@ -422,3 +422,19 @@ def test_a_path_naming_an_unknown_user_s_home_is_refused_not_a_500(client):
     assert response.json()["error"]["fields"] == {
         "astrometry.astap_path": "names the home folder of an unknown user"
     }
+
+
+def test_the_photon_transfer_help_says_the_cores_order_s73():
+    """S73 amended (the owner's call of 2026-11-16): on a core that reads the observer's
+    photon-transfer file before the telescope profile (GUARD:
+    ``hardware.egain.from_calibration``), Settings says so; on a core before it, the file
+    is the sensor reference's fallback and Settings keeps saying that."""
+    from argos.core.hardware import egain as core_egain
+
+    help_ = META["data_paths.camera_calibration_directory"].help
+    table = META["camera.egain_table"].help
+    if hasattr(core_egain, "from_calibration"):
+        assert "before the telescope profile" in help_ and "only when" not in help_
+        assert table.index("photon-transfer file") < table.index("telescope profile")
+    else:
+        assert "only when" in help_ and "photon-transfer file" not in table

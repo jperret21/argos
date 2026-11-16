@@ -116,6 +116,39 @@ class KeyMeta:
 #: model would take the frames' wrong EGAIN).
 _NOISE_MODEL_DEFAULT = getattr(_core_params, "NOISE_MODEL_DEFAULT", "pixel")
 
+#: GUARD: a core whose e-/ADU chain reads the observer's photon-transfer file before the
+#: telescope profile's measurement (release S73 amended, ``hardware.egain.from_calibration``);
+#: before it the file was read with the sensor reference curve, last. The help texts of
+#: ``camera.egain_table`` and ``data_paths.camera_calibration_directory`` say the order
+#: the core in use applies.
+try:
+    from argos.core.hardware import egain as _core_egain
+except ImportError:  # pragma: no cover - a core before S73
+    _core_egain = None
+_CALIBRATION_FIRST = hasattr(_core_egain, "from_calibration")
+_EGAIN_TABLE_HELP = (
+    "Measured electrons per ADU at each gain setting, first in the chain. Empty: your "
+    "photon-transfer file's entry at that gain (Photon-transfer calibrations), then the "
+    "telescope profile's photon-transfer value (the S30 Pro: 0.228 at gain 80, scaled at 0.1 "
+    "dB per step over gains 0-251, S73), else the driver's value, else the sensor reference "
+    "curve. Locked while a sequence runs (S84)."
+    if _CALIBRATION_FIRST
+    else "Measured electrons per ADU at each gain setting, first in the chain. Empty: the "
+    "telescope profile's photon-transfer value (the S30 Pro: 0.228 at gain 80, scaled at "
+    "0.1 dB per step over gains 0-251, S73), else the driver's value, else the sensor "
+    "reference curve. Locked while a sequence runs (S84)."
+)
+_CALIBRATION_HELP = (
+    "Folder searched for camera_calibration*.json (camera_calibration.json for the IMX585): "
+    "an entry at a frame's gain comes after the electron gain table and before the "
+    "telescope profile's measured value and the driver's (S73: your own camera's "
+    "measurement first). Locked while a sequence runs (S84)."
+    if _CALIBRATION_FIRST
+    else "Folder searched for camera_calibration*.json, read with the sensor reference: only "
+    "when the gain table, the telescope profile's measured value (S73) and the driver "
+    "give no electron gain. Locked while a sequence runs (S84)."
+)
+
 
 def _k(key: str, type_: KeyType, default: Any, label: str, help_: str, category: Category, **kw):
     return KeyMeta(
@@ -249,18 +282,12 @@ KEYS: tuple[KeyMeta, ...] = (
        read_only=True, advanced=True,
        read_only_reason="Follows Linearity limit above, so the Qt app reads the same "
                         "value."),  # Q-C1
-    _k("camera.egain_table", "object", {}, "Electron gain table",
-       "Measured electrons per ADU at each gain setting, first in the chain. Empty: the "
-       "telescope profile's photon-transfer value (the S30 Pro: 0.228 at gain 80, scaled at "
-       "0.1 dB per step over gains 0-251, S73), else the driver's value, else the sensor "
-       "reference curve.",
+    _k("camera.egain_table", "object", {}, "Electron gain table", _EGAIN_TABLE_HELP,
        "instrument", used_by=("photometry noise model",), advanced=True),
     _k("data_paths.camera_calibration_directory", "path", str(_HOME / ".argos"),
-       "Photon-transfer calibrations",
-       "Folder searched for camera_calibration*.json, read with the sensor reference: only "
-       "when the gain table, the telescope profile's measured value (S73) and the driver "
-       "give no electron gain.",
-       "instrument", used_by=("electron gain fallback",)),
+       "Photon-transfer calibrations", _CALIBRATION_HELP,
+       "instrument",
+       used_by=("photometry noise model" if _CALIBRATION_FIRST else "electron gain fallback",)),
     # -- Plate solving -------------------------------------------------------------------
     _k("astrometry.astap_path", "path", "", "ASTAP executable",
        "Empty: auto-detect (astap_cli on PATH).",
@@ -416,8 +443,8 @@ KEYS: tuple[KeyMeta, ...] = (
        "photometry", used_by=("batch photometry",)),
     _k("photometry.read_noise_e", "float", 1.5, "Read noise",
        "Read noise used in the photometric error model. The green-plane model uses the "
-       "camera's own, measured with its e-/ADU, at a gain the telescope profile measured "
-       "(S73).",
+       "camera's own where a measurement gives it with the e-/ADU in use (S73). Locked "
+       "while a sequence runs (S84).",
        "photometry", used_by=("photometry noise model",), min=0.0, max=100.0, step=0.1,
        unit="e⁻", advanced=True),
     # S72: registered so the Settings API accepts it (release config.py default).
@@ -426,7 +453,7 @@ KEYS: tuple[KeyMeta, ...] = (
        "plane's noise above the camera's black level, the sky estimate's own error and "
        "scintillation (S72, S74, S75). Per pixel: the 0.4.x formula, for comparison only: "
        "it counts the black level as sky photons: 2.5-3.5 times the S30 Pro's real sky "
-       "noise at its measured e-/ADU.",
+       "noise at its measured e-/ADU. Locked while a sequence runs (S84).",
        "photometry", used_by=("photometry noise model", "light-curve errors"),
        options=(("green_plane", "Green plane"), ("pixel", "Per pixel (0.4.x)")),
        advanced=True),

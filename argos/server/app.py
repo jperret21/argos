@@ -787,7 +787,7 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
 
     @api.patch("/config")
     def patch_config(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
-        hub.sequence.guard_config(body)  # wave 6a: geometry locked during a run (S15)
+        hub.sequence.guard_config(body)  # geometry (S15) and noise model (S84) locked in a run
         return hub.config.patch(body, source="api").to_dict()
 
     @api.get("/devices")

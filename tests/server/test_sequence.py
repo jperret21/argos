@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 from astropy.io import fits
 
-from argos.server.sequence import GEOMETRY_KEYS
+from argos.server.sequence import GEOMETRY_KEYS, NOISE_MODEL_KEYS
 from argos.server.settings import SimOptions
 from tests.server.conftest import (
     AUTH,
@@ -393,6 +393,61 @@ def test_the_aperture_geometry_is_locked_during_a_run(seq):
     seq.post("/api/sequence/stop", headers=AUTH)
     wait_state(seq, "idle")
     assert seq.patch("/api/config", json={GEOMETRY_KEYS[0]: 3.0}, headers=AUTH).status_code == 200
+
+
+def test_the_noise_model_is_locked_during_a_run_s84(seq, tmp_path):
+    """S84: ``photometry.noise_model``, ``photometry.read_noise_e`` and the observer's two
+    inputs of the e-/ADU (``camera.egain_table``, ``data_paths.camera_calibration_directory``:
+    S73's chain) set the SNR the gates read (S35, S56, S58, S69) and the formal errors; a
+    change mid-run split one curve in two error models. Refused as S15's geometry (written
+    mid-run before the fix; the e-/ADU's two keys before the validation's F1)."""
+    before = seq.get("/api/config", headers=AUTH).json()["values"]
+    put_plan(seq, steps=[light(count=3, exposure_s=0.5)])
+    start(seq)
+    changes = {
+        "photometry.noise_model": "pixel",
+        "photometry.read_noise_e": 3.0,
+        "camera.egain_table": {"80": 0.3},
+        "data_paths.camera_calibration_directory": str(tmp_path),
+    }
+    for key, value in changes.items():
+        response = seq.patch("/api/config", json={key: value}, headers=AUTH)
+        assert response.status_code == 409, (key, response.text)
+        error = response.json()["error"]
+        assert error["code"] == "run_active" and error["keys"] == [key]
+        assert error["message"] == (
+            "The noise model and the camera's e-/ADU are locked while a sequence runs (one "
+            "curve, one error model)."
+        )
+    both = seq.patch(
+        "/api/config",
+        json={GEOMETRY_KEYS[0]: 3.0, NOISE_MODEL_KEYS[0]: "pixel", "photometry.min_comparisons": 3},
+        headers=AUTH,
+    )
+    assert both.status_code == 409  # nothing of the PATCH is written
+    assert both.json()["error"]["keys"] == [GEOMETRY_KEYS[0], NOISE_MODEL_KEYS[0]]
+    values = seq.get("/api/config", headers=AUTH).json()["values"]
+    for key in (*NOISE_MODEL_KEYS, GEOMETRY_KEYS[0], "photometry.min_comparisons"):
+        assert values.get(key) == before.get(key), key
+    seq.post("/api/sequence/stop", headers=AUTH)
+    wait_state(seq, "idle")
+    ok = seq.patch("/api/config", json={"photometry.read_noise_e": 3.0}, headers=AUTH)
+    assert ok.status_code == 200, ok.text
+    ok = seq.patch("/api/config", json={"camera.egain_table": {"80": 0.3}}, headers=AUTH)
+    assert ok.status_code == 200, ok.text
+    assert set(changes) == set(NOISE_MODEL_KEYS)  # the test covers every locked key
+
+
+def test_the_server_locks_the_cores_noise_model_keys_s84():
+    """GUARD (release S84): the keys ``PATCH /api/config`` refuses during a run are the
+    ones the release core locks in Qt (``params.NOISE_MODEL_KEYS``), so a key the core adds
+    cannot be missing here. On a core before S84 (no such constant) nothing to compare."""
+    from argos.core.photometry import params
+
+    core = getattr(params, "NOISE_MODEL_KEYS", None)
+    if core is None:
+        pytest.skip("core before S84: no params.NOISE_MODEL_KEYS")
+    assert tuple(NOISE_MODEL_KEYS) == tuple(core)
 
 
 # -- the mount interlock (PROPOSAL §7, D2) ---------------------------------------------

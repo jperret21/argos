@@ -6,6 +6,8 @@
   placeholder); the ADC depth is the profile's (read-only, Q-C1). The
   photon-transfer calibration folder describes the sensor. Advanced: the
   access-point address, the ADC depth and the electron gain table; the
+  folder and the table give the camera's e-/ADU, unavailable while a sequence
+  runs with the server's sentence (runlock.ts, S84); the
   legacy Qt copies (read-only mirrors) in a closed "Qt app compatibility"
   disclosure at the end.
 -->
@@ -18,6 +20,7 @@
   import { int } from '../../format/number';
   import EgainTable from '../EgainTable.svelte';
   import QtCompat from '../QtCompat.svelte';
+  import { runLockReasons } from '../runlock';
   import SettingsBlock from '../SettingsBlock.svelte';
 
   interface Props {
@@ -26,6 +29,7 @@
   let { query = '' }: Props = $props();
 
   const app = useApp();
+  const locks = $derived(runLockReasons(app.sequence.state?.active ?? false));
   const profiles = $derived(app.profiles);
   const active = $derived(profiles?.profiles.find((p) => p.key === profiles.active) ?? null);
   const placeholders = $derived<Record<string, string>>(
@@ -45,7 +49,7 @@
 </script>
 
 {#snippet egain(_key: string, _meta: KeyMeta, value: ConfigValue | undefined)}
-  <EgainTable {value} />
+  <EgainTable {value} locked={locks['camera.egain_table'] ?? null} />
 {/snippet}
 
 <div class="page">
@@ -94,6 +98,7 @@
   <SettingsBlock
     title="Photon-transfer calibrations"
     keys={['data_paths.camera_calibration_directory']}
+    reasons={locks}
     {query}
     hideEmpty={!!query}
   />

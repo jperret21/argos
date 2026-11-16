@@ -175,7 +175,7 @@ start).
 | 409 | `unsupported` | `DELETE /api/jobs/{id}` on a job kind that cannot be cancelled. |
 | 409 | `file_exists` | (wave 2) A support bundle destination that exists, without `"overwrite": true`. |
 | 409 | `not_ready` | (wave 2) `GET /api/jobs/{id}/download` while the job still runs. |
-| 409 | `run_active` | (wave 6a, sequences) a mount motion during a run (the interlock: GoTo, Centre, Sync, Park, Unpark, tracking off, tracking rate, jog) or a photometry-geometry config change during a run; `details: {state, run_id, …}`. |
+| 409 | `run_active` | (wave 6a, sequences) a mount motion during a run (the interlock: GoTo, Centre, Sync, Park, Unpark, tracking off, tracking rate, jog) or a photometry-geometry or noise-model config change during a run (S15, S84: the model, the read noise, the e-/ADU's gain table and photon-transfer folder); `details: {state, run_id, …}`. |
 | 409 | `preflight_blocked` | (wave 6a) `POST /api/sequence/start` refused by a preflight block (`details.checks`). |
 | 409 | `not_running` | (wave 6a) `POST /api/sequence/pause` or `/resume` with no run, or while it waits for its start time. |
 | 500 | `internal_error` | Any unexpected failure; the traceback is in the server log. The answer keeps the CORS headers, so the browser can read it. |
@@ -2413,9 +2413,19 @@ saturated ensemble, no comparison) gives no point that frame.
   when present): the telescope profile's photon-transfer e-/ADU comes after the
   table and before the driver (S30 Pro: 0.228 ± 0.005 at gain 80, scaled by
   0.1 dB per step over gains 0-251; elsewhere the driver, then the reference,
-  logged unverified); an opened or re-run frame of the camera its `TELESCOP`
-  names takes it at its `GAIN` instead of its `EGAIN` (the 0.8 or 1.723 the
-  0.4.x frames carry), an `EGAIN` the table wrote excepted (the opened frame's
+  logged unverified); the observer's own photon-transfer file
+  (`camera_calibration*.json` in `data_paths.camera_calibration_directory`)
+  comes before the profile, its entry at that exact gain with its `rdnoise` as
+  the measured read noise (an entry without one keeps the Settings read noise,
+  logged), source "<sensor> PTC file" ("IMX585 PTC file" on the
+  S30 Pro; S73 amended, the owner's call of 2026-11-16; on a core without
+  `hardware.egain.from_calibration` it is read with the reference curve, last);
+  a new frame's `RDNOISE` names that file when its e-/ADU has no read noise of
+  its own (the table's), and a frame whose `EGAIN` the file wrote keeps the
+  `RDNOISE` it wrote with it (core code, no server change);
+  an opened or re-run frame of the camera its `TELESCOP` names takes it at its
+  `GAIN` instead of its `EGAIN` (the 0.8 or 1.723 the 0.4.x frames carry), an
+  `EGAIN` the table or that file wrote excepted (the opened frame's
   `gain_header` is a `fits.Header` keeping that comment). A scaled gain carries
   the read noise measured at gain 80 (2.6 e-), and every gain other than 80 and
   100 is logged once "e-/ADU at gain N scaled, not measured" (S73 amended). The
@@ -2443,8 +2453,14 @@ saturated ensemble, no comparison) gives no point that frame.
   release core is merged (`photometry.noise_model`: `green_plane`; `pixel`, the
   0.4.x formula, for comparison only; the Settings key's default is the core's
   `NOISE_MODEL_DEFAULT`, `pixel` on a core without it: GUARD). With it: S75,
-  the sky estimate's error, `n_ap (1 + (π/2) n_ap / n_sky)` sky variances (the
-  annulus median); S74, each star's scintillation, Young's formula with Osborn's
+  the sky estimate's error, `n_ap (1 + n_ap / n_sky)` sky variances with the
+  annulus' 3σ-clipped mean over the `n_sky` pixels it keeps (S76, adopted
+  2026-11-16; `n_ap (1 + (π/2) n_ap / n_sky)` with the annulus median on a core
+  before it); the sky estimate itself, for every model, is that clipped mean
+  (`aperture.sky_level`: median centre, standard deviation, bounds inclusive,
+  repeated until nothing is rejected, at most 10 passes: astropy's
+  `sigma_clipped_stats(sigma=3, maxiters=10)`) instead of the median, whose
+  value sits on the 8-ADU-stepped plane's 4-8 ADU grid; S74, each star's scintillation, Young's formula with Osborn's
   `C_Y = 1.5` from the profile's aperture, the frame's exposure and airmass and
   the site's height (`PhotometryParams.with_frame`: an opened or re-run frame's
   `EXPTIME`, `AIRMASS`, `SITEELEV`; live, the sub's exposure, the mount's
@@ -3297,14 +3313,30 @@ usual ones. The series FWHM is re-sampled on the next measured sub (Qt
 Bounded: when the sweep has not ended after `9 × (exposure + 10 s) + 120 s`,
 the run ends (`autofocus_timeout`).
 
-### Photometry geometry locked (S15)
+### Photometry geometry and noise model locked (S15, S84)
 
 While a run is active, `PATCH /api/config` touching
 `photometry.aperture_fwhm_mult`, `photometry.aperture_min_px`,
 `photometry.annulus_in_px` or `photometry.annulus_out_px` answers
 `409 run_active` "The aperture geometry is locked while a sequence runs
 (one curve, one aperture)." with `details.keys`; nothing is written. The
-other photometry settings (comparison selection) stay editable, as Qt.
+noise model's keys, `photometry.noise_model`, `photometry.read_noise_e` and
+the observer's two inputs of the camera's e-/ADU, `camera.egain_table` and
+`data_paths.camera_calibration_directory` (S73's chain), are locked the same
+way (release S84: they set the SNR the S35, S56, S58 and S69 gates read and
+every formal error; the server's `sequence.NOISE_MODEL_KEYS`, the release
+core's `params.NOISE_MODEL_KEYS`): "The noise model and the camera's e-/ADU
+are locked while a sequence runs (one curve, one error model)."; a PATCH
+touching both groups
+gives both sentences, `details.keys` lists every locked key it held, and
+nothing of it is written. The other photometry settings (comparison
+selection) stay editable, as Qt. The web Settings pages show these keys
+unavailable during a run, with the same sentence as the reason
+(`settings/runlock.ts`; `settings/pages/Photometry.svelte`, `Instrument.svelte`).
+Not covered, as for S15: another program editing `config.json` during a run
+(`GET /api/config` re-reads the file), and an edit of the photon-transfer file
+itself, read for every frame (OWNER DECISION: resolve the e-/ADU once per gain
+at the run's start).
 
 ### Mount-motion interlock (PROPOSAL §7, D2)
 
@@ -3418,7 +3450,7 @@ there):
 
 | HTTP | code | When |
 |---|---|---|
-| 409 | `run_active` | A mount motion during a run (interlock above); a photometry-geometry change during a run; `details: {"state", "run_id", …}`. |
+| 409 | `run_active` | A mount motion during a run (interlock above); a photometry-geometry or noise-model change during a run (S15, S84); `details: {"state", "run_id", …}`. |
 | 409 | `preflight_blocked` | Start refused by a preflight `block` other than the camera and plan checks; `details.checks`. |
 | 409 | `not_running` | Pause or resume with no run, or while waiting for the start time. |
 
@@ -4965,7 +4997,7 @@ wide by 1920 px high, 16-bit, mono.
 | A54-A57 | Wave 5: `GET /api/photometry/live`; `photometry_point` and `photometry_reset` (a stream), `comparison_quality` and `photometry` (snapshots); BJD_TDB per point; leave-one-out status per comparison |
 | A58 | Wave 5: `POST /api/photometry/comparisons/recommend` (`replace` / `complete`, `count`) |
 | — | Wave 5 follow-ups of wave 4: `auto_selected` in the `POST /api/targets` answer and `DELETE /api/targets/{key}?also=` (Undo of a new target); `frame_metrics` replayed to a new client; `GET /api/fs/list` lists a typed file's folder with `selected` |
-| A62-A64 | Wave 6a: `GET /api/sequence`, `POST /api/sequence/start` (`start_at_utc`, Q-P2) / `pause` / `resume` / `stop`, `sequence` event and `status.sequence`, `GET /api/sequence/preflight`; the mount interlock (`409 run_active`, `pause_run`), the geometry lock (S15), `frame_saved` of a run, `--sim-replay` |
+| A62-A64 | Wave 6a: `GET /api/sequence`, `POST /api/sequence/start` (`start_at_utc`, Q-P2) / `pause` / `resume` / `stop`, `sequence` event and `status.sequence`, `GET /api/sequence/preflight`; the mount interlock (`409 run_active`, `pause_run`), the geometry and noise-model lock (S15, S84), `frame_saved` of a run, `--sim-replay` |
 | §7 (6b) | Wave 6b: `attention` event, `GET /api/attention`, `POST /api/attention/{id}/ack` and `/ack-all`, config category `alerts`; `status.keep_awake` and the preflight `sleep` row; `GET /api/sequence/wrapup`, `POST /api/sequence/calibration-plan`; `sequence.autofocus`, `autofocus_passes`, `wrapup` |
 | A67-A75 | Wave 7 (Review): `POST /api/sessions/scan` (job `sessions_scan`), `POST` / `GET /api/review/session` (job `session_open`), `GET /api/review/session/curves`, `GET /api/review/live/curves`, `POST /api/review/import-csv`, `GET /api/files/frame` (not on `/ws/frames`), `GET /api/files/fits-header`, `POST /api/files/measure-star`, `POST /api/files/solve` (job `file_solve`), `GET /api/files/solution`, `POST /api/files/catalogue` (job `file_catalogue`); the Source model |
 | A7, A12 | Wave 8 (desktop): `POST /api/app/shutdown` (`409 busy` with `what`, stages, `shutdown` event, `503 shutting_down`), `POST /api/fs/reveal` (`--desktop` only), `--exit-on-stdin-eof`, AppInfo `desktop`; keep-awake `held` from the run's first `status` |

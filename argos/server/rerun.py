@@ -1252,7 +1252,8 @@ class BatchRun:
 
 
 def _engine_egain(hub: "Hub") -> float:
-    """``imaging_page._engine_egain``: Settings' table at the Camera gain, the profile's
+    """``imaging_page._engine_egain``: Settings' table at the Camera gain, the observer's
+    photon-transfer file (a core with ``hardware.egain.from_calibration``), the profile's
     photon transfer (S73), else the sensor's (GUARD: a core before S73 skips the profile)."""
     from argos.core.hardware import active as hardware
     from argos.core.imaging import sensor_models

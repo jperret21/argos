@@ -453,3 +453,42 @@ def test_every_key_of_a_settings_page_s_category_is_shown_somewhere() -> None:
                 if c == cat and f"'{key}'" not in everywhere and key not in known_gaps
             ]
     assert orphans == []
+
+
+def test_the_settings_page_locks_what_the_server_locks_during_a_run_s15_s84() -> None:
+    """S15, S84: the web Settings pages show the aperture geometry, the noise model and the
+    camera's e-/ADU (Instrument: the gain table, the photon-transfer folder) unavailable
+    during a run with the server's own sentence (``settings/runlock.ts``); its keys and
+    sentences are the ones ``PATCH /api/config`` refuses with (the pages let them be
+    edited mid-run before S84 and the validation's F1)."""
+    from argos.server.sequence import (
+        GEOMETRY_KEYS,
+        GEOMETRY_LOCK_REASON,
+        NOISE_MODEL_KEYS,
+        NOISE_MODEL_LOCK_REASON,
+    )
+
+    text = (REPO / "web" / "src" / "lib" / "settings" / "runlock.ts").read_text(encoding="utf-8")
+
+    def array(name: str) -> list[str]:
+        body = re.search(rf"export const {name} = \[(.*?)\] as const;", text, re.S)
+        assert body, name
+        return re.findall(r"'([^']+)'", body.group(1))
+
+    def sentence(name: str) -> str:
+        found = re.search(rf"export const {name} =\s*(['\"])(.+?)\1;", text)
+        assert found, name
+        return found.group(2)
+
+    assert array("GEOMETRY_KEYS") == list(GEOMETRY_KEYS)
+    assert array("NOISE_MODEL_KEYS") == list(NOISE_MODEL_KEYS)
+    assert sentence("GEOMETRY_LOCK_REASON") == GEOMETRY_LOCK_REASON
+    assert sentence("NOISE_MODEL_LOCK_REASON") == NOISE_MODEL_LOCK_REASON
+    pages = REPO / "web" / "src" / "lib" / "settings" / "pages"
+    page = (pages / "Photometry.svelte").read_text(encoding="utf-8")
+    assert page.count("reasons={locks}") == 2 and "runLockReasons(" in page
+    instrument = (pages / "Instrument.svelte").read_text(encoding="utf-8")
+    assert "runLockReasons(" in instrument
+    folder = instrument.index("'data_paths.camera_calibration_directory'")
+    assert instrument.index("reasons={locks}", folder) < instrument.index("/>", folder)
+    assert "locked={locks['camera.egain_table'] ?? null}" in instrument

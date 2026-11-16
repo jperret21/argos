@@ -1,8 +1,10 @@
 <!--
   Electron gain table (`camera.egain_table`, Instrument › Advanced; Q-C4):
   measured e⁻/ADU per gain setting, first in the photometric noise model's
-  e⁻/ADU chain: then the telescope profile's photon transfer (S73), the
-  driver's value and the sensor reference (hardware/egain.py).
+  e⁻/ADU chain: then the observer's photon-transfer file, the telescope
+  profile's photon transfer (S73), the driver's value and the sensor
+  reference (hardware/egain.py). While a sequence runs it is unavailable,
+  with the server's sentence (`locked`, settings/runlock.ts, S84).
   Rows are read-only facts with [remove] (Undo); a new row is added with
   its gain and value. Each change is one PATCH of the whole object; the
   server validates it (gain 0…10 000, e⁻/ADU in (0, 100]) and its words
@@ -16,8 +18,10 @@
 
   interface Props {
     value: ConfigValue | undefined;
+    /** Why the table cannot change now (a run is active: S84), else null. */
+    locked?: string | null;
   }
-  let { value }: Props = $props();
+  let { value, locked = null }: Props = $props();
 
   const app = useApp();
   const rows = $derived(
@@ -42,6 +46,7 @@
   }
 
   async function add(): Promise<void> {
+    if (locked) return;
     const gain = parseNumber(gainText);
     const egain = parseNumber(egainText);
     if (gain === null || !Number.isInteger(gain) || gain < 0) {
@@ -66,6 +71,7 @@
   }
 
   async function remove(gain: number): Promise<void> {
+    if (locked) return;
     const before = rows;
     busy = true;
     error = null;
@@ -94,7 +100,7 @@
             variant="ghost"
             tooltip="top"
             tooltipText="Remove (Undo for 6 s)"
-            disabledReason={busy ? 'saving' : null}
+            disabledReason={locked ?? (busy ? 'saving' : null)}
             onclick={() => void remove(r.gain)}
           />
         </li>
@@ -102,21 +108,21 @@
     </ul>
   {:else}
     <p class="empty">
-      Empty: the telescope profile's measured value (at a measured or scaled gain), else the
-      driver's, else the sensor reference curve.
+      Empty: the next sources in the help above, in its order.
     </p>
   {/if}
   <div class="add">
-    <input class="num" type="text" inputmode="numeric" placeholder="Gain" aria-label="Gain setting" bind:value={gainText} />
-    <input class="num" type="text" inputmode="decimal" placeholder="e⁻/ADU" aria-label="Electrons per ADU" bind:value={egainText}
+    <input class="num" type="text" inputmode="numeric" placeholder="Gain" aria-label="Gain setting" readonly={!!locked} aria-disabled={!!locked || undefined} bind:value={gainText} />
+    <input class="num" type="text" inputmode="decimal" placeholder="e⁻/ADU" aria-label="Electrons per ADU" readonly={!!locked} aria-disabled={!!locked || undefined} bind:value={egainText}
       onkeydown={(e) => {
         if (e.key === 'Enter') {
           e.preventDefault();
-          void add();
+          if (!locked) void add();
         }
       }} />
-    <Control icon="add" label="Add" showLabel size="xs" variant="secondary" busy={busy} onclick={() => void add()} />
+    <Control icon="add" label="Add" showLabel size="xs" variant="secondary" busy={busy} disabledReason={locked} onclick={() => void add()} />
   </div>
+  {#if locked}<p class="locked">{locked}</p>{/if}
   {#if error}<p class="error" role="alert">{error}</p>{/if}
 </div>
 
@@ -145,6 +151,31 @@
     color: var(--text-muted);
     font-size: var(--text-xs);
     line-height: var(--input-h);
+  }
+  /* Unavailable with a reason (a run, S84): muted, read-only, still focusable (NumberField). */
+  .add input[aria-disabled='true'] {
+    border-color: var(--border-soft);
+    background: transparent;
+    color: var(--fg-disabled);
+    cursor: not-allowed;
+  }
+  /* The run lock's reason, as a settings row's (hollow ring, never cut: BRAND 8). */
+  .locked {
+    margin: var(--space-1) 0 0;
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    line-height: 16px;
+    overflow-wrap: anywhere;
+  }
+  .locked::before {
+    content: '';
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 6px;
+    border-radius: var(--radius-round);
+    vertical-align: 1px;
+    box-shadow: inset 0 0 0 1.5px var(--fg-muted);
   }
   .add {
     display: grid;

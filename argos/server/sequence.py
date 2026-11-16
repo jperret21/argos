@@ -86,6 +86,26 @@ GEOMETRY_KEYS = (
     "photometry.annulus_in_px",
     "photometry.annulus_out_px",
 )
+#: The noise model's settings, locked during a run as the geometry is (S84): the model, the
+#: read noise and the observer's two inputs of the camera's e-/ADU (the gain table, the
+#: photon-transfer folder: S73's chain) set the SNR the gates read (S35, S56, S58, S69) and
+#: the formal errors of every point. The release core's ``params.NOISE_MODEL_KEYS``
+#: (tests/server/test_sequence.py checks they agree).
+NOISE_MODEL_KEYS = (
+    "photometry.noise_model",
+    "photometry.read_noise_e",
+    "camera.egain_table",
+    "data_paths.camera_calibration_directory",
+)
+#: Why each locked group cannot change during a run (the 409's words, and the web
+#: Settings page's).
+GEOMETRY_LOCK_REASON = (
+    "The aperture geometry is locked while a sequence runs (one curve, one aperture)."
+)
+NOISE_MODEL_LOCK_REASON = (
+    "The noise model and the camera's e-/ADU are locked while a sequence runs (one curve, "
+    "one error model)."
+)
 
 #: sequence_worker.py:47 — the longest wait for the wheel to settle.
 FILTER_SETTLE_S = 20.0
@@ -1915,7 +1935,7 @@ class SequenceService:
             thread.join(SHUTDOWN_JOIN_S)
 
     # ------------------------------------------------------------------
-    # Interlock (PROPOSAL §7, D2) and the geometry lock (S15)
+    # Interlock (PROPOSAL §7, D2), the geometry lock (S15) and the noise-model lock (S84)
     # ------------------------------------------------------------------
 
     def guard_motion(self, action: str, pause_run: bool = False) -> None:
@@ -1972,22 +1992,26 @@ class SequenceService:
             return max(0.0, exposure - elapsed) + 60.0
 
     def guard_config(self, changes: Any) -> None:
-        """``PATCH /api/config`` during a run: the aperture geometry is locked (S15)."""
+        """``PATCH /api/config`` during a run: the aperture geometry (S15) and the noise
+        model (S84) are locked; nothing of the PATCH is written."""
         if not isinstance(changes, dict):
             return
-        keys = sorted(k for k in changes if k in GEOMETRY_KEYS)
-        if not keys:
+        geometry = sorted(k for k in changes if k in GEOMETRY_KEYS)
+        noise = sorted(k for k in changes if k in NOISE_MODEL_KEYS)
+        if not geometry and not noise:
             return
         with self._hub._lock:
             if self._state not in ACTIVE:
                 return
-            details = {"state": self._state, "run_id": self._record.get("run_id"), "keys": keys}
-        raise ApiError(
-            409,
-            "run_active",
-            "The aperture geometry is locked while a sequence runs (one curve, one aperture).",
-            details=details,
+            details = {
+                "state": self._state,
+                "run_id": self._record.get("run_id"),
+                "keys": geometry + noise,
+            }
+        reasons = ([GEOMETRY_LOCK_REASON] if geometry else []) + (
+            [NOISE_MODEL_LOCK_REASON] if noise else []
         )
+        raise ApiError(409, "run_active", " ".join(reasons), details=details)
 
     # ------------------------------------------------------------------
     # Preflight (A64)
@@ -2555,6 +2579,9 @@ def _night_frames(sessions: Path, night_start: datetime) -> list[tuple[str, floa
 __all__ = [
     "ACTIVE",
     "GEOMETRY_KEYS",
+    "GEOMETRY_LOCK_REASON",
+    "NOISE_MODEL_KEYS",
+    "NOISE_MODEL_LOCK_REASON",
     "MOTION_LOCKED",
     "SequenceService",
     "observation_payload",
