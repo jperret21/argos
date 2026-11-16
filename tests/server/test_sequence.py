@@ -688,6 +688,27 @@ def test_a_sub_is_measured_with_the_frame_its_solution_was_solved_on_s56(seq, mo
         assert request.solved_seq == 41 and request.solved_raw is raw  # None before
 
 
+def test_a_sub_is_measured_at_its_steps_gain_s83(seq, monkeypatch):
+    """Release S83 (technical review): a sub's photometry took the e-/ADU at the Camera
+    form's gain while its FITS EGAIN and a later re-run (S70) take the step's. Since S73
+    they differ (0.228 at gain 80, 0.181 at 100). The request carries the step's gain."""
+    from argos.core.catalog.targets import TargetSet, TargetStar
+
+    TargetSet(
+        object_name="SYN Var",
+        stars=[TargetStar("target", 291.0, 42.0, name="SYN Var", source="vsx")],
+    ).save(seq.sessions_path / "targets" / "SYN_Var.json")
+    wcs, raw = object(), np.zeros((4, 4), dtype=np.uint16)
+    monkeypatch.setattr(seq.hub.field, "reference_with_frame", lambda: (wcs, 7, 41, raw))
+    requests: list = []
+    monkeypatch.setattr(seq.hub.photometry, "measure_saved_frame", requests.append)
+    put_plan(seq, steps=[light(count=1, gain=100), light(count=1)])
+    start(seq)
+    assert wait_state(seq, "idle")["last_result"]["completed"]
+    assert [r.gain for r in requests] == [100, 80]  # the form's for both before
+    assert seq.hub.targets.egain(100) != seq.hub.targets.egain(80)
+
+
 # -- the simulator replay source ---------------------------------------------------------
 
 

@@ -426,3 +426,30 @@ def test_place_search_cancels_during_a_request(client):
     assert time.monotonic() - started < 2.0
     assert job["result"] is None
     gate.set()
+
+
+def test_every_key_of_a_settings_page_s_category_is_shown_somewhere() -> None:
+    """S72 (technical review): ``photometry.noise_model`` was registered in the photometry
+    category, counted by the Settings filter and reset by "Restore defaults", but the
+    Photometry page names its keys one by one and left it out: the observer could
+    neither see nor change the model the owner made the default. Every key of a
+    category whose page names its keys must be named in the Settings UI.
+    ``site.min_altitude_deg`` (Plan's visibility, the Watch bar) is a known gap of the
+    Observer & site page, outside this pass (web/spec/progress.md W7, S73-S80)."""
+    from argos.server.config_meta import KEYS
+
+    settings = Path(__file__).resolve().parents[2] / "web" / "src" / "lib" / "settings"
+    pages = {p.name: p.read_text() for p in (settings / "pages").glob("*.svelte")}
+    everywhere = "".join(p.read_text() for p in settings.rglob("*.svelte"))
+    category = {m.key: m.category for m in KEYS}
+    known_gaps = {"site.min_altitude_deg"}
+    orphans = []
+    for text in pages.values():
+        named = {key for key in category if f"'{key}'" in text}
+        for cat in {category[key] for key in named}:
+            orphans += [
+                key
+                for key, c in category.items()
+                if c == cat and f"'{key}'" not in everywhere and key not in known_gaps
+            ]
+    assert orphans == []

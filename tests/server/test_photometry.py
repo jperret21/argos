@@ -1065,6 +1065,63 @@ def test_identifying_the_field_keeps_the_check_star(make_client, tmp_path, monke
     assert [s.auid for s in tset.by_role("comparison")] == ["000-CMP-1", "000-CMP-2", "000-CMP-3"]
 
 
+def test_the_pilot_measures_comparisons_with_the_noise_model_s72(
+    make_client, tmp_path, monkeypatch
+):
+    """Release S72 (parity, main session's server leftover): ``_pilot_comparison_quality``
+    passes the noise model's black level and plane pixels to ``measure_aperture``; the
+    server's pilot did not, so with the green-plane model a pilot comparison's SNR (the
+    automatic selection's ``comparison_min_snr`` gate) was the 0.4.x model's."""
+    from types import SimpleNamespace
+
+    hub = science_client(make_client, tmp_path, connect=()).app.state.hub
+    real_get = hub.config.get
+    monkeypatch.setattr(
+        hub.config,
+        "get",
+        lambda key, default=None: (
+            "green_plane" if key == "photometry.noise_model" else real_get(key, default)
+        ),
+    )
+    params = hub.targets.params(0.228)
+    if params.plane_pixels != 2:  # GUARD: a core without S72's model
+        pytest.skip("the core has no green-plane noise model")
+    yy, xx = np.mgrid[0:120, 0:120]
+    rng = np.random.default_rng(72)
+    plane = 1200.0 + 400.0 * np.exp(-((xx - 60.0) ** 2 + (yy - 60.0) ** 2) / (2 * 1.3**2))
+    raw = np.zeros((240, 240))
+    raw[0::2, 0::2] = plane + rng.normal(0.0, 25.0, plane.shape)
+    raw[1::2, 1::2] = plane + rng.normal(0.0, 25.0, plane.shape)
+    raw[0::2, 1::2] = raw[1::2, 0::2] = 1200.0
+
+    class _Wcs:
+        def world_to_pixel_deg(self, ra_deg, dec_deg):
+            return 60.0, 60.0
+
+    pilot = SimpleNamespace(raw=raw, wcs=_Wcs(), egain=0.228)
+    phot = hub.targets.pilot_measure(pilot)(10.0, 20.0)
+    assert phot is not None
+    from argos.server.field_measure import FrameMeasurer
+
+    m = FrameMeasurer(raw)
+    c = m.measure_star_at(60.0, 60.0, radius=max(2, int(round(params.aperture_px(3.0)))), search=3)
+    r_ap = params.aperture_px(hub.targets._series_fwhm() or 3.0)
+    expected = measure_aperture(
+        m.green,
+        c.x,
+        c.y,
+        r_ap,
+        max(params.annulus_in_px, r_ap + 1.0),
+        max(params.annulus_out_px, max(params.annulus_in_px, r_ap + 1.0) + 2.0),
+        egain=params.egain,
+        read_noise_e=params.read_noise_e,
+        sat_adu=params.sat_adu,
+        black_adu=params.black_adu,
+        plane_pixels=params.plane_pixels,
+    )
+    assert phot.snr == expected.snr  # the 0.4.x model's SNR before the fix
+
+
 _BJD_OFFLINE = """
 import json, warnings
 warnings.simplefilter("ignore")
@@ -1324,14 +1381,15 @@ def test_a_set_change_never_re_anchors_on_a_stale_solution_s52(phot_client, monk
     raw = synthetic_raw(0, drift=False)
 
     def sub(i: int, dx: float) -> int:
-        # The field drifts east; a field star rides along 30 px west of C1, so it
-        # sits 5 px from C1's solved position once the field has moved 30 px.
-        frame = _add_star(np.roll(raw, int(2 * dx), axis=1), 16.0 + dx, 41.0, 10.0)
+        # The field drifts east; a field star rides along 22 px west of C1, so it
+        # sits 4 px from C1's solved position once the field has moved 26 px (every
+        # star's 12 px sky annulus stays on the 200 px plane: S81).
+        frame = _add_star(np.roll(raw, int(2 * dx), axis=1), 20.0 + dx, 41.0, 10.0)
         when = T0 + timedelta(minutes=i)
         request = MeasureRequest(i + 1, frame, GREEN_WCS, when, 1, fwhm=2.4, origin="sequence")
         return hub.photometry.measure(request)
 
-    for i, dx in enumerate((0.0, 10.0, 20.0, 30.0)):  # the tracker follows the drift
+    for i, dx in enumerate((0.0, 9.0, 18.0, 26.0)):  # the tracker follows the drift
         assert sub(i, dx) == 6
     assert not hub.field._resolve_due_flag
 
@@ -1339,10 +1397,10 @@ def test_a_set_change_never_re_anchors_on_a_stale_solution_s52(phot_client, monk
     hub.targets.reload()  # the set changes between solves: C5 added
     assert hub.field._resolve_due_flag  # in a run, the next sub is solved at once
 
-    assert sub(4, 30.0) == 7
+    assert sub(4, 26.0) == 7
     x, y = placed[-1]
-    # True position (130, 80): about (104, 83), on blank sky, before the fix.
-    assert math.hypot(x - 130.0, y - 80.0) < 5.0
+    # True position (126, 80): about (100, 80), on blank sky, before the fix.
+    assert math.hypot(x - 126.0, y - 80.0) < 5.0
     assert hub.photometry._tracker.anchors_used >= 3
 
 
@@ -1511,9 +1569,12 @@ def _measure_target(hub, seq: int, raw, solved_seq, *, reset: bool = False) -> b
 def test_a_few_anchor_lock_near_a_fresh_solution_is_verified_s56(phot_client):
     """Release S56 as amended (2026-11-15): with 1-2 anchors a frame is verified when
     it is measured through a solution of this sub or the previous one and the
-    tracker moved no aperture 2 px or more from where it puts it (XX Cyg 2026-08-29
+    tracker moved no aperture 10 px or more from where it puts it (XX Cyg 2026-08-29
     050148Z: 2 anchors, all 22 points flagged before, 21 within 2 px of the star).
-    No re-solve is due then. Two subs after the solve, or 3 px from it: flagged."""
+    No re-solve is due then. Two subs after the solve: flagged. The threshold was 2 px
+    until 2026-11-16 (6 px flagged): the converged tracker (S69) sees the owner's
+    fields move 4-7.5 px between subs (10 px or more: the Qt engine's test; here the
+    field would leave the tracker's search radius)."""
     _two_anchor_set(phot_client)
     hub = phot_client.hub
     raw = synthetic_raw(0, drift=False)
@@ -1527,7 +1588,7 @@ def test_a_few_anchor_lock_near_a_fresh_solution_is_verified_s56(phot_client):
     hub.field._resolve_due_flag = False
     assert _measure_target(hub, 3, raw.copy(), 1) is True  # two subs after it
     assert hub.field._resolve_due_flag
-    for seq, (shift, flagged) in enumerate(((1, False), (3, True)), start=10):
+    for seq, (shift, flagged) in enumerate(((1, False), (6, False)), start=10):
         hub.field._resolve_due_flag = False
         moved = np.roll(raw, 2 * shift, axis=1)  # the field drifted ``shift`` green px
         assert _measure_target(hub, seq, moved, seq - 1, reset=True) is flagged, shift
@@ -1827,3 +1888,141 @@ def test_an_off_centre_comparison_leaves_the_ensemble_s69(phot_client):
     assert not target["points"][-1]["suspect"]
     assert _star(live["curves"], "000-SYN-C4")["points"][-1]["suspect"]
     assert any("more than 1 px from the aperture centre" in m for m in log_messages(phot_client))
+
+
+# -- the live path's S74, S77, S78 and S83 ports (technical review: no test failed
+# -- without them). GUARD: each needs release/0.5.0's core.
+
+
+def _spy_measure(monkeypatch) -> list:
+    """Record the set and params each live ``measure_frame`` call receives."""
+    import argos.server.photometry as sp
+
+    seen: list = []
+    real = sp.measure_frame
+
+    def spy(green, wcs, tset, params, **kwargs):
+        seen.append((tset, params))
+        return real(green, wcs, tset, params, **kwargs)
+
+    monkeypatch.setattr(sp, "measure_frame", spy)
+    return seen
+
+
+def _mount_at(hub, monkeypatch, ra_deg, dec_deg, when, site):
+    """The connected mount points at (ra, dec) from ``site`` at ``when`` (X1 Pointing)."""
+    import argos.server.photometry as sp
+    from argos.core.imaging.sky_geometry import horizontal_at
+    from argos.core.photometry.airmass import julian_date
+    from argos.server.capture import Pointing
+
+    alt, az = horizontal_at(julian_date(when), ra_deg / 15.0, dec_deg, *site)
+    monkeypatch.setattr(hub, "_pointing", lambda: Pointing(ra_deg / 15.0, dec_deg, alt, az))
+    monkeypatch.setattr(sp, "_utcnow", lambda: when)
+    return alt
+
+
+def test_the_live_port_measures_a_star_at_the_frames_date_s77(phot_client, monkeypatch):
+    """S77 (release ``_measure_photometry``'s ``tset.at_jd``): a target with a proper
+    motion is measured where it is on the frame's date, not at its J2000.0 position."""
+    if not hasattr(TargetStar, "at_jd"):
+        pytest.skip("GUARD: needs release/0.5.0's core (S77)")
+    from argos.core.photometry.airmass import julian_date
+
+    tset = target_set()
+    ra, dec = sky(100.0, 80.0)
+    moving = replace(
+        tset.stars[0],
+        pm_ra_mas_yr=-500.0,
+        pm_dec_mas_yr=-900.0,
+        pm_epoch=2000.0,
+        pm_source="Gaia DR3",
+    )
+    tset = TargetSet(object_name=OBJECT, stars=[moving] + list(tset.stars[1:]))
+    tset.save(phot_client.sessions_path / "targets" / "SYN_Var.json")
+    set_object(phot_client)
+    seen = _spy_measure(monkeypatch)
+
+    phot_client.hub.photometry.measure(MeasureRequest(1, synthetic_raw(0), GREEN_WCS, T0, 1))
+
+    measured = seen[0][0].stars[0]
+    expected = moving.at_jd(julian_date(T0))
+    assert (measured.ra_deg, measured.dec_deg) == (expected.ra_deg, expected.dec_deg)
+    assert abs(measured.dec_deg - dec) * 3600.0 > 20.0  # the J2000.0 position before
+
+
+def test_the_live_port_adds_the_frames_scintillation_s74(phot_client, monkeypatch):
+    """S74 (release ``_with_frame_scintillation``): a camera frame's errors carry the
+    scintillation of its exposure at the mount's airmass."""
+    from argos.core.photometry.params import PhotometryParams
+
+    if not hasattr(PhotometryParams, "with_frame"):
+        pytest.skip("GUARD: needs release/0.5.0's core (S74)")
+    from argos.core.photometry.airmass import airmass_from_altitude
+
+    target_set().save(phot_client.sessions_path / "targets" / "SYN_Var.json")
+    set_object(phot_client)
+    hub = phot_client.hub
+    ra, dec = sky(100.0, 80.0)
+    alt = _mount_at(hub, monkeypatch, ra, dec, T0, (SITE["latitude"], SITE["longitude"]))
+    seen = _spy_measure(monkeypatch)
+
+    request = MeasureRequest(
+        1, synthetic_raw(0), GREEN_WCS, T0, 1, origin="camera", exposure_s=10.0
+    )
+    hub.photometry.measure(request)
+
+    params = seen[0][1]
+    assert params.exposure_s == 10.0
+    assert params.airmass == pytest.approx(airmass_from_altitude(alt))
+    assert params.scint_frac() > 0.005  # 0 before: no exposure, no airmass
+
+
+def test_the_live_port_takes_the_site_fitted_to_the_mount_s78(phot_client, monkeypatch):
+    """S78 and its amendment (release ``_note_mount_pointing``, ``_settings_site_
+    reproduces``): the Settings site is 20° from the telescope here. Until 3 pointings
+    span 10 minutes no site is fitted and every star takes the mount's airmass (the
+    field centre's), never that site's; then each takes its own at the fitted site."""
+    from argos.core.imaging import sky_geometry
+
+    if not hasattr(sky_geometry, "SiteFit"):
+        pytest.skip("GUARD: needs release/0.5.0's core (S78)")
+    from argos.core.photometry.airmass import airmass_at, airmass_from_altitude
+
+    target_set().save(phot_client.sessions_path / "targets" / "SYN_Var.json")
+    set_object(phot_client)
+    hub = phot_client.hub
+    true_site = (SITE["latitude"], SITE["longitude"] + 20.0)
+    ra, dec = sky(100.0, 80.0)
+    mount = []
+    for i, minute in enumerate(range(0, 16, 3)):
+        when = T0 + timedelta(minutes=minute)
+        mount.append(_mount_at(hub, monkeypatch, ra, dec, when, true_site))
+        hub.photometry.measure(
+            MeasureRequest(i + 1, synthetic_raw(i), GREEN_WCS, when, 1, origin="camera")
+        )
+
+    live = phot_client.get("/api/photometry/live", headers=AUTH).json()
+    check = next(c for c in live["curves"] if c["role"] == "check")
+    kra, kdec = sky(100.0, 132.0)
+    first, last = check["points"][0], check["points"][-1]
+    assert first["airmass"] == pytest.approx(airmass_from_altitude(mount[0]), abs=1e-4)
+    assert abs(last["airmass"] - airmass_at(last["jd_utc"], kra, kdec, *true_site)) < 5e-4
+
+
+def test_the_live_port_takes_the_egain_at_the_frames_own_gain_s83(phot_client, monkeypatch):
+    """S83 (release ``_egain`` at ``_last_gain``): a sub or camera frame taken at gain
+    100 with the Camera form at 80 was measured with the form's e-/ADU."""
+    target_set().save(phot_client.sessions_path / "targets" / "SYN_Var.json")
+    set_object(phot_client)
+    hub = phot_client.hub
+    assert int(hub._capture_settings.gain) == 80
+    seen = _spy_measure(monkeypatch)
+
+    for i, gain in enumerate((100, None)):
+        request = MeasureRequest(i + 1, synthetic_raw(i), GREEN_WCS, T0, 1, origin="sequence")
+        hub.photometry.measure(replace(request, gain=gain))
+
+    assert float(seen[0][1].egain) == pytest.approx(float(hub.targets.egain(100)))
+    assert float(seen[1][1].egain) == pytest.approx(EGAIN)  # the form's 80: the table's
+    assert float(hub.targets.egain(100)) != pytest.approx(EGAIN)

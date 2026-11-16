@@ -264,7 +264,7 @@ def _qt_batch(request, out: Path):
 
     tr._QT.append(QApplication.instance() or QApplication([]))
     box = []
-    qt = qt_worker.PhotometryBatchWorker(qt_worker.BatchRequest(**vars(request(out))))
+    qt = qt_worker.PhotometryBatchWorker(tr.qt_request(qt_worker, request(out)))
     qt.finished_batch.connect(box.append)
     qt.run()
     return box[0]
@@ -340,7 +340,7 @@ def test_a_re_run_on_a_wrong_settings_site_takes_the_header_airmass_s66(tmp_path
 
     tr._QT.append(QApplication.instance() or QApplication([]))
     box = []
-    qt = qt_worker.PhotometryBatchWorker(qt_worker.BatchRequest(**vars(request(tmp_path / "qt"))))
+    qt = qt_worker.PhotometryBatchWorker(tr.qt_request(qt_worker, request(tmp_path / "qt")))
     qt.finished_batch.connect(box.append)
     qt.run()
     names = sorted(p.name for p in (tmp_path / "qt").glob("*.csv"))
@@ -351,7 +351,6 @@ def test_a_re_run_on_a_wrong_settings_site_takes_the_header_airmass_s66(tmp_path
 
 def test_a_vsp_answer_names_the_chart_of_comparisons_kept_without_one_s68(client_root):
     from argos.core.catalog.aavso import Band, ComparisonStar
-    from argos.server.field import backfill_chart_ids
 
     hub = client_root.hub
     tset, path = hub.targets._current()
@@ -367,12 +366,12 @@ def test_a_vsp_answer_names_the_chart_of_comparisons_kept_without_one_s68(client
     hub.targets.reload()
     answer = [ComparisonStar("000-AAA-001", 300.1, 22.4, "114", (Band("V", 11.4),), chart_id="X7")]
 
-    assert backfill_chart_ids(hub, answer) == 1
+    assert hub.targets.backfill_chart_ids(answer) == 1  # TargetService's own (was field.py's)
 
     assert [s.chart_id for s in TargetSet.load(path).by_role("comparison")] == ["X7"]
     record = hub.targets.record()
     assert [s["chart_id"] for s in record["stars"] if s["role"] == "comparison"] == ["X7"]
-    assert backfill_chart_ids(hub, answer) == 0
+    assert hub.targets.backfill_chart_ids(answer) == 0
 
 
 def test_rules_keep_a_floor_that_is_not_the_automatic_one(client_root):

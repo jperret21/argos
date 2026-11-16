@@ -161,7 +161,7 @@ class OpenedFrame:
         bayer: str | None,
         pointing: tuple[float, float] | None = None,
         epoch: datetime | None = None,
-        gain_header: dict[str, Any] | None = None,
+        gain_header: Any = None,
         filter_name: str | None = None,
     ) -> None:
         self.pixels = pixels
@@ -245,6 +245,26 @@ def load_raw_fits_frame(path: Path) -> OpenedFrame:
         bayer=str(bayer).strip() or None if bayer else None,
         pointing=header_hint(header),
         epoch=mid,
-        gain_header={key: header.get(key) for key in ("GAIN", "EGAIN")},
+        # S73: TELESCOP names the camera whose measured e-/ADU the frame takes; S74: its
+        # exposure, airmass and site height for the scintillation.
+        gain_header=_gain_header(header),
         filter_name=(str(header.get("FILTER")).strip() if header.get("FILTER") else None),
     )
+
+
+def _gain_header(header) -> Any:
+    """The cards of an opened frame's header its e-/ADU and scintillation read (S41, S73,
+    S74): ``GAIN``, ``EGAIN`` (with its comment: an EGAIN the observer's
+    ``camera.egain_table`` wrote is kept, ``hardware.egain.of_frame``), ``TELESCOP``,
+    ``EXPTIME``, ``AIRMASS`` and ``SITEELEV``; a plain dict lost that comment, and an
+    S30 Pro frame at gain 80 took 0.228 where Qt kept the table's value."""
+    from astropy.io import fits
+
+    out = fits.Header()
+    for key in ("GAIN", "EGAIN", "TELESCOP", "EXPTIME", "AIRMASS", "SITEELEV"):
+        if key in header:
+            try:
+                out[key] = (header[key], header.comments[key])
+            except (KeyError, IndexError, ValueError):
+                out[key] = header[key]
+    return out

@@ -117,13 +117,13 @@ LOCK_VERIFY_MIN_ANCHORS = 3
 #: ...unless the frame is measured through a solution of this sub or the previous one
 #: and the tracker moved no aperture of the set this many green px or more from where
 #: that solution puts it (release ``_LOCK_FRESH_MAX_SHIFT_PX``, S56 as amended).
-LOCK_FRESH_MAX_SHIFT_PX = 2.0
+LOCK_FRESH_MAX_SHIFT_PX = 10.0  # S56 as amended on 2026-11-16 (it was 2 px)
 #: S56 (release ``lock_unverified_text``), once per episode: until a verified frame,
 #: a slew or invalidation, or a set change.
 LOCK_UNVERIFIED_TEXT = (
     "Photometry: only {n} anchor star{s} steer the apertures — the lock cannot be"
     " verified; points are flagged suspect while fewer than 3 anchor stars steer the"
-    " apertures (except within 2 px of a solution of this sub or the previous one)."
+    " apertures (except within 10 px of a solution of this sub or the previous one)."
     " Re-solving."
 )
 #: S69 (b) (release ``off_centre_text``), once per episode: until a frame with none.
@@ -148,6 +148,14 @@ def s69_core():
     return None
 
 
+def _new_site_fit():
+    """S78: a ``SiteFit`` (GUARD: None before the release core has it)."""
+    from argos.core.imaging import sky_geometry
+
+    fit = getattr(sky_geometry, "SiteFit", None)
+    return fit() if fit is not None else None
+
+
 def set_neighbours(tset) -> dict:
     """S69 (GUARD: :func:`s69_core`): ``neighbours=`` the set's stars, targets included,
     for ``select_tracking_anchors`` and ``centring_offsets`` (a star beside a brighter
@@ -163,9 +171,16 @@ def centred_anchors(anchor_stars, tracker, offsets) -> int:
     if core is None:
         return len(anchor_stars)
     bad = core.off_centre(offsets or {})
-    rejected = getattr(tracker, "rejected_anchor", None)
+    # S80: every anchor the fit rejected (``rejected_anchors``); GUARD: a core before it
+    # rejects one at most (``rejected_anchor``).
+    rejected = getattr(tracker, "rejected_anchors", None)
+    if rejected is None:
+        one = getattr(tracker, "rejected_anchor", None)
+        rejected = frozenset() if one is None else frozenset({one})
     return sum(
-        1 for index, star in enumerate(anchor_stars) if star.key() not in bad and index != rejected
+        1
+        for index, star in enumerate(anchor_stars)
+        if star.key() not in bad and index not in rejected
     )
 
 
@@ -459,6 +474,14 @@ class MeasureRequest:
     origin: str = "live"  # the frame's origin; "file" = Open FITS (another night)
     reset_tracker: bool = False  # a new solution: rebuild the tracker first
     egain: float | None = None  # an opened frame's own e-/ADU (frame_egain, S41)
+    #: S83: a camera frame's gain setting: the live chain's e-/ADU at it (the Camera
+    #: form's when None).
+    gain: int | None = None
+    #: S74: an opened frame's ``EXPTIME``, ``AIRMASS`` and ``SITEELEV``
+    #: (``frame_scintillation_inputs``); None: a camera frame.
+    scintillation: dict | None = None
+    #: S74: a camera frame's exposure (s); None: the Camera form's.
+    exposure_s: float | None = None
     #: The frame's filter (S49): a sub's read-back FILTER, an opened file's FILTER
     #: card, a live frame's Camera form; None: the wheel's settled slot, else the form.
     filter_name: str | None = None
@@ -491,6 +514,14 @@ class PhotometryService:
         #: P7: the series FWHM (green px), frozen on the first measured frame.
         self._phot_fwhm: float | None = None
         self._tracker: ApertureTracker | None = None
+        #: S78 (release ``_site_fit``; GUARD: ``sky_geometry.SiteFit``): the mount's
+        #: pointings of the measured frames and the site fitted to them.
+        self._site_fit = _new_site_fit()
+        #: S78 amended (release ``_mount_key`` / ``_mount_since`` / ``_mount_frozen``):
+        #: the last pointing added, since when it repeats, and whether it is frozen (X1).
+        self._mount_key: tuple | None = None
+        self._mount_since: float | None = None
+        self._mount_frozen = False
         self._tracker_anchors = 0  # anchor stars the tracker was built with
         self._tracker_anchor_stars: list = []  # ...and which (the S48 lock check)
         #: The solution the tracker was built on (the request's raw WCS, and that
@@ -987,6 +1018,22 @@ class PhotometryService:
             self._preview_csv[key] = path
         return path
 
+    def _with_frame_scintillation(
+        self, params: PhotometryParams, request: MeasureRequest, air: float | None
+    ) -> PhotometryParams:
+        """S74's inputs (``AcquisitionEngine._with_frame_scintillation``): an opened
+        frame's header, else its exposure (the Camera form's when unknown), the mount's
+        airmass and the Settings site. GUARD: a core before S74 has no ``with_frame``."""
+        if not hasattr(params, "with_frame"):
+            return params
+        if request.origin == "file":
+            return params.with_frame(**(request.scintillation or {}))
+        exposure = request.exposure_s
+        if exposure is None:
+            with self._hub._lock:
+                exposure = getattr(self._hub._capture_settings, "exposure_s", None)
+        return params.with_frame(exposure_s=exposure, airmass=air)
+
     def _frame_fwhm(self, request: MeasureRequest) -> float | None:
         """The measured frame's mean FWHM (green px): Qt's ``_last_fwhm``.
 
@@ -1225,18 +1272,30 @@ class PhotometryService:
         frame_fwhm = self._frame_fwhm(request)
         token = filter_token(self._frame_filter(request))  # one curve per (star, filter): S49
         # An opened frame's errors use its own e-/ADU (S41), else the live chain.
-        egain = request.egain if request.egain is not None else self._hub.targets.egain()
+        egain = (
+            request.egain if request.egain is not None else self._hub.targets.egain(request.gain)
+        )
         params = PhotometryParams.from_config(self._hub.config.get, egain=egain)
         green = green_plane(request.raw)
         jd = julian_date(request.epoch)
+        selection = tset
+        # S77 (GUARD: ``TargetSet.at_jd``): every star with a proper motion at the
+        # frame's date; the apertures, anchors and lock and centring checks place it there.
+        at_jd = getattr(tset, "at_jd", None)
+        tset = at_jd(jd) if at_jd is not None else tset
         t_iso = utc_iso(request.epoch)
         # The mount says where it points now: never the airmass of an opened
         # frame from another night (S34, fixed for 0.5.0).
         pointing = None if request.origin == "file" else self._hub._pointing()
         air = airmass_from_altitude(pointing.alt_deg) if pointing is not None else None
+        star_site = self._note_mount_pointing(pointing)  # S78
+        params = self._with_frame_scintillation(params, request, air)
         # Never the 0/0 default: without a site, the airmass is the mount's
         # (or none) and there is no BJD_TDB (X2).
         lat, lon, elev = observing_site(self._hub.config) or (None, None, 0.0)
+        # S78 amended: without a fitted site, a Settings site that does not reproduce the
+        # mount's pointing gives no star its own airmass: each takes the mount's.
+        own_airmass = star_site is not None or self._settings_site_reproduces(pointing, lat, lon)
         with self._lock:
             # The recorder first: a new object resets the series FWHM, which is
             # then frozen on THIS frame (P7; S31: Qt froze it before the reset).
@@ -1362,7 +1421,18 @@ class PhotometryService:
                 green, tracked, tset, params, fwhm=fwhm, on_star=on_star, **exclude
             )
             tracker = self._tracker if params.track_apertures else None
-            diag.record("frame", frame=frame_no, jd_utc=jd, airmass=air, fwhm=fwhm)
+            diag.record(
+                "frame",
+                frame=frame_no,
+                jd_utc=jd,
+                airmass=air,
+                fwhm=fwhm,
+                **(  # S73: the e-/ADU and where it came from (GUARD: a core before it)
+                    {"egain": float(params.egain), "egain_source": params.egain_source}
+                    if hasattr(params, "egain_source")
+                    else {}
+                ),
+            )
             kept = 0
             target_point: dict[str, Any] | None = None
             for res in results:
@@ -1384,7 +1454,18 @@ class PhotometryService:
                 # S69 (b): an off-centre comparison or check star's own point is suspect.
                 flagged = unverified or bool(excluded and res.star.key() in excluded)
                 point = self._emit_live_point(
-                    tset, res, jd, air, fwhm, (lat, lon, elev), request, t_iso, token, flagged
+                    tset,
+                    res,
+                    jd,
+                    air,
+                    fwhm,
+                    (lat, lon, elev),
+                    request,
+                    t_iso,
+                    token,
+                    flagged,
+                    airmass_site=star_site,
+                    own_airmass=own_airmass,
                 )
                 kept += 1
                 if res.star.role == ROLE_TARGET and target_point is None:
@@ -1394,7 +1475,7 @@ class PhotometryService:
                         "mag_err": _num(point.mag_err),
                         "bjd_tdb": _num(point.bjd_tdb),
                     }
-            self._write_live_quality_report(tset, request, token)
+            self._write_live_quality_report(selection, request, token)
             self._frames += 1
             self._points += kept
             r_ap = params.aperture_px(fwhm)
@@ -1430,6 +1511,52 @@ class PhotometryService:
         self.refresh_status()
         return kept
 
+    def _note_mount_pointing(self, pointing) -> tuple[float, float] | None:
+        """S78 (release ``_note_mount_pointing``): add the mount's pointing (``Pointing``:
+        RA hours, Dec, altitude, azimuth) to the site fit; the fitted site, or None. A
+        pointing more than 6 hours after the last one starts a new fit; a slewing
+        mount's is not added, nor one that repeats the last (a lost mount's frozen poll,
+        X1: frozen 60 s after it began)."""
+        fit = self._site_fit
+        self._mount_frozen = False
+        if fit is None:
+            return None
+        slewing = getattr(getattr(self._hub, "_mount_state", None), "state", None) == "slewing"
+        if pointing is not None and not slewing:
+            jd = julian_date(_utcnow())
+            key = (pointing.ra_hours, pointing.dec_deg, pointing.alt_deg, pointing.az_deg)
+            if key == self._mount_key and self._mount_since is not None:
+                self._mount_frozen = (jd - self._mount_since) * 86_400.0 >= 60.0
+                return fit.site()
+            self._mount_key, self._mount_since = key, jd
+            last = fit.last_jd
+            if last is not None and jd - last > 0.25:
+                fit = self._site_fit = _new_site_fit()
+            fit.add(jd, pointing.ra_hours, pointing.dec_deg, pointing.alt_deg, pointing.az_deg)
+        return fit.site()
+
+    def _settings_site_reproduces(self, pointing, lat, lon) -> bool:
+        """S78 amended (release ``_settings_site_reproduces``): whether the Settings site
+        gives a star its own airmass without a fitted site. True when nothing can tell
+        (no mount, a frozen pointing, no site) or before the merged core (GUARD: no
+        ``SiteFit``); else whether it reproduces the mount's pointing within 0.1°."""
+        if self._site_fit is None or pointing is None or self._mount_frozen:
+            return True
+        if lat is None or lon is None or pointing.alt_deg is None or pointing.az_deg is None:
+            return True
+        from argos.core.imaging import sky_geometry
+
+        try:
+            alt, az = sky_geometry.horizontal_at(
+                julian_date(_utcnow()), pointing.ra_hours, pointing.dec_deg, float(lat), float(lon)
+            )
+            offset = sky_geometry.angle_between_directions(
+                alt, az, pointing.alt_deg, pointing.az_deg
+            )
+        except (TypeError, ValueError):
+            return True
+        return offset <= getattr(sky_geometry, "SITE_FIT_MAX_RMS_DEG", 0.1)
+
     def _emit_live_point(
         self,
         tset,
@@ -1442,6 +1569,9 @@ class PhotometryService:
         t_iso,
         token: str = "clear",
         unverified: bool = False,
+        *,
+        airmass_site: tuple[float, float] | None = None,
+        own_airmass: bool = True,
     ) -> LcPoint:
         """``_emit_live_point`` (1700-1765): the point, its (star, filter) curve (S49),
         its CSV, its event. ``unverified``: the frame's lock rests on fewer than 3
@@ -1452,9 +1582,14 @@ class PhotometryService:
             if lat is not None and lon is not None
             else None
         )
-        # The target's own altitude at the midpoint, not the mount's (1712-1719).
-        if lat is not None and lon is not None:
-            target_air = airmass_at(jd, res.star.ra_deg, res.star.dec_deg, float(lat), float(lon))
+        # The target's own altitude at the midpoint, not the mount's (1712-1719); S78:
+        # each star's own, for the site fitted to the mount's pointing when there is one.
+        # S78 amended: ``own_airmass`` False, the mount's (the field centre's).
+        a_lat, a_lon = airmass_site if airmass_site is not None else (lat, lon)
+        if own_airmass and a_lat is not None and a_lon is not None:
+            target_air = airmass_at(
+                jd, res.star.ra_deg, res.star.dec_deg, float(a_lat), float(a_lon)
+            )
             if target_air is not None:
                 air = target_air
         point = LcPoint(

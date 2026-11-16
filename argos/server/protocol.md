@@ -1261,7 +1261,8 @@ still `400`.
    (`Light Frame`, `Dark Frame`, `Flat Frame`, `Bias Frame`), `OBJECT` (the
    observation's object name, `Unknown` when empty, as the Qt form),
    `OBSERVER`, `OFFSET`, `CCD-TEMP`, `EGAIN` (driver, else the sensor
-   reference), `READOUTM` read from the camera at save time, `SOFTWARE`
+   reference; with the release core, S73, the profile's measured e-/ADU first),
+   `READOUTM` read from the camera at save time, `SOFTWARE`
    `Argos v<version>`. Folder and name as the Qt Take shot:
    `<sessions_path>/<start UTC>_<OBJECT>/<lights|darks|flats|biases>/<OBJECT>_<filter>_<type>_e<ms>ms_g<gain>_<n>.fit`,
    never overwriting (the index grows).
@@ -2034,12 +2035,17 @@ FieldTransform = {"generation": int, "frame_seq": int|null,
     "detected"`; one anchor gives no rotation and no consistency test);
     else every star of the set (Qt's last resort).
   - Each anchor's signal baseline (core's 20 % lost-anchor test) is measured
-    on the solved frame; each centroid is taken twice, the second window
-    centred on the first (a window centred on the prediction lags a moving
-    star by about one frame px).
+    on the solved frame; each centroid is the core's converged one (S69,
+    `_converged_centroid_measurement`: re-centred on itself until it moves
+    less than 0.01 px, then in a 4 px window). Two passes kept 0.31° of lag
+    on XX Cyg 2026-09-07 `040723Z` (0.7° of field rotation per sub), 0.07°
+    now (GUARD: two passes with a core before S69). The anchors follow S69's
+    neighbour rule (a candidate beside a brighter star of the set is none).
   - With three or more anchors an update needs two anchors whose
     separations agree with the reference within 1.5 green px; a lone window
-    that slid onto another star or onto sky is no lock.
+    that slid onto another star or onto sky is no lock. The core tracker has
+    the same rule since S80 (`tracking.consistent_pairs`, used here when
+    present): every inconsistent anchor leaves the fit, not one at most.
   - A frame with no consistent anchor keeps the previous transform
     (`lost_frames` counts them, `tracking: "lost"`) and is re-acquired by
     matching the frame's detected stars to the solved frame's 300 brightest
@@ -2129,10 +2135,16 @@ Targets = {"object_name": string,         // the set's key (D11), "Unknown" when
            "geometry": {"aperture_px", "annulus_in_px", "annulus_out_px",   // green px
                         "aperture_r_px", "annulus_in_r_px", "annulus_out_r_px",  // frame px
                         "fwhm_px": float|null, "fwhm_source": "frame"|"default"},
-           "revision": int}
+           "revision": int,
+           "crowding": [string]}          // S79: one line per crowded comparison or check star
 TargetStar = {"key", "role": "target"|"comparison"|"check", "name", "display_name",
               "ra_deg", "dec_deg", "ra_hours", "auid", "source", "mags", "chart_id", "note",
-              "x": float|null, "y": float|null}   // reference frame px when solved and in frame
+              "x": float|null, "y": float|null,   // reference frame px when solved and in frame
+              "proper_motion": {"pm_ra_mas_yr": float, "pm_dec_mas_yr": float,   // S77
+                                "epoch": float, "source": string}|null,
+              "crowded": {"neighbour": string, "separation_arcsec": float,      // S79
+                          "delta_mag": float|null, "band": string|null,
+                          "radius_arcsec": float, "text": string}|null}
 TargetRoleBody = {"role": "target"|"comparison"|"check",
                   // exactly one of:
                   "selection"?: int,            // the current Selection's id (its pending_star)
@@ -2158,6 +2170,25 @@ TargetRoleBody = {"role": "target"|"comparison"|"check",
   1281-1293): a new name re-reads its own file and publishes `targets`.
   `geometry` is `photometry_geometry` (1493-1504) on the last frame's mean
   FWHM (`fwhm_source: "frame"`), else the default FWHM.
+- **Proper motion** (S77, GUARD: the release core): a field catalogue answer's
+  Gaia DR3 sources give the set's VSX/VSP stars with an AUID their proper
+  motion and Gaia's 2016.0 position (`TargetService.backfill_proper_motions`,
+  as Qt's `_on_catalog`; the object's set and the running run's
+  `targets.json` are saved, INFO "Catalog: proper motion from Gaia DR3 for N
+  star(s) of the set …"). `ra_deg`/`dec_deg` stay the catalogue's J2000.0
+  position; `x`, `y` are where the star is now, and every path that places an
+  aperture (live, sequence, re-run) measures the set at the frame's date
+  (`TargetSet.at_jd`). A Gaia source is a star's when its J2000.0 or 2016.0
+  position lies within 1" of the catalogue one, or for a star with a V, when
+  it is the one source within 6" whose G is within 1 mag of V.
+- **Crowding** (S79, GUARD): a comparison or check star with a brighter star
+  of the set (by its catalogue V, else a band both hold), or one of unknown
+  brightness (a variable), within 2 aperture radii of the series FWHM at the
+  profile's green-plane scale carries `crowded`, and `crowding` lists the
+  lines (the Field band shows them under its note line; Qt's Comparison stars
+  tab). The server logs the WARN "Comparison crowded — …" once per newly
+  crowded star (topic `photometry`), as Qt does. The separations behind the
+  Gaia match and the crowding are taken across RA 0h (S77/S79 amended).
 
 ### Centre target and Sync (A32, A33)
 
@@ -2328,7 +2359,7 @@ saturated ensemble, no comparison) gives no point that frame.
   solve is due at once as after `lock_lost` (in a run the sub in hand). WARN
   "Photometry: only 2 anchor stars steer the apertures — the lock cannot be
   verified; points are flagged suspect while fewer than 3 anchor stars steer
-  the apertures (except within 2 px of a solution of this sub or the previous
+  the apertures (except within 10 px of a solution of this sub or the previous
   one). Re-solving." once per episode (a verified frame, an invalidation or a
   set change ends it; a solve that lands does not), a `lock_unverified` event
   (`anchors`) per flagged frame in the flight recorder, `lock.verified: false`.
@@ -2378,6 +2409,25 @@ saturated ensemble, no comparison) gives no point that frame.
   an opened frame keeps its own: the table at its `GAIN`, else its `EGAIN`
   (`frame_egain`, release S41), the chain above only when it records neither.
   A Take shot's header `EGAIN` follows the same chain (release S42).
+  Once release/0.5.0's core is merged (S73, GUARD: `hardware.egain`, imported
+  when present): the telescope profile's photon-transfer e-/ADU comes after the
+  table and before the driver (S30 Pro: 0.228 ± 0.005 at gain 80, scaled by
+  0.1 dB per step over gains 0-251; elsewhere the driver, then the reference,
+  logged unverified); an opened or re-run frame of the camera its `TELESCOP`
+  names takes it at its `GAIN` instead of its `EGAIN` (the 0.8 or 1.723 the
+  0.4.x frames carry), an `EGAIN` the table wrote excepted (the opened frame's
+  `gain_header` is a `fits.Header` keeping that comment). A scaled gain carries
+  the read noise measured at gain 80 (2.6 e-), and every gain other than 80 and
+  100 is logged once "e-/ADU at gain N scaled, not measured" (S73 amended). The
+  e-/ADU is the frame's own gain's (S83): a sequence sub's step gain, a camera
+  frame's (`MeasureRequest.gain`, `Frame.gain`), the Camera form's only for a
+  frame that records none (the S54 re-pointing check and the pilot's comparison
+  quality). The value is an
+  `Egain` (a float with `source` and, measured, `read_noise_e`); the flight
+  recorder's `frame` record carries `egain` and `egain_source` (Qt and server).
+  New frames write it to `EGAIN` ("S30 Pro PTC", "S30 Pro PTC scaled") and, at
+  a measured gain, to `RDNOISE`. `OpenedFrame.gain_header` keeps `TELESCOP`,
+  `EXPTIME`, `AIRMASS` and `SITEELEV` for it and for S74.
   Once release/0.5.0's core is merged (S71, S72): the zero point is the
   comparisons' mean weighted by `1/(inst_mag_err² + 0.01²)`, clipped at 2.5
   normalised residuals about the weighted median, and its error
@@ -2388,12 +2438,23 @@ saturated ensemble, no comparison) gives no point that frame.
   `DiffResult.suspect`, read with `getattr`: GUARD). S72's noise model
   (the (G1+G2)/2 plane's: `2 × egain` e-/ADU, read noise `rn/√2` ADU, the
   telescope profile's black level `black_level_adu` subtracted from the sky
-  before its Poisson term) is in the core but off by default
-  (`photometry.noise_model`: `pixel`, the 0.4.x model; `green_plane`, S72)
-  until the owner decides the e-/ADU. The server calls the same core functions;
-  `field.py`'s comparison-quality aperture passes `black_adu` itself (GUARD:
-  `_APERTURE_TAKES_BLACK`); `targets.py`'s pilot-quality aperture
-  (`_pilot_comparison_quality`) does not yet (open: Qt's passes it).
+  before its Poisson term; the read noise measured with the profile's e-/ADU
+  when it gave it, else `photometry.read_noise_e`) is the default once the
+  release core is merged (`photometry.noise_model`: `green_plane`; `pixel`, the
+  0.4.x formula, for comparison only; the Settings key's default is the core's
+  `NOISE_MODEL_DEFAULT`, `pixel` on a core without it: GUARD). With it: S75,
+  the sky estimate's error, `n_ap (1 + (π/2) n_ap / n_sky)` sky variances (the
+  annulus median); S74, each star's scintillation, Young's formula with Osborn's
+  `C_Y = 1.5` from the profile's aperture, the frame's exposure and airmass and
+  the site's height (`PhotometryParams.with_frame`: an opened or re-run frame's
+  `EXPTIME`, `AIRMASS`, `SITEELEV`; live, the sub's exposure, the mount's
+  airmass, the Settings site; sea level when none), added in quadrature to each
+  star's `inst_mag_err` (hence the zero point's weights and every target's
+  error), never to the SNR the gates read. The server calls the same core
+  functions (`MeasureRequest.scintillation`, `exposure_s`); `field.py`'s
+  comparison-quality aperture and `targets.py`'s pilot-quality aperture
+  (`_pilot_comparison_quality`) pass `black_adu` and `plane_pixels` (GUARD:
+  `_APERTURE_TAKES_BLACK`).
 - **Errors and flags**: `formal_mag_err`; `mag_err` = `hypot(max(0,
   formal), σ_syst)` once the curve has ten valid points (or with
   `photometry.systematic_floor_mag`), recomputed for every point of the
@@ -2410,7 +2471,12 @@ saturated ensemble, no comparison) gives no point that frame.
   12° on the owner's runs); without a site no `bjd_tdb` and the
   mount's airmass for a camera frame (`null` without a mount, and `null` for an
   opened file, another night: Qt used the mount's current altitude, fixed for
-  0.5.0, `notes/release_0_5_0.md` S34).
+  0.5.0, `notes/release_0_5_0.md` S34). S78 (GUARD: the release core's
+  `SiteFit`): each star's airmass is computed for the site fitted to the mount's
+  polls of the measured frames (3 over 10 minutes, rms under 0.1°; a slewing
+  mount's poll and one that repeats the last, a lost mount's, are not added);
+  before a fit, for the Settings site only when it reproduces the mount's
+  pointing within 0.1°, else every star takes the mount's airmass (S78 amended).
 - **Files**: each curve is rewritten after every point by
   `LightCurve.to_csv` (15 columns, `lightcurve.py:14-30`; written beside the
   file and renamed over it, so a reader never sees it half written: release
@@ -2548,7 +2614,7 @@ PhotometryStatus = {"type": "photometry",
                              "seen": int,                //   showing a star (SNR ≥ 5)
                              "needed": int,              //   ceil(anchors / 2)
                              "held": bool,               //   seen ≥ needed
-                             "verified": bool}|null,     //   S56: held, and 3 anchors or more or within 2 px of a fresh solution
+                             "verified": bool}|null,     //   S56: held, and 3 anchors or more or within 10 px of a fresh solution
                                                          //   null: tracking off, S35, reset
                     "revision": int}
 ```
@@ -3844,7 +3910,15 @@ HeaderSiteCheck = {"state": "ok"|"mismatch"|"unknown", "frames": int,
   The same rule reads the run's flight recorder (S67, "Curves" below). The
   owner's runs: RR Lyr AMASS 1.033 on its first row (4.088 before; the target
   within 0.00035 of astropy at the site fitted to the mount), XX Cyg 09-07
-  and 08-29 within 0.00044 and 0.00009.
+  and 08-29 within 0.00044 and 0.00009. S78 (GUARD: the release core's
+  `fitted_site`): the header AIRMASS is the field centre's, the target's; a
+  comparison or check star's curve takes its own airmass, computed for the
+  site fitted to the lights' `RA`/`DEC`/`ALTITUDE`/`AZIMUTH` (frozen lights
+  left out; 3 lights over 10 minutes at least, rms under 0.1°), else for the
+  Settings site the lights recorded when it reproduces the mount's pointing
+  (median S66 offset within 0.1°: `settings_site_reproduces`, S78 amended),
+  else the header AIRMASS as the target (`OldFileRules.airmass_own_star`,
+  `star_airmass_site: "fitted"|"settings"|null`).
 
 ### Curves (A69, A70)
 
@@ -3861,6 +3935,8 @@ CurveSet = {"source": Source, "object": string|null, "root": path|null,
 OldFileRules = {"site_mismatch": bool, "airmass_from_header": int,
                 "airmass_computed": int,          // points left with the CSV's airmass (S66)
                 "frozen_lights": int,             // X1: lights whose pointing is frozen
+                "airmass_own_star": int,          // S78: comparison/check points, own airmass
+                "star_airmass_site": "fitted"|"settings"|null,   // S78: computed for
                 "no_detection_frames": [{"file", "frame": int, "jd_utc",
                                          "low_snr": [string],   // targets below SNR 3
                                          "zp_outlier": bool}],
@@ -3923,7 +3999,7 @@ ReviewCurve = {"key": string,                 // "<AUID, else display name>@<fil
     same recorder: fewer than 3 `star` records of role comparison or check
     with `snr` ≥ 10, not saturated, on that frame: the lock was not
     verified; every star's point of the frame. Conservative (0.5.0 still
-    verifies such a sub within 2 px of a fresh solution, which old files do
+    verifies such a sub within 10 px of a fresh solution, which old files do
     not record): on the owner's files, all 22 frames of XX Cyg 2026-08-29
     and RR Lyr frames 52 and 175 (already `zp_outlier`). Display and
     readiness only (`unverified_lock`); the export decides (A77).
@@ -4227,7 +4303,7 @@ ExportResult = {"path": path|null, "name": string, "bytes": int, "download": boo
   `software=`). `#OBSTYPE=CCD`: the AAVSO Extended File Format reports a
   CMOS camera as CCD. CHART is the comparisons' single VSP chart
   (`comparison_chart_id`); a VSP answer now names the chart of comparisons
-  kept from before 0.4.2 (`field.backfill_chart_ids`, S68), so new runs
+  kept from before 0.4.2 (`TargetService.backfill_chart_ids`, S68), so new runs
   write it; older runs' `targets.json` keep `na`.
 - **Refusals** (`refusal` in the preview, the same `409` from A78 before
   any job starts): `obscode_unset` ("Set your AAVSO observer code in
@@ -4341,7 +4417,25 @@ RerunResult = {"out_dir": path, "folder": string, "source": Source,   // open it
   `400 invalid_argument`.
 - **Stars**: the session's `targets.json` (`TargetSet.load`) or the live set
   (A51); at least one target and one comparison, else `409 no_targets` /
-  `409 no_comparisons` (Qt's texts).
+  `409 no_comparisons` (Qt's texts). S77 (GUARD): the set's VSX/VSP stars
+  without a proper motion take their Gaia DR3 one at the start
+  (`gaia_sources_for_set`, cached, online when Settings' field-star catalogue
+  is; a failure is a WARN and the catalogue positions; each cone gives up after
+  5 s, the stars after a failure are read from the cache only, and the job's
+  cancel stops the lookup between stars; the job's message reads "proper
+  motions (Gaia DR3)" meanwhile), every frame measures the set at its date, and
+  the `targets.json` written beside the CSVs carries the motions (a
+  `proper_motions` event in the recorder). S78 (GUARD): a comparison or check
+  star's airmass is its own, for the site fitted to the frames' header
+  pointing, else for the request's Settings site when it reproduces that
+  pointing within 0.1° (S78 amended; GUARD `settings_site_reproduces`), else
+  the header AIRMASS (a `star_airmass_site` event); the target's stays the
+  header AIRMASS (S66). S74: each star's scintillation takes the airmass its
+  row gets (GUARD: `measure_frame(star_airmass=…)`). S82: a frame's `OBJECT`
+  matches the set's object without SIMBAD's identifier prefixes ("V* XX Cyg" is
+  XX Cyg). S81: a star whose aperture or 12 px sky annulus runs off the frame is
+  not measured (no row), in every path.
+  S80: the recorder's `tracking` record counts `anchors_inconsistent`.
 - **Reference**: `solve` plate-solves the reference frame's green plane
   with ASTAP (`build_solve_settings(live=False)`, hinted by `OBJCTRA` /
   `OBJCTDEC`, as A74), stage `"solving the reference"`; a failure ends the
@@ -4354,10 +4448,12 @@ RerunResult = {"out_dir": path, "folder": string, "source": Source,   // open it
   first readable frame (one aperture for the run), the tracker on the
   comparisons and checks, the S43 lock check (half the anchors seen at SNR
   5), a re-solve when the field is lost, S58's verification of a lock on 1
-  or 2 anchors (a solution of this frame or the previous one within 2 px,
+  or 2 anchors (a solution of this frame or the previous one within 10 px,
   else a re-solve, else the points flagged suspect), each frame's own
-  e-/ADU (`frame_egain`, S41; the fallback is Settings' table at the
-  Camera gain, else the sensor reference, as `_engine_egain`; S70, GUARD with
+  e-/ADU (`frame_egain`, S41, S73; the fallback is Settings' table at the
+  Camera gain, the profile's measurement, else the sensor reference, as
+  `_engine_egain`; S74's exposure, airmass and height from each frame's header,
+  GUARD: `with_frame`; S70, GUARD with
   S69: in the tracker's anchors and the lock checks too, not only in the
   measurement), S69 (GUARD: the release core): a re-solve once the tracked
   rotation since the solution exceeds 2° (a failed one retried only after 2°

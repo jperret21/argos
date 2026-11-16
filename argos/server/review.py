@@ -665,6 +665,10 @@ def rules_record(rules: Any) -> dict[str, Any] | None:
         "airmass_from_header": int(rules.airmass_from_header),
         "airmass_computed": int(rules.airmass_computed),
         "frozen_lights": int(rules.frozen_lights),
+        # S78 (GUARD: a core before it has neither): comparison and check points given
+        # their own airmass, and the site it is computed for.
+        "airmass_own_star": int(getattr(rules, "airmass_own_star", 0)),
+        "star_airmass_site": getattr(rules, "star_airmass_site", None),
         "no_detection_frames": [
             {
                 "file": f.file,

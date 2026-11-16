@@ -1518,6 +1518,8 @@ class SequenceService:
                 generation=generation,
                 run_root=run_root,
                 origin="sequence",
+                gain=int(spec.gain),  # S83: its e-/ADU at the sub's gain, not the form's
+                exposure_s=float(spec.exposure_s),  # S74's scintillation
                 filter_name=filter_actual,  # its read-back FILTER: its curve (S49)
                 solved_seq=solved_seq,  # S56: fresh when seq - 1
                 solved_raw=solved_raw,  # S56: the anchors are chosen on the solved frame

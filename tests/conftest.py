@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import requests
@@ -31,6 +32,20 @@ def _isolated_argos_home(tmp_path, monkeypatch):
     monkeypatch.setattr(config_module, "_CONFIG_DIR", home)
     monkeypatch.setattr(config_module, "_CONFIG_FILE", home / "config.json")
     monkeypatch.setattr(aavso, "_CACHE_DIR", home / "cache" / "catalog")
+    # S77: the Gaia DR3 cache too, and no Gaia request leaves a test (a re-run looks up
+    # the proper motions of its VSX/VSP stars; a test that needs them passes its own).
+    from argos.core.catalog import gaia
+
+    monkeypatch.setattr(gaia, "_CACHE_DIR", home / "cache" / "gaia")
+
+    def _no_gaia_network(*_args, **_kwargs):
+        raise requests.ConnectionError("tests never reach the Gaia archive")
+
+    monkeypatch.setattr(
+        gaia,
+        "requests",
+        SimpleNamespace(post=_no_gaia_network, RequestException=requests.RequestException),
+    )
 
     # Many tests build ``Config(dict(_DEFAULTS))``: a shallow copy, so a set()
     # during the test (connect_mount stores alpaca.host) writes into the

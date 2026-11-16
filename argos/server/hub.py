@@ -87,6 +87,7 @@ from argos.core.config import observing_site
 from argos.core.hardware import active, catalog
 from argos.core.imaging.sky_geometry import compute_airmass
 from argos.core.photometry.airmass import airmass_at, julian_date
+from argos.core.photometry import params as _core_params
 from argos.core.photometry.params import frame_egain
 from argos.server import API_VERSION
 from argos.server import profiles as profile_records
@@ -2460,6 +2461,7 @@ class Hub:
                     pixels,
                     origin,
                     epoch=start + (end - start) / 2,
+                    gain=frame.gain,  # S83: its e-/ADU at its own gain, not the form's
                     filter_name=frame.filter,  # the frame's form filter (S49)
                 )
                 if log_note:
@@ -2861,6 +2863,12 @@ class Hub:
             epoch=opened.epoch,
             egain=egain,
             filter_name=opened.filter_name,  # its FILTER card: its curve (S49)
+            # S74: its exposure, airmass and site height (GUARD: a core before S74)
+            scintillation=(
+                _core_params.frame_scintillation_inputs(opened.gain_header)
+                if hasattr(_core_params, "frame_scintillation_inputs")
+                else None
+            ),
         )
         shape = "×".join(str(n) for n in (opened.pixels.shape[1], opened.pixels.shape[0]))
         self.log("info", f"Opened {p.name} ({shape})", source="camera", topic="camera")

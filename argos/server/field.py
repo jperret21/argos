@@ -84,7 +84,7 @@ from argos.server.field_solve import (
     wire_mirrored,
 )
 from argos.server.jobs import JobCancelled, JobContext
-from argos.server.photometry import MeasureRequest
+from argos.server.photometry import MeasureRequest, set_neighbours
 from argos.server.state import utc_iso
 from argos.server.targets import pending_star, star_from_pending
 
@@ -168,9 +168,13 @@ class Frame:
     epoch: datetime | None = None
     #: An opened frame's own e-/ADU (``frame_egain``, S41); None → the live chain.
     egain: float | None = None
+    #: S74: an opened frame's exposure, airmass and site height; None: a camera frame.
+    scintillation: dict | None = None
     #: The frame's filter (a live frame's Camera form, an opened file's FILTER card):
     #: its photometry curve (S49). None: unknown.
     filter_name: str | None = None
+    #: S83: a camera frame's gain setting: its e-/ADU (the Camera form's when None).
+    gain: int | None = None
 
 
 #: S50: a camera frame's solution more than this fraction from the session's first
@@ -606,6 +610,8 @@ class FieldService:
         epoch: datetime | None = None,
         egain: float | None = None,
         filter_name: str | None = None,
+        scintillation: dict | None = None,
+        gain: int | None = None,
     ) -> None:
         """A new frame was published (camera or file); latest wins on the frame thread."""
         if raw is None or getattr(raw, "ndim", 0) != 2 or self._closed:
@@ -618,6 +624,8 @@ class FieldService:
             epoch=epoch,
             egain=egain,
             filter_name=filter_name,
+            scintillation=scintillation,
+            gain=gain,
         )
         family = _origin_family(origin)
         dropped = False
@@ -1132,6 +1140,8 @@ class FieldService:
                 generation=generation,
                 origin=newest.origin,
                 egain=newest.egain,
+                gain=newest.gain,  # S83
+                scintillation=newest.scintillation,  # S74
                 filter_name=newest.filter_name,
                 solved_seq=frame.seq,  # S56: a solution of this frame or the previous one
                 solved_raw=frame.raw,  # S56: the anchors are chosen on the solved frame
@@ -1414,7 +1424,9 @@ class FieldService:
                 self.schedule_projection()
                 if result.comparisons:
                     self._hub.targets.backfill_comparisons()
-                    backfill_chart_ids(self._hub, result.comparisons)
+                    self._hub.targets.backfill_chart_ids(result.comparisons)  # S68
+                if result.field_stars:
+                    self._hub.targets.backfill_proper_motions(result.field_stars)  # S77
         except Exception:
             logger.exception("Field catalogue fetch failed")
             with self._hub._lock:
@@ -1748,7 +1760,13 @@ class FieldService:
         search_r = max(8.0, 2.0 * params.aperture_px(None))
         margin = search_r + 2.0  # the centroid window fits in the frame (tracking.py:99-105)
         candidates = tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK)
-        anchors = select_tracking_anchors(ref_green, wcs, candidates, params) if candidates else []
+        # S69 (GUARD: set_neighbours): a candidate beside a brighter star of the set is no
+        # anchor: its converged window would end on that star.
+        anchors = (
+            select_tracking_anchors(ref_green, wcs, candidates, params, **set_neighbours(tset))
+            if candidates
+            else []
+        )
         xy: list[tuple[float, float]] = []
         for star in anchors:
             x, y = wcs.world_to_pixel_deg(star.ra_deg, star.dec_deg)
@@ -2295,43 +2313,6 @@ def _radec_rows(ra_deg: float, dec_deg: float) -> list[dict[str, str]]:
 def _mags_value(pairs) -> str | None:
     text = "  ".join(f"{band} {float(mag):.3f}" for band, mag in pairs if mag is not None)
     return text or None
-
-
-def backfill_chart_ids(hub: Any, comparisons) -> int:
-    """S68 (``AcquisitionEngine._backfill_chart_ids``): comparisons kept without a chart.
-
-    A VSP comparison saved before Argos kept the chart (0.4.1) never got one; this VSP
-    answer names it when it lists the star with the same catalogue magnitudes, in the
-    object's set and in the running run's ``targets.json``. GUARD: needs the core's
-    ``TargetSet.backfill_chart_ids`` (release/0.5.0); returns how many stars changed.
-    """
-    from argos.core.catalog.targets import TargetSet
-
-    if not hasattr(TargetSet, "backfill_chart_ids"):
-        return 0
-    targets = hub.targets
-    with targets._lock:  # TargetService's own lock and save (backfill_comparisons)
-        tset, path = targets._current()
-        changed = tset.backfill_chart_ids(comparisons)
-        if changed:
-            try:
-                targets._save(tset, path)
-            except ApiError:
-                return 0  # logged by _save
-    if not changed:
-        return 0
-    sequence = getattr(hub, "sequence", None)
-    root = sequence.run_root() if sequence is not None else None
-    snapshot = root / "targets.json" if root is not None else None
-    if snapshot is not None and snapshot.is_file():
-        try:
-            run_set = TargetSet.load(snapshot)
-            if run_set.backfill_chart_ids(comparisons):
-                run_set.save(snapshot)
-        except OSError as exc:
-            hub.log("warning", f"Save run targets: {exc}", source="photometry", topic="photometry")
-    targets.publish()
-    return changed
 
 
 def _catalogue_card(kind: str, item, hub, tset) -> tuple[str, list, dict] | None:

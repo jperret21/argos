@@ -7,9 +7,11 @@ clicks and computes Centre and Sync through it, so a wrong lock is visible
 and harmful. :class:`FieldTracker` keeps core's fit and adds (protocol.md
 "Layers (A47) and the tracking transform (A48)", Tracking):
 
-1. **a re-centred centroid**: each anchor is centroided twice, the second
-   window centred on the first result (a window centred on the prediction
-   lags a moving star by about one frame px);
+1. **a converged centroid**: each anchor's window is re-centred on its centroid
+   until it converges, then refined in a 4 px window (core S69,
+   ``_converged_centroid_measurement``): a window centred on the prediction lags
+   a moving star, and two passes still kept 0.31-0.44° of lag on XX Cyg
+   2026-09-07 ``040723Z`` (0.7° of field rotation per sub);
 2. **baselines from the reference**: each anchor's signal baseline (core's
    ``MIN_SIGNAL_FRACTION`` test) is measured on the solved frame, where the
    anchor is known to sit, never on the first tracked frame;
@@ -32,6 +34,7 @@ from typing import Sequence
 
 import numpy as np
 
+from argos.core.photometry import tracking as _core_tracking
 from argos.core.photometry.tracking import (
     ApertureTracker,
     RigidTransform,
@@ -55,6 +58,22 @@ VOTE_MIN_MATCHES = 6
 Star = tuple[float, float, float]  # x, y (green px), flux
 
 
+def _anchor_centroid(green: np.ndarray, x: float, y: float, r: float):
+    """The anchor's centroid near the prediction ``(x, y)``: the core's converged one
+    (S69: re-centred until it moves less than 0.01 px, then in a 4 px window), or the
+    two passes of wave 4 with a core before S69 (GUARD)."""
+    converged = getattr(_core_tracking, "_converged_centroid_measurement", None)
+    if converged is not None:
+        return converged(green, x, y, r)
+    meas = _refine_centroid_measurement(green, x, y, r)
+    if meas is None:
+        return None
+    # A second pass centred on the first: a window centred on the prediction
+    # truncates a moved star's wings and drags the centroid back toward it.
+    again = _refine_centroid_measurement(green, meas.x, meas.y, r)
+    return again if again is not None else meas
+
+
 def consistent_pairs(
     refs: Sequence[tuple[float, float]],
     meas: Sequence[tuple[float, float]],
@@ -63,8 +82,12 @@ def consistent_pairs(
     """Indices of the matched anchors whose separations agree with the reference.
 
     An anchor is kept when it agrees with at least ``max(1, (n - 1) // 2)``
-    others: a minority of wrong locks cannot carry the fit.
+    others: a minority of wrong locks cannot carry the fit. The core tracker has the
+    same rule since S80 (``tracking.consistent_pairs``), used when present.
     """
+    core = getattr(_core_tracking, "consistent_pairs", None)
+    if core is not None:
+        return core(list(refs), list(meas), tol)
     n = len(refs)
     if n < 2:
         return list(range(n))
@@ -123,15 +146,9 @@ class FieldTracker(ApertureTracker):
         matched_meas: list[tuple[float, float]] = []
         for index, ref in enumerate(self._anchors):
             pred = self.transform.apply(*ref)
-            meas = _refine_centroid_measurement(green, pred[0], pred[1], self._search_r)
+            meas = _anchor_centroid(green, pred[0], pred[1], self._search_r)
             if meas is None:
                 continue
-            # A second pass centred on the first: a window centred on the
-            # prediction truncates a moved star's wings and drags the
-            # centroid back toward the prediction (a lag of ~1 frame px).
-            again = _refine_centroid_measurement(green, meas.x, meas.y, self._search_r)
-            if again is not None:
-                meas = again
             baseline = self._reference_signal[index]
             if baseline is None:
                 self._reference_signal[index] = meas.signal

@@ -153,3 +153,28 @@ def test_unreadable_path_is_a_400_not_a_crash(client, tmp_path):
     response = _open(client, path)
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "invalid_argument"
+
+
+def test_an_opened_frame_keeps_an_egain_its_table_wrote_s73(tmp_path):
+    """S73 (technical review): the opened frame's header cards reached
+    ``hardware.egain.of_frame`` as a plain dict, without the EGAIN comment, so an S30 Pro
+    gain-80 frame whose EGAIN came from the observer's ``camera.egain_table`` took the
+    profile's 0.228 where Qt (the astropy header) keeps the written value."""
+    from argos.core.photometry.params import frame_egain
+    from argos.server.fits_source import load_raw_fits_frame
+
+    hdu = fits.PrimaryHDU(np.full((40, 60), 1100, dtype=np.uint16))
+    hdu.header["DATE-OBS"] = "2026-09-07T04:07:23"
+    hdu.header["EXPTIME"] = 20.0
+    hdu.header["GAIN"] = 80
+    hdu.header["EGAIN"] = (0.5, "[e-/ADU] electron gain (egain_table)")
+    hdu.header["TELESCOP"] = "ZWO Seestar S30 Pro"
+    path = tmp_path / "table.fit"
+    hdu.writeto(path)
+
+    opened = load_raw_fits_frame(path)
+
+    with fits.open(path) as hdul:
+        qt = frame_egain(hdul[0].header)  # what the Qt engine reads
+    assert frame_egain(opened.gain_header) == qt
+    assert opened.gain_header.comments["EGAIN"] == "[e-/ADU] electron gain (egain_table)"

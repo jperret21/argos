@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import inspect
 import logging
 import math
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -35,10 +37,19 @@ from argos.core.hardware import active as hardware
 from argos.core.imaging import sensor_models
 from argos.core.imaging.platesolve import angular_separation_deg
 from argos.core.photometry.aperture import measure_aperture
+from argos.core.photometry.airmass import julian_date
 from argos.core.photometry.params import DEFAULT_FWHM, PhotometryParams
 from argos.server.errors import ApiError
 from argos.server.field_measure import FrameMeasurer
 from argos.server.observation import target_file
+
+try:  # GUARD: S73's chain (the profile's measured e-/ADU) is in the release core only
+    from argos.core.hardware import egain as _camera_egain
+except ImportError:  # pragma: no cover - the core before S73
+    _camera_egain = None
+
+#: GUARD: a core whose ``measure_aperture`` takes S72's black level and plane pixels.
+_APERTURE_TAKES_BLACK = "black_adu" in inspect.signature(measure_aperture).parameters
 
 if TYPE_CHECKING:  # pragma: no cover
     from argos.server.hub import Hub
@@ -48,8 +59,20 @@ logger = logging.getLogger(__name__)
 ROLE_WORDS = {"target": "Target", "comparison": "Comparison", "check": "Check"}
 
 
-def star_record(star: TargetStar, xy: tuple[float, float] | None = None) -> dict[str, Any]:
-    """A ``TargetStar`` on the wire (protocol.md "Target set")."""
+def star_record(
+    star: TargetStar, xy: tuple[float, float] | None = None, crowded: dict | None = None
+) -> dict[str, Any]:
+    """A ``TargetStar`` on the wire (protocol.md "Target set"). S77: its proper motion
+    (None without one; GUARD: a core ``TargetStar`` before S77 has none); S79:
+    ``crowded``, why a comparison or check star is crowded (None: it is not)."""
+    motion = None
+    if getattr(star, "has_proper_motion", False):
+        motion = {
+            "pm_ra_mas_yr": star.pm_ra_mas_yr,
+            "pm_dec_mas_yr": star.pm_dec_mas_yr,
+            "epoch": star.pm_epoch,
+            "source": star.pm_source,
+        }
     return {
         "key": star.key(),
         "role": star.role,
@@ -65,6 +88,8 @@ def star_record(star: TargetStar, xy: tuple[float, float] | None = None) -> dict
         "note": star.note,
         "x": round(xy[0], 2) if xy is not None else None,
         "y": round(xy[1], 2) if xy is not None else None,
+        "proper_motion": motion,
+        "crowded": crowded,
     }
 
 
@@ -117,6 +142,18 @@ def star_from_pending(pending: dict[str, Any], role: str) -> TargetStar:
         mags={str(k): float(v) for k, v in mags.items()},
         chart_id=pending.get("chart_id") or None,
     )
+
+
+def _driver_egain(camera: Any) -> float | None:
+    """The connected driver's e-/ADU (``fits_readings``), None when unavailable."""
+    reader = getattr(camera, "fits_readings", None) if camera is not None else None
+    if reader is None:
+        return None
+    try:
+        return reader().get("egain_driver")
+    except Exception as exc:  # a driver error must not block a role
+        logger.info("egain from the driver unavailable: %s", exc)
+        return None
 
 
 class TargetService:
@@ -179,26 +216,26 @@ class TargetService:
 
     # -- geometry -------------------------------------------------------------------
 
-    def egain(self) -> float:
-        """``_egain`` (1517-1529): config table → driver → active sensor reference."""
+    def egain(self, gain: int | None = None) -> float:
+        """``_egain``: config table → the profile's photon transfer (S73) → driver →
+        active sensor reference (``hardware.egain.live``; GUARD: a core without it
+        keeps the 0.4.x order, table → driver → reference). At ``gain``, the frame's own
+        setting (S83: a sequence step's, a camera frame's), else the Camera form's."""
         with self._hub._lock:
-            gain = int(self._hub._capture_settings.gain)
+            if gain is None:
+                gain = int(self._hub._capture_settings.gain)
             camera = self._hub._slots["camera"].handle
         table = self._hub.config.get("camera.egain_table", {}) or {}
+        if _camera_egain is not None:
+            return _camera_egain.live(gain, table=table, driver=lambda: _driver_egain(camera))
         if isinstance(table, dict) and str(gain) in table:
             try:
                 return float(table[str(gain)])
             except (TypeError, ValueError):
                 pass
-        reader = getattr(camera, "fits_readings", None) if camera is not None else None
-        if reader is not None:
-            try:
-                value = reader().get("egain_driver")
-            except Exception as exc:  # a driver error must not block a role
-                logger.info("egain from the driver unavailable: %s", exc)
-                value = None
-            if value:
-                return float(value)
+        value = _driver_egain(camera)
+        if value:
+            return float(value)
         return sensor_models.lookup_egain(hardware.profile().sensor, gain)
 
     def params(self, egain: float | None = None) -> PhotometryParams:
@@ -261,14 +298,54 @@ class TargetService:
             obj = tset.object_name
             revision = self._revision
         project = self._hub.field.project_reference
+        crowded, radius = self.crowding(TargetSet(object_name=obj, stars=stars))
+        # S77: a star with a proper motion is drawn where it is now (GUARD: at_jd).
+        now = julian_date(datetime.now(timezone.utc))
+
+        def placed(star: TargetStar) -> TargetStar:
+            at_jd = getattr(star, "at_jd", None)
+            return at_jd(now) if at_jd is not None else star
+
+        records = []
+        for star in stars:
+            why = crowded.get(star.key())
+            wire = None
+            if why is not None:
+                wire = {
+                    "neighbour": why.neighbour,
+                    "separation_arcsec": why.separation_arcsec,
+                    "delta_mag": None if why.delta_mag is None else round(why.delta_mag, 3),
+                    "band": why.band,
+                    "radius_arcsec": round(radius, 1),
+                    "text": why.text(star.display_name, radius),
+                }
+            here = placed(star)
+            records.append(star_record(star, project(here.ra_deg, here.dec_deg), wire))
         return {
             "object_name": obj,
             "path": str(path),
-            "stars": [star_record(s, project(s.ra_deg, s.dec_deg)) for s in stars],
+            "stars": records,
             "summary": summary,
             "geometry": self.geometry(),
             "revision": revision,
+            # S79: one line per crowded comparison or check star (the Qt Comparison tab's).
+            "crowding": [r["crowded"]["text"] for r in records if r["crowded"] is not None],
         }
+
+    def crowding(self, tset: TargetSet) -> tuple[dict, float]:
+        """S79 (release ``AcquisitionEngine.crowding``; GUARD: ``crowded_stars``): the
+        set's crowded comparison and check stars and the radius (arcsec), about 2
+        aperture radii of the series FWHM at the active profile's green-plane scale."""
+        from argos.core.catalog import targets as core_targets
+
+        crowded_stars = getattr(core_targets, "crowded_stars", None)
+        if crowded_stars is None:
+            return {}, 0.0
+        from argos.core.imaging.metrics import arcsec_per_green_px
+
+        radii = core_targets.CROWDING_APERTURE_RADII
+        radius = radii * self.params().aperture_px(self._series_fwhm()) * arcsec_per_green_px()
+        return crowded_stars(tset, radius), radius
 
     def cached_record(self) -> dict[str, Any] | None:
         return self._record
@@ -278,7 +355,25 @@ class TargetService:
         with self._hub._lock:
             self._record = record
             self._hub._publish("targets", record)
+        self._warn_crowding(record)
         return record
+
+    def _warn_crowding(self, record: dict[str, Any]) -> None:
+        """S79 (release ``ImagingPage._warn_crowding``): one WARN in the Activity log for
+        each newly crowded comparison or check star ("Comparison crowded — …")."""
+        crowded = {
+            r["key"]: r["crowded"]["text"] for r in record["stars"] if r.get("crowded") is not None
+        }
+        warned = getattr(self, "_crowding_warned", set())
+        for key, line in crowded.items():
+            if key not in warned:
+                self._hub.log(
+                    "warning",
+                    f"Comparison crowded — {line}",
+                    source="photometry",
+                    topic="photometry",
+                )
+        self._crowding_warned = set(crowded)
 
     def _changed(self) -> dict[str, Any]:
         """After a role change: revision, tracker reset, ``targets`` and ``field_layers``."""
@@ -497,6 +592,59 @@ class TargetService:
                 self._set = None  # re-read on the next access
         return path
 
+    def backfill_chart_ids(self, comparisons) -> int:
+        """S68 (``AcquisitionEngine._backfill_chart_ids``): comparisons kept from before
+        0.4.2 take the VSP chart of this answer, in the object's set and the running
+        run's ``targets.json``. GUARD: ``TargetSet.backfill_chart_ids``; returns how many
+        stars changed."""
+        return self._backfill("backfill_chart_ids", comparisons)
+
+    def backfill_proper_motions(self, field_stars) -> int:
+        """S77 (``AcquisitionEngine._backfill_proper_motions``): the set's VSX/VSP stars
+        take the proper motion of their Gaia DR3 source (``field_stars``), in the
+        object's set and the running run's ``targets.json``. GUARD:
+        ``TargetSet.backfill_proper_motions``; returns how many stars changed."""
+        changed = self._backfill("backfill_proper_motions", field_stars)
+        if changed:
+            self._hub.log(
+                "info",
+                f"Catalog: proper motion from Gaia DR3 for {changed} star(s) of the set;"
+                " their apertures are placed at each frame's date (S77).",
+                source="catalog",
+                topic="photometry",
+            )
+        return changed
+
+    def _backfill(self, method: str, answer) -> int:
+        """Apply ``TargetSet.<method>(answer)`` to the object's set (saved) and to the
+        running run's ``targets.json`` snapshot, then publish; 0 without the method."""
+        if not hasattr(TargetSet, method):
+            return 0
+        with self._lock:
+            tset, path = self._current()
+            changed = getattr(tset, method)(answer)
+            if changed:
+                try:
+                    self._save(tset, path)
+                except ApiError:
+                    return 0  # logged by _save
+        if not changed:
+            return 0
+        sequence = getattr(self._hub, "sequence", None)
+        root = sequence.run_root() if sequence is not None else None
+        snapshot = root / "targets.json" if root is not None else None
+        if snapshot is not None and snapshot.is_file():
+            try:
+                run_set = TargetSet.load(snapshot)
+                if getattr(run_set, method)(answer):
+                    run_set.save(snapshot)
+            except OSError as exc:
+                self._hub.log(
+                    "warning", f"Save run targets: {exc}", source="photometry", topic="photometry"
+                )
+        self.publish()
+        return changed
+
     def backfill_comparisons(self) -> None:
         """The VSP answer arrived after the target (``_on_catalog``, 1225-1240)."""
         with self._lock:
@@ -655,6 +803,14 @@ class TargetService:
                 egain=params.egain,
                 read_noise_e=params.read_noise_e,
                 sat_adu=params.sat_adu,
+                # Qt passes the noise model's black level and plane pixels (S72): the
+                # pilot's comparison SNRs are those of the measurement (GUARD: a core
+                # whose measure_aperture takes neither).
+                **(
+                    {"black_adu": params.black_adu, "plane_pixels": params.plane_pixels}
+                    if _APERTURE_TAKES_BLACK
+                    else {}
+                ),
             )
 
         return measure

@@ -19,6 +19,8 @@ output is always a **new** folder inside the session, never overwritten.
 
 from __future__ import annotations
 
+import functools
+import inspect
 import logging
 import math
 import shutil
@@ -43,6 +45,7 @@ from argos.core.photometry.lightcurve import (
     run_curve_csv_name,
     series_label,
 )
+from argos.core.photometry import params as _core_params
 from argos.core.photometry.params import PhotometryParams, frame_egain, measure_frame
 from argos.core.photometry.tracking import (
     ApertureTracker,
@@ -69,7 +72,7 @@ _CALIBRATION_WORDS = ("dark", "flat", "bias", "offset", "zero")
 _LOCK_MIN_SNR = 5.0
 #: S58 (S56's rule in the re-run).
 _LOCK_VERIFY_MIN_ANCHORS = 3
-_LOCK_FRESH_MAX_SHIFT_PX = 2.0
+_LOCK_FRESH_MAX_SHIFT_PX = 10.0  # S56 as amended on 2026-11-16 (it was 2 px)
 
 
 # ---------------------------------------------------------------------------
@@ -77,9 +80,33 @@ _LOCK_FRESH_MAX_SHIFT_PX = 2.0
 # ---------------------------------------------------------------------------
 
 
+#: S82 (release ``_SIMBAD_PREFIXES``): SIMBAD's identifier prefixes ("V* XX Cyg").
+SIMBAD_PREFIXES = ("v*", "*", "**", "name", "cl*", "em*", "v*?", "*?", "**?")
+
+#: S74 (GUARD: the merged core's ``measure_frame`` takes ``star_airmass``).
+_MEASURE_TAKES_STAR_AIRMASS = "star_airmass" in inspect.signature(measure_frame).parameters
+
+
 def object_key(name: str | None) -> str:
-    """An object name compared without case, spaces or underscores (S62)."""
-    return "".join(c for c in str(name or "").lower() if c.isalnum())
+    """An object name compared without case, spaces or underscores (S62), nor a SIMBAD
+    identifier prefix (S82, release ``_object_key``: an OBJECT of "V* XX Cyg" is XX
+    Cyg)."""
+    words = str(name or "").replace("_", " ").split()
+    while len(words) > 1 and words[0].lower() in SIMBAD_PREFIXES:
+        words = words[1:]
+    return "".join(c for c in " ".join(words).lower() if c.isalnum())
+
+
+def call_with_cancel(lookup, tset, cancel):
+    """S77 (release ``call_with_cancel``): ``lookup(tset)``, passing ``cancel`` (a
+    callable, true to stop) when the lookup takes it (GUARD: the merged core's
+    ``gaia_sources_for_set``)."""
+    try:
+        params = inspect.signature(lookup).parameters
+    except (TypeError, ValueError):
+        params = {}
+    takes = "cancel" in params or any(p.kind is p.VAR_KEYWORD for p in params.values())
+    return lookup(tset, cancel=cancel) if takes else lookup(tset)
 
 
 @dataclass
@@ -215,6 +242,10 @@ class BatchRequest:
     diagnostics: bool = True
     egain_table: dict = field(default_factory=dict)
     solver: Callable[[np.ndarray], object] | None = None
+    #: S77 (release ``BatchRequest.proper_motions``): Gaia DR3 sources around the set,
+    #: called once when a VSX/VSP star has no proper motion (GUARD: a core without
+    #: ``TargetSet.backfill_proper_motions`` never calls it).
+    proper_motions: Callable[[TargetSet], list] | None = None
 
 
 @dataclass
@@ -255,6 +286,19 @@ class BatchResult:
     @property
     def ok(self) -> bool:
         return not self.error
+
+
+def _proper_motion_lookup(cfg_get) -> Callable[[TargetSet], list] | None:
+    """S77 (release ``imaging_page._on_rerun_subs``): the Gaia DR3 sources of a set's
+    VSX/VSP stars (``gaia_sources_for_set``, cached; online when the field-star
+    catalogue is), or None without that core function (GUARD)."""
+    from argos.core.catalog import gaia
+
+    lookup = getattr(gaia, "gaia_sources_for_set", None)
+    if lookup is None:
+        return None
+    allow = bool(cfg_get("catalog.field_stars_enabled", True))
+    return functools.partial(lookup, allow_network=allow)
 
 
 class BatchRun:
@@ -312,6 +356,12 @@ class BatchRun:
         self._stars_off_centre = 0
         self._off_centre_logged = False
         self._frames_no_target_point = 0
+        # S77: the set measured (with the proper motions looked up at the start), and
+        # that set at the date of the frame being measured; S78: the (lat, lon) of a
+        # comparison or check star's own airmass.
+        self._base_set: TargetSet = request.target_set
+        self._tset: TargetSet = request.target_set
+        self._star_site: tuple[float, float] | None = None
 
     @property
     def _cancel(self) -> bool:
@@ -341,6 +391,8 @@ class BatchRun:
                 track_apertures=req.params.track_apertures,
                 band=req.params.band,
             )
+            self._prepare_proper_motions(diag)
+            self._prepare_star_site(diag)
             for fpath in req.fits_paths:
                 if self._cancel:
                     break
@@ -496,16 +548,35 @@ class BatchRun:
             return False
         core = s69_core()
         params = self._req.params
-        if egain is not None and egain != params.egain:
+        if hasattr(params, "with_frame"):
+            # S73: the camera's measured e-/ADU (``frame_egain``) and, green-plane model,
+            # the read noise measured with it; S74: the frame's exposure, airmass, height.
+            params = params.with_frame(egain=egain, **self._read_scintillation(fpath))
+        elif egain is not None and egain != params.egain:  # GUARD: a core before S73
             params = replace(params, egain=egain)
         # S70 (with S69, GUARD): the frame's own e-/ADU in every SNR of the frame — the
         # tracker's anchors, the lock checks and the measurement (the measurement's only).
         self._params = params if core is not None else self._req.params
         green = green_plane(arr)
+        # S77 (GUARD: ``TargetSet.at_jd``): proper motions at the frame's date.
+        at_jd = getattr(self._base_set, "at_jd", None)
+        self._tset = at_jd(jd) if at_jd is not None else self._base_set
         wcs = self._wcs_for_frame(green, fpath.name)
         if self._series_fwhm is None:
             self._series_fwhm = self._measure_series_fwhm(arr, diag)
-        diag.record("frame", frame=frame_no, file=fpath.name, jd_utc=jd, fwhm=self._series_fwhm)
+        gain_fields = (  # S73: the e-/ADU and where it came from (GUARD: a core before it)
+            {"egain": float(params.egain), "egain_source": params.egain_source}
+            if hasattr(params, "egain_source")
+            else {}
+        )
+        diag.record(
+            "frame",
+            frame=frame_no,
+            file=fpath.name,
+            jd_utc=jd,
+            fwhm=self._series_fwhm,
+            **gain_fields,
+        )
         wcs, anchored = self._anchor(green, wcs, diag, frame_no, fpath.name)
         if anchored:
             wcs = self._resolve_rotation(green, wcs, diag, frame_no, fpath.name)
@@ -519,6 +590,8 @@ class BatchRun:
                 frame=frame_no,
                 anchors=self._tracker.anchors_used,
                 anchors_rejected=self._tracker.anchors_rejected or None,
+                # S80 (GUARD: a core tracker before it has no such count)
+                anchors_inconsistent=getattr(self._tracker, "anchors_inconsistent", 0) or None,
                 residual_px=self._tracker.residual_px,
                 rotation_deg=self._tracker.transform.rotation_deg,
                 shift_px=self._tracker.transform.shift_px,
@@ -553,10 +626,13 @@ class BatchRun:
             )
 
         exclude = {"exclude": excluded} if core is not None else {}
+        if _MEASURE_TAKES_STAR_AIRMASS:
+            # S74: each star's scintillation at the airmass its row gets (S66, S78).
+            exclude["star_airmass"] = lambda star: self._airmass(jd, star)
         results = measure_frame(
             green,
             wcs,
-            self._req.target_set,
+            self._tset,
             params,
             fwhm=self._series_fwhm,
             on_star=on_star,
@@ -646,7 +722,7 @@ class BatchRun:
         core = s69_core()
         if core is None:
             return {}
-        tset = self._req.target_set
+        tset = self._tset
         stars = tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK)
         return core.centring_offsets(
             green, wcs, stars, self._params, fwhm=self._series_fwhm, neighbours=list(tset.stars)
@@ -735,11 +811,11 @@ class BatchRun:
         return wcs, False
 
     def _fresh(self, tracked) -> bool:
-        """S58: a solution of this frame or the previous one, no aperture moved >= 2 px."""
+        """S58: a solution of this frame or the previous one, no aperture moved >= 10 px."""
         if self._reference_index is None or self._file_index - self._reference_index > 1:
             return False
         shift = 0.0
-        for star in self._req.target_set.stars:
+        for star in self._tset.stars:
             x0, y0 = self._reference.world_to_pixel_deg(star.ra_deg, star.dec_deg)
             x1, y1 = tracked.world_to_pixel_deg(star.ra_deg, star.dec_deg)
             d = math.hypot(float(x1) - float(x0), float(y1) - float(y0))
@@ -780,7 +856,7 @@ class BatchRun:
             logger.warning(
                 "%s: only %d anchor star(s) steer the apertures — the lock cannot be"
                 " verified; points are flagged suspect while fewer than 3 anchor stars steer"
-                " the apertures (except within 2 px of a solution of this frame or the"
+                " the apertures (except within 10 px of a solution of this frame or the"
                 " previous one)",
                 fname,
                 n,
@@ -828,7 +904,7 @@ class BatchRun:
         return TrackedWCS(self._reference, self._tracker)
 
     def _build_tracker(self, green) -> ApertureTracker:
-        tset = self._req.target_set
+        tset = self._tset
         wcs = self._reference
         candidates = tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK)
         # S70: the anchors' SNR >= 10 with the frame's own e-/ADU (self._params).
@@ -946,11 +1022,101 @@ class BatchRun:
             return None
         return bjd_tdb(jd, star.ra_deg, star.dec_deg, float(lat), float(lon), float(elev))
 
+    def _prepare_star_site(self, diag) -> None:
+        """S78 (release ``_prepare_star_site``; GUARD: ``review.fitted_site``): the site a
+        comparison or check star's airmass is computed for, the one fitted to the frames'
+        header pointing, else the request's Settings site when it reproduces that
+        pointing (``review.settings_site_reproduces``, GUARD), else none: the header
+        ``AIRMASS``, as the target."""
+        from argos.server.review import core_rules
+
+        rules = core_rules()
+        fit = getattr(rules, "fitted_site", None) if rules is not None else None
+        if fit is None:
+            return
+        pointings = [rules.read_frame_pointing(path) for path in self._req.fits_paths]
+        site = fit(pointings)
+        kind = "fitted"
+        if site is None:
+            lat, lon, _elev = self._req.site
+            reproduces = getattr(rules, "settings_site_reproduces", None)
+            site = (
+                (float(lat), float(lon))
+                if lat is not None
+                and lon is not None
+                and (reproduces is None or reproduces(pointings, float(lat), float(lon)))
+                else None
+            )
+            kind = "settings" if site is not None else None
+        self._star_site = site
+        diag.record("event", what="star_airmass_site", site=kind)
+        if kind == "fitted":
+            logger.info(
+                "Batch photometry: comparison and check stars take their own airmass, for the"
+                " site fitted to the frames' pointing (the mount's)"
+            )
+
+    def _prepare_proper_motions(self, diag) -> None:
+        """S77 (release ``_prepare_proper_motions``; GUARD: a core ``TargetSet`` without
+        ``backfill_proper_motions`` keeps the request's set): the set with the proper
+        motions of its VSX/VSP stars from the request's lookup (Gaia DR3)."""
+        tset = self._req.target_set
+        if not hasattr(tset, "backfill_proper_motions"):
+            return
+        from argos.core.catalog.targets import CATALOGUE_POSITION_SOURCES
+
+        missing = [
+            s
+            for s in tset.stars
+            if s.source in CATALOGUE_POSITION_SOURCES and not s.has_proper_motion
+        ]
+        lookup = self._req.proper_motions
+        if missing and lookup is not None:
+            copy = TargetSet(object_name=tset.object_name, stars=list(tset.stars))
+            logger.info("Batch photometry: looking up proper motions (Gaia DR3)")
+            if self._progress_cb is not None:  # the job's stage while the archive answers
+                self._progress_cb(0, len(self._req.fits_paths), "proper motions (Gaia DR3)")
+            try:
+                # A cancel stops the lookup between stars (the run then ends before
+                # its first frame).
+                found = copy.backfill_proper_motions(
+                    call_with_cancel(lookup, tset, lambda: self._cancel) or []
+                )
+            except Exception as exc:  # a catalogue failure never ends the re-run
+                logger.warning(
+                    "Batch photometry: no proper motion looked up (%s); the stars are placed"
+                    " at their catalogue positions (J2000.0)",
+                    exc,
+                )
+                found = 0
+            if found:
+                tset = copy
+                logger.info(
+                    "Batch photometry: proper motion from Gaia DR3 for %d star(s) of the set;"
+                    " each frame places them at its date",
+                    found,
+                )
+        self._base_set = tset
+        self._tset = tset
+        moving = [s for s in tset.stars if s.has_proper_motion]
+        if moving:
+            diag.record(
+                "event",
+                what="proper_motions",
+                stars=[s.auid or s.display_name for s in moving],
+                sources=sorted({s.pm_source or "" for s in moving}),
+            )
+
     def _airmass(self, jd: float | None, star) -> float | None:
         """Release ``_airmass`` with S66 (option b): an Argos frame's header ``AIRMASS``
         (the mount's) unless its pointing is frozen (X1), else the airmass computed for
-        the Settings site, or None without site/time."""
+        the Settings site, or None without site/time. S78: a comparison or check star's
+        own, for the site fitted to the frames' pointing (:meth:`_prepare_star_site`)."""
         header = self._frame_header_airmass()
+        if star.role != ROLE_TARGET and self._star_site is not None and jd is not None:
+            own = airmass_at(jd, star.ra_deg, star.dec_deg, *self._star_site)
+            if own is not None:
+                return own
         if header is not None:
             return header
         lat, lon, _elev = self._req.site
@@ -1048,6 +1214,20 @@ class BatchRun:
                 logger.warning("%s: no EXPTIME — JD is exposure start, not midpoint", fpath.name)
         return arr, jd, frame_egain(header, egain_table), filter_name
 
+    @staticmethod
+    def _read_scintillation(fpath: Path) -> dict:
+        """The frame's ``EXPTIME``, ``AIRMASS`` and ``SITEELEV`` for its scintillation
+        (S74, ``frame_scintillation_inputs``); empty when unreadable or (GUARD) before S74."""
+        inputs = getattr(_core_params, "frame_scintillation_inputs", None)
+        if inputs is None:
+            return {}
+        from astropy.io import fits
+
+        try:
+            return inputs(fits.getheader(fpath))
+        except Exception:
+            return {}
+
     def _write_csvs(self, curves: dict[str, LightCurve]) -> None:
         for lc in curves.values():
             tag = lc.auid or lc.name or "photometry"
@@ -1061,7 +1241,7 @@ class BatchRun:
         if not curves:
             return
         try:
-            self._req.target_set.save(self._req.out_dir / "targets.json")
+            self._base_set.save(self._req.out_dir / "targets.json")  # S77: with its motions
         except OSError as exc:
             logger.warning("batch targets.json: %s", exc)
 
@@ -1072,13 +1252,20 @@ class BatchRun:
 
 
 def _engine_egain(hub: "Hub") -> float:
-    """``imaging_page._engine_egain``: Settings' table at the Camera gain, else the sensor's."""
+    """``imaging_page._engine_egain``: Settings' table at the Camera gain, the profile's
+    photon transfer (S73), else the sensor's (GUARD: a core before S73 skips the profile)."""
     from argos.core.hardware import active as hardware
     from argos.core.imaging import sensor_models
 
     with hub._lock:
         gain = int(hub._capture_settings.gain)
     table = hub.config.get("camera.egain_table", {}) or {}
+    try:
+        from argos.core.hardware import egain as camera_egain
+    except ImportError:  # pragma: no cover - the core before S73
+        camera_egain = None
+    if camera_egain is not None:
+        return camera_egain.live(gain, table=table)
     if isinstance(table, dict) and str(gain) in table:
         try:
             return float(table[str(gain)])
@@ -1338,6 +1525,7 @@ class RerunService:
                 diagnostics=bool(diagnostics),
                 egain_table=egain_table,
                 solver=_frame_solver(cfg_get, _wcs_centre(wcs), ctx.cancel_event, stage),
+                proper_motions=_proper_motion_lookup(cfg_get),  # S77
             )
             ctx.progress(0, len(paths), stage="measuring", message=None)
             run = BatchRun(request, cancel=ctx.cancel_event, progress=progress)

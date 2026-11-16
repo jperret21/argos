@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from argos.core.hardware import catalog
+from argos.core.photometry import params as _core_params
 
 KeyType = Literal["bool", "int", "float", "str", "path", "host", "list", "object"]
 Category = Literal[
@@ -108,6 +109,12 @@ class KeyMeta:
             "path_kind": self.path_kind if self.type == "path" else None,
             "personal": self.personal,
         }
+
+
+#: S72's default noise model, the core's (GUARD: a core without S73's measured e-/ADU
+#: has no ``NOISE_MODEL_DEFAULT`` and keeps the 0.4.x ``pixel`` model, whose green-plane
+#: model would take the frames' wrong EGAIN).
+_NOISE_MODEL_DEFAULT = getattr(_core_params, "NOISE_MODEL_DEFAULT", "pixel")
 
 
 def _k(key: str, type_: KeyType, default: Any, label: str, help_: str, category: Category, **kw):
@@ -243,13 +250,16 @@ KEYS: tuple[KeyMeta, ...] = (
        read_only_reason="Follows Linearity limit above, so the Qt app reads the same "
                         "value."),  # Q-C1
     _k("camera.egain_table", "object", {}, "Electron gain table",
-       "Measured electrons per ADU at each gain setting; empty uses the driver's value or the "
-       "sensor reference curve.",
+       "Measured electrons per ADU at each gain setting, first in the chain. Empty: the "
+       "telescope profile's photon-transfer value (the S30 Pro: 0.228 at gain 80, scaled at "
+       "0.1 dB per step over gains 0-251, S73), else the driver's value, else the sensor "
+       "reference curve.",
        "instrument", used_by=("photometry noise model",), advanced=True),
     _k("data_paths.camera_calibration_directory", "path", str(_HOME / ".argos"),
        "Photon-transfer calibrations",
-       "Folder searched for camera_calibration*.json, used only when the driver gives no "
-       "electron gain.",
+       "Folder searched for camera_calibration*.json, read with the sensor reference: only "
+       "when the gain table, the telescope profile's measured value (S73) and the driver "
+       "give no electron gain.",
        "instrument", used_by=("electron gain fallback",)),
     # -- Plate solving -------------------------------------------------------------------
     _k("astrometry.astap_path", "path", "", "ASTAP executable",
@@ -405,9 +415,21 @@ KEYS: tuple[KeyMeta, ...] = (
        "Follow field rotation and drift across a batch.",
        "photometry", used_by=("batch photometry",)),
     _k("photometry.read_noise_e", "float", 1.5, "Read noise",
-       "Read noise used in the photometric error model.",
+       "Read noise used in the photometric error model. The green-plane model uses the "
+       "camera's own, measured with its e-/ADU, at a gain the telescope profile measured "
+       "(S73).",
        "photometry", used_by=("photometry noise model",), min=0.0, max=100.0, step=0.1,
        unit="e⁻", advanced=True),
+    # S72: registered so the Settings API accepts it (release config.py default).
+    _k("photometry.noise_model", "str", _NOISE_MODEL_DEFAULT, "Noise model",
+       "How the photometric errors and SNR are computed. Green plane: the (G1+G2)/2 "
+       "plane's noise above the camera's black level, the sky estimate's own error and "
+       "scintillation (S72, S74, S75). Per pixel: the 0.4.x formula, for comparison only: "
+       "it counts the black level as sky photons: 2.5-3.5 times the S30 Pro's real sky "
+       "noise at its measured e-/ADU.",
+       "photometry", used_by=("photometry noise model", "light-curve errors"),
+       options=(("green_plane", "Green plane"), ("pixel", "Per pixel (0.4.x)")),
+       advanced=True),
     _k("photometry.min_comparisons", "int", 2, "Minimum comparisons",
        "Fewest comparison stars for a valid ensemble measurement.",
        "photometry", used_by=("ensemble photometry",), min=1, max=20, step=1, advanced=True),

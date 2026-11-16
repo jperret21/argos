@@ -381,12 +381,26 @@ def test_reference_that_does_not_solve_fails_the_job(rerun_client, monkeypatch):
 _QT: list = []  # the QApplication of the parity test, never garbage-collected
 
 
-def _request(paths, out_dir, solver=None, tset=None) -> BatchRequest:
+def qt_request(qt_worker, request):
+    """The Qt worker's ``BatchRequest`` with the server request's fields it knows (S77:
+    ``proper_motions`` is the release worker's; a worker before it has no such field)."""
+    known = qt_worker.BatchRequest.__dataclass_fields__
+    return qt_worker.BatchRequest(**{k: v for k, v in vars(request).items() if k in known})
+
+
+def _pixel_model(key, default):
+    """The 0.4.x noise model (S72): the synthetic scenes' sky (300 ADU) lies below the S30
+    Pro's black level (1024), which the default green-plane model subtracts; their SNRs
+    (the S43, S58, S69 thresholds) are those of the 0.4.x model they were built for."""
+    return "pixel" if key == "photometry.noise_model" else default
+
+
+def _request(paths, out_dir, solver=None, tset=None, cfg=_pixel_model) -> BatchRequest:
     return BatchRequest(
         fits_paths=list(paths),
         wcs=WCS,
         target_set=tset or target_set(),
-        params=PhotometryParams.from_config(lambda k, d: d, egain=0.8),
+        params=PhotometryParams.from_config(cfg, egain=0.8),
         out_dir=out_dir,
         object_name="XX Test",
         site=(12.0, 34.0, 100.0),  # a made-up site
@@ -455,6 +469,17 @@ requires_s69_core = pytest.mark.skipif(
 )
 
 
+def core_has_s73() -> bool:
+    """GUARD (pending merge of release/0.5.0): the core resolves the camera's measured
+    e-/ADU (S73) and the per-frame scintillation inputs (S74)."""
+    return hasattr(PhotometryParams, "with_frame")
+
+
+requires_s73_core = pytest.mark.skipif(
+    not core_has_s73(), reason="the core has no S73/S74 yet (release/0.5.0 not merged)"
+)
+
+
 @requires_s69_core
 def test_a_re_run_re_solves_a_turning_field_and_leaves_an_off_centre_star_out_s69(tmp_path):
     """Release S69: (a) a frame is re-solved once the field turned more than 2° since
@@ -506,6 +531,7 @@ def _core_rules_merged() -> bool:
         "clouds_s43",
         "two_anchors_s58",
         pytest.param("alt_az_s69", marks=requires_s69_core),
+        pytest.param("noise_model_s72_s73_s74", marks=requires_s73_core),
         pytest.param(
             "faint_target_s67",
             marks=pytest.mark.skipif(
@@ -544,6 +570,16 @@ def test_server_port_writes_the_qt_workers_bytes(tmp_path, case):
             PEAKS[TARGET.auid] = bright
         with fits.open(session / "lights" / "XX_Test_ir_light_00003.fit", mode="update") as hdul:
             hdul[0].data = faint
+    elif case == "noise_model_s72_s73_s74":
+        # The default model on S30 Pro subs whose sky is above its black level, their
+        # EGAIN the 0.4.2 driver's 0.8: the measured e-/ADU, scintillation from each
+        # sub's EXPTIME, AIRMASS and SITEELEV.
+        for i, path in enumerate(sorted((session / "lights").glob("XX_Test_ir_*.fit"))):
+            with fits.open(path, mode="update") as hdul:
+                hdul[0].data = (hdul[0].data.astype(np.int32) + 1100).astype(np.uint16)
+                hdul[0].header.update(
+                    {"TELESCOP": "ZWO Seestar S30 Pro", "AIRMASS": 1.2 + 0.1 * i, "SITEELEV": 50.0}
+                )
     solutions: dict[bytes, FrameWCS] = {}
     if case == "alt_az_s69":
         shutil.rmtree(session)
@@ -555,10 +591,11 @@ def test_server_port_writes_the_qt_workers_bytes(tmp_path, case):
         calls.append("x")
         return solutions.get(green.tobytes(), solution)
 
-    server = BatchRun(_request(paths, tmp_path / "server", solver, tset)).run()
+    cfg = (lambda k, d: d) if case == "noise_model_s72_s73_s74" else _pixel_model
+    server = BatchRun(_request(paths, tmp_path / "server", solver, tset, cfg)).run()
     server_calls = len(calls)
     qt = qt_worker.PhotometryBatchWorker(
-        qt_worker.BatchRequest(**vars(_request(paths, tmp_path / "qt", solver, tset)))
+        qt_request(qt_worker, _request(paths, tmp_path / "qt", solver, tset, cfg))
     )
     box = []
     qt.finished_batch.connect(box.append)
@@ -572,7 +609,8 @@ def test_server_port_writes_the_qt_workers_bytes(tmp_path, case):
         counts += ("frames_no_detection",)
     assert [getattr(server, k) for k in counts] == [getattr(qt_result, k) for k in counts]
     assert server_calls == len(calls) - server_calls  # the solver was used alike...
-    assert server_calls > 0 or case == "faint_target_s67"  # ...where a case needs it
+    # ...where a case needs it
+    assert server_calls > 0 or case in ("faint_target_s67", "noise_model_s72_s73_s74")
     if case == "clouds_s43":
         assert (server.frames_unanchored, server.frames_resolved) == (1, 1)
         flagged = [p.suspect for p in server.curves["000-AAA-001@ir"].points]
@@ -588,6 +626,20 @@ def test_server_port_writes_the_qt_workers_bytes(tmp_path, case):
         assert [[r.get(k) for k in keys] for r in stars[0]] == [
             [r.get(k) for k in keys] for r in stars[1]
         ]
+    elif case == "noise_model_s72_s73_s74":
+        recorders = [tmp_path / side / "XX_Test_diagnostics.jsonl" for side in ("server", "qt")]
+        frames = [
+            [
+                {k: v for k, v in json.loads(line).items() if k != "t"}
+                for line in p.read_text().splitlines()
+                if json.loads(line)["kind"] == "frame"
+            ]
+            for p in recorders
+        ]
+        assert frames[0] == frames[1]  # the recorder names the e-/ADU's source alike
+        assert [(r["egain"], r["egain_source"]) for r in frames[0]] == [
+            (0.228, "S30 Pro PTC")
+        ] * 5  # the subs' EGAIN 0.8 before S73
     elif case == "faint_target_s67":
         # S67 in the re-run, per target: only the target's own point is flagged.
         assert server.frames_no_detection == 1
@@ -659,3 +711,46 @@ def test_the_plan_and_the_start_scan_the_frames_once(rerun_client, monkeypatch):
         "/api/review/rerun/plan", json={"session": str(session)}, headers=AUTH
     ).json()
     assert len(calls) == 2 and plan["frames"] == 5
+
+
+def test_a_frame_named_in_simbad_form_is_the_sets_object_s82(tmp_path):
+    """Release S82: S62's object match compared "V* XX Cyg" (an OBJECT in SIMBAD's
+    form, 20260829T034413Z_V_XX_Cyg) with "XX Cyg" letter for letter: another object,
+    0 frames. SIMBAD's identifier prefixes are ignored."""
+    assert rerun_module.object_key("V* XX Cyg") == rerun_module.object_key("XX Cyg")
+    assert rerun_module.object_key("NAME Polaris") == rerun_module.object_key("polaris")
+    assert rerun_module.object_key("V*_XX_Cyg") == "xxcyg"
+    assert rerun_module.object_key("V* RR Lyr") != rerun_module.object_key("XX Cyg")
+    session = tmp_path / "s"
+    (session / "lights").mkdir(parents=True)
+    path = session / "lights" / "XX_Test_ir_light_00001.fit"
+    _write(path, 0, obj="V* XX Test")
+    assert rerun_module.discover_light_frames(session, "XX Test").paths == [path]
+
+
+def test_a_cancel_during_the_proper_motion_lookup_ends_the_run_s77(tmp_path):
+    """Release S77 amended: the lookup ran before the frame loop without the cancel (up
+    to 20 s per star on an archive that does not answer). The lookup gets the cancel and
+    a cancelled run measures no frame."""
+    session = tmp_path / "s"
+    (session / "lights").mkdir(parents=True)
+    paths = []
+    for i in range(2):
+        path = session / "lights" / f"XX_Test_ir_light_{i + 1:05d}.fit"
+        _write(path, i)
+        paths.append(path)
+    req = _request(paths, tmp_path / "out")
+    run = rerun_module.BatchRun(req)
+    seen = []
+
+    def lookup(_tset, cancel=None):
+        run.cancel()
+        seen.append(cancel() if cancel is not None else None)
+        return []
+
+    req.proper_motions = lookup
+    result = run.run()
+    if not hasattr(TargetSet, "backfill_proper_motions"):
+        pytest.skip("GUARD: needs release/0.5.0's core (S77)")
+    assert seen == [True]  # no cancel argument before
+    assert result.frames_done == 0
