@@ -24,7 +24,7 @@ from datetime import datetime
 project = "ARGOS"
 author = "J. Perret"
 copyright = f"{datetime.now().year}, {author}"
-release = "0.4.2"
+release = "0.5.0"
 
 # -- General configuration -------------------------------------------------
 

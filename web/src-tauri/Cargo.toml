@@ -2,7 +2,7 @@
 name = "argos-desktop"
 # = argos/__init__.py __version__ (build.rs refuses a mismatch); tauri.conf.json
 # sets no version, so the bundles follow this one.
-version = "0.4.2"
+version = "0.5.0"
 description = "ARGOS desktop app: the web UI in a Tauri window, the headless Python server as its sidecar"
 license = "GPL-3.0-or-later"
 edition = "2021"
