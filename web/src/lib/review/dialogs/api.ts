@@ -62,6 +62,8 @@ export interface AavsoTargetLine {
 
 export interface Excluded {
   saturated: number;
+  /** S67: suspect points of a frame without a detection in the run's flight recorder. */
+  no_detection: number;
   suspect: number;
   nonfinite: number;
   undated: number;
@@ -169,6 +171,19 @@ export interface RerunResult {
   frames_resolved: number;
   frames_unanchored: number;
   frames_unverified: number;
+  /** S69 (a): frames re-solved after the field turned more than 2° since its solution. */
+  frames_rotation_solved: number;
+  /** S69 (b): comparison/check measurements more than 1 px off their aperture (suspect). */
+  stars_off_centre: number;
+  /** S69 (a): re-solves for rotation that failed (the apertures followed the tracker). */
+  frames_rotation_unsolved: number;
+  /** S69 (b): frames left without a target point (every comparison off-centre). */
+  frames_no_target_point: number;
+  /** S67: frames with no detection (their points suspect, out of the AAVSO export). */
+  frames_no_detection: number;
+  /** S66: frames whose airmass is their header AIRMASS; frames whose header says the Settings site is wrong. */
+  frames_header_airmass: number;
+  frames_site_wrong: number;
   /** S62: another object; S63: FITS outside lights/ (Siril's process/ copies), links to a frame listed. */
   left_out: { calibration: number; other_object: number; outside_lights: number; duplicates: number };
   rotation_deg: number;
@@ -215,7 +230,7 @@ function parseRefusal(v: unknown): Refusal | null {
 
 function parseExcluded(v: unknown): Excluded {
   const o = isObj(v) ? v : {};
-  return { saturated: num(o.saturated), suspect: num(o.suspect), nonfinite: num(o.nonfinite), undated: num(o.undated) };
+  return { saturated: num(o.saturated), no_detection: num(o.no_detection), suspect: num(o.suspect), nonfinite: num(o.nonfinite), undated: num(o.undated) };
 }
 
 export function parseAavsoPreview(v: unknown): AavsoPreview {
@@ -326,6 +341,13 @@ export function parseRerunResult(v: unknown): RerunResult | null {
     frames_resolved: num(v.frames_resolved),
     frames_unanchored: num(v.frames_unanchored),
     frames_unverified: num(v.frames_unverified),
+    frames_rotation_solved: num(v.frames_rotation_solved),
+    stars_off_centre: num(v.stars_off_centre),
+    frames_rotation_unsolved: num(v.frames_rotation_unsolved),
+    frames_no_target_point: num(v.frames_no_target_point),
+    frames_no_detection: num(v.frames_no_detection),
+    frames_header_airmass: num(v.frames_header_airmass),
+    frames_site_wrong: num(v.frames_site_wrong),
     left_out: { calibration: num(left.calibration), other_object: num(left.other_object), outside_lights: num(left.outside_lights), duplicates: num(left.duplicates) },
     rotation_deg: num(v.rotation_deg),
     shift_px: num(v.shift_px),

@@ -237,6 +237,16 @@ export interface AavsoInput {
 export const MIN_AAVSO_JD = 2_400_000;
 
 /**
+ * S66: the AAVSO pre-check's "AMASS wrong site". The curves' airmass is wrong only while the
+ * session's site check says the Settings site was wrong (A68 `airmass_source` "header") and the
+ * curves still carry the CSV's airmass: once the server put each frame's header AIRMASS in the
+ * column (A69 `airmass_column` "header", `airmassFixed`) there is nothing to warn about.
+ */
+export function airmassWrongSite(airmassSource: 'csv' | 'header', airmassFixed: boolean): boolean {
+  return airmassSource === 'header' && !airmassFixed;
+}
+
+/**
  * What the card shows before the dialog (the dialog's preview, A77, is the final word):
  * target-role curves only, one filter at a time (S53), saturated and suspect points left
  * out (Q-R3), the observer code required (Q-R2), FILT against the session's filter.
@@ -247,6 +257,7 @@ export function aavsoChecks(o: AavsoInput): { checks: AavsoCheck[]; rows: number
   const check = [...o.store.stars.values()].find((s) => s.role === 'check' && inFilter(s, o.filter)) ?? null;
   let rows = 0;
   let sat = 0;
+  let noDet = 0;
   let sus = 0;
   let nonfinite = 0;
   let undated = 0;
@@ -259,6 +270,8 @@ export function aavsoChecks(o: AavsoInput): { checks: AavsoCheck[]; rows: number
       if (!(Number.isFinite(c.jd[i]) && c.jd[i] >= MIN_AAVSO_JD)) undated++;
       else if (!(Number.isFinite(c.mag[i]) && Number.isFinite(c.err[i]))) nonfinite++;
       else if (c.flags[i] & FLAG_SATURATED) sat++;
+      // S67: a suspect point of a recorder-flagged frame (no detection), counted apart.
+      else if (c.flags[i] & FLAG_SUSPECT && c.flags[i] & FLAG_RECORDER) noDet++;
       else if (c.flags[i] & FLAG_SUSPECT) sus++;
       else {
         rows++;
@@ -290,12 +303,12 @@ export function aavsoChecks(o: AavsoInput): { checks: AavsoCheck[]; rows: number
   if (o.airmassWrong) checks.push({ id: 'amass', level: 'warn', label: 'AMASS', value: 'wrong site', detail: 'The Settings site was not where the telescope was during this run: the curves’ airmass, written as AMASS, is wrong (the FITS header AIRMASS is right)' });
   if (flagged) checks.push({ id: 'flagged', level: 'warn', label: 'Flagged', value: `${int(flagged)} point${flagged === 1 ? '' : 's'} · written`, detail: 'The run’s flight recorder marks these frames as no detection or a zero point more than 1 mag off: they are written unless you leave them out; the dialog names them' });
   checks.push(check ? { id: 'check', level: 'ok', label: 'Check', value: check.name } : { id: 'check', level: 'warn', label: 'Check', value: 'none · KNAME / KMAG na', detail: 'No check star in this source' });
-  if (sat || sus || nonfinite || undated)
+  if (sat || noDet || sus || nonfinite || undated)
     checks.push({
       id: 'excluded',
       level: 'warn',
       label: 'Left out',
-      value: [sat ? `${int(sat)} saturated` : '', sus ? `${int(sus)} suspect` : '', nonfinite ? `${int(nonfinite)} without a magnitude` : '', undated ? `${int(undated)} undated` : ''].filter(Boolean).join(' · '),
+      value: [sat ? `${int(sat)} saturated` : '', noDet ? `${int(noDet)} suspect (no detection)` : '', sus ? `${int(sus)} suspect` : '', nonfinite ? `${int(nonfinite)} without a magnitude` : '', undated ? `${int(undated)} undated` : ''].filter(Boolean).join(' · '),
       detail: 'Saturated, suspect, undated points and points without a magnitude are never exported (the file’s note says how many)',
     });
   if (targets.length && !rows) checks.push({ id: 'rows', level: 'block', label: 'Rows', value: '0', detail: 'Every point is left out (flagged, undated or without a magnitude)' });

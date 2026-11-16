@@ -100,6 +100,12 @@ export function rerunResultText(r: RerunResult): string {
   const bits = [`${int(r.frames_done)} of ${int(r.frames_total)} frames`, n(r.curves.length, 'curve', 'curves')];
   if (r.frames_skipped) bits.push(`${int(r.frames_skipped)} skipped`);
   if (r.frames_unverified) bits.push(`${int(r.frames_unverified)} unverified (suspect)`);
+  if (r.frames_rotation_solved) bits.push(`${int(r.frames_rotation_solved)} re-solved for rotation`);
+  if (r.stars_off_centre) bits.push(`${int(r.stars_off_centre)} off-centre (suspect)`);
+  if (r.frames_rotation_unsolved) bits.push(`${int(r.frames_rotation_unsolved)} not re-solved for rotation`);
+  if (r.frames_no_target_point) bits.push(`${int(r.frames_no_target_point)} without a target point`);
+  if (r.frames_no_detection) bits.push(`${int(r.frames_no_detection)} no detection (suspect)`);
+  if (r.frames_site_wrong) bits.push(`site in Settings wrong on ${int(r.frames_site_wrong)}`);
   return `${bits.join(' · ')} → ${r.folder}/`;
 }
 

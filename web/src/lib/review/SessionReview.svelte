@@ -39,7 +39,7 @@
   import type { ReviewIntent } from './intents';
   import type { WallLayoutState } from './layout.svelte';
   import PlotWall from './PlotWall.svelte';
-  import { aavsoChecks, ensembleRows, pointInfo, type EnsembleRow, type PointInfo } from './rail';
+  import { aavsoChecks, airmassWrongSite, ensembleRows, pointInfo, type EnsembleRow, type PointInfo } from './rail';
   import type { ReviewSource } from './session.svelte';
   import { defaultCells } from './wall';
 
@@ -193,7 +193,7 @@
   const aavso = $derived.by(() => {
     void version;
     // OBSCODE and FILT are the Settings' (observer.obscode, photometry.default_band), as A77-A78.
-    return aavsoChecks({ store: source.store, filter, filters: source.filters, obscode: obscode ?? info?.obscode ?? null, band: band ?? info?.band ?? null, frameFilters: info?.filters ?? {}, chartId: info?.chartId ?? null, wheel, airmassWrong: source.airmassSource() === 'header' });
+    return aavsoChecks({ store: source.store, filter, filters: source.filters, obscode: obscode ?? info?.obscode ?? null, band: band ?? info?.band ?? null, frameFilters: info?.filters ?? {}, chartId: info?.chartId ?? null, wheel, airmassWrong: airmassWrongSite(source.airmassSource(), source.airmassFixed()) });
   });
 
   function targetKeys(): string[] {

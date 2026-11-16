@@ -121,6 +121,7 @@ export function excludedText(e: Excluded | null | undefined): string | null {
   if (!e) return null;
   const bits: string[] = [];
   if (e.saturated) bits.push(`${int(e.saturated)} saturated`);
+  if (e.no_detection) bits.push(`${int(e.no_detection)} suspect (no detection)`);
   if (e.suspect) bits.push(`${int(e.suspect)} suspect`);
   if (e.nonfinite) bits.push(`${int(e.nonfinite)} without a magnitude`);
   if (e.undated) bits.push(`${int(e.undated)} undated`);

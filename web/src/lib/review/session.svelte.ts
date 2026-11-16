@@ -171,6 +171,8 @@ export interface SessionInfo {
    * AIRMASS (the mount's) right.
    */
   airmassSource: 'csv' | 'header';
+  /** S66: the curves' airmass is already each frame's header AIRMASS (A69 `airmass_column`). */
+  airmassFixed?: boolean;
   /** The header site check's sentence when it is not "ok" (A68 `site_check.message`). */
   siteNote: string | null;
   targets: TargetStarLike[];
@@ -317,6 +319,11 @@ export class ReviewSource {
     return this.info?.airmassSource ?? 'csv';
   }
 
+  /** S66: the curves' airmass (written as AMASS) is each frame's header AIRMASS, so right. */
+  airmassFixed(): boolean {
+    return this.info?.airmassFixed === true;
+  }
+
   /** The source as the exports and the re-run name it (the dialogs' `source`). */
   ref(): SourceRef | null {
     if (this.kind === 'live') return { kind: 'live' };
@@ -345,6 +352,7 @@ export class ReviewSource {
       const curves = parseCurves(rawCurves);
       const s = rawSession as Record<string, unknown>;
       if (curves.airmass_source === 'header' && info.airmassSource !== 'header') info.airmassSource = 'header';
+      info.airmassFixed = curves.airmass_column === 'header';
       this.apply('session', info, curves.curves, frameRows(Array.isArray(s.frames) ? s.frames : []), parseQualityBlock(s.quality ?? s.comparison_quality ?? null), curves.problems ?? []);
     } catch (e) {
       if (ac.signal.aborted) return;
@@ -369,6 +377,7 @@ export class ReviewSource {
     // The source is the CSV file (protocol Source "import"), not the CurveSet's `root` folder.
     const info = { ...parseSession({ ...r, folder: basename(file), object: str(r.object) ?? str(r.object_name) ?? '' }, file), path: file };
     if (curves.airmass_source === 'header') info.airmassSource = 'header';
+    info.airmassFixed = curves.airmass_column === 'header';
     this.apply('import', info, curves.curves, [], [], curves.problems ?? []);
   }
 

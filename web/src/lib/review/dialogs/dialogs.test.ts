@@ -150,9 +150,12 @@ describe('AAVSO dialog: the request and what blocks Export', () => {
   });
 
   it('says the points left out, non-zero counts only, grouped digits', () => {
-    expect(excludedText({ saturated: 0, suspect: 0, nonfinite: 0, undated: 0 })).toBeNull();
+    expect(excludedText({ saturated: 0, no_detection: 0, suspect: 0, nonfinite: 0, undated: 0 })).toBeNull();
     expect(excludedText(null)).toBeNull();
-    expect(excludedText({ saturated: 3, suspect: 1200, nonfinite: 0, undated: 1 })).toBe(`Left out: 3 saturated · 1${NNBSP}200 suspect · 1 undated`);
+    expect(excludedText({ saturated: 3, no_detection: 0, suspect: 1200, nonfinite: 0, undated: 1 })).toBe(`Left out: 3 saturated · 1${NNBSP}200 suspect · 1 undated`);
+    // S67: the no-detection points (the run's flight recorder) are named apart.
+    expect(excludedText({ saturated: 0, no_detection: 2, suspect: 1, nonfinite: 0, undated: 0 })).toBe('Left out: 2 suspect (no detection) · 1 suspect');
+    expect(parseAavsoPreview({ ...PREVIEW_RAW, excluded: { no_detection: 2 } }).excluded.no_detection).toBe(2);
     expect(rowsText(1)).toBe('1 row');
     expect(rowsText(1365)).toBe(`1${NNBSP}365 rows`);
   });
@@ -304,5 +307,43 @@ describe('Re-run dialog (A76, M50)', () => {
     })!;
     expect(rerunResultText(r)).toBe('193 of 195 frames · 2 curves · 2 skipped · 4 unverified (suspect) → photometry_rerun_x/');
     expect(checkRmsLines(r, (k) => k.replace('@ir', ' [IR]'))).toEqual(['Check c [IR]: RMS 0.012 mag over 183 frames']);
+  });
+
+  it('says the S69 counts: re-solves for rotation and off-centre measurements', () => {
+    const r = parseRerunResult({
+      out_dir: '/s/photometry_rerun_y',
+      folder: 'photometry_rerun_y',
+      frames_total: 24,
+      frames_done: 24,
+      frames_rotation_solved: 7,
+      stars_off_centre: 15,
+      curves: [{ key: 'a' }],
+    })!;
+    expect(r.frames_rotation_solved).toBe(7);
+    expect(rerunResultText(r)).toBe('24 of 24 frames · 1 curve · 7 re-solved for rotation · 15 off-centre (suspect) → photometry_rerun_y/');
+    const old = parseRerunResult({ out_dir: '/s/r', folder: 'r', frames_total: 1, frames_done: 1, curves: [] })!;
+    expect(old.frames_rotation_solved).toBe(0); // a server before S69
+    expect(old.stars_off_centre).toBe(0);
+  });
+
+  it('says the failed rotation re-solves, frames without a target point, no detection and a wrong site', () => {
+    const r = parseRerunResult({
+      out_dir: '/s/photometry_rerun_z',
+      folder: 'photometry_rerun_z',
+      frames_total: 24,
+      frames_done: 24,
+      frames_rotation_unsolved: 7,
+      frames_no_target_point: 1,
+      frames_no_detection: 1,
+      frames_header_airmass: 24,
+      frames_site_wrong: 24,
+      curves: [{ key: 'a' }],
+    })!;
+    expect(r.frames_header_airmass).toBe(24);
+    expect(rerunResultText(r)).toBe(
+      '24 of 24 frames · 1 curve · 7 not re-solved for rotation · 1 without a target point · 1 no detection (suspect) · site in Settings wrong on 24 → photometry_rerun_z/',
+    );
+    const old = parseRerunResult({ out_dir: '/s/r', folder: 'r', frames_total: 1, frames_done: 1, curves: [] })!;
+    expect([old.frames_rotation_unsolved, old.frames_no_target_point, old.frames_no_detection, old.frames_site_wrong]).toEqual([0, 0, 0, 0]);
   });
 });

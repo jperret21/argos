@@ -336,10 +336,11 @@
         if (j.kind === 'export' && j.state === 'done') {
           const r = parseExportResult(j.result);
           if (r?.download) void saveDownload(j.id, r.name);
-          if (away) app.toast('info', 'Exported', r ? `${r.rows} ${r.rows === 1 ? 'row' : 'rows'} to ${r.download ? `${r.name} (download)` : `${baseName(r.path ?? r.name)} in ${baseName(parentPath(r.path ?? ''))}`}` : (j.message ?? ''));
+          // Reveal in Finder (desktop app, W8) for a file written on disk, not a download.
+          if (away) app.toast('info', 'Exported', r ? `${r.rows} ${r.rows === 1 ? 'row' : 'rows'} to ${r.download ? `${r.name} (download)` : `${baseName(r.path ?? r.name)} in ${baseName(parentPath(r.path ?? ''))}`}` : (j.message ?? ''), app.revealAction(r && !r.download ? r.path : null));
         } else if (j.kind === 'rerun' && j.state === 'done') {
           const r = parseRerunResult(j.result);
-          if (away) app.toast('info', 'Photometry re-run', r ? `${r.frames_done} frames → ${r.folder || r.out_dir}` : (j.message ?? ''));
+          if (away) app.toast('info', 'Photometry re-run', r ? `${r.frames_done} frames → ${r.folder || r.out_dir}` : (j.message ?? ''), app.revealAction(r?.out_dir));
         } else if (j.state === 'failed' && j.kind !== 'session_open') {
           app.toast('error', j.kind === 'rerun' ? 'Re-run failed' : 'Export failed', j.error?.message ?? j.message ?? '');
         }

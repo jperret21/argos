@@ -2656,6 +2656,124 @@ server passes no `software=`).
 - Not checked live: Gaia DR3, SIMBAD, NASA (unreachable here); the RR Lyr template fit
   (no reference); `OBSTYPE=CMOS` against the live AAVSO list (aavso.org answered 403).
 
+### 9. Science decisions S66-S72 (2026-11-15)
+
+The owner accepted the W7 reviews' recommendations as release/0.5.0 items S66-S72, each
+fixed in Qt first (`notes/release_0_5_0.md`) and ported here behind a feature GUARD until
+the merge.
+
+- **S66, S67, S68 (Review and exports).** The core reader's old-file rules
+  (`argos/core/session/review.py`: `apply_old_file_rules`, `apply_old_file_rules_to_file`)
+  run in A68/A69 and A70 through `review.core_rules()` (GUARD): a wrong-site run's airmass
+  is each frame's header AIRMASS (`CurveSet.airmass_column: "header"`, the preview's
+  `airmass.source`), a no-detection frame of the flight recorder flags every star's point
+  `suspect` (`no_detection` flag; `excluded.no_detection` in A77/A78, "N suspect (no
+  detection)"), `sigma_syst` recomputed without them; the S56 `few_anchors` rows stay
+  written and the preview points to a re-run (S58). The re-run (A76) checks each frame's
+  header against the Settings site (S66, `frames_header_airmass`, a note). S68: a VSP answer
+  names the chart of comparisons kept without one (`field.backfill_chart_ids`, GUARD);
+  `#OBSTYPE` stays CCD. Level (a), on the release core overlaid (scratch, not this tree):
+  RR Lyr AMASS 1.033 on row 1, 1.033-1.364, at most 0.0007 from astropy (3.055 before);
+  193 rows (2 no-detection left out), target `sigma_syst` 0.01657 → 0.01497; XX Cyg 09-07
+  23 rows, 0.2918 → 0.2365; XX Cyg 08-29 22 rows; the AAVSO validator finds no error in
+  the 9 files. Level (b): A78 session and import, A79 session and import equal Qt's Review
+  and Analyze files byte for byte on the three sessions (12/12), and the re-runs equal the
+  fixed Qt worker's (RR Lyr 7 CSVs, XX Cyg 9 and 6, each with `targets.json`). A re-run of
+  XX Cyg 08-29 `050148Z` verifies 22/22 frames (12 ASTAP re-solves; 13 with S69-S71), none flagged. The web
+  card counts "suspect (no detection)" apart and drops the AMASS warning once
+  `airmass_column` is `header`.
+- **S71, S72 (the photometric model).** Core only (`differential.py`, `aperture.py`, the
+  S30 Pro profile's `black_level_adu`); the server calls the same functions, so a re-run,
+  the live points and A54 follow after the merge with no server change but two: the
+  comparison-quality aperture in `field.py` passes the profile's black level (GUARD
+  `_APERTURE_TAKES_BLACK`), and `targets.py`'s pilot-quality aperture should too (not this
+  wave's file: open). Readiness `faint_comparisons` (S71, warn, `median_snr` < 10 of the
+  recorder's comparisons; no guard): XX Cyg 08-29 1.7 warns, XX Cyg 09-07 20 and RR Lyr
+  101 do not. S71 alone on the study re-runs (fixed Qt worker): XX Cyg 08-29 check
+  000-BJV-171 +0.155 ± 0.079 → +0.055 ± 0.027 (within its VSP and comparison errors),
+  XX Cyg 09-07 check 000-BJV-169 −0.061 ± 0.017 → −0.036 ± 0.013, RR Lyr check 000-BCG-523
+  +0.0174 → +0.0166 ± 0.0016, RR Lyr 2 comps − Siril green 2 comps +0.0020 → +0.0004
+  (robust σ 0.0099), 6 comps −0.0112 → −0.0083 (0.0173 → 0.0157); no count changes. S72
+  is in the core but off by default (`photometry.noise_model`: `pixel`; `green_plane` = S72):
+  as decided (2 × the frame's EGAIN, rn/√2, black level 1024 ADU) it fails its own test:
+  model sky σ −54 %, −67 %, −66 % of the measured green-plane σ, because the frames' EGAIN
+  (0.8 driver, 1.723 reference, gain 80) is 3-9× the photon transfer's 0.20-0.25 e-/ADU;
+  with 0.20 it passes (−4 %, −1 %, +1 %). With the frames' EGAIN the S43, S58 and low-SNR
+  gates loosen (RR Lyr frames 52-53 measured off the stars unflagged; XX Cyg 08-29's 12
+  verify solves gone); with 0.20 in every path the counts are unchanged and the star-pair
+  scatter / formal error goes 2.64 → 2.31 (XX Cyg 09-07) and 1.37 → 1.22 (XX Cyg 08-29).
+  Owner decision open (`notes/release_0_5_0.md` S72, S73): which e-/ADU S72 uses.
+  Level (b): the server's re-run (HEAD `rerun.py`, release core overlaid) equals the fixed
+  Qt worker byte for byte on RR Lyr 2 comps, XX Cyg 09-07 and 08-29, with S72 off and on
+  (44/44 files).
+- **S69, S70 (the tracker on alt-az runs; the re-run's frame gain).** Root cause of the
+  under-rotation (XX Cyg 09-07 `040723Z`: 15.37° found, ASTAP 16.49°): core
+  `ApertureTracker.update` centroided each anchor once in a 15 px window centred on its
+  prediction; the clipped sky noise and the cut wings kept the centroid 30-80 % of the way
+  to the window's centre (every anchor of the 24 frames against each frame's ASTAP
+  solution), a lag of 0.4-1.2° on a field turning 0.7° per sub. Fixed in the core
+  (`tracking.py`: re-centred until it converges, then in a 4 px window): within 0.07° of
+  ASTAP on all frames. The safety nets are ported behind `photometry.s69_core()` (GUARD):
+  (a) a solve due past 2° of tracked rotation since the solution (`TrackedWCS.rotation_deg`;
+  live and sequence: `FieldService.resolve_due`, once per 2° while none lands; re-run: the
+  frame re-solved, `frames_rotation_solved`), (b) each comparison and check star seen at
+  SNR ≥ 5 more than 1 px from its aperture centre left out of the frame's ensemble
+  (`measure_frame(exclude=…)`), its point `suspect`, `stars_off_centre`, the recorder's
+  `centroid_offset_px` / `off_centre`, and the anchors S56/S58 count are the centred ones.
+  S70 (the re-run's tracker and lock checks with the frame's own e-/ADU) is ported behind
+  the same GUARD (applied with S69 only). The web re-run summary says "N re-solved for
+  rotation", "N off-centre (suspect)". Level (a), release worktree's batch worker with
+  ASTAP: XX Cyg 09-07 apertures 0.01-0.22 px from each frame's solution on frames 1-3 and
+  the last (0.2-4.5 px before; 8.5 px with S70 alone), check 000-BJV-169 −0.045 ± 0.017 →
+  −0.071 ± 0.010 (scatter 0.084 → 0.046; 1.4σ from VSP with VSP's ± 0.051; 000-BJV-173
+  adds 1.0 % of light), 7 re-solves for rotation; XX Cyg 08-29 check +0.060 either way,
+  apertures 0.5 → 0.1 px (median), 10 → 13 verify solves; RR Lyr 2 comps − Siril green
+  +0.0004 → +0.0013, robust σ 0.0099 → 0.0096, check +0.0166 → +0.0162. No point flagged,
+  no frame skipped on the three re-runs. Live replays of the owner's runs: the same points
+  in Qt and here; XX Cyg 08-29 gains 3 frames flagged by S56's 2 px freshness rule (the
+  field moved 2.5-3.7 px between subs, which the lagging tracker under-reported; owner
+  decision open). Level (b): re-run CSVs, `targets.json` and recorder records equal the
+  fixed Qt worker's on the three sessions (19/19 CSVs), and the HTTP job's on XX Cyg 09-07
+  (9/9).
+- **Fixer round: the owner's calls on the reviews' open items (2026-11-15).** Qt first in
+  release/0.5.0, then here (same GUARDs). S66 option (b): an Argos frame's header AIRMASS
+  whatever the site check (a warning now), unless its pointing is frozen (X1: RA, DEC,
+  ALTITUDE, AZIMUTH, AIRMASS those of a light 60 s or more before), in Review, Open curve
+  CSV and the re-run (`frames_header_airmass`, `frames_site_wrong`); `airmass_column` is
+  `header` whenever a point took it; `OldFileRules.airmass_computed` replaces
+  `airmass_unknown`. S67 option (b): the zero-point rule frame-wide, SNR < 3 per target
+  (`no_detection_frames[].low_snr` lists the targets), and the re-run applies it to its own
+  frames (`frames_no_detection`). S71: a comparison holding over half the weight that two
+  others or more contradict (2.5 combined σ) flags the point suspect (release
+  `DiffResult.suspect`); `faint_comparisons` now comes from the core, which Qt's Review warns
+  on too. S69, both reviews: a star beside a set star of a quarter of its core flux or more,
+  within the search radius + 8 px, is no anchor; the centring centroid stays within 0.45 ×
+  that distance and is re-centred in 3 px; the anchor the fit rejects is not a verifying one;
+  failed re-solves for rotation (`frames_rotation_unsolved`) and frames without a target
+  point (`frames_no_target_point`) are counted and said, and a failed rotation re-solve no
+  longer says "its points are flagged". Web: Reveal on the export and re-run toasts
+  (desktop), the airmass pre-check as a pure helper with its test, the new re-run counts in
+  the summary. Level (a), final re-runs (ASTAP, each night's Settings site) and the
+  sessions' own files: target airmass within 0.00035 (RR Lyr), 0.00044 (XX Cyg 09-07) and
+  0.00009 (08-29) of astropy at the fitted site in Review, 0.0003 / 0.0004 / 0.0001 in the
+  re-runs (header AIRMASS on 195/195, 24/24, 22/22 frames; RR Lyr warns of its wrong site);
+  AAVSO AMASS 1.033 on row 1, 1.033-1.364; RR Lyr 2 comps − Siril green 2 comps +0.0013,
+  robust σ 0.0096; 6 comps −0.0076, 0.0153; times within 0.1 ms of astropy; checks 000-BCG-523
+  +0.0155 ± 0.0017, 000-BJV-169 −0.074 ± 0.009 (1.4σ with VSP's error), 000-BJV-171
+  +0.051 ± 0.023 (1.35σ); `040723Z` 0 off-centre (15 before; 000-BJV-173 no anchor, at most
+  0.23 px from its aperture), frames 1-3 within 0.27 px of every star; `050148Z` 13 verify
+  solves, 0 flagged, 0 off-centre (000-BJV-178's false flag gone), 1 frame flagged by S71's
+  heavy-comparison rule; RR Lyr 193 rows, `sigma_syst` 0.01657 → 0.01497; `040723Z` frame
+  20's target point only (SNR 1.6), 23 rows, 0.2918 → 0.2365. Level (b): the four re-runs
+  (RR Lyr 2 and 6 comps, XX Cyg 09-07, 08-29) equal the fixed Qt worker's (counts, solver
+  calls, every CSV, `targets.json`, every recorder record); the 12 export files equal Qt's
+  Review and Analyze files; the AAVSO validator finds no error. The independent checks:
+  `web/spec/decisions-s66-s72-independent-checks.md`. Owner decisions still open: the
+  e-/ADU at gain 80 (S73) and enabling S72, a scintillation term, the annulus-median error
+  term, the sky estimator, S56's 2 px freshness with the converged tracker, proper motion,
+  000-BJV-173 in `040723Z`'s set, the header AIRMASS of off-centre stars (check 000-BCG-523
+  0.0071 from its own airmass).
+
 ## Wave 8: Desktop app and Qt retirement (2026-11-15)
 
 Scope (README section 7, row W8; waves.md §5 W8; rows M18, M20; A7, A12): the Tauri v2

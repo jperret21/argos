@@ -2343,6 +2343,27 @@ saturated ensemble, no comparison) gives no point that frame.
   slower than one sub interval such subs stay flagged and every other sub is
   solved (no loop or stall: at most one solve starts per sub).
   The 2 px threshold stays until a field drifting more is observed.
+- **Tracker on an alt-az run** (release S69, GUARD: active once the release
+  core is merged, `photometry.s69_core()`). The tracker's centroids are
+  re-centred on themselves until they converge (core `tracking.py`): one
+  centroid per window centred on the prediction lagged a field turning 0.7°
+  per sub by about 1° (XX Cyg 2026-09-07). (a) A solve is due when the tracked
+  rotation since the solution (`TrackedWCS.rotation_deg`, a set-change rebase
+  included) exceeds **2°**, as after `lock_lost` (in a run the sub in hand);
+  while none lands, again only after 2° more (`rotation_resolve_due`), so a
+  failing solver never loops; a `rotation_resolve_due` event (`rotation_deg`)
+  in the flight recorder. (b) Each frame, every comparison and check star seen
+  at SNR >= 5 has its centroid measured within its aperture
+  (`tracking.centring_offsets`); one more than **1 green px** from its aperture
+  centre is left out of the frame's ensemble (`measure_frame(exclude=…)`), its
+  own point is flagged `suspect`, its star record carries `off_centre: true`
+  (every tested star its `centroid_offset_px`), an `off_centre` event
+  (`stars`) is recorded and a WARN "Photometry: N comparison/check stars more
+  than 1 px from the aperture centre — left out of the frame's ensemble, their
+  points flagged suspect." is logged once per episode (a frame with none ends
+  it). The anchors counted by the unverified-lock rule above are those centred:
+  off-centre anchors that leave fewer than 3 make the frame unverified unless
+  it is fresh.
 - **One curve per (star, filter)** (release S49, wave 6b): the filter of the
   measured frame is a sub's read-back `FILTER`, an opened file's `FILTER` card
   (none: `clear`), a live frame's wheel slot when the wheel reports one
@@ -2357,6 +2378,22 @@ saturated ensemble, no comparison) gives no point that frame.
   an opened frame keeps its own: the table at its `GAIN`, else its `EGAIN`
   (`frame_egain`, release S41), the chain above only when it records neither.
   A Take shot's header `EGAIN` follows the same chain (release S42).
+  Once release/0.5.0's core is merged (S71, S72): the zero point is the
+  comparisons' mean weighted by `1/(inst_mag_err² + 0.01²)`, clipped at 2.5
+  normalised residuals about the weighted median, and its error
+  `max(sqrt(1/Σw), weighted rms/√n)` is in `formal_mag_err`; when the
+  comparison holding more than half the weight is contradicted by the
+  weighted mean of two others or more (beyond 2.5 combined σ), the point is
+  flagged suspect and the `ensemble` record's note says so (release
+  `DiffResult.suspect`, read with `getattr`: GUARD). S72's noise model
+  (the (G1+G2)/2 plane's: `2 × egain` e-/ADU, read noise `rn/√2` ADU, the
+  telescope profile's black level `black_level_adu` subtracted from the sky
+  before its Poisson term) is in the core but off by default
+  (`photometry.noise_model`: `pixel`, the 0.4.x model; `green_plane`, S72)
+  until the owner decides the e-/ADU. The server calls the same core functions;
+  `field.py`'s comparison-quality aperture passes `black_adu` itself (GUARD:
+  `_APERTURE_TAKES_BLACK`); `targets.py`'s pilot-quality aperture
+  (`_pilot_comparison_quality`) does not yet (open: Qt's passes it).
 - **Errors and flags**: `formal_mag_err`; `mag_err` = `hypot(max(0,
   formal), σ_syst)` once the curve has ten valid points (or with
   `photometry.systematic_floor_mag`), recomputed for every point of the
@@ -3769,9 +3806,13 @@ HeaderSiteCheck = {"state": "ok"|"mismatch"|"unknown", "frames": int,
 - `readiness.issues`: `session_warning` (warn, one per core warning, e.g.
   "Missing FITS frame: <name>"), `no_lights` and `no_fits` (error; the
   texts of `readiness_issues`, `review.py:76-82`), `site_mismatch` (warn),
-  `flagged_points` (warn, `count` = target points with `zp_outlier` or
-  `low_snr`), `unverified_lock` (warn, W7 fix, `count` = target points
-  with `few_anchors` and neither of those), `unidentified_curve` (warn,
+  `flagged_points` (warn, `count` = target points with `zp_outlier`,
+  `low_snr` or `no_detection`), `unverified_lock` (warn, W7 fix, `count` =
+  target points with `few_anchors` and none of those), `faint_comparisons`
+  (warn, S71, `median_snr`: each comparison's median recorder SNR over the
+  run, the median of those, below 10; unsaturated records only; with
+  release/0.5.0's core the core's value, `OldFileRules.comparison_median_snr`,
+  which Qt's Review warns on alike), `unidentified_curve` (warn,
   one per curve file whose star or role is unknown). `state` is `blocked`
   with an error, `warnings` with a warning, else `ready`.
 - **Header site check** (X3 on the files, `notes/release_0_5_0.md` "Site
@@ -3787,6 +3828,23 @@ HeaderSiteCheck = {"state": "ok"|"mismatch"|"unknown", "frames": int,
   owner's RR Lyr 2026-09-25 run is such a run. Otherwise `airmass_source:
   "csv"`. Nothing is rewritten: the CSV keeps its airmass, A69 adds the
   header's beside it.
+- (S66, the owner's option b; GUARD: release/0.5.0's core,
+  `review.core_rules()`) Whatever the site check says, the curves' `airmass`
+  becomes the header AIRMASS of the Argos light whose `DATE-OBS +
+  EXPTIME/2` is nearest the point, within 5 s, unless that light's pointing
+  is frozen (X1: `RA`, `DEC`, `ALTITUDE`, `AZIMUTH`, `AIRMASS` all those of a
+  light 60 s or more before, a lost mount's last poll; such lights are not
+  site-checked either); a point without one keeps the CSV's (computed for the
+  Settings site). By the core's `apply_old_file_rules` as Qt's
+  `load_session_curves` applies it: `CurveSet.airmass_column: "header"` when
+  any point took it. The site check stays a warning: on `mismatch` the
+  `site_mismatch` issue says "…: fix it in Settings › Observer & site. The
+  airmass shown and exported is each frame's FITS header AIRMASS, from the
+  mount (S66)." (plus the count of points left with the computed airmass).
+  The same rule reads the run's flight recorder (S67, "Curves" below). The
+  owner's runs: RR Lyr AMASS 1.033 on its first row (4.088 before; the target
+  within 0.00035 of astropy at the site fitted to the mount), XX Cyg 09-07
+  and 08-29 within 0.00044 and 0.00009.
 
 ### Curves (A69, A70)
 
@@ -3796,7 +3854,20 @@ CurveSet = {"source": Source, "object": string|null, "root": path|null,
             "curves": [ReviewCurve],
             "filters": [string], "multi_filter": bool,
             "problems": [string],             // per-file problems (identify_curve_file)
-            "airmass_source": "csv"|"header", "revision": string}
+            "airmass_source": "csv"|"header", "revision": string,
+            "airmass_column": "csv"|"header", // (S66) "header": `airmass` is the header AIRMASS
+                                              //   (points without one keep the CSV's)
+            "old_file_rules": OldFileRules|null}   // (S66, S67) null before the merge (GUARD)
+OldFileRules = {"site_mismatch": bool, "airmass_from_header": int,
+                "airmass_computed": int,          // points left with the CSV's airmass (S66)
+                "frozen_lights": int,             // X1: lights whose pointing is frozen
+                "no_detection_frames": [{"file", "frame": int, "jd_utc",
+                                         "low_snr": [string],   // targets below SNR 3
+                                         "zp_outlier": bool}],
+                "no_detection_points": int,
+                "comparison_median_snr": float|null,     // S71 (faint_comparisons)
+                "sigma_syst": {name: [before, after]},   // floors recomputed (S67)
+                "messages": [string]}                    // Qt Review's warning lines
 ReviewCurve = {"key": string,                 // "<AUID, else display name>@<filter token>" (S49)
                "identity": string,            // the core's identity key (dedup of aliases)
                "role": "target"|"comparison"|"check", "name": string, "auid": string|null,
@@ -3856,6 +3927,18 @@ ReviewCurve = {"key": string,                 // "<AUID, else display name>@<fil
     not record): on the owner's files, all 22 frames of XX Cyg 2026-08-29
     and RR Lyr frames 52 and 175 (already `zp_outlier`). Display and
     readiness only (`unverified_lock`); the export decides (A77).
+  - `no_detection` (S67, GUARD): on a frame of the recorder where the
+    `zp_outlier` rule holds, every star's point, and where a target has an
+    SNR below 3, that target's points (the owner's option b: per target), are
+    `suspect` (the column) and carry this flag; it is left out of the AAVSO
+    export (counted apart, A77) and the curve's `sigma_syst` (with each
+    `mag_err`) is recomputed without those points when the file's floor is
+    the automatic estimate of its own points (a manual floor is kept). The
+    core's `apply_old_file_rules`, as Qt's Review: the owner's RR Lyr run
+    loses frames `_00053`, `_00176` (both rules; target `sigma_syst` 0.01657
+    → 0.01497), XX Cyg 2026-09-07 `040723Z` frame 20's target point (SNR
+    1.6, its zero point normal; 0.2918 → 0.2365). `few_anchors`
+    points are never dropped by it (a re-run, S58, verifies them).
   - The client draws `zp_outlier` / `low_snr` points hollow, leaves them out
     of a cell's y range (a point off the range is a chevron on the edge) and
     draws their error bar at half the error ink.
@@ -3873,7 +3956,11 @@ ReviewCurve = {"key": string,                 // "<AUID, else display name>@<fil
   session's single light filter as A69 (`filter_source: "session"`, read
   from `session.json` alone).
   A curve whose star or role is unknown has `exportable: false` and the
-  core's problem text. `422 invalid_csv` with the reason: no valid row
+  core's problem text. (S66, S67, GUARD) A run's own CSV (`<session>/
+  photometry/*.csv`) gets its session's old-file rules as Analyze's Open
+  curve CSV applies them (`apply_old_file_rules_to_file`): `airmass_column`,
+  `old_file_rules` and the `no_detection` flag as for the session; a batch
+  re-run's CSV or a preview curve is read as written. `422 invalid_csv` with the reason: no valid row
   ("No valid photometry rows in <name>"), a missing column ("<name> has no
   'mag_err' column"), not UTF-8 text, not a CSV.
 
@@ -4057,17 +4144,19 @@ AavsoPreview = {"source": Source, "object": string|null,
                 "chart": string, "chart_source": "request"|"targets"|"none",   // "na" when none
                 "check": {"key", "name", "kname", "points", "kmag_rows"}|null,
                 "targets": [{"key", "name", "points", "rows",
-                             "saturated", "suspect", "nonfinite", "undated",
+                             "saturated", "no_detection", "suspect", "nonfinite", "undated",
                              "recorder_flagged": [int],     // point indices, see below
                              "unverified_lock": [int]}],    // (W7 fix) S56 rule, see below
                 "rows": int,
-                "excluded": {"saturated": int, "suspect": int, "nonfinite": int, "undated": int},
+                "excluded": {"saturated": int, "no_detection": int,   // (S67) no_detection
+                             "suspect": int, "nonfinite": int, "undated": int},
                 "recorder_flagged": int,           // rows written although the recorder flags them
                 "unverified_lock": int,            // (W7 fix) rows on a few-anchor frame (S56)
                 "flagged_points": [{"key", "index", "jd_utc", "mag", "mag_err", "flags"}],  // both, named
                 "warnings": [{"code": "airmass_wrong_site"|"recorder_flagged"|"unverified_lock",
                               "count": int, "message": string}],   // (W7 fix) shown with the glyph
-                "airmass": {"source": "csv", "state": "ok"|"mismatch", "message": string|null},
+                "airmass": {"source": "csv"|"header",   // (S66) "header": AMASS is the header AIRMASS
+                            "state": "ok"|"mismatch", "message": string|null},
                 "notes": [string],                 // the other lines the dialog shows (the
                                                    //   left-out counts, the check, the band note)
                 "refusal": {"code", "message", "details"?}|null,   // what A78 would answer now
@@ -4092,7 +4181,10 @@ ExportResult = {"path": path|null, "name": string, "bytes": int, "download": boo
   verified lock), points with a non-finite magnitude or error, and (S60)
   undated points (`jd_utc` not finite or below JD 2 400 000: a pre-0.5.0
   batch re-run wrote JD 0 for a frame without `DATE-OBS`, S13). There is
-  no option to include them.
+  no option to include them. (S67) A suspect point flagged `no_detection`
+  (`LcPoint.no_detection`, the core's rule from the run's flight recorder)
+  is counted apart as `no_detection` and named "N suspect (no detection)"
+  in the notes and the export's log line, as Qt's Export AAVSO message.
 - **Flight-recorder flags** (A69 `flags` `low_snr`, `zp_outlier`: a target SNR
   below 3, S35's "not a detection", or a zero point more than 1 mag off, S52):
   the fixed Qt export reads the CSV only and writes these points; so does
@@ -4103,6 +4195,12 @@ ExportResult = {"path": path|null, "name": string, "bytes": int, "download": boo
   before S35). (W7 fix) `few_anchors` points (S56's conservative old-file
   rule) are counted apart in `unverified_lock` with their own warning:
   written too, as the fixed Qt writes them (XX Cyg 2026-08-29: all 22).
+  (S67, GUARD) With release/0.5.0's core the no-detection points are suspect
+  (A69) and left out by the writer, Qt and server alike: `recorder_flagged`
+  is then 0 and its warning gone. The `unverified_lock` warning stays and
+  points to a re-run (S58), which verifies each such frame with a plate
+  solve (owner decision 2026-11-15: the S56 old-file rule over-flags, it
+  never drops a row).
 - **One filter at a time (S53)**: `filters` are the tokens of the source's
   target and check curves (`ReviewCurve.filter`; a pre-0.5.0 file name
   takes the session frames' filter, else `""`). With more than one, a
@@ -4115,8 +4213,22 @@ ExportResult = {"path": path|null, "name": string, "bytes": int, "download": boo
   the owner's RR Lyr 2026-09-25 run), `airmass.state` is `mismatch` and a
   `warnings` line (`airmass_wrong_site`) says the values were computed for
   the wrong site (the FITS header AIRMASS is right); the export still
-  writes the CSV values (an owner decision is pending: header AIRMASS, or
-  `na`).
+  writes the CSV values. (S66, the owner's option b; GUARD) With
+  release/0.5.0's core the `airmass` column is already each frame's header
+  AIRMASS (`CurveSet.airmass_column: "header"`; a point without one keeps
+  the CSV's): the message says "AMASS is each frame's FITS header AIRMASS,
+  from the mount (S66)." and, on `mismatch`, "The site in Settings was not
+  where the telescope was during this run."; an `airmass_wrong_site`
+  warning remains only when points of the run were left with the airmass
+  computed for that wrong site (`count`: `OldFileRules.airmass_computed`).
+  Qt's Review and Analyze write the same bytes.
+- **#SOFTWARE, #OBSTYPE, CHART** (S64, S68): `#SOFTWARE=Argos v<version>`
+  (`argos.SOFTWARE_ID`, the writer's default; the server passes no
+  `software=`). `#OBSTYPE=CCD`: the AAVSO Extended File Format reports a
+  CMOS camera as CCD. CHART is the comparisons' single VSP chart
+  (`comparison_chart_id`); a VSP answer now names the chart of comparisons
+  kept from before 0.4.2 (`field.backfill_chart_ids`, S68), so new runs
+  write it; older runs' `targets.json` keep `na`.
 - **Refusals** (`refusal` in the preview, the same `409` from A78 before
   any job starts): `obscode_unset` ("Set your AAVSO observer code in
   Settings first: it is stamped on every AAVSO report.", Q-R2: empty or
@@ -4187,6 +4299,13 @@ RerunPlan   = {"session": path, "frames_dir": path, "frames": int,
 RerunResult = {"out_dir": path, "folder": string, "source": Source,   // open it in Review
                "frames_total": int, "frames_done": int, "frames_skipped": int,
                "frames_resolved": int, "frames_unanchored": int, "frames_unverified": int,
+               "frames_rotation_solved": int,   // S69 (a): re-solved, the field turned > 2°
+               "stars_off_centre": int,         // S69 (b): comparison/check rows > 1 px off
+               "frames_rotation_unsolved": int, // S69 (a): such a re-solve failed (tracker kept)
+               "frames_no_target_point": int,   // S69 (b): every comparison off-centre
+               "frames_no_detection": int,      // S67: points flagged no_detection (suspect)
+               "frames_header_airmass": int,    // S66: airmass = the frame's header AIRMASS
+               "frames_site_wrong": int,        // S66: header says the Settings site > 5° off
                "left_out": {…as RerunPlan},
                "rotation_deg": float, "shift_px": float,
                "series_fwhm_px": float|null, "aperture_px": float,
@@ -4238,9 +4357,36 @@ RerunResult = {"out_dir": path, "folder": string, "source": Source,   // open it
   or 2 anchors (a solution of this frame or the previous one within 2 px,
   else a re-solve, else the points flagged suspect), each frame's own
   e-/ADU (`frame_egain`, S41; the fallback is Settings' table at the
-  Camera gain, else the sensor reference, as `_engine_egain`), JD UTC at
+  Camera gain, else the sensor reference, as `_engine_egain`; S70, GUARD with
+  S69: in the tracker's anchors and the lock checks too, not only in the
+  measurement), S69 (GUARD: the release core): a re-solve once the tracked
+  rotation since the solution exceeds 2° (a failed one retried only after 2°
+  more; `re_solved_rotation` / `rotation_not_re_solved` events, the count
+  `frames_rotation_solved` and an `info` note "the field turned more than 2°
+  since its solution on N frames; each was re-solved (S69)"), and each
+  comparison and check star more than 1 px from its aperture centre left out
+  of its frame's ensemble, its row flagged suspect (the count
+  `stars_off_centre`, a `warning` note, the frame's `tracking` record's
+  `off_centre`; the anchors S58 counts are those centred), JD UTC at
   mid-exposure (`DATE-OBS` + `EXPTIME`/2), BJD_TDB and airmass for the
-  Settings site (none without a site), one curve per (star, filter)
+  Settings site (none without a site; S66, the owner's option b, GUARD: an
+  Argos frame with a header AIRMASS takes it, the mount's, unless its
+  pointing is frozen (X1), whatever the site; `frames_header_airmass` and
+  an `info` note "the airmass of N frames of M is the FITS header AIRMASS
+  …"; a frame whose header puts the mount more than 5° from the direction
+  computed for the Settings site counts in `frames_site_wrong`, one WARN per
+  run and a `warning` note "on N frames the site in Settings was not where
+  the telescope was …"; both counts as Qt's `BatchResult` and the recorder's
+  `batch_end`), S67 (GUARD) at the end of the run (a target below SNR 3: its
+  points; a zero point more than 1 mag from the run's: every point of the
+  frame; flagged `no_detection`, suspect, out of `sigma_syst`;
+  `frames_no_detection`, a `warning` note, a `no_detection` event), S71
+  (release `DiffResult.suspect`: the comparison holding over half the weight
+  contradicted by two others or more, the point suspect, its note in the
+  `ensemble` record), S69's failed re-solves for rotation
+  (`frames_rotation_unsolved`, a `warning` note; the solve failure's own
+  "its points are flagged" line is not said for them) and frames without a
+  target point (`frames_no_target_point`), one curve per (star, filter)
   (S49), the systematic floor per curve over the points measured with the
   field. Progress: `done`/`total` = frames handled / frames, `message` =
   the frame's name, stage `"measuring"` (`"re-solving"` while ASTAP runs).

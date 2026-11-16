@@ -81,6 +81,8 @@ export interface CurvesWire {
   problems?: string[];
   /** "header" when the header site check found the Settings site wrong (A68): the CSV airmass is wrong. */
   airmass_source?: 'csv' | 'header';
+  /** What the `airmass` column holds: "header" once the server applied S66 (each frame's header AIRMASS). */
+  airmass_column?: 'csv' | 'header';
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -156,7 +158,8 @@ export function parseCurves(raw: unknown): CurvesWire {
   }
   const problems = isObj(raw) && Array.isArray(raw.problems) ? raw.problems.filter((p): p is string => typeof p === 'string') : [];
   const airmass = isObj(raw) && raw.airmass_source === 'header' ? 'header' : 'csv';
-  return { curves, problems, airmass_source: airmass };
+  const column = isObj(raw) && raw.airmass_column === 'header' ? 'header' : 'csv';
+  return { curves, problems, airmass_source: airmass, airmass_column: column };
 }
 
 const ROLES: readonly Role[] = ['target', 'check', 'comparison'];
@@ -205,10 +208,11 @@ export const FLAG_WORDS: Record<string, string> = {
   zp_outlier: 'ZP outlier',
   low_snr: 'low SNR',
   few_anchors: 'unverified lock',
+  no_detection: 'no detection',
   no_frame: 'no frame',
 };
 /** The recorder's words that mean "not a measurement of the star": drawn hollow, off the range. */
-export const RECORDER_WORDS: ReadonlySet<string> = new Set(['low_snr', 'zp_outlier']);
+export const RECORDER_WORDS: ReadonlySet<string> = new Set(['low_snr', 'zp_outlier', 'no_detection']);
 /** A display flag in words (an unknown code is shown as written). */
 export const flagWord = (code: string) => FLAG_WORDS[code] ?? code.replace(/_/g, ' ');
 

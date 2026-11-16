@@ -9,7 +9,7 @@ import { CurveLink } from '../charts/lightcurve/link.svelte';
 import { frameRows } from './frames/frames';
 import { curveFilters, extraRow, flagWord, parseCurves, parseQuality, parseQualityBlock, parseQualityList, qualityFor, seriesLabel, starKeyOf, statusWord, storeFromCurves } from './source';
 import { arrange, cellMenu, cellStats, cellTsv, CONDITIONS_ID, metricMenu, defaultCells, estimateScatter, healthOf, isWallLayout, loadWallLayout, metricSeries, moveCell, robustSigma, rowHeight, saveWallLayout, wallColumns, wallExtent } from './wall';
-import { aavsoChecks, ensembleRows, pointInfo } from './rail';
+import { aavsoChecks, airmassWrongSite, ensembleRows, pointInfo } from './rail';
 import { WallLayoutState } from './layout.svelte';
 import { ReviewSource, parseSession, summaryRows, wallFramesOf } from './session.svelte';
 import { fixtureLoader, makeSession } from './gallery/fixtures';
@@ -334,6 +334,14 @@ describe('the rail cards', () => {
     // The card says what the dialog warns about: a wrong-site AMASS (design review).
     const wrongSite = aavsoChecks({ store, filter: 'ir', filters: ['ir'], obscode: 'XYZ', band: 'TG', frameFilters: info.filters, chartId: info.chartId, airmassWrong: true });
     expect(wrongSite.checks.find((c) => c.id === 'amass')).toMatchObject({ level: 'warn', value: 'wrong site' });
+    // S66 (technical review): the warning follows the column. A wrong site whose curves still
+    // hold the CSV's airmass warns; once the server put the header AIRMASS there, it does not.
+    expect(airmassWrongSite('header', false)).toBe(true);
+    expect(airmassWrongSite('header', true)).toBe(false);
+    expect(airmassWrongSite('csv', false)).toBe(false);
+    expect(airmassWrongSite('csv', true)).toBe(false);
+    const fixed = aavsoChecks({ store, filter: 'ir', filters: ['ir'], obscode: 'XYZ', band: 'TG', frameFilters: info.filters, chartId: info.chartId, airmassWrong: airmassWrongSite('header', true) });
+    expect(fixed.checks.find((c) => c.id === 'amass')).toBeUndefined();
     const noCode = aavsoChecks({ store, filter: 'ir', filters: ['ir'], obscode: '  ', band: 'TG', frameFilters: {}, chartId: null });
     expect(noCode.blocked).toMatch(/observer code/);
     // Q-R2: Qt's placeholder "XXX" is no observer code either.
@@ -365,6 +373,31 @@ describe('the rail cards', () => {
     expect(lp.rows).toBe(20); // the LP half of the frames; the fixture's flagged rows are all IR
     expect(lp.checks.some((c) => c.id === 'excluded')).toBe(false);
     expect(aavsoChecks({ store: two.store, filter: 'ir', filters: ['ir', 'lp'], obscode: 'XYZ', band: 'TG', frameFilters: two.info.filters, chartId: null }).rows).toBe(17);
+  });
+
+  it('AAVSO pre-checks name a no-detection point apart from the other suspect ones (S67)', () => {
+    const st = new LiveCurveStore();
+    st.load({
+      curves: [
+        {
+          key: 't',
+          role: 'target',
+          points: [
+            { jd_utc: 2461346.5, mag: 10, mag_err: 0.01 },
+            { jd_utc: 2461346.51, mag: 11.4, mag_err: 0.7, suspect: true, recorder_flag: true },
+            { jd_utc: 2461346.52, mag: 10, mag_err: 0.01, suspect: true },
+          ],
+        },
+      ],
+    });
+    const r = aavsoChecks({ store: st, filter: null, filters: [], obscode: 'XYZ', band: 'TG', frameFilters: {}, chartId: null });
+    expect(r.rows).toBe(1);
+    expect(r.checks.find((c) => c.id === 'excluded')!.value).toBe('1 suspect (no detection) · 1 suspect');
+    expect(r.checks.some((c) => c.id === 'flagged')).toBe(false);
+    // S66: the server says the airmass column is already the frames' header AIRMASS.
+    expect(parseCurves({ curves: [], airmass_source: 'header', airmass_column: 'header' }).airmass_column).toBe('header');
+    expect(parseCurves({ curves: [], airmass_source: 'header' }).airmass_column).toBe('csv');
+    expect(flagWord('no_detection')).toBe('no detection');
   });
 });
 
