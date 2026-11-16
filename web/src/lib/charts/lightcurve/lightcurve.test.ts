@@ -343,7 +343,7 @@ describe('readout and TSV', () => {
     expect(r.bjd).toBe((JD0 + DT + 0.0023).toFixed(5));
     expect(r.checkBjd).toBe((JD0 + DT + 0.0023 + 6.4 / 86400).toFixed(5));
     expect(r.target!.value).toBe('11.010 ± 0.010');
-    expect(r.target!.flags).toEqual(['suspect (hot pixel, or unverified lock)']);
+    expect(r.target!.flags).toEqual(['suspect (left out of the AAVSO export)']);
     expect(r.check!.value).toBe('+0.012 ± 0.010');
     expect(r.check!.what).toBe('check − V 10.500');
     expect(r.ensemble!.value).toBe('ZP 19.410 · σ 0.014');

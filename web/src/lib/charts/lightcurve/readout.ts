@@ -51,7 +51,7 @@ export interface PointReadout {
 export function flagWords(f: number): string[] {
   const out: string[] = [];
   if (f & FLAG_SATURATED) out.push('saturated');
-  if (f & FLAG_SUSPECT) out.push('suspect (hot pixel, or unverified lock)');
+  if (f & FLAG_SUSPECT) out.push('suspect (left out of the AAVSO export)');
   return out;
 }
 
