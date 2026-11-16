@@ -964,6 +964,35 @@ def test_aperture_geometry_locked_during_sequence(qapp) -> None:
         qapp.processEvents()
 
 
+def test_the_noise_model_is_locked_during_a_sequence_s84(qapp) -> None:
+    """S84: ``photometry.noise_model`` and ``photometry.read_noise_e`` set the SNR the
+    gates read (S35, S56, S58, S69) and the formal errors: a change during a run would
+    split one curve. Refused like S15's geometry (Qt has no control for them: a change
+    can only arrive through the setting signal). Written mid-run before the fix."""
+    from argos.core.config import Config
+
+    config = Config({})
+    logs: list[tuple[str, str]] = []
+    page = SimpleNamespace(
+        _sequence_active=True,
+        _config=config,
+        log_message=SimpleNamespace(emit=lambda level, msg: logs.append((level, msg))),
+        _sync_photometry_setup=lambda: None,
+        _pending_green=None,
+    )
+    for key, value in (("photometry.noise_model", "pixel"), ("photometry.read_noise_e", 3.0)):
+        before = config.get(key, None)
+        ImagingPage._on_photometry_setting_changed(page, key, value)
+        assert config.get(key, None) == before, key
+    assert [level for level, _msg in logs] == ["WARN", "WARN"]
+    assert "noise model is locked" in logs[0][1]
+    # after the run it is written again
+    page._sequence_active = False
+    page._engine = SimpleNamespace(photometry_geometry=lambda: (6.0, 8.0, 12.0))
+    ImagingPage._on_photometry_setting_changed(page, "photometry.read_noise_e", 3.0)
+    assert config.get("photometry.read_noise_e", None) == 3.0
+
+
 def test_relative_flux_baseline_ignores_saturated_points(qapp) -> None:
     """S16: the relative-flux median (and the comparison Δmag median)
     included saturated (clipped) points."""

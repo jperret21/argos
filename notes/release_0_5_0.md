@@ -99,12 +99,13 @@ measurements of a two-filter run merged a star's two curves when read back),
 **S62** (the batch re-run measured another object's frames against the target set)
 and **S63** (a batch re-run of a session folder also measured the links and
 registered copies Siril had written beside its lights: each epoch three times).
-**S64**-**S83** follow from the same wave's checks against references independent of
+**S64**-**S84** follow from the same wave's checks against references independent of
 the app (Siril reductions, astropy, VSP, the frames' own noise) and the owner's
 decisions of 2026-11-15 and 2026-11-16: the airmass (S66, S78), the error model
 (S71-S76: the measured e-/ADU, the green-plane noise, scintillation, the sky
 estimate), the tracker (S69, S80), proper motions (S77), crowded comparisons (S79),
-and three defects their reviews found (S81-S83); each is in the table below.
+three defects their reviews found (S81-S83), and the noise model and the camera's
+e-/ADU locked during a run (S84); each is in the table below.
 
 **Several of these defects affect files you already hold.** The table says
 which; *Check your old files* below says how to find them.
@@ -179,7 +180,7 @@ which; *Check your old files* below says how to find them.
 | S73 | The e-/ADU the S30 Pro writes and uses at gain 80 (driver 0.8, IMX585 reference 1.723) is not its photon transfer's 0.228 ± 0.005 | Poisson errors of stars 1.9-2.7× too small; every SNR gate read another SNR on 0.4.1 and 0.4.2 frames | **yes** (every run at gain 80; re-run for honest errors) |
 | S74 | No error term held scintillation | Bright stars' errors 2.2-2.4× below their scatter (RR Lyr 2026-09-25) | **yes** (every run) |
 | S75 | The flux error ignored the error of the subtracted sky level | Faint stars' errors too small (the sky variance short by 57 % with a 5.3 px aperture) | **yes** (every run) |
-| S76 | The annulus median of the 8-ADU-stepped green plane (evaluated, not changed) | Sky error 1.26-1.49× S75's model on blank apertures; a clipped mean 1.05-1.06× (owner decision) | **yes** (every run) |
+| S76 | The sky under each aperture was the annulus median, which sits on the 8-ADU-stepped green plane's 4-8 ADU grid | A sawtooth of about 2 ADU rms per pixel in no error term: 0.004-0.005 mag rms per bright RR Lyr star, the largest part of the RR Lyr − Siril residual (robust σ 0.0101 → 0.0083 with the clipped mean now used) | **yes** (every run; a re-run changes magnitudes and errors slightly) |
 | S77 | Target sets held J2000.0 positions; no aperture followed its star's proper motion | RR Lyr's aperture 0.99 green px from the star in 2026, its comparisons 0.27-0.43 px (magnitudes barely affected) | **yes** (RR Lyr: every run; other stars by their motion) |
 | S78 | Since S66 every star took the header `AIRMASS`, the field centre's | A comparison or check curve's airmass up to 0.020 off its own (RR Lyr 2026-09-25); `AMASS` (the target's) unaffected | **yes** (comparison and check curves; Review now computes their own) |
 | S79 | Nothing named a comparison with a brighter star of the set within its aperture's reach | XX Cyg 2026-09-07: 000-BJV-173 6.8 px from 000-BJV-169, 1.47 mag brighter, unnoticed | **yes** (the XX Cyg 2026-09-07 set) |
@@ -187,6 +188,7 @@ which; *Check your old files* below says how to find them.
 | S81 | An aperture or sky annulus partly off the frame was measured, truncated | Unflagged comparison and check rows up to 5 mag faint near the edges (RR Lyr 2026-09-25: 000-BJW-667, 000-BJW-668) | **yes** (rows within 12 green px of an edge) |
 | S82 | The batch re-run took an OBJECT in SIMBAD's form ("V* XX Cyg") for another object | "No frames": the run's lights not measured | no (nothing was written) |
 | S83 | Live and sequence photometry took the e-/ADU at the Camera form's gain, not the frame's | A step at another gain measured with the form's e-/ADU (since S73 26 % apart between gains 80 and 100) | only steps at another gain than the form's |
+| S84 | The noise model, its read noise and the camera's e-/ADU (gain table, photon-transfer folder) could change during a run (web Settings; Qt's photon-transfer folder) | The SNR the gates read and the formal errors changed partway through one curve | no (no released version could) |
 | S66 | Review, Analyze and the batch re-run used the airmass computed for the Settings site, wrong on some runs (X3) | AAVSO `AMASS` 4.088-1.514 where the airmass was 1.033-1.364 (RR Lyr 2026-09-25); 0.013-0.015 high under X3's 5° tolerance (a re-run of XX Cyg 2026-08-29) | **yes** (RR Lyr 2026-09-25; Review now takes each frame's header `AIRMASS`, the files are unchanged) |
 | S67 | Review, the AAVSO export and the batch re-run kept the rows S35 now refuses (no detection) | Blank-sky rows submitted; a larger `sigma_syst` and `MERR` on every row of the run | **yes** (RR Lyr 2026-09-25: 2 frames; XX Cyg 2026-09-07 `040723Z`: its target on 1 frame) |
 | S68 | Comparisons picked before 0.4.2 never got their VSP chart | `CHART` na on every report of those objects, new runs included | **yes** (every report of the owner's objects; header lines only, no observation) |
@@ -500,6 +502,13 @@ against the day you installed 0.5.0.
   ± 0.051) and its point-to-point scatter halves; on XX Cyg 2026-08-29
   `050148Z` it moves from +0.060 ± 0.029 to +0.051 ± 0.023 (with S71); RR Lyr
   2026-09-25 moves by 1 mmag.
+- **The sky under every aperture (S76).** The sky was the annulus median, which
+  sits on the 4-8 ADU grid of the green plane: about 2 ADU per pixel of error that
+  followed the sky level slowly, in no error term (0.004-0.005 mag rms per bright
+  RR Lyr star, about 0.05 mag for a faint XX Cyg comparison). Nothing in a file
+  shows it. Magnitudes and errors of old runs change slightly when re-run (**Re-run
+  subs…**): RR Lyr 2026-09-25's target by 5 mmag rms per point, its scatter against
+  the Siril reduction 0.0101 → 0.0083 mag.
 - **Rows near the frame's edge (S81).** A comparison or check star (or a target)
   within 12 green px of an edge was measured through a clipped aperture or sky
   annulus: up to 5 mag faint, unflagged (RR Lyr 2026-09-25 `200453Z`'s
@@ -987,6 +996,53 @@ apertures.
 **What changed.** The spins are disabled during a sequence (tooltip says why);
 the comparison-selection controls stay available.
 **How to check.** `tests/ui/test_photometry_window.py::test_aperture_geometry_locked_during_sequence`.
+
+### S84 — The noise model is locked while a sequence runs
+
+**What was wrong.** `photometry.noise_model` and `photometry.read_noise_e` (S72,
+S73) are read for every frame. A change during a run applied from the next sub: the
+SNR the S35, S56, S58 and S69 gates read and the formal errors changed partway
+through one curve, with no record in the files (technical review). The web
+Settings page shows both keys; the Qt app has no control for them (config file
+only, read at start). The camera's e-/ADU sets the same SNR and errors, and the
+observer gives it two inputs, also read for every frame (S73's chain): the
+`camera.egain_table` (web Settings › Instrument; config file only in Qt) and the
+photon-transfer folder `data_paths.camera_calibration_directory` (Settings in both
+apps). In a simulator run, a `PATCH` of `camera.egain_table` `{"80": 0.3}`
+mid-run was accepted and the next frames carried `EGAIN` 0.3 instead of 0.25
+(validation F1; the review measured +15 % on one star's SNR from a file written
+mid-run).
+**Who was affected.** Nobody in 0.4.2 (no control, the green-plane model did not
+exist; its e-/ADU chain did not read the profile or the file first); the web app
+before this fix, which is not released; the Qt app through its photon-transfer
+folder field.
+**What changed.** The four keys join S15's run lock and are refused the same way
+(`params.NOISE_MODEL_KEYS`): Qt refuses a noise-model change that arrives during a
+sequence (`_on_photometry_setting_changed`, "The noise model is locked while a
+sequence runs — change ignored.", nothing written), and its photon-transfer folder
+field is unavailable during a sequence with the reason in its tooltip (the Shell
+passes the run state, `ConfigurationPage.set_sequence_running`; a change that still
+arrives keeps the folder in use and writes nothing); the web server's
+`PATCH /api/config` answers `409 run_active` "The noise model and the camera's
+e-/ADU are locked while a sequence runs (one curve, one error model)." with the
+keys, and writes nothing of the PATCH; the web Settings pages show these keys
+unavailable during a run with the server's sentence: Photometry the noise model and
+the read noise, with S15's four, Instrument the photon-transfer folder and the
+electron gain table. Not covered, as for S15: another program editing
+`config.json` during a run (the web server re-reads the file on
+`GET /api/config`), and an edit of the photon-transfer file itself, which is read
+for every frame (OWNER DECISION, the review: resolve the e-/ADU once per gain at
+the run's start).
+**How to check.** `tests/ui/test_photometry_window.py::test_the_noise_model_is_locked_during_a_sequence_s84`
+(written mid-run before the fix), `tests/ui/test_shell.py::test_shell_three_mode_walkthrough`
+(the folder field enabled, and a change applied, during a run before the fix); web
+`tests/server/test_sequence.py::test_the_noise_model_is_locked_during_a_run_s84`
+(the e-/ADU's keys written mid-run before the fix),
+`::test_the_server_locks_the_cores_noise_model_keys_s84` (GUARD: the server's keys
+are the core's), `tests/server/test_settings_wave2.py::test_the_settings_page_locks_what_the_server_locks_during_a_run_s15_s84`,
+`web/src/lib/settings/runlock.test.ts`.
+**Check your old files.** None: no released version could change the noise model
+during a run.
 
 ### S16 — Saturated points are left out of the plot baselines
 
@@ -1769,18 +1825,41 @@ read noise also follows the frame's own e-/ADU whatever the path (technical
 review): `with_frame` kept the base params' read noise when the frame's e-/ADU had
 none, so a frame at gain 300 had 2.6 e- in a re-run with the Camera form at 80 and
 1.5 e- with the form at 300; it now takes the measured one, else the Settings one.
-The observer's own photon-transfer file (`camera_calibration*.json`, Settings ›
-Photon-transfer calibrations) is read with the sensor reference, the chain's last
-step: it ranks below the profile's measurement at gains 0-251 and below the
-driver (OWNER DECISION, not changed: put it before the profile).
+**Amended again (the owner's call of 2026-11-16 on the technical review): the
+observer's own photon-transfer file first.** The file (`camera_calibration*.json`,
+Settings › Photon-transfer calibrations: `camera_calibration.json` for the IMX585,
+`camera_calibration_<sensor>.json` otherwise) was read with the sensor reference,
+the chain's last step, below the profile's measurement at gains 0-251 and below the
+driver. An observer's measurement of their own camera beats one made on another
+unit: its entry at the frame's exact gain now comes second, after
+`camera.egain_table` and before the profile (`egain.from_calibration`), live and for
+a saved frame (`of_frame`: the table, an `EGAIN` the table wrote, the file, an
+`EGAIN` the file wrote, the profile, the frame's `EGAIN`), with the file's `rdnoise`
+at that gain as the read noise measured with it (else the Settings one, as for any
+e-/ADU without a measured read noise). Its source is recorded as every step's is
+(the `EGAIN` and `RDNOISE` comments, the recorder's `egain_source`), named
+"<sensor> PTC file" ("IMX585 PTC file" on the S30 Pro; before, the file's value was
+recorded as the reference's "IMX585 ref"); logged once per gain. The owner's study
+runs are unchanged: the default folder (`~/.argos`) holds no such file.
+**The file's read noise (validation F2, the review).** With an e-/ADU that carries no
+read noise of its own (the gain table's, the driver's), a new frame's `RDNOISE` is
+the file's `rdnoise` at that gain named "IMX585 PTC file" (`egain.calibration_read_noise`;
+it was the same value named "IMX585 reference"). A saved frame whose `EGAIN` the file
+wrote, re-run or opened without the file, keeps the `RDNOISE` the file wrote with it
+(the Settings 1.5 e- before), when the `RDNOISE` comment names the file. A file entry
+without `rdnoise` keeps the Settings read noise, as every e-/ADU without a measured one
+does (the profile's 2.6 e- measured at gain 80 is not mixed with another e-/ADU), and
+the log line of that gain says so: give the file both (2.6 e- against 1.5 e- moves the
+SNR of a star under RR Lyr's 10 s sky by 2.5 %; the review's `rn_fallback_snr.txt`).
 **What changed.** The S30 Pro profile carries the measurement
 (`TelescopeProfile.gain_measurements`, `gain_step_db`, `gain_scaling_range`;
 `hardware/egain.py`). One order for the photometry, `EGAIN` and the re-run:
-`camera.egain_table`, the profile's measurement (or its scaling), the driver,
-the reference curve. New frames write it to `EGAIN` (comment "S30 Pro PTC" or
-"S30 Pro PTC scaled") and, at a measured gain, to `RDNOISE`. An old frame of the
-camera its `TELESCOP` names takes the measurement at its `GAIN` instead of its
-`EGAIN` (an `EGAIN` the observer's table wrote is kept); the batch re-run (S70:
+`camera.egain_table`, the observer's photon-transfer file (amended above), the
+profile's measurement (or its scaling), the driver, the reference curve. New
+frames write it to `EGAIN` (comment "S30 Pro PTC" or "S30 Pro PTC scaled") and,
+at a measured gain, to `RDNOISE`. An old frame of the camera its `TELESCOP` names
+takes the measurement at its `GAIN` instead of its `EGAIN` (an `EGAIN` the
+observer's table wrote is kept); the batch re-run (S70:
 each frame's own) and Open FITS use it, and the flight recorder's `frame` record
 names the value and its source (`egain`, `egain_source`).
 **Effect on the study runs** (with S72-S75, the batch re-runs above). Star-pair
@@ -1806,10 +1885,18 @@ run of the owner's), and every gate that reads an SNR (S72's table).
 `tests/workers/test_photometry_batch_worker.py::test_batch_uses_the_cameras_measured_egain_and_scintillation_s73_s74`
 (0.8 and 1.723), `tests/core/test_photometry_core.py::test_a_scaled_gain_is_logged_scaled_not_measured_except_where_checked_s73`
 (no log before the amendment), `::test_the_read_noise_follows_the_frames_egain_whatever_the_path_s73`
-(2.6 e- kept for a gain-300 frame before); web
+(2.6 e- kept for a gain-300 frame before),
+`::test_the_observers_photon_transfer_file_comes_before_the_profile_s73` (the
+profile's 0.228 and the S50 driver's 0.5 before the second amendment),
+`tests/core/test_fits_writer.py::test_egain_header_takes_the_observers_photon_transfer_file_first_s73`
+(0.228 and 2.6 e- written whatever the file said),
+`::test_rdnoise_names_the_observers_photon_transfer_file_s73` ("IMX585 reference"
+before the fix; `test_the_observers_photon_transfer_file_comes_before_the_profile_s73`
+also checks the `RDNOISE` the file wrote, None before, and the log); web
 `tests/server/test_open_fits.py::test_an_opened_frame_keeps_an_egain_its_table_wrote_s73`
 (the server's opened frame lost the `EGAIN` comment: 0.228 where Qt keeps the
-table's value).
+table's value), `tests/server/test_config.py::test_the_photon_transfer_help_says_the_cores_order_s73`
+(GUARD: the Settings help follows the core's order).
 
 ### S74 — Each star's error carries its scintillation
 
@@ -1863,45 +1950,130 @@ variance.
 **Its check.** 7800 blank apertures on RR Lyr `200453Z`, 960 on XX Cyg `040723Z`,
 880 on `050148Z` (40 per frame, 30 px from every set star, no pixel above 6σ): the
 scatter of their flux over the model built on each annulus' measured sigma is
-1.79, 1.61, 1.60 without the term and 1.43, 1.28, 1.26 with it. The rest is the
-annulus median's quantisation (S76): with a clipped mean, 1.06, 1.06, 1.05.
+1.79, 1.61, 1.60 without the term and 1.43, 1.28, 1.26 with it. Most of the rest
+was the annulus median's quantisation (S76). Since S76 the sky is the annulus'
+clipped mean and the factor a mean's 1, over the pixels the clip keeps (36 % of the
+sky variance with 89 and 244 pixels). That factor is measured: on the real annuli
+(the two halves of each, 9340 pairs on RR Lyr) the clipped mean's is 1.09 (the
+median's 2.95), within 1.2 % of the total error; on a sky quantised as the plane it
+is 1.00-1.09 whatever the level's phase on the 8-ADU grid (the median's 0.38-9.5).
+Against the code's own error since S76 the blank apertures scatter 1.17, 1.19, 1.14
+times (validation, the selection above, every fifth RR Lyr light; 1.42, 1.31, 1.25
+with the median) and 1.10, 1.07, 1.07, 1.06 (the review, RR Lyr, `050148Z`,
+`040723Z`, `052943Z`, a stricter star mask; 1.40, 1.20, 1.20, 1.20 with the median);
+the 1.06, 1.06, 1.05 first quoted here were against the median's model (π/2, every
+pixel). The rest is not the estimator: neighbouring pixels correlate (0.02-0.04; a
+k × k box sum's variance is 1.02-1.08 times that of independent pixels, k 2-7, 1-4 %
+on σ) and faint stars sit in the apertures (the bias of S76).
 **How to check.** `tests/core/test_photometry_core.py::test_the_sky_estimates_own_error_is_counted_s75`
-(the error 25 % below the scatter before the fix).
+(the error 25 % below the scatter before the fix; with S76's mean, 0.86 without the
+term, 1.07 with it, 1.17 with a median's π/2).
 
-### S76 — The sky estimator stays the annulus median (not adopted, owner decision)
+### S76 — The sky is the annulus' 3-sigma-clipped mean, not its median
 
-**The question.** The green plane steps by 8 ADU, so the annulus median is
-quantised; photutils and Siril take a 3-sigma-clipped mean. Adopt it only if it is
-better or equal everywhere and unbiased.
-**The numbers** (the after re-runs' aperture centres, 8-12 px annulus, numpy only).
-Star pairs, robust point-to-point scatter, clipped mean / median (median over
-pairs; pairs where the mean is worse): RR Lyr 6 comparisons 0.96 (3 of 21),
-2 comparisons + check 0.94 (1 of 6), XX Cyg `040723Z` 0.75 (10 of 36),
-`050148Z` 0.83 (4 of 10). Blank apertures (as S75): flux bias with the median
-+47 ± 4, +61 ± 14, +49 ± 16 ADU per aperture, with the mean +22 ± 3, +36 ± 12,
-+32 ± 13; scatter 335 → 248, 445 → 368, 462 → 385 ADU; the other study runs
-alike.
-**Verdict by the rule.** Not adopted: the mean is better in every run (pairs and
-blank apertures) and less biased in all ten re-runs, but worse on 18 of 73 pairs and not unbiased (both estimators read the
-sky low where faint stars sit in the annulus). The median stays; S75's term then
-covers 0.70-0.79 of its error on blank apertures. Owner decision below.
-**New evidence (the science review of 2026-11-16, its own code).** The median of the
-8-ADU-stepped plane lands on a 4-8 ADU grid: its error is a sawtooth with the sky
-level's phase on that grid, about 2.1 ADU rms per pixel (median minus clipped mean
-2.27-2.34 ADU rms against 0.96 on continuous data), more than the 1.6 ADU S75's π/2
-term counts, and too slow for `sigma_syst` to see (0.004-0.005 mag rms per bright RR
-Lyr star). Against the independent Siril reduction, RR Lyr's residual robust σ is
-0.0108 with the median and 0.0073 with a clipped mean (ratio 0.69, 68 %: 0.63-0.76).
-Pairs, clipped mean / median: `040723Z` 0.81 (18 of 28 better, one marginally worse:
-1.11 [1.00-1.22]), RR Lyr 6 comparisons 0.97 (11 of 15 better, none worse); the two
-worse `050148Z` pairs hold non-detections (SNR 1-2). Blank apertures, scatter over
-the model: median + S75 1.14-1.54; with a quantisation term n_ap² Δ²/12 (Δ = 8 ADU)
-1.01-1.26; clipped mean 1.00-1.31. Bias on RR Lyr: +45 ± 35 ADU (median), +21 ± 23
-(mean). OWNER DECISION (not implemented by this pass): (a) adopt the 3σ-clipped
-annulus mean, S75's factor 1 instead of π/2; (b) keep the median and add the
-quantisation term to S75; (c) keep as is. Recommended (science review): (a), with
-a regression test (a flat Gaussian sky quantised to 8 ADU stepped by 1 ADU through
-one grid period: the estimate within 0.5 ADU at every level).
+**Status: adopted (the owner's call of 2026-11-16, science review F1).** It was
+first evaluated and left out ("not adopted"); the science review's new evidence
+decided it.
+**What was wrong.** The green plane steps by 8 ADU (12-bit values × 16, averaged
+in pairs), so the annulus median sat on a 4-8 ADU grid: its error is a sawtooth with
+the sky level's phase on that grid, about 2.1 ADU rms per pixel (median minus
+clipped mean 2.27-2.34 ADU rms on RR Lyr against 0.96 on continuous data), more
+than the 1.6 ADU S75's π/2 counted, in no error term, and too slow for `sigma_syst`
+to see: 0.004-0.005 mag rms per bright RR Lyr star, about 0.05 mag for a 5000 ADU
+XX Cyg comparison.
+**What changed.** `measure_aperture` takes the annulus' 3-sigma-clipped mean
+(`aperture.sky_level`): pixels farther than 3 standard deviations from the median
+rejected, median and standard deviation recomputed on what is kept, repeated until
+nothing more is rejected, at most 10 passes (bounds inclusive): photutils'
+`ApertureStats` default, `astropy.stats.sigma_clipped_stats(sigma=3, maxiters=10)`
+(Siril and photutils use a clipped mean too). S75's sky-estimate term takes a mean's
+factor 1 instead of the median's π/2, over the `n_sky` pixels the clip keeps. Every
+aperture of the core and the server: points, anchors, lock checks, comparison
+quality, the pilot; both noise models (the 0.4.x `pixel` model keeps its formula,
+which has no S75 term). Non-finite annulus pixels are left out of the estimate.
+**The two evaluations that decided it.**
+- The noise role (the after re-runs' aperture centres, 8-12 px annulus, numpy
+  only). Star pairs, robust point-to-point scatter, clipped mean / median (median
+  over pairs; pairs where the mean is worse): RR Lyr 6 comparisons 0.96 (3 of 21),
+  2 comparisons + check 0.94 (1 of 6), XX Cyg `040723Z` 0.75 (10 of 36),
+  `050148Z` 0.83 (4 of 10). Blank apertures (as S75): flux bias with the median
+  +47 ± 4, +61 ± 14, +49 ± 16 ADU per aperture, with the mean +22 ± 3, +36 ± 12,
+  +32 ± 13; scatter 335 → 248, 445 → 368, 462 → 385 ADU; the other study runs
+  alike. Its verdict by the rule it was given (better or equal everywhere, and
+  unbiased): not adopted, the mean being better in every run and less biased in
+  all ten re-runs, but worse on 18 of 73 pairs and not unbiased (both estimators
+  read the sky low where faint stars sit in the annulus).
+- The science review (its own code). Against the independent star_var_script +
+  Siril green reduction (2 comparisons), RR Lyr's residual robust σ is 0.0108 with
+  the median and 0.0073 with a clipped mean (ratio 0.69, 68 %: 0.63-0.76): the
+  median's quantisation was the largest identified part of the ARGOS − Siril
+  residual. Pairs, clipped mean / median: `040723Z` 0.81 (18 of 28 better, one
+  marginally worse: 1.11 [1.00-1.22]), RR Lyr 6 comparisons 0.97 (11 of 15 better,
+  none worse); the two worse `050148Z` pairs hold non-detections (SNR 1-2): the
+  "worse" pairs of the first evaluation are noise or non-detections. Blank
+  apertures, scatter over the model: median + S75 1.14-1.54; with a quantisation
+  term n_ap² Δ²/12 (Δ = 8 ADU) 1.01-1.26; clipped mean 1.00-1.31. Bias on RR Lyr:
+  +45 ± 35 ADU (median), +21 ± 23 (mean).
+- Why the mean: better or equal on every pair whose two stars are detected (one
+  marginal exception), about half the bias, nearer the independent reduction, and
+  an error the CCD equation describes; neither estimator is unbiased (faint stars
+  in the annulus), the mean less biased wherever the bias is significant. The other
+  options were (b) the median with a quantisation term in S75 (honest errors, the
+  scatter kept) and (c) no change.
+**The code, RR Lyr 2026-09-25 `200453Z`, 2 comparisons + check** (Qt batch
+re-runs before and after on the same clone, ASTAP, the night's Settings site; impl
+`level_a_{before,after}.json`, `target_shift_rr2.json`, `star_deltas_rr2.json`,
+`blank_{before,after}.json`): the same apertures (0.000 px apart), the sky moves by
+2.30-2.38 ADU rms per star and frame (the median's sawtooth); RR Lyr − Siril green 2
+comparisons +0.0013 / robust σ 0.0101 → +0.0021 / 0.0083 (σ ratio 0.83, 68 %:
+0.74-0.91; the offset's change, +0.0008 [+0.0001, +0.0012], is within the offset's
+own error, 0.0007-0.0009, while the target's own magnitudes move by −0.0004 median,
+0.0050 rms); check 000-BCG-523 − VSP V +0.0167 ± 0.0016 → +0.0166 ± 0.0015 (its
+scatter 0.0225 → 0.0213); pair scatter / formal error 0.89 (0.77 robust) → 0.86
+(0.75): the scatter is lower, the formal errors the same (−0.4 %; bright stars'
+errors are S74's conservative scintillation); `sigma_syst` 0 → 0. 1560 blank
+apertures (every fifth light): bias +27 ± 8 → +9 ± 6 ADU, scatter 333 → 255 ADU,
+scatter over the code's own error 1.42 → 1.16; the model's sky σ over the annuli's
+measured σ 1.008 both (10-90 %: 0.945-1.078).
+**The other study runs** (the validation's batch re-runs of every study run, before
+and after; the fixer's final re-run of RR2, RR Lyr's 6 comparisons, `040723Z` and
+`050148Z` gives the same figures key by key): RR Lyr 6 comparisons − Siril −0.0110
+/ robust σ 0.0147 → −0.0098 / 0.0130; checks − VSP V 000-BJV-169 −0.0647 ± 0.0091 →
+−0.0645 ± 0.0085 (VSP ± 0.051), 000-BJV-171 +0.0447 ± 0.0223 → +0.0436 ± 0.0204
+(± 0.030); pair scatter / formal error RR Lyr 6 comparisons 0.95 (0.80 robust) →
+0.94 (0.77), `040723Z` 1.11 (1.01) → 1.12 (0.95), `050148Z` 0.71 (0.60) → 0.92
+(0.94) (three pairs: the median sat at 1400 ADU on 17 of 22 frames, a bias no error
+counted, where the mean adds a noise the error counts); the `040723Z` target's
+`sigma_syst` 0.170 → 0 (its second-difference σ 0.283 → 0.124 mag, SNR about 5);
+blank apertures `040723Z`, `050148Z`: bias +44 ± 14 → +32 ± 12, +52 ± 15 → +25 ± 12
+ADU, scatter over the code's error 1.31 → 1.19, 1.25 → 1.14; the model's sky σ over
+the measured one 0.959-1.049 → 0.960-1.039 (gains 80 and 100, 31 frames; the one
+gain-65 frame 0.883); the code's sky equals astropy's `sigma_clipped_stats(sigma=3,
+maxiters=10)` within 0.01 ADU on 502 of 504 records (the two others hold a pixel
+1e-5 px from the annulus edge); the apertures, times and airmass unchanged. The
+higher SNR (×1.02 for bright stars, ×1.06-1.08 where the sky dominates) moves stars
+across the gates' thresholds: on the XX Cyg runs anchors, verification solves and
+three flags change, each explained by the validation (faint comparisons' anchors
+crossing SNR 5 and 10; `050148Z` frame 5 keeps 2 comparisons after the clip, so no
+S71 flag; `052943Z` frame 3's target flagged by the hot-pixel guard at 9.9 % against
+the 10 % threshold). On the live path the cloudy `045626Z` frame, a lock lost
+before, is now measured on its one anchor with the target at SNR 0.8, unflagged in
+the live CSV; Review, the AAVSO export and a re-run leave it out (S67): OWNER
+DECISION, apply S67's per-target rule live or ask S48 for 2 anchors.
+**Who was affected.** Every magnitude and error of every run: by a few mmag on
+bright stars, more on faint ones (the sawtooth scales as 1/flux).
+**How to check.** `tests/core/test_photometry_core.py::test_the_sky_is_no_quantised_median_s76`
+(a flat Gaussian sky quantised to the plane's 8 ADU, stepped by 1 ADU through one
+grid period: within 0.5 ADU at every step; the median missed it by up to 4 ADU
+before the fix), `::test_the_sky_is_the_annulus_3_sigma_clipped_mean_s76`
+(astropy's `sigma_clipped_stats` as the reference, a star and a hot pixel in the
+annulus, the term over the pixels kept; the median before),
+`::test_the_sky_estimates_own_error_is_counted_s75` (1.17 with the median's π/2
+kept for a mean).
+**Check your old files.** Magnitudes and errors of old runs change slightly when
+re-run (**Re-run subs…**): RR Lyr 2026-09-25's target by 5 mmag rms per point
+(−0.4 mmag median), its scatter against the Siril reduction down 17 %; faint
+stars move more (the median's error scales as 1/flux).
 
 ### S69 — The tracker keeps up with a fast-turning alt-az field, and checks its apertures
 
@@ -3211,8 +3383,8 @@ patch:
 
 ## State of the branch
 
-- 646 tests pass, 46 skipped (0.4.2: 534 and 45; the skipped S43 check needs a
-  copy of a real session and ASTAP). Every fix carries a test that
+- 779 tests pass, 47 skipped on 2026-11-16 with S84 (0.4.2: 534 and 45; the skipped
+  S43 check needs a copy of a real session and ASTAP). Every fix carries a test that
   fails on the code before it, checked commit by commit against its parent; one
   guard test (S3, the wheel cannot be read) pins a fallback 0.4.2 already had.
   Each hardware test was written first and run on the unfixed code (H17

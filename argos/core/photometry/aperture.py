@@ -16,9 +16,18 @@ import numpy as np
 #: ``plane_pixels`` of S72's noise model. The default, 1, is the 0.4.x model.
 GREEN_PIXELS = 2
 
-#: Variance of a sample median over that of the mean, for Gaussian noise: the sky
-#: under the aperture is the annulus median (S75).
-MEDIAN_VARIANCE_FACTOR = math.pi / 2.0
+#: The sky under the aperture is the annulus' sigma-clipped mean (S76): pixels farther
+#: than ``SKY_CLIP_SIGMA`` standard deviations from the median are rejected and the
+#: clip repeated until it rejects nothing, at most ``SKY_CLIP_MAXITERS`` passes
+#: (photutils' ``ApertureStats`` default, ``astropy.stats.SigmaClip(sigma=3,
+#: maxiters=10)``: median centre, standard deviation, bounds inclusive). The median
+#: it replaces lands on the 4-8 ADU grid of the 8-ADU-stepped green plane.
+SKY_CLIP_SIGMA = 3.0
+SKY_CLIP_MAXITERS = 10
+
+#: Variance of the sky estimate over sigma² / n_sky (S75): 1 for a mean (S76; a
+#: median's was pi/2).
+SKY_ESTIMATE_VARIANCE_FACTOR = 1.0
 
 
 @dataclass(frozen=True)
@@ -26,7 +35,7 @@ class AperturePhot:
     """One aperture measurement (instrumental, uncalibrated)."""
 
     flux_adu: float  # background-subtracted aperture sum
-    sky_adu: float  # per-pixel sky (annulus median)
+    sky_adu: float  # per-pixel sky (annulus 3-sigma-clipped mean, S76)
     n_pix: int  # aperture pixel count
     peak_adu: float  # brightest pixel in the aperture
     snr: float  # flux / flux_err (electrons)
@@ -72,9 +81,10 @@ def measure_aperture(
     (G1+G2)/2 plane holds two pixels' electrons, ``2 × egain`` per ADU, and two
     pixels' read noise, ``rn/√2`` ADU at the raw gain; the sky's Poisson term
     counts only the electrons above ``black_adu``; and the sky subtracted under the
-    aperture is itself an estimate, the median of ``n_sky`` annulus pixels, whose
-    error the CCD equation's ``n_pix (1 + n_pix / n_sky)`` form counts, with the
-    median's pi/2 (S75). With ``plane_pixels=1`` and no black level it is the 0.4.x
+    aperture is itself an estimate, the 3-sigma-clipped mean of the ``n_sky`` annulus
+    pixels the clip keeps (S76), whose error the CCD equation's
+    ``n_pix (1 + n_pix / n_sky)`` form counts (S75). With ``plane_pixels=1`` and no
+    black level it is the 0.4.x
     model: one raw pixel's gain, the whole sky level as photons, no sky-estimate
     term. :class:`~argos.core.photometry.params.PhotometryParams` chooses.
 
@@ -103,7 +113,7 @@ def measure_aperture(
     ann = (dist2 > r_in * r_in) & (dist2 <= r_out * r_out)
 
     sky_pixels = sub[ann]
-    sky = float(np.median(sky_pixels)) if sky_pixels.size else 0.0
+    sky, n_sky = sky_level(sky_pixels)  # S76
     sky_sigma = float(np.std(sky_pixels)) if sky_pixels.size else 0.0
     ap_vals = sub[ap]
     n_pix = int(ap.sum())
@@ -114,10 +124,9 @@ def measure_aperture(
 
     k = _plane_gain(egain, plane_pixels)
     flux_e = max(flux, 0.0) * k
-    n_sky = int(sky_pixels.size)
     sky_terms = float(n_pix)
     if max(int(plane_pixels), 1) > 1 and n_sky > 0:
-        sky_terms *= 1.0 + MEDIAN_VARIANCE_FACTOR * n_pix / n_sky  # S75
+        sky_terms *= 1.0 + SKY_ESTIMATE_VARIANCE_FACTOR * n_pix / n_sky  # S75, S76
     var_e = flux_e + sky_terms * _pixel_variance_e(sky, k, read_noise_e, black_adu, plane_pixels)
     flux_err_e = math.sqrt(var_e) if var_e > 0 else 0.0
     snr = (flux_e / flux_err_e) if flux_err_e > 0 else 0.0
@@ -154,6 +163,32 @@ def _annulus_on_frame(x: float, y: float, r_out: float, w: int, h: int) -> bool:
         and math.ceil(y - r_out) >= 0
         and math.floor(y + r_out) <= h - 1
     )
+
+
+def sky_level(values: np.ndarray) -> tuple[float, int]:
+    """The sky level of annulus pixels and the number of pixels it is the mean of (S76).
+
+    The 3-sigma-clipped mean (:data:`SKY_CLIP_SIGMA`, :data:`SKY_CLIP_MAXITERS`):
+    keep the pixels within 3 standard deviations of the median, recompute both on
+    what is kept, and repeat until nothing more is rejected (at most 10 passes), as
+    ``astropy.stats.sigma_clipped_stats(values, sigma=3, maxiters=10)``. A star or a
+    hot pixel in the annulus is rejected as the median rejected it, but the level is
+    no longer the median of a plane stepped by 8 ADU, which sits on a 4-8 ADU grid
+    (about 2 ADU rms per pixel on the S30 Pro's frames, in no error term). ``(0.0, 0)``
+    for no pixel.
+    """
+    kept = np.asarray(values, dtype=np.float64).ravel()
+    kept = kept[np.isfinite(kept)]
+    if not kept.size:
+        return 0.0, 0
+    for _ in range(SKY_CLIP_MAXITERS):
+        centre, spread = float(np.median(kept)), float(np.std(kept))
+        bound = SKY_CLIP_SIGMA * spread
+        inside = (kept >= centre - bound) & (kept <= centre + bound)
+        if inside.all():
+            break
+        kept = kept[inside]
+    return float(np.mean(kept)), int(kept.size)
 
 
 def sky_sigma_adu(
