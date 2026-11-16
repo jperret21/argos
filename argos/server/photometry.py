@@ -30,7 +30,9 @@ A Qt-free port of the live photometry half of ``AcquisitionEngine``
   unless the frame is measured within 2 px of a solution of this sub or the
   previous one; the anchors are chosen on the solved frame (:func:`anchor_frame`)
   and a run's sub verified through the previous sub's solution is solved too (S56
-  as amended on 2026-11-15, second set); **S57**: every vetting file names its filter.
+  as amended on 2026-11-15, second set); **S57**: every vetting file names its filter;
+  **S85** (GUARD, :func:`no_detection_rule`): a target measured below SNR 3 has its point
+  flagged ``suspect`` and ``no_detection`` and left out of the curve's ``sigma_syst``.
 
 One deliberate difference with the Qt 0.5.0 code: the series FWHM is frozen
 on the **first** measured frame. Qt read it before ``_diagnostics`` reset it on
@@ -146,6 +148,17 @@ def s69_core():
     if all(hasattr(_core_tracking, name) for name in names):
         return _core_tracking
     return None
+
+
+def no_detection_rule():
+    """GUARD (S85, release/0.5.0): the core review's ``flag_no_detection``, S67's
+    per-target rule applied when a point is measured (a target below SNR 3: its point
+    ``suspect`` and ``no_detection``, out of ``sigma_syst``), else None: until the
+    release core is merged such a point is written unflagged, as before S85. The module
+    is path-loaded (``review.core_review``, imported here: it imports this module)."""
+    from argos.server.review import core_review
+
+    return getattr(core_review(), "flag_no_detection", None)
 
 
 def _new_site_fit():
@@ -1435,6 +1448,7 @@ class PhotometryService:
             )
             kept = 0
             target_point: dict[str, Any] | None = None
+            no_detection: list[str] = []  # S85: the targets measured below SNR 3
             for res in results:
                 if res.diff is not None:
                     diag.record(
@@ -1467,6 +1481,8 @@ class PhotometryService:
                     airmass_site=star_site,
                     own_airmass=own_airmass,
                 )
+                if point.no_detection:
+                    no_detection.append(res.star.auid or res.star.display_name)
                 kept += 1
                 if res.star.role == ROLE_TARGET and target_point is None:
                     target_point = {
@@ -1475,6 +1491,9 @@ class PhotometryService:
                         "mag_err": _num(point.mag_err),
                         "bjd_tdb": _num(point.bjd_tdb),
                     }
+            if no_detection:
+                # S85 (release ``_measure_photometry``): as a batch re-run records it.
+                diag.record("event", frame=frame_no, what="no_detection", low_snr=no_detection)
             self._write_live_quality_report(selection, request, token)
             self._frames += 1
             self._points += kept
@@ -1575,7 +1594,8 @@ class PhotometryService:
     ) -> LcPoint:
         """``_emit_live_point`` (1700-1765): the point, its (star, filter) curve (S49),
         its CSV, its event. ``unverified``: the frame's lock rests on fewer than 3
-        anchors, the point is flagged ``suspect`` (S56)."""
+        anchors, the point is flagged ``suspect`` (S56). A target measured below SNR 3:
+        ``suspect`` and ``no_detection`` (S85, GUARD: :func:`no_detection_rule`)."""
         lat, lon, elev = site
         bjd = (
             bjd_tdb(jd, res.star.ra_deg, res.star.dec_deg, float(lat), float(lon), float(elev))
@@ -1616,6 +1636,9 @@ class PhotometryService:
             relative_flux=res.relative.flux_ratio if res.relative else None,
             relative_flux_err=res.relative.flux_ratio_err if res.relative else None,
         )
+        flag = no_detection_rule()
+        if flag is not None:  # S85 (GUARD): S67's per-target rule when the point is measured
+            flag(point, res.star.role, getattr(res.phot, "snr", None))
         key = curve_key(res.star, token)
         lc = self._curves.get(key)
         if lc is None or lc.role != res.star.role:
@@ -1670,13 +1693,16 @@ class PhotometryService:
         return point
 
     def _apply_systematic_floor(self, curve: LightCurve) -> bool:
-        """``_apply_systematic_floor`` (1767-1795)."""
+        """``_apply_systematic_floor`` (1767-1795); a no-detection point sets no floor
+        (S85, release ``_apply_systematic_floor``)."""
         manual = self._cfg("photometry.systematic_floor_mag", None)
         floor = estimate_systematic_floor(
             [
                 (point.jd_utc, point.mag, point.formal_mag_err or point.mag_err)
                 for point in curve.points
-                if math.isfinite(point.mag) and math.isfinite(point.formal_mag_err or point.mag_err)
+                if math.isfinite(point.mag)
+                and math.isfinite(point.formal_mag_err or point.mag_err)
+                and not point.no_detection  # S85: no star there (S67)
             ],
             manual_floor=manual,
         )

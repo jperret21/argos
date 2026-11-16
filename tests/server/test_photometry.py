@@ -190,8 +190,16 @@ def target_v(i: int) -> float:
     return 10.5 + 0.3 * math.sin(i / 3.0)
 
 
-def synthetic_raw(i: int, *, drift: bool = True, saturate: bool = False, hot: bool = False):
-    """One raw frame (each green value repeated over its 2x2 tile)."""
+def synthetic_raw(
+    i: int,
+    *,
+    drift: bool = True,
+    saturate: bool = False,
+    hot: bool = False,
+    target_scale: float = 1.0,
+):
+    """One raw frame (each green value repeated over its 2x2 tile); ``target_scale``
+    dims the target (a cloud over it, S85)."""
     rng = np.random.default_rng(1000 + i)
     k = max(0, i - 1) if drift else 0  # frames 0 and 1 are the same image
     theta = math.radians(0.04 * k)
@@ -206,6 +214,8 @@ def synthetic_raw(i: int, *, drift: bool = True, saturate: bool = False, hot: bo
         flux = 10 ** (-0.4 * (mag - 21.0))
         if key == "T" and saturate:
             flux *= 40.0
+        if key == "T":
+            flux *= target_scale
         green += (
             flux
             / (2 * math.pi * SIGMA**2)
@@ -2026,3 +2036,115 @@ def test_the_live_port_takes_the_egain_at_the_frames_own_gain_s83(phot_client, m
     assert float(seen[0][1].egain) == pytest.approx(float(hub.targets.egain(100)))
     assert float(seen[1][1].egain) == pytest.approx(EGAIN)  # the form's 80: the table's
     assert float(hub.targets.egain(100)) != pytest.approx(EGAIN)
+
+
+def core_has_s85() -> bool:
+    """GUARD (pending merge of release/0.5.0): the core review flags a live target point
+    measured below SNR 3 (S85: ``flag_no_detection``). Before the merge the server
+    writes it unflagged, as the release did before S85."""
+    from argos.server.review import core_review
+
+    return hasattr(core_review(), "flag_no_detection")
+
+
+requires_s85_core = pytest.mark.skipif(
+    not core_has_s85(), reason="the core has no S85 yet (release/0.5.0 not merged)"
+)
+
+
+def _recorder(run: Path) -> list[dict]:
+    path = run / "diagnostics" / "SYN_Var_live_diagnostics.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+@requires_s85_core
+def test_a_live_target_below_snr_3_is_flagged_no_detection_s85(phot_client, tmp_path):
+    """Release S85: S67's per-target rule when the point is measured. A target below
+    SNR 3 was written unflagged in the live CSV and the stream (S76's replay of the
+    cloudy XX Cyg 2026-09-07 ``045626Z`` sub: SNR 0.8, 12.77 ± 1.28) and counted in the
+    curve's ``sigma_syst``; Review, the AAVSO export and a re-run leave it out. Its point
+    is now ``suspect`` and ``no_detection`` and the recorder names it; the bright target,
+    the comparisons and the check on that frame keep theirs."""
+    from argos.core.photometry.lightcurve import LightCurve
+
+    faint = TargetStar("target", *sky(60.0, 80.0), name="SYN Faint", source="vsx")
+    tset = target_set()
+    TargetSet(object_name=OBJECT, stars=[*tset.stars, faint]).save(
+        phot_client.sessions_path / "targets" / "SYN_Var.json"
+    )
+    set_object(phot_client)
+    response = phot_client.patch("/api/config", json={"diagnostics.enabled": True}, headers=AUTH)
+    assert response.status_code == 200, response.text
+    hub = phot_client.hub
+    run = tmp_path / "20260925T200000Z_SYN_Var"
+    (run / "photometry").mkdir(parents=True)
+    raw = _add_star(synthetic_raw(0, drift=False), 60.0, 80.0, 16.9)
+    request = MeasureRequest(1, raw, GREEN_WCS, T0, 1, fwhm=2.4, run_root=run, origin="sequence")
+    with phot_client.websocket_connect(f"/ws/events?token={TOKEN}") as ws:
+        assert hub.photometry.measure(request) == 8
+        seen: list[dict] = []
+        receive_until(ws, lambda m: m["type"] == "photometry" and m["points"] == 8, seen=seen)
+
+    records = _recorder(run)
+    snr = {r["name"]: r.get("snr") for r in records if r["kind"] == "star" and r.get("name")}
+    assert 0.0 < snr["SYN Faint"] < 3.0 and snr[OBJECT] > 100.0  # the frame as intended
+    points = {m["name"]: m["point"] for m in seen if m["type"] == "photometry_point"}
+    assert len(points) == 8
+    assert points["SYN Faint"]["suspect"]  # unflagged before the fix
+    assert not any(p["suspect"] for name, p in points.items() if name != "SYN Faint")
+    csv = run / "photometry" / "target_SYN_Var_clear_SYN_Faint.csv"
+    assert [p.suspect for p in LightCurve.from_csv(csv).points] == [True]
+    events = [r for r in records if r["kind"] == "event" and r.get("what") == "no_detection"]
+    assert [(e["frame"], e["low_snr"]) for e in events] == [(0, ["SYN Faint"])]
+
+
+@requires_s49_core
+@requires_s85_core
+def test_live_no_detection_flags_and_floor_are_the_qt_engines_s85(
+    phot_client, tmp_path, monkeypatch
+):
+    """Release S85, parity: on 13 opened frames, the target dimmed below SNR 3 on frame
+    6 (a cloud), the server and the fixed Qt engine flag that point alike, leave it out
+    of the floor alike (``sigma_syst`` without it, every point's ``mag_err`` with it) and
+    write the same CSVs byte for byte."""
+    pytest.importorskip("PyQt6")
+    from argos.core.photometry.uncertainty import estimate_systematic_floor
+
+    start = lambda: datetime(2026, 11, 9, 20, 15, tzinfo=timezone.utc)  # noqa: E731
+    monkeypatch.setattr("argos.core.session.acquisition_engine._utcnow", start)
+    monkeypatch.setattr("argos.server.photometry._utcnow", start)
+    folder = tmp_path / "frames"
+    folder.mkdir()
+    paths = [
+        write_frame(
+            folder / f"syn_{i:03d}.fit", synthetic_raw(i, target_scale=0.016 if i == 6 else 1.0), i
+        )
+        for i in range(13)
+    ]
+    qt = run_qt(tmp_path, paths, target_set())
+    live = run_server(phot_client, paths, target_set())
+
+    reference = qt["curves"][f"{OBJECT}@clear"]
+    assert [i for i, p in enumerate(reference.points) if p.suspect] == [6]
+    assert reference.points[6].no_detection
+    kept = [(p.jd_utc, p.mag, p.formal_mag_err) for i, p in enumerate(reference.points) if i != 6]
+    floor = estimate_systematic_floor(kept).sigma_systematic
+    assert {p.sigma_syst for p in reference.points} == {floor}
+    for curve in live["curves"]:
+        theirs = qt["curves"][curve["key"]].points
+        assert len(curve["points"]) == len(theirs) == 13
+        for wire, point in zip(curve["points"], theirs):
+            expected = point_record(
+                point, wire["frame_seq"], wire["t"], wire["zero_point"], wire["zp_rms"]
+            )
+            assert wire == expected, (curve["key"], wire, expected)
+    target = _star(live["curves"], OBJECT)
+    assert [i for i, p in enumerate(target["points"]) if p["suspect"]] == [6]
+    assert target["sigma_syst"] == floor
+    others = [p for c in live["curves"] if c["role"] != "target" for p in c["points"]]
+    assert len(others) == 6 * 13 and not any(p["suspect"] for p in others)
+    qt_csvs = sorted((qt["sessions"] / "targets").glob("*.csv"))
+    web_csvs = sorted((phot_client.sessions_path / "targets").glob("*.csv"))
+    assert [p.name for p in web_csvs] == [p.name for p in qt_csvs] and len(qt_csvs) == 7
+    for ours, theirs in zip(web_csvs, qt_csvs):
+        assert ours.read_bytes() == theirs.read_bytes(), ours.name

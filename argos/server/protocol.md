@@ -2478,7 +2478,20 @@ saturated ensemble, no comparison) gives no point that frame.
   client recomputes the earlier bars the same way from `sigma_syst`);
   `saturated` (aperture peak ≥ `camera.linearity_max_adu`), `suspect`
   (hot pixel / cosmic, `aperture.py:109-136`; or the frame's lock rests on fewer
-  than 3 anchors, release S56), never used to drop a point.
+  than 3 anchors, release S56), never used to drop a point. **No detection**
+  (release S85, GUARD: `photometry.no_detection_rule`, the core review's
+  `flag_no_detection`, active once the release core is merged): a **target** measured
+  below SNR 3 (`review.NO_DETECTION_SNR`, S67's per-target rule) has its point flagged
+  `suspect` when it is measured (`LcPoint.no_detection` in the process; on the wire
+  and in the CSV the existing `suspect` flag, no new field), that point sets no
+  `sigma_syst` (the floor is estimated without it and still added to its own
+  `mag_err`), and the flight recorder gets a `no_detection` event (`low_snr`: the
+  targets' AUID, else name) after the frame's `ensemble` records, as a batch re-run
+  records it. Only that target's own point: a second, bright target, the comparisons
+  and the check keep theirs; S67's other half (a zero point more than 1 mag from the
+  run's median flags the whole frame) needs the run and stays with Review and the
+  re-run. The target's flag on such a frame is then the re-run's (a re-run may flag
+  the frame's other stars by its own gates, e.g. a frame it cannot re-solve, S43).
 - **Time and airmass** (X2): `jd_utc` of the midpoint; with a site set
   (`observing_site`: a name, or coordinates other than 0/0) `bjd_tdb` from
   astropy for the star's own RA / Dec and the site, and the star's own

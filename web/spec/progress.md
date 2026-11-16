@@ -2896,11 +2896,13 @@ solves and three flags on the XX Cyg runs, each explained in part D). Level (b):
 server's re-run equals the fixed Qt worker byte for byte on six cases (validation); the
 fixer's later changes leave the four main study runs identical key by key.
 
-Open (owner decisions, part D.8): S67's per-target no-detection rule on the live path, or
-2 anchors for S48 (the cloudy `045626Z` sub is now measured live on one anchor, target at
-SNR 0.8, left out by Review, the export and a re-run); resolving the e-/ADU once per gain at
-a run's start (an edit of the photon-transfer file itself during a run is not locked);
-`site.elevation` (S74's scintillation) in the lock. Not decided now: splitting the formal
+Decided after part D.8 (the owner, 2026-11-16): S67's per-target no-detection rule on the
+live path, option (a), is **S85** (the cloudy `045626Z` sub, measured live on one anchor with
+the target at SNR 0.8, is now flagged when it is measured; release worktree first, then
+`photometry.py` behind the GUARD `no_detection_rule`, the core review's `flag_no_detection`;
+`tests/server/test_photometry.py::*_s85` skip until the merge). Resolving the e-/ADU once per
+gain at a run's start and `site.elevation` (S74's scintillation) in the lock are deferred to
+0.5.x (S84's known limits). Not decided now: splitting the formal
 error into a random part and a per-run calibration part (bright stars' `MERR` 1.3-1.6 times
 their scatter) and refitting C_Y, deferred to 0.5.x with more nights. GUARDs:
 `config_meta._CALIBRATION_FIRST` (the Settings help follows the core's order) and
