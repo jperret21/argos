@@ -149,9 +149,15 @@ noise and blending, paid knowingly.
 
 ### 3.2 Sky and flux
 
-The sky level $\tilde{s}$ is the **median** of the annulus pixels, not the mean:
-a median is insensitive to a star that happens to fall in the annulus. With
-$n_\text{pix}$ pixels inside the aperture,
+The sky level $\tilde{s}$ is the **3σ-clipped mean** of the annulus pixels
+(S76): pixels farther than three standard deviations from the median are
+rejected, and the clip is repeated on what is kept until it rejects nothing (at
+most 10 passes), as photutils' `ApertureStats` and astropy's
+`sigma_clipped_stats(sigma=3, maxiters=10)` do. The clip rejects a star or a hot
+pixel that falls in the annulus, as the median did; the median itself is not used
+because the green plane steps by 8 ADU, so it lands on a 4-8 ADU grid, an error of
+about 2 ADU per pixel in no error term (before 0.5.0 the sky was that median).
+With $n_\text{pix}$ pixels inside the aperture,
 
 $$
 F = \sum_{(i,j)\,\in\,\text{ap}} I(i,j) \;-\; n_\text{pix}\,\tilde{s}
@@ -171,13 +177,14 @@ $F_e = 2g F$, $s_e = 2g(\tilde{s} - b)$, $n$ aperture pixels and $n_\text{ann}$
 annulus pixels:
 
 $$
-\sigma_F^2 = F_e + n\left(1 + \tfrac{\pi}{2}\,\frac{n}{n_\text{ann}}\right)
+\sigma_F^2 = F_e + n\left(1 + \frac{n}{n_\text{ann}}\right)
 \left(s_e + 2\left(\tfrac{R}{\sqrt{2}}\right)^2\right)
 $$
 
 The terms are the star's photon noise, then the sky photon noise and the read
 noise over the aperture, each enlarged by the error of the sky level subtracted
-from it: the annulus *median*, whose variance is $\pi/2$ that of a mean (S75).
+from it: the clipped mean of the $n_\text{ann}$ annulus pixels the clip keeps
+(S75, S76).
 The signal-to-noise ratio is $\text{SNR} = F_e / \sigma_F$, the one every gate
 reads. The instrumental magnitude's error then adds the star's scintillation in
 quadrature (S74):
@@ -207,12 +214,13 @@ Merline & Howell (1995); Howell, *Handbook of CCD Astronomy* (2006); Young (1967
 Osborn et al. (2015, MNRAS 452, 1707). Full citations in {doc}`references`.
 
 Two terms of a calibrated reduction are still absent. **Dark current** is never
-measured: its *signal* is absorbed into the annulus median and subtracted with the
-sky, but its *shot noise* is not counted — small on short uncooled sub-exposures
-against a bright sky. **The median's quantisation**: the green plane steps by 8 ADU,
-so the annulus median lands on a 4-8 ADU grid; that error (about 2 ADU per pixel)
-follows the sky level slowly and is not in $\sigma_F$ (release notes S76: the
-estimator is an open decision).
+measured: its *signal* is absorbed into the annulus' sky level and subtracted with
+the sky, but its *shot noise* is not counted — small on short uncooled
+sub-exposures against a bright sky. **Faint stars** bias the sky slightly low even
+after the clip (the clip, and the median it replaced, leave out their brightest
+pixels, which an aperture still sums), so blank apertures read slightly positive (on
+RR Lyr 2026-09-25, +9 ± 6 ADU per aperture with the clipped mean, +27 ± 8 with the
+median: release notes S76).
 ```
 
 ```{admonition} Where does $g$ come from — and when is it wrong?
@@ -222,21 +230,23 @@ ARGOS resolves the electron gain at the frame's own gain setting, in order
 (`argos/core/hardware/egain.py`, S73):
 
 1. the `camera.egain_table` entry for that gain;
-2. the telescope profile's photon-transfer measurement: the S30 Pro's
+2. your own photon-transfer file's entry at that gain (`camera_calibration*.json`,
+   Settings › Photon-transfer calibrations), with its `rdnoise` as the read noise:
+   a measurement of your camera beats one made on another unit;
+3. the telescope profile's photon-transfer measurement: the S30 Pro's
    0.228 ± 0.005 e⁻/ADU at gain 80 (read noise 2.6 e⁻), scaled at 0.1 dB per gain
    step over gains 0-251 (checked at gain 100: 0.183 measured, 0.181 scaled; any
    other scaled gain is logged "scaled, not measured"); a scaled gain uses the
    measured read noise too;
-3. the driver's `ElectronsPerADU`;
-4. the sensor reference curve (your own `camera_calibration*.json`, Settings ›
-   Photon-transfer calibrations, is read at this last step).
+4. the driver's `ElectronsPerADU`;
+5. the sensor reference curve.
 
 That value is what goes into `EGAIN` in the FITS header, with its source in the
 comment, and the measured read noise into `RDNOISE`. A **saved frame**, opened
 with **Open FITS…** or re-measured with **Re-run subs…**, takes the same order at
 its own `GAIN`: an S30 Pro frame of 0.4.x at gain 80, whose `EGAIN` says 0.8 (the
-driver) or 1.723 (the reference), takes the measured 0.228; an `EGAIN` your table
-wrote is kept. The flight recorder's `frame` record names the value and its source.
+driver) or 1.723 (the reference), takes the measured 0.228 (or your file's value
+at that gain); an `EGAIN` your table or your file wrote is kept. The flight recorder's `frame` record names the value and its source.
 
 :::{admonition} Before 0.5.0
 :class: warning
@@ -253,9 +263,13 @@ errors.
 :class: note
 
 With the green-plane model, the read noise is the one measured with the e⁻/ADU
-(2.6 e⁻ on the S30 Pro, the ADC's quantisation included) wherever the profile gives
-the gain; elsewhere `photometry.read_noise_e` (1.5 e⁻ by default). The `pixel`
-model always uses the setting.
+(your photon-transfer file's `rdnoise` at that gain; else 2.6 e⁻ on the S30 Pro,
+the ADC's quantisation included, wherever the profile gives the gain); elsewhere
+`photometry.read_noise_e` (1.5 e⁻ by default), also for a file entry without
+`rdnoise` (logged once: give your file both). The `pixel` model always uses the
+setting. The noise model, the read noise, the electron gain table and the
+photon-transfer folder cannot be changed while a sequence runs (S84), as the
+aperture geometry (S15): one curve keeps one error model.
 ```
 
 ### 3.4 Instrumental magnitude
@@ -312,8 +326,8 @@ less than 10 % of that excess, the point is marked *suspect*. Since the live
 curve measures raw subs, an uncorrected hot pixel drifting through an aperture
 would otherwise paint a convincing artificial dip with nothing to point at.
 
-($\sigma_\text{sky}$ here is the annulus **standard deviation**, while the sky
-level is its median. A star sitting in the annulus inflates that σ and makes the
+($\sigma_\text{sky}$ here is the annulus **standard deviation** before any
+clipping, while the sky level is its clipped mean. A star sitting in the annulus inflates that σ and makes the
 test fire less often — the threshold is more conservative than it looks.)
 
 ```{admonition} What the flags actually gate — read this before trusting them
@@ -726,7 +740,7 @@ prefixes `star_id`, `role`, `name` and `auid`; the rest is the same in both.
 | `sigma_syst` | mag | the run-level systematic floor that was added |
 | `airmass` | — | from the target's coordinates at this point's JD (see §7) |
 | `fwhm` | green px | frame FWHM. **Multiply by 2 for full-resolution pixels**, then by the plate scale for arcsec |
-| `sky_adu` | ADU | annulus median for this star on this frame |
+| `sky_adu` | ADU | annulus 3σ-clipped mean for this star on this frame (the median before 0.5.0) |
 | `comps_used` | count | comparisons behind `mag` in this row — the zero-point ensemble of §4.1 |
 | `relative_flux` | — | $\rho$ of §4.4, un-normalised |
 | `relative_flux_err` | — | its propagated error |
@@ -861,7 +875,7 @@ JSON config. The defaults below are those of 0.4.2.
 | `photometry.comparison_validation_max_formal_error_mag` | `0.10` | above this median error, *Noisy* — §6 |
 | `photometry.systematic_floor_mag` | `None` | `None` derives the floor from the curve; a number imposes it — §5 |
 | `photometry.track_apertures` | `True` | whether apertures follow a transform fitted between frames or are re-derived from the WCS alone. Live, on a mount in EQ mode the fit is a translation only, since there is no field rotation to follow; in alt-az mode it is rigid (rotation and translation). The offline batch re-measurement does not know the mount mode — saved frames do not record it — and always fits the rigid transform |
-| `camera.egain_table` | `{}` (empty) | $g$ in e⁻/ADU per gain setting. Empty is fine: the live path asks the driver then the sensor reference, and since 0.4.2 the offline path falls back to that same reference (§3.3) |
+| `camera.egain_table` | `{}` (empty) | $g$ in e⁻/ADU per gain setting, first in the order of §3.3. Empty is fine: your photon-transfer file, the telescope profile's measurement, the driver, then the sensor reference |
 
 ```{warning}
 Changing these changes what the numbers mean. Widening

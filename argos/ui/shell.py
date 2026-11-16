@@ -434,6 +434,7 @@ class Shell(QMainWindow):
     def _on_sequence_running(self, running: bool) -> None:
         self._sequence_active = running
         self._status.set_sequence_running(running)
+        self._configuration.set_sequence_running(running)  # S84: the e-/ADU's folder
         self._refresh_sidebar_states()
 
     def _on_autofocus_state(self, running: bool) -> None:

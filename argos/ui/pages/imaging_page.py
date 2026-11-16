@@ -97,6 +97,7 @@ from argos.core.imaging.metrics import (
 )
 from argos.core.imaging.platesolve import find_astap, format_dec_dms, format_ra_hms
 from argos.core.photometry.airmass import airmass_from_altitude
+from argos.core.photometry.params import NOISE_MODEL_KEYS
 from argos.ui import design, theme
 from argos.ui.panels.log_panel import LogPanel
 from argos.ui.panels.manual_control_dialog import ManualControlDialog
@@ -2189,6 +2190,13 @@ class ImagingPage(QWidget):
             )
             self._sync_photometry_setup()
             return
+        if self._sequence_active and key in NOISE_MODEL_KEYS:
+            # S84: the noise model sets the SNR the gates read and the formal errors;
+            # Qt has no control for it (a config key), refused as the geometry is.
+            self.log_message.emit(
+                "WARN", "The noise model is locked while a sequence runs — change ignored."
+            )
+            return
         self._config.set(key, value)
         self._sync_photometry_setup()
         # If a catalogue star is selected, redraw its aperture ring immediately
@@ -2397,8 +2405,9 @@ class ImagingPage(QWidget):
         worker.start()
 
     def _engine_egain(self) -> float:
-        """e-/ADU for an offline batch: config table, the profile's photon transfer
-        (S73), then the sensor reference (``hardware.egain.live``).
+        """e-/ADU for an offline batch: config table, the observer's photon-transfer
+        file, the profile's photon transfer (S73), then the sensor reference
+        (``hardware.egain.live``).
 
         Mirrors ``AcquisitionEngine._egain`` minus the driver step, which needs
         a live handle. Falling back to 1.0 here — as this used to — silently

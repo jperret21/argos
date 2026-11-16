@@ -1867,7 +1867,8 @@ class AcquisitionEngine(QObject):
 
     def _egain(self) -> float:
         """e-/ADU for photometric errors (``hardware.egain.live``): the gain table, the
-        profile's photon transfer (S73), the driver, the active sensor reference.
+        observer's photon-transfer file, the profile's photon transfer (S73), the
+        driver, the active sensor reference.
 
         At the gain the frame in hand was taken at (S83: a sequence sub's step, a live
         frame's settings), the Camera form's only before any frame. An opened frame

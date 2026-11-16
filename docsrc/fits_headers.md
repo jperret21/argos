@@ -101,7 +101,7 @@ same.
 | `EGAIN` | [e⁻/ADU] electron gain, with its source named in the comment |
 | `GAIN_E` | [e⁻/ADU] electron gain (AAVSO alias) |
 | `EPERDN` | [e⁻/ADU] electron gain (alias) |
-| `RDNOISE` | [e⁻] read noise, measured with `EGAIN` (S30 Pro) or from the sensor reference; source in the comment |
+| `RDNOISE` | [e⁻] read noise, measured with `EGAIN` (S30 Pro, or your photon-transfer file) or from the sensor reference; source in the comment |
 | `FULLWELL` | [e⁻] full-well capacity, from the sensor reference |
 | `XBINNING`, `YBINNING` | binning factors — always 1 |
 | `CCD-TEMP` | [°C] sensor temperature *(conditional)* |
@@ -123,9 +123,13 @@ pixel values carry. On the S30 Pro it is the camera's own photon-transfer
 measurement, 0.228 ± 0.005 e⁻/ADU at gain 80 (frame pairs of the owner's lights over
 three nights; release notes S73), scaled at 0.1 dB per gain step over gains 0-251
 (checked at gain 100); the comment says "S30 Pro PTC" or "S30 Pro PTC scaled". With
-a `camera.egain_table` entry for the gain, it is that entry; otherwise, on another
-camera or above gain 251, the driver's value or the sensor reference, named in the
-comment (not a measurement of your unit).
+a `camera.egain_table` entry for the gain, it is that entry; with an entry at that
+gain in your own photon-transfer file (`camera_calibration*.json`, Settings ›
+Photon-transfer calibrations), it is that one, before the profile's ("IMX585 PTC
+file", and `RDNOISE` the file's `rdnoise`, which `RDNOISE` also names with a gain
+table's e⁻/ADU); otherwise, on another camera or above
+gain 251, the driver's value or the sensor reference, named in the comment (not a
+measurement of your unit).
 
 Frames of 0.4.x carry the driver's 0.8 or the reference's 1.723 e⁻/ADU at gain 80,
 3.5 and 7.6 times the measured value; Open FITS and the batch re-run take the

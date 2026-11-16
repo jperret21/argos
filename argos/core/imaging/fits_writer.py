@@ -349,8 +349,8 @@ def _resolve_egain(
     """The e-/ADU in the order the photometry uses (S42, S73), with its ``source``.
 
     ``hardware.egain.live``: the ``camera.egain_table`` entry for the gain
-    setting, the active profile's photon-transfer measurement, the driver's
-    value, the active sensor reference.
+    setting, the observer's photon-transfer file, the active profile's
+    photon-transfer measurement, the driver's value, the active sensor reference.
     """
     return camera_egain.live(gain_setting, table=table, driver=driver_value)
 
@@ -396,8 +396,11 @@ def _add_sensor_headers(
     rdnoise = sensor_models.lookup_read_noise(sensor, gain)
     rdnoise_source = f"{model.SENSOR_NAME} reference"
     measured_rn = getattr(egain, "read_noise_e", None)
+    calibrated_rn = camera_egain.calibration_read_noise(sensor, gain)
     if measured_rn:  # S73: measured with the e-/ADU, at the profile's black level
         rdnoise, rdnoise_source = float(measured_rn), egain_source
+    elif calibrated_rn is not None:  # S73: the observer's own file, not the reference
+        rdnoise, rdnoise_source = calibrated_rn
     full_well = sensor_models.full_well_capacity(sensor, gain)
     eg = round(egain, 4)
     hdr["GAIN"] = (gain, "camera gain setting")

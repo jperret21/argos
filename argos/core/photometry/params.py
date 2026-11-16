@@ -42,6 +42,18 @@ NOISE_MODEL_GREEN = "green_plane"
 NOISE_MODEL_DEFAULT = NOISE_MODEL_GREEN
 NOISE_MODELS = (NOISE_MODEL_GREEN, NOISE_MODEL_PIXEL)
 
+#: The noise model's config keys, fixed while a sequence runs (S84, as the aperture
+#: geometry, S15): the model, the read noise and the observer's two inputs of the
+#: camera's e-/ADU (the gain table, the photon-transfer folder: S73's chain) change the
+#: SNR the gates read (S35, S56, S58, S69) and the formal errors, so a change partway
+#: through would split one curve in two.
+NOISE_MODEL_KEYS = (
+    "photometry.noise_model",
+    "photometry.read_noise_e",
+    "camera.egain_table",
+    "data_paths.camera_calibration_directory",
+)
+
 #: Scintillation computed at sea level for want of a height, or not at all for want of
 #: an exposure or airmass (each logged once).
 _sea_level_noted = False
@@ -221,9 +233,10 @@ def frame_egain(header, table=None) -> float | None:
     """e-/ADU of a saved frame (Open FITS, batch re-run), or None if unknown.
 
     ``hardware.egain.of_frame``: the ``camera.egain_table`` entry at the frame's
-    ``GAIN``, an ``EGAIN`` that table wrote, the photon-transfer measurement of the
-    camera its ``TELESCOP`` names (S73: never the wrong 0.8 or 1.723 of an S30 Pro
-    frame at gain 80), then its ``EGAIN``. The value is an ``Egain``: its
+    ``GAIN``, an ``EGAIN`` that table wrote, then for the camera its ``TELESCOP``
+    names the observer's photon-transfer file, an ``EGAIN`` that file wrote and the
+    profile's photon-transfer measurement (S73: never the wrong 0.8 or 1.723 of an
+    S30 Pro frame at gain 80), then its ``EGAIN``. The value is an ``Egain``: its
     ``source`` says which. None (the caller keeps its live chain) when nothing is
     usable.
     """

@@ -879,6 +879,69 @@ def test_the_read_noise_follows_the_frames_egain_whatever_the_path_s73() -> None
     assert PhotometryParams.from_config(cfg, egain=at_100).read_noise_e == pytest.approx(2.6)
 
 
+def test_the_observers_photon_transfer_file_comes_before_the_profile_s73(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    """S73 amended (the owner's call of 2026-11-16): the observer's own photon-transfer
+    file (Settings > Photon-transfer calibrations) measures their own camera, the
+    profile's 0.228 another unit: the file's entry at the frame's gain comes after the
+    gain table and before the profile and the driver, live and for a saved frame, with
+    the read noise measured with it. Before the fix it was read with the reference
+    curve, last: 0.228 (S30 Pro PTC) at gain 80, the driver's 0.5 for an S50."""
+    import json
+
+    from argos.core.hardware import catalog
+    from argos.core.hardware import egain as camera_egain
+    from argos.core.imaging import imx585, sensor_reference
+    from argos.core.photometry.params import PhotometryParams, frame_egain
+
+    monkeypatch.setattr(imx585, "_USER_CALIB_PATH", tmp_path / "camera_calibration.json")
+    monkeypatch.setattr(sensor_reference, "_CALIBRATION_DIRECTORY", tmp_path)
+    monkeypatch.setattr(camera_egain, "_warned", set())
+    s30pro, s50 = catalog.get("s30pro"), catalog.get("s50")
+    calibration = {"80": {"egain": 0.25, "rdnoise": 2.0}, "100": {"egain": 0.2}}
+    (tmp_path / "camera_calibration.json").write_text(json.dumps(calibration))
+    (tmp_path / "camera_calibration_imx462.json").write_text(json.dumps({"80": {"egain": 0.9}}))
+
+    with caplog.at_level("INFO", logger="argos.core.hardware.egain"):
+        live = camera_egain.live(80, driver=0.42, profile=s30pro)
+    assert (live, live.source, live.read_noise_e) == (0.25, "IMX585 PTC file", 2.0)
+    assert any("camera_calibration.json" in r.getMessage() for r in caplog.records)
+    with caplog.at_level("INFO", logger="argos.core.hardware.egain"):
+        at_100 = camera_egain.live(100, profile=s30pro)  # no rdnoise there: the Settings one
+    assert (at_100, at_100.read_noise_e) == (0.2, None)
+    assert any("not in the file" in r.getMessage() for r in caplog.records)  # said once
+    cfg = {"photometry.noise_model": "green_plane", "photometry.read_noise_e": 1.5}.get
+    assert PhotometryParams.from_config(cfg, egain=live).read_noise_e == 2.0
+    assert PhotometryParams.from_config(cfg, egain=at_100).read_noise_e == 1.5
+    # no entry at the gain: the profile's measurement (scaled), as before
+    assert camera_egain.live(120, profile=s30pro).source == "S30 Pro PTC scaled"
+    # the gain table still comes first
+    assert camera_egain.live(80, table={"80": 0.3}, profile=s30pro).source == "egain_table"
+    # an unvalidated profile's file beats its driver (IMX462: camera_calibration_imx462.json)
+    s50_live = camera_egain.live(80, driver=0.5, profile=s50)
+    assert (s50_live, s50_live.source) == (0.9, "IMX462 PTC file")
+
+    # a saved S30 Pro frame at gain 80 (EGAIN 0.8, the driver's): the file, not 0.228
+    saved = frame_egain(_s30pro_header(80, 0.8))
+    assert (saved, saved.source, saved.read_noise_e) == (0.25, "IMX585 PTC file", 2.0)
+    assert frame_egain(_s30pro_header(80, 0.8), {"80": 0.31}) == 0.31  # table first
+    # without the file: an EGAIN the file wrote is kept, any other gives the profile's
+    (tmp_path / "camera_calibration.json").unlink()
+    kept = frame_egain(_s30pro_header(80, 0.25, "IMX585 PTC file"))
+    assert kept == 0.25 and "PTC file" in kept.source
+    # ...with the read noise that file wrote with it (validation F2: the Settings 1.5 e-
+    # before), never an RDNOISE of another source
+    written = _s30pro_header(80, 0.25, "IMX585 PTC file")
+    written["RDNOISE"] = 3.0
+    written.comments["RDNOISE"] = "[e-] read noise (IMX585 PTC file)"
+    assert frame_egain(written).read_noise_e == 3.0
+    written.comments["RDNOISE"] = "[e-] read noise (IMX585 reference)"
+    assert frame_egain(written).read_noise_e is None
+    assert frame_egain(_s30pro_header(80, 0.8)) == pytest.approx(0.228)
+    assert camera_egain.live(80, profile=s30pro).source == "S30 Pro PTC"
+
+
 def test_the_model_sky_sigma_is_the_measured_one_s72_s73() -> None:
     """S72's test: the model's sky sigma within 10 % of the green-plane sigma measured
     in the annuli of the first light of RR Lyr 2026-09-25 (sky 1176 ADU: 20.5 ADU), XX
@@ -973,10 +1036,12 @@ def test_scintillation_is_in_each_stars_error_not_its_snr_s74() -> None:
 
 
 def test_the_sky_estimates_own_error_is_counted_s75() -> None:
-    """The sky under the aperture is the median of n_sky annulus pixels, whose error
-    the CCD equation counts as n_ap (1 + n_ap / n_sky) with the median's pi/2. Without
-    it the model's error of a faint star measured with a small annulus is 25 % below
-    the scatter of its flux over 400 noise realisations (0.75 before the fix, 1.04 with it)."""
+    """The sky under the aperture is an estimate from n_sky annulus pixels, whose error
+    the CCD equation counts as n_ap (1 + n_ap / n_sky). Without it the model's error of
+    a faint star measured with a small annulus is below the scatter of its flux over 400
+    noise realisations (0.75 before the fix with S75's median; 0.86 with S76's clipped
+    mean). With the clipped mean and a mean's factor 1 (S76): 1.07; a median's pi/2 kept
+    for the mean gives 1.17."""
     from argos.core.photometry.aperture import sky_sigma_adu
 
     rng = np.random.default_rng(75)
@@ -1002,6 +1067,74 @@ def test_the_sky_estimates_own_error_is_counted_s75() -> None:
     )
     var = old.flux_adu * egain + n_pix * (level * egain + 2.6**2)
     assert old.snr == pytest.approx(round(old.flux_adu * egain / math.sqrt(var), 2), abs=0.01)
+
+
+def test_the_sky_is_no_quantised_median_s76() -> None:
+    """S76: the green plane of the S30 Pro's 12-bit x 16 raw frames steps by 8 ADU, so
+    the annulus median sat on a 4-8 ADU grid and followed the sky level's phase on it
+    (a sawtooth, about 2.1 ADU rms per pixel on RR Lyr 2026-09-25, in no error term).
+    A flat Gaussian sky quantised as the camera does, stepped by 1 ADU through one grid
+    period: the sky estimate within 0.5 ADU of the true level at every step (the median
+    missed it by up to 4 ADU before the fix)."""
+    rng = np.random.default_rng(76)
+
+    def raw(level):  # one raw green pixel per plane pixel: 12-bit values x 16
+        return 16.0 * np.round(rng.normal(level, 16.0, (200, 200)) / 16.0)
+
+    for step in range(9):
+        level = 1176.0 + step
+        green = ((raw(level) + raw(level)) / 2.0).astype(np.float32)
+        assert not np.any(np.mod(green, 8.0)), "the plane steps by 8 ADU"
+        phot = measure_aperture(green, 100.0, 100.0, 5.0, 20.0, 60.0)
+        assert phot.sky_adu == pytest.approx(level, abs=0.5), (level, phot.sky_adu)
+
+
+def test_the_sky_is_the_annulus_3_sigma_clipped_mean_s76() -> None:
+    """S76: the sky is the annulus' 3-sigma-clipped mean, photutils' ``ApertureStats``
+    default and astropy's ``sigma_clipped_stats(sigma=3, maxiters=10)`` (an independent
+    reference): a neighbour star and a hot pixel in the annulus are rejected, the rest
+    averaged; the sky-estimate term (S75) counts the pixels kept, with a mean's factor
+    1. Before the fix it was the annulus median, with a median's pi/2."""
+    from astropy.stats import sigma_clipped_stats
+
+    from argos.core.photometry.aperture import sky_level
+
+    rng = np.random.default_rng(761)
+    yy, xx = np.mgrid[0:60, 0:60]
+    green = 1176.0 + rng.normal(0.0, 20.0, (60, 60))
+    green += 5000.0 * np.exp(-((xx - 30) ** 2 + (yy - 30) ** 2) / (2 * 1.5**2))
+    green += 3000.0 * np.exp(-((xx - 40) ** 2 + (yy - 30) ** 2) / (2 * 1.5**2))  # in the annulus
+    green[22, 30] += 4000.0  # a hot pixel in the annulus
+    green = green.astype(np.float32)
+    annulus = ((xx - 30.0) ** 2 + (yy - 30.0) ** 2 > 64) & (
+        (xx - 30.0) ** 2 + (yy - 30.0) ** 2 <= 144
+    )
+    pixels = green[annulus].astype(np.float64)
+    reference = sigma_clipped_stats(pixels, sigma=3.0, maxiters=10)[0]
+    level, kept = sky_level(green[annulus])
+    assert level == pytest.approx(reference, abs=1e-9)
+    assert kept < pixels.size and abs(level - 1176.0) < 3.0
+
+    egain, rn, black = 0.228, 2.6, 1024.0
+    phot = measure_aperture(
+        green,
+        30.0,
+        30.0,
+        5.0,
+        8.0,
+        12.0,
+        egain=egain,
+        read_noise_e=rn,
+        black_adu=black,
+        plane_pixels=2,
+    )
+    assert phot.sky_adu == pytest.approx(reference, abs=1e-6)
+    n_ap = int(((xx - 30.0) ** 2 + (yy - 30.0) ** 2 <= 25).sum())
+    k = 2 * egain
+    flux = float(green[(xx - 30.0) ** 2 + (yy - 30.0) ** 2 <= 25].sum()) - level * n_ap
+    pixel_var = (level - black) * k + 2 * rn**2
+    var = flux * k + n_ap * (1.0 + n_ap / kept) * pixel_var
+    assert phot.snr == pytest.approx(round(flux * k / math.sqrt(var), 2), abs=0.01)
 
 
 def test_an_aperture_or_annulus_off_the_frame_is_not_measured_s81() -> None:

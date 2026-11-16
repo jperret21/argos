@@ -329,8 +329,23 @@ def test_shell_three_mode_walkthrough(monkeypatch) -> None:
         assert plan.steps[0].count > 0
         shell._engine.sequence_running.emit(True)
         assert shell._sequence_active is True and shell.status._seq_running is True
+        # S84: the photon-transfer folder gives every frame's e-/ADU (S73): locked during
+        # the run, and a change that still arrives keeps the folder in use (it was
+        # applied from the next frame before the fix).
+        from argos.core.imaging import imx585
+
+        settings = shell._configuration
+        assert not settings._calibration_row.isEnabled()
+        assert "one error model" in settings._calibration_row.toolTip()
+        in_use = imx585.calibration_path()
+        configured = shell._config.get("data_paths.camera_calibration_directory", None)
+        settings._calibration_dir_edit.setText(str(in_use.parent / "elsewhere"))
+        settings._save_local_data_paths()
+        assert imx585.calibration_path() == in_use
+        assert shell._config.get("data_paths.camera_calibration_directory", None) == configured
         shell._engine.sequence_running.emit(False)
         assert shell._sequence_active is False and shell.status._seq_running is False
+        assert settings._calibration_row.isEnabled()
         # Starting without a camera is refused and the button snaps back.
         seq_page.panel.set_running(True)
         seq_page._on_start(plan)
