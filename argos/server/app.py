@@ -20,7 +20,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Any, Awaitable, Callable, Literal
 
 import anyio
-from fastapi import APIRouter, Body, Depends, FastAPI, Path, Query, WebSocket
+from fastapi import APIRouter, Body, Depends, FastAPI, Path, Query, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.concurrency import run_in_threadpool
@@ -44,6 +44,7 @@ from argos.server.errors import ApiError, CatchAllMiddleware, error_body, instal
 from argos.server.events import EventBus
 from argos.server import profiles as profile_records
 from argos.server import runtime
+from argos.server import desktop
 from argos.server.hub import Hub
 from argos.server.planning import PlanningService, TransitBody, TransitPlanBody
 from argos.server import review_routes
@@ -269,6 +270,18 @@ class SyncBody(_Body):
 
 
 class OpenFitsBody(_Body):
+    path: str = Field(min_length=1, max_length=4096)
+
+
+class ShutdownBody(_Body):
+    """``POST /api/app/shutdown`` (wave 8, A7)."""
+
+    force: bool = False
+
+
+class RevealBody(_Body):
+    """``POST /api/fs/reveal`` (wave 8, A12)."""
+
     path: str = Field(min_length=1, max_length=4096)
 
 
@@ -593,6 +606,7 @@ def app_info(settings: Settings, hub: Hub) -> dict[str, Any]:
         "credits": [dict(c) for c in CREDITS],
         "project_url": PROJECT_URL,
         "docs_url": DOCS_URL,
+        "desktop": bool(getattr(settings, "desktop", False)),  # wave 8: --desktop
     }
 
 
@@ -629,6 +643,18 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
     if getattr(hub, "planning", None) is None:
         hub.planning = PlanningService(hub)  # type: ignore[attr-defined]
     auth = TokenAuth(settings.token)
+    # Wave 8 (desktop): the shutdown route and reveal (desktop.py).
+    lifecycle = desktop.ShutdownService(hub)
+    revealer = desktop.Revealer(hub, settings)
+
+    def refuse_while_closing(request: Request) -> None:
+        """Wave 8: once a shutdown started, only reads (and the shutdown route) run."""
+        if (
+            lifecycle.closing
+            and request.method not in ("GET", "HEAD", "OPTIONS")
+            and request.url.path != "/api/app/shutdown"
+        ):
+            raise ApiError(503, "shutting_down", "ARGOS is shutting down")
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -659,6 +685,8 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
     )
     app.state.hub = hub
     app.state.settings = settings
+    app.state.lifecycle = lifecycle  # the CLI sets its request_exit (__main__.py)
+    app.state.revealer = revealer
     hosts = allowed_hosts(settings.host)
     install_error_handlers(app)
     # Last added runs first: guard → CORS → catch-all → routes.
@@ -673,7 +701,9 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
     app.add_middleware(_LocalGuard, hosts=hosts)
 
     public = APIRouter()
-    api = APIRouter(prefix="/api", dependencies=[Depends(auth.require)])
+    api = APIRouter(
+        prefix="/api", dependencies=[Depends(auth.require), Depends(refuse_while_closing)]
+    )
 
     @public.get("/api/health")
     def health() -> dict[str, Any]:
@@ -738,6 +768,10 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
     @api.get("/app/info")
     def get_app_info() -> dict[str, Any]:
         return app_info(settings, hub)
+
+    @api.post("/app/shutdown", status_code=202)
+    def app_shutdown(body: ShutdownBody | None = None) -> dict[str, Any]:
+        return lifecycle.request(force=bool(body and body.force))  # wave 8, A7
 
     @api.get("/logs")
     def get_logs(
@@ -863,6 +897,10 @@ def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
         hidden: bool = False,
     ) -> dict[str, Any]:
         return hub.fs_list(path, kind=kind, ext=ext, counts=counts, hidden=hidden)
+
+    @api.post("/fs/reveal")
+    def fs_reveal(body: RevealBody) -> dict[str, Any]:
+        return revealer.reveal(body.path)  # wave 8, A12: desktop app only
 
     @api.get("/sessions")
     def sessions(

@@ -90,6 +90,61 @@ def awake(client) -> dict:
 # -- keep-awake: the lifecycle --------------------------------------------------------
 
 
+class GatedBackend(FakeBackend):
+    """``acquire`` blocks like the real helpers' 0.2 s alive check, until ``gate``."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate = threading.Event()
+        self.entered = threading.Event()
+
+    def acquire(self, reason: str):
+        self.entered.set()
+        self.gate.wait(5)
+        return super().acquire(reason)
+
+
+def test_held_is_said_by_the_status_that_announces_the_run(seq):
+    # Wave 8: caffeinate held the assertion 24 ms after Start while
+    # status.keep_awake read "off" until 239 ms (the alive check), live on 8780.
+    backend = GatedBackend()
+    seq.hub.keep_awake.backend = backend
+    seq.hub.keep_awake._record = seq.hub.keep_awake._idle_record()
+    put_plan(seq, steps=[light(count=3, exposure_s=0.2)])
+    with seq.websocket_connect(f"/ws/events?token={TOKEN}") as ws:
+        start(seq)
+        first = receive_until(
+            ws, lambda m: m["type"] == "status" and m["sequence"]["active"], timeout=5
+        )
+        assert first["keep_awake"]["state"] == "held"
+        assert backend.entered.wait(5) and backend.held == 0  # the helper is still checked
+        record = awake(seq)
+        assert record["state"] == "held" and record["method"] == "fake"
+        assert record["reason"] == "A sequence is running (SYN Var)." and record["since"]
+        backend.gate.set()
+        wait_for(lambda: backend.held == 1, timeout=5)
+        assert seq.hub.keep_awake.settle(2.0)
+        assert awake(seq) == record  # confirmed: the same record, no second event
+    wait_state(seq, "idle")
+    wait_for(lambda: awake(seq)["state"] == "off", timeout=5)
+    assert backend.held == 0
+
+
+def test_no_early_held_when_keep_awake_is_off_or_unsupported(seq):
+    assert awake(seq)["state"] == "unsupported"  # in-process: NullBackend
+    seq.hub.keep_awake.want("A sequence is running (X).")
+    assert awake(seq)["state"] == "unsupported"
+    seq.hub.keep_awake.want(None)
+    backend = fake(seq)
+    assert (
+        seq.patch("/api/config", json={"alerts.keep_awake": False}, headers=AUTH).status_code == 200
+    )
+    seq.hub.keep_awake.want("A sequence is running (X).")
+    assert awake(seq)["state"] == "disabled"
+    seq.hub.keep_awake.want(None)
+    assert seq.hub.keep_awake.settle(2.0) and backend.held == 0
+
+
 def test_the_assertion_is_held_from_start_to_the_end_of_the_run(seq):
     backend = fake(seq)
     assert awake(seq)["state"] == "off"

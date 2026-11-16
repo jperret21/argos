@@ -13,6 +13,11 @@ the lines are printed, so a client that reads them can connect at once, and
 
 Ctrl-C (SIGINT) shuts down gracefully and exits with status 0, without the
 KeyboardInterrupt traceback uvicorn's re-raised signal would print.
+``POST /api/app/shutdown`` (wave 8) ends the process with status 0 too.
+
+Wave 8, desktop: the Tauri shell passes ``--desktop`` (reveal allowed) and
+``--exit-on-stdin-eof`` (its pipe closing, however the shell ended, takes
+the SIGTERM path).
 
 Start-up (row A3): the configuration is read from ``--config-dir`` (default
 ``$ARGOS_CONFIG_DIR``, else ``~/.argos``), the rotating ``argos.log`` and
@@ -26,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import socket
 import sys
 from pathlib import Path
@@ -93,6 +99,22 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="simulator: play the FITS frames of DIR (copies of real frames) in file-name "
         "order, the simulated mount reporting their pointing (wave 6a)",
     )
+    parser.add_argument(
+        "--desktop",
+        action="store_true",
+        help="started by the desktop shell: reveal in the file manager allowed (wave 8)",
+    )
+    parser.add_argument(
+        "--exit-on-stdin-eof",
+        action="store_true",
+        help="shut down gracefully when stdin reaches end of file (the desktop shell is gone)",
+    )
+    parser.add_argument(
+        "--self-check",
+        action="store_true",
+        help="import the server and every module it loads by file path, then exit "
+        "(packaging smoke test: a frozen build missing one fails here, not in Review)",
+    )
     parser.add_argument("--version", action="version", version=f"ARGOS {__version__}")
     args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
@@ -121,6 +143,8 @@ def _bind(host: str, port: int) -> socket.socket:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    if args.self_check:
+        return _self_check()
     formatter = logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
     logging.basicConfig(
         level=logging.INFO,
@@ -169,6 +193,7 @@ def main(argv: list[str] | None = None) -> int:
         manage_process=True,
         connect_timeout_s=args.connect_timeout,
         sim=SimOptions(replay_dir=args.sim_replay),
+        desktop=args.desktop,
     )
     # The hub reads the configuration and applies the log level, the
     # telescope profile and the data paths before the first request.
@@ -193,11 +218,36 @@ def main(argv: list[str] | None = None) -> int:
     print(f"ARGOS_PORT={port}", flush=True)
     print(f"ARGOS_TOKEN={token}", flush=True)
     logger.info("ARGOS %s server on http://%s:%d", __version__, args.host, port)
+    server = uvicorn.Server(config)
+    # Wave 8: POST /api/app/shutdown ends uvicorn's loop after its stages (exit status 0).
+    app.state.lifecycle.request_exit = lambda: setattr(server, "should_exit", True)
+    app.state.lifecycle.hard_exit = os._exit  # past the shutdown budget (desktop.py)
+    if args.exit_on_stdin_eof:
+        from argos.server.desktop import watch_stdin_eof
+
+        watch_stdin_eof()
     try:
-        uvicorn.Server(config).run(sockets=[sock])
+        server.run(sockets=[sock])
     except KeyboardInterrupt:
         # uvicorn re-raises SIGINT after its graceful shutdown: a normal stop.
         pass
+    return 0
+
+
+def _self_check() -> int:
+    """Load what a request could load later: the app, and the modules read by file path.
+
+    ``argos.server.review`` loads ``argos/core/session/review.py`` by its path (its package
+    imports PyQt6); a freeze that does not ship that file would only fail when Review opens a
+    session (W8 integration). The release workflow runs this on the frozen sidecar.
+    """
+    from argos.server import review
+    from argos.server.app import create_app  # noqa: F401  (the whole app imports)
+
+    loaded = [review.core_review().__file__]
+    for path in loaded:
+        print(f"loaded {path}")
+    print(f"ARGOS {__version__} self-check: ok")
     return 0
 
 

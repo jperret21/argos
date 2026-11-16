@@ -77,6 +77,8 @@ class Settings:
             (``autofocus_worker.py:44``: 1 s; tests shorten it).
         autofocus_poll_s: ``IsMoving`` poll period during autofocus
             (``autofocus_worker.py:45``: 0.3 s).
+        desktop: Started by the desktop shell (``--desktop``, wave 8): AppInfo
+            ``desktop`` and ``POST /api/fs/reveal``.
     """
 
     token: str
@@ -98,3 +100,4 @@ class Settings:
     jog_deadman_s: float = 1.0
     autofocus_settle_s: float = 1.0
     autofocus_poll_s: float = 0.3
+    desktop: bool = False

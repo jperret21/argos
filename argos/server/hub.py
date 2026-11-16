@@ -78,7 +78,7 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -294,6 +294,9 @@ class Hub:
         self._mount_failing = False
         #: Exposure and gain the running live view uses from its next frame on.
         self._live_settings: tuple[float, int] | None = None
+        #: Wave 8: ``shutdown`` runs once; a second caller waits for the first.
+        self._shutdown_lock = threading.Lock()
+        self._shut_down = False
 
         self.logbook = LogBook()
         #: Numbering and handing a log line to the bus happen under one lock, so
@@ -417,16 +420,29 @@ class Hub:
         self.targets.publish()  # the cached record a new client receives
         self.attention.start()  # wave 6b
 
-    def shutdown(self) -> None:
-        """Release everything at server exit."""
+    def shutdown(self, stage: Callable[[str], None] | None = None) -> None:
+        """Release everything at server exit, once; a second caller waits for the first.
+
+        Wave 8: *stage* hears each stage id before it runs (``desktop.STAGES``,
+        the ``shutdown`` events of ``POST /api/app/shutdown``).
+        """
+        with self._shutdown_lock:
+            if not self._shut_down:
+                self._shut_down = True
+                self._release_all(stage or (lambda _stage: None))
+
+    def _release_all(self, mark: Callable[[str], None]) -> None:
+        mark("sequence")
         self.sequence.close()  # wave 6a: stop a run first, its subs complete on disk
         self.keep_awake.close()  # wave 6b: the sleep assertion goes with the run
+        mark("services")
         self.attention.close()
         self.field.close()
         self.photometry.close()
         self.jobs.shutdown()
         self.network.stop()
         self.stellarium.stop(announce=False)
+        mark("devices")
         run = self._autofocus
         if run is not None:
             run.stop()  # return the focuser to its start, bounded by the join below
@@ -434,6 +450,7 @@ class Hub:
         for dev in DISCONNECT_ORDER:
             self._disconnect_device(dev, quiet=True)
         self.jog.close()
+        mark("files")
         self.metrics.close()
         self._saver.shutdown(wait=True)  # a FITS being written is finished, never cut
         with self._lock:

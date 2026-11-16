@@ -28,7 +28,8 @@ wave 5 (rows A50, A54-A58) adds the live photometry of
 ```
 .venv/bin/python -m argos.server [--host 127.0.0.1] [--port 8742] [--simulator]
                                  [--dev-token TOKEN] [--config-dir DIR] [--log-dir DIR]
-                                 [--connect-timeout S]
+                                 [--connect-timeout S] [--sim-replay DIR] [--desktop]
+                                 [--exit-on-stdin-eof] [--self-check]
 ```
 
 | Flag | Meaning |
@@ -40,14 +41,29 @@ wave 5 (rows A50, A54-A58) adds the live photometry of
 | `--config-dir` | Folder holding `config.json`. Default: `$ARGOS_CONFIG_DIR`, else `~/.argos` (the Qt app's file, shared during the transition). Tests and smoke runs always pass a temporary folder. |
 | `--log-dir` | Folder of the rotating server log `argos.log` and crash reports. Default: `$ARGOS_LOG_DIR`, else the platform diagnostics folder (`~/Library/Logs/Argos` on macOS, `$XDG_STATE_HOME/argos` or `~/.local/state/argos` elsewhere). |
 | `--connect-timeout` | Seconds a TCP pre-check of an Alpaca address may take before a device connect is attempted (default 3). See [Unreachable addresses](#unreachable-addresses). |
+| `--sim-replay` | (Wave 6a) With `--simulator`: the camera plays the FITS frames of DIR. See [Simulator replay source](#simulator-replay-source). |
+| `--desktop` | (Wave 8) Started by the desktop shell: AppInfo `desktop: true`, `POST /api/fs/reveal` allowed. See [Desktop app](#desktop-app-wave-8-shutdown-reveal-the-shells-stdin). |
+| `--exit-on-stdin-eof` | (Wave 8) Shut down gracefully (SIGTERM) when stdin reaches end of file: the shell's pipe closed, whatever ended the shell. |
+| `--self-check` | (Wave 8) Import the app and every module the server loads by file path (`argos/core/session/review.py`), print `loaded <path>` lines and `ARGOS <version> self-check: ok`, exit 0; no socket, no configuration read. The release workflow runs it on the frozen sidecar (`packaging/smoke_sidecar.py`): a freeze missing such a file fails there, not when Review opens a session. |
 
 Once the socket is bound and listening, stdout carries exactly two lines, in
-this order, for a supervising process such as the future Tauri sidecar:
+this order, for a supervising process such as the desktop app's shell:
 
 ```
 ARGOS_PORT=8742
 ARGOS_TOKEN=<token>
 ```
+
+The desktop app (wave 8, `web/src-tauri/src/sidecar.rs`) runs the frozen
+one-dir server (`argos-server`, `packaging/argos_server.spec`) as
+`argos-server --host 127.0.0.1 --port 0 --desktop --exit-on-stdin-eof`, its
+stdin a pipe it holds open, reads the two lines within 60 s, and opens the UI
+with the address and the token. It spawns the server first thing, before its
+own window exists. A dev build (`org.argos.argos.dev`) may add arguments
+(`ARGOS_SIDECAR_ARGS`) or run another executable (`ARGOS_SIDECAR`); the extra
+arguments come before the shell's own, which therefore win (argparse keeps
+the last value: no `--host` can expose a desktop server). A release build
+ignores both variables.
 
 Logs, uvicorn's access log included, go to stderr, with any `token=…`
 redacted. SIGINT and SIGTERM shut down gracefully: running jobs are
@@ -485,7 +501,8 @@ AppInfo = {"name": "ARGOS", "version": "0.4.2", "api": 2,
            "description": "Scientific acquisition and differential photometry for ZWO Seestar telescopes.",
            "credits": [{"name", "use", "licence", "url"}],
            "project_url": "https://github.com/jperret21/argos",
-           "docs_url": "https://perretjules.com/argos/"}
+           "docs_url": "https://perretjules.com/argos/",
+           "desktop": bool}              // wave 8: started by the desktop shell (--desktop)
 ```
 
 `config` is `null` when the server runs on an in-memory configuration
@@ -3545,6 +3562,13 @@ KeepAwake = {"state": "off"|"held"|"failed"|"unsupported"|"disabled",
   waited for the next run).
 - A shutdown or a Stop that arrives while the OS call is being made never
   leaves the assertion held: it is released as soon as the call returns.
+- (Wave 8) `held` is reported from the moment the run asks for it, in the
+  same `status` that announces the run, when a method exists and the
+  setting is on: the macOS and Linux helpers hold the OS assertion within
+  milliseconds of their start, while the check that they stayed alive takes
+  0.2 s (before, `status.keep_awake.state` read `off` during that check
+  although `pmset` already listed the assertion). A helper that exits at
+  once turns the record to `failed`, with the WARNING line.
 
 ### Sequence record additions (6a leftovers, D2)
 
@@ -4258,6 +4282,154 @@ Job errors: `write_failed` (A78, A79), `not_solved` (A76 reference solve),
 `invalid_fits` (A76: the reference frame is unreadable or too large),
 `rerun_failed` (A76, the worker's exception text).
 
+## Desktop app (wave 8): shutdown, reveal, the shell's stdin
+
+Rows A7 and A12 of `web/spec/README.md` §7 and the two start-up flags the
+Tauri shell passes (`web/src-tauri/src/sidecar.rs`). Still `"api": 2`
+(additive). Module: `argos/server/desktop.py`.
+
+| Method | Path | Body | Returns | Row |
+|---|---|---|---|---|
+| POST | `/api/app/shutdown` | `{"force": bool}` (optional, default `false`) | `202` ShutdownStarted; `409 busy` with `what` | A7 |
+| POST | `/api/fs/reveal` | `{"path": "<absolute path>"}` | `{"path": "<resolved path>", "method": string}` | A12 |
+
+New WebSocket event `shutdown` (a snapshot: the newest stage is enough).
+AppInfo gains `"desktop": bool`.
+
+### Started by the desktop shell (`--desktop`, `--exit-on-stdin-eof`)
+
+The shell starts the frozen server as `argos-server --host 127.0.0.1 --port
+0 --desktop --exit-on-stdin-eof`, its stdin a pipe the shell keeps open and
+never writes to, and reads `ARGOS_PORT` / `ARGOS_TOKEN` (see Launching).
+
+- `--desktop`: the server was started by the desktop shell. AppInfo says
+  `"desktop": true` (the UI offers Quit and Reveal only then) and
+  `POST /api/fs/reveal` works; without it the route is
+  `403 desktop_only`. Nothing else changes.
+- `--exit-on-stdin-eof`: a daemon thread reads stdin until end of file,
+  then sends the server process SIGTERM, the graceful path of Launching (a
+  run stopped, jobs cancelled, devices released, the keep-awake assertion
+  released; exit status −15). The pipe closes however the shell ends (Quit,
+  a crash, `kill -9`), so the server never outlives it. SIGTERM is sent
+  only once uvicorn's signal handlers are installed (an earlier end of file
+  waits for them), so even a stdin at end of file from the start
+  (`/dev/null`) takes the graceful path: that server stops right after
+  start-up. The server logs "Standard input closed (the desktop shell is
+  gone): shutting down." Without the flag, stdin is never read.
+
+### Shutdown (A7)
+
+`POST /api/app/shutdown` with `{"force": false}` (or no body):
+
+- Something is busy (see below): `409 busy`, nothing is stopped; the
+  error carries `what: [BusyItem]` and a message listing the same texts.
+- Nothing is busy, or `"force": true`: `202` ShutdownStarted; the stages
+  below run on a server thread, each announced by a `shutdown` event. After
+  the last one, a server started by the CLI exits with status **0**
+  (uvicorn closes the WebSockets, 1012 or 1001). An in-process server
+  (tests) runs the same stages and stays.
+- During the shutdown, a second `POST /api/app/shutdown` answers `202`
+  with the same record (`forced` of the first), and every other `POST`,
+  `PUT`, `PATCH` or `DELETE` is `503 shutting_down`; `GET` routes answer
+  while the process lives.
+
+```
+BusyItem = {"kind": "run"|"exposure"|"slew"|"job"|"write",
+            "text": string,              // one sentence, shown as is in the Quit dialog
+            "job_id": string|null,       // kind "job" or "write" from a job (A80)
+            "job_kind": string|null}
+ShutdownStarted = {"state": "shutting_down", "forced": bool,
+                   "what": [BusyItem],   // what was busy when it started
+                   "stages": [{"id": string, "label": string}],
+                   "budget_s": 60}
+ShutdownEvent = {"type": "shutdown", "stage": string, "label": string,
+                 "index": int,           // 1-based, of "count"
+                 "count": int, "forced": bool, "budget_s": 60, "t": ISO}
+```
+
+What counts as busy, in the order of `what` (port of P39: Qt quit stopped
+these silently, `acquisition_engine.py:1621-1622`):
+
+| kind | When | text (examples) |
+|---|---|---|
+| `run` | A sequence is active (`waiting`, `running`, `pausing`, `paused`, `autofocus`, `stopping`) | "A sequence is running: SS Cyg, 34 of 120 frames." · "A sequence is paused: SS Cyg, 34 of 120 frames." · "A sequence waits for its start time: SS Cyg." · "A sequence is stopping: SS Cyg."; without an object name the count comes first: "A sequence is running: 0 of 10 frames (no object name)." · "A sequence is stopping." |
+| `exposure` | Outside a run: the camera exposes or downloads, live view runs, a Take shot waits for its frame, an autofocus runs | "The camera is exposing (30 s)." · "The camera is downloading a frame." · "Live view is running." · "A Take shot waits for its frame." · "Autofocus is running." |
+| `slew` | The mount slews (GoTo, Centre, Park) or an axis is jogged | "The mount is slewing." · "The mount is being jogged." |
+| `job` | Every active job (A80) that is not a write: `discovery`, `site_search`, `field_solve`, `file_solve`, `file_catalogue`, `sessions_scan`, `session_open`, any later kind | "Plate-solving the frame." · "Searching the network for devices." |
+| `write` | A Take-shot FITS handed to the save thread and not yet written; the jobs that write files: `export`, `support_bundle`, `rerun` | "A FITS file is being written." · "Writing an export file." · "Re-running photometry (12 of 340 frames)." |
+
+The camera and an autofocus that belong to the run (camera owner
+`sequence`, a mid-run autofocus) are part of its `run` item, not listed
+again. A filter-wheel turn or a focuser move (seconds, harmless to cut)
+does not count.
+
+Stages, in order (port of `Shell.closeEvent` `shell.py:611-625`: the engine
+shutdown `acquisition_engine.py:1607-1650`, `DeviceSession.shutdown`
+`device_session.py:822-831`; the server's `Hub.shutdown`), each bounded:
+
+| # | `stage` | `label` | What it does | Bound |
+|---|---|---|---|---|
+| 1 | `sequence` | Stopping the sequence | Stops a run (`reason: "shutdown"`: the sub in progress is discarded, the saved subs stay, no wrap-up), then releases the keep-awake assertion | 15 s + 4 s |
+| 2 | `services` | Stopping background tasks | Attention rules, field and live photometry workers, every job cancelled and awaited, the network monitor, the Stellarium bridge | 3 s (jobs) |
+| 3 | `devices` | Closing the equipment connections | An autofocus stopped (the focuser back to its start), then camera (exposure aborted), mount (jogging axes stopped first), filter wheel, focuser disconnected | 5 s per thread |
+| 4 | `files` | Finishing file writes | The frame-metrics worker; a FITS being written is finished, never cut; the private download folder removed | one write |
+| 5 | `exit` | Stopping the ARGOS server | Sent last; the process exits about 0.3 s later | — |
+
+`budget_s` is the whole bound: a CLI server still in its stages after 60 s
+logs an ERROR naming the stage and ends its process at once (exit status
+70); the OS then drops its device sockets and the keep-awake helper, which
+is tied to the server's pid. The shell keeps its own SIGTERM, then
+SIGKILL, for a server that is still there after that: when the app exits
+(Quit with no UI to ask, SIGTERM / SIGINT / SIGHUP to the shell, the end of
+the UI's quit), it sends SIGTERM and waits up to 65 s (the 60 s bound plus a
+margin, its window already hidden) before it SIGKILLs the server's process
+group, so a slow real mount is never cut off mid-stop. "Quit now" on a stuck
+scrim (past 20 s) asks the shell for the short path instead (`argos://quit`
+`{now: true}`: SIGTERM, SIGKILL 2 s later). Whenever the server process
+ends, the shell sweeps its process group (helpers such as `caffeinate` or a
+solver) before reaping it.
+
+The same `Hub.shutdown` runs, once, for every way out: this route,
+SIGTERM, SIGINT, stdin end of file (the uvicorn lifespan), whichever comes
+first; a second caller waits for the first to finish.
+
+### Reveal (A12)
+
+`POST /api/fs/reveal` with `{"path": "<absolute path>"}` shows a file or a
+folder in the OS file manager, selected in its folder: macOS `open -R`
+(Finder); Linux the freedesktop `org.freedesktop.FileManager1.ShowItems`
+through `dbus-send`, else `xdg-open` on its folder (nothing selected);
+Windows `explorer /select,`. The answer names the `method` (`"open -R"`,
+`"FileManager1"`, `"xdg-open"`, `"explorer"`). The server waits up to 5 s
+for the command's answer; it never opens or runs the file itself. Uses:
+the support bundle just written (M15), an export, a run folder, the log
+(`paths.log_file` of AppInfo: the log folder opens with `argos.log`
+selected).
+
+- Only a server started with `--desktop` (`403 desktop_only`): a browser
+  page must not make the server open windows on the computer it runs on.
+- The path is checked as in [File listing](#file-listing-a11): absolute
+  (`400 invalid_argument`), resolved and inside the allowed roots (home,
+  the data folders, the config and log folders; `403 forbidden_path`),
+  existing (`404 not_found`).
+
+### Version
+
+`/api/health`, AppInfo and the log's start line report
+`argos.__version__` (`argos/__init__.py`), the one version source: the
+frozen sidecar, the `.app` (`tauri.conf.json`, `Cargo.toml`) and the
+`.dmg` follow it.
+
+### Errors (wave 8)
+
+| HTTP | code | When |
+|---|---|---|
+| 409 | `busy` | `POST /api/app/shutdown` without `force` while something is busy; `what` lists it |
+| 503 | `shutting_down` | Any `POST`, `PUT`, `PATCH` or `DELETE` but the shutdown route once a shutdown started |
+| 403 | `desktop_only` | `POST /api/fs/reveal` on a server started without `--desktop` |
+| 400 / 403 / 404 | `invalid_argument` / `forbidden_path` / `not_found` | `POST /api/fs/reveal`: relative path / outside the allowed roots / missing |
+| 502 | `reveal_failed` | The file manager command failed or could not start (its message) |
+
 ## State records
 
 ```
@@ -4355,6 +4527,7 @@ DeviceState     = {"state": "disconnected"|"connecting"|"connected"|"busy"|"erro
 | `{"type": "comparison_quality", …ComparisonQuality}` | Wave 5. The leave-one-out report after every measured frame (`report: null` after a reset). |
 | `{"type": "photometry", …PhotometryStatus}` | Wave 5. Every change of the live photometry status (set, field, outcome of a measurement). |
 | `{"type": "attention", …AttentionState}` | Wave 6b. Every change of the attention list (raised, updated, reopened, cleared, acknowledged); once to a client that connects. A snapshot. |
+| `{"type": "shutdown", …ShutdownEvent}` | Wave 8. Each stage of a shutdown started by `POST /api/app/shutdown`, the last one `exit`. A snapshot. |
 | `{"type": "log", …LogEntry}` | Server events, plus WARNING-and-above records from `argos.core`, such as Alpaca driver warnings (core INFO, logged on every exposure, stays in the server log; a core message repeated within 60 s is sent once). Right after the first `status` (and `network`, `stellarium`, `activity`, in that order), a new client receives the last 200 log lines, oldest first, so a page opened mid-session shows what happened before; older lines come from `GET /api/logs`. A client that reconnects drops the lines whose `seq` it already holds. |
 
 A camera change therefore sends both a `camera` message and a `status`
@@ -4553,3 +4726,4 @@ wide by 1920 px high, 16-bit, mono.
 | A62-A64 | Wave 6a: `GET /api/sequence`, `POST /api/sequence/start` (`start_at_utc`, Q-P2) / `pause` / `resume` / `stop`, `sequence` event and `status.sequence`, `GET /api/sequence/preflight`; the mount interlock (`409 run_active`, `pause_run`), the geometry lock (S15), `frame_saved` of a run, `--sim-replay` |
 | §7 (6b) | Wave 6b: `attention` event, `GET /api/attention`, `POST /api/attention/{id}/ack` and `/ack-all`, config category `alerts`; `status.keep_awake` and the preflight `sleep` row; `GET /api/sequence/wrapup`, `POST /api/sequence/calibration-plan`; `sequence.autofocus`, `autofocus_passes`, `wrapup` |
 | A67-A75 | Wave 7 (Review): `POST /api/sessions/scan` (job `sessions_scan`), `POST` / `GET /api/review/session` (job `session_open`), `GET /api/review/session/curves`, `GET /api/review/live/curves`, `POST /api/review/import-csv`, `GET /api/files/frame` (not on `/ws/frames`), `GET /api/files/fits-header`, `POST /api/files/measure-star`, `POST /api/files/solve` (job `file_solve`), `GET /api/files/solution`, `POST /api/files/catalogue` (job `file_catalogue`); the Source model |
+| A7, A12 | Wave 8 (desktop): `POST /api/app/shutdown` (`409 busy` with `what`, stages, `shutdown` event, `503 shutting_down`), `POST /api/fs/reveal` (`--desktop` only), `--exit-on-stdin-eof`, AppInfo `desktop`; keep-awake `held` from the run's first `status` |

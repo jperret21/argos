@@ -279,11 +279,32 @@ class KeepAwake:
     # -- driving -----------------------------------------------------------------------
 
     def want(self, reason: str | None) -> None:
-        """Hold (a reason) or release (None); non-blocking, any thread, any lock."""
+        """Hold (a reason) or release (None); non-blocking, any thread, any lock.
+
+        Wave 8: with a method and the setting on, the record says ``held`` at
+        once, so the ``status`` that announces the run says it too. The helper
+        holds the OS assertion within milliseconds of its start, while the
+        check that it stayed alive takes :data:`_ALIVE_CHECK_S`; before, the
+        record read ``off`` during that check (``pmset`` already listed the
+        assertion). A helper that fails turns it to ``failed``.
+        """
         with self._cond:
             if self._closed or reason == self._wanted:
                 return
             self._wanted = reason
+            if (
+                reason is not None
+                and self._held is None
+                and self._on
+                and self._record["state"] == "off"
+            ):
+                self._record = {
+                    "state": "held",
+                    "method": self.backend.method,
+                    "since": _utc_iso(),
+                    "reason": reason,
+                    "message": None,
+                }
             self._wake()
 
     def recheck(self) -> None:
@@ -404,10 +425,16 @@ class KeepAwake:
                         self._attempted = reason
                     self._set(self._idle_record())
                     return
+                prior = self.record()  # held since want(): keep that time, no new event
                 record = {
                     "state": "held",
                     "method": self.backend.method,
-                    "since": _utc_iso(),
+                    "since": (
+                        prior["since"]
+                        if prior["state"] == "held" and prior["reason"] == reason
+                        else None
+                    )
+                    or _utc_iso(),
                     "reason": reason,
                     "message": None,
                 }
