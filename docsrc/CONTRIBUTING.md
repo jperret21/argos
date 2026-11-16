@@ -21,7 +21,7 @@ brew install uv graphviz
 
 git clone https://github.com/jperret21/argos.git
 cd argos
-uv sync --extra dev
+uv sync --extra dev --extra qt --extra server
 ```
 
 ```{admonition} Why graphviz
@@ -81,8 +81,8 @@ fixtures. This is exactly what CI does:
 
 ```bash
 export QT_QPA_PLATFORM=offscreen
-uv run --extra dev pytest -q --deselect tests/ui/test_photometry_window.py
-uv run --extra dev pytest -q tests/ui/test_photometry_window.py
+uv run --extra dev --extra qt --extra server pytest -q --deselect tests/ui/test_photometry_window.py
+uv run --extra dev --extra qt --extra server pytest -q tests/ui/test_photometry_window.py
 uv run --extra docs sphinx-build -W -b html docsrc /tmp/argos-docs
 ```
 

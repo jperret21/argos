@@ -86,7 +86,7 @@ and an appropriate star database separately, then set both paths in
 ```bash
 git clone https://github.com/jperret21/argos.git
 cd argos
-uv sync --extra dev
+uv sync --extra dev --extra qt --extra server
 uv run python main.py
 ```
 
@@ -131,8 +131,8 @@ uv run --extra dev black --check argos/ tests/ main.py
 # The suite runs in two processes; a single process can abort on the
 # simulator fixtures. This is what CI does.
 export QT_QPA_PLATFORM=offscreen
-uv run --extra dev pytest -q --deselect tests/ui/test_photometry_window.py
-uv run --extra dev pytest -q tests/ui/test_photometry_window.py
+uv run --extra dev --extra qt --extra server pytest -q --deselect tests/ui/test_photometry_window.py
+uv run --extra dev --extra qt --extra server pytest -q tests/ui/test_photometry_window.py
 uv run --extra docs sphinx-build -W -b html docsrc /tmp/argos-docs
 ```
 

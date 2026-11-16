@@ -2655,3 +2655,252 @@ server passes no `software=`).
   row; the live run has no vetting report; the desktop save route.
 - Not checked live: Gaia DR3, SIMBAD, NASA (unreachable here); the RR Lyr template fit
   (no reference); `OBSTYPE=CMOS` against the live AAVSO list (aavso.org answered 403).
+
+## Wave 8: Desktop app and Qt retirement (2026-11-15)
+
+Scope (README section 7, row W8; waves.md §5 W8; rows M18, M20; A7, A12): the Tauri v2
+shell around the web UI with the frozen server as its one-dir sidecar, the UI's desktop
+side (`lib/shell/desktop/`: title bar, start-up stage, Quit dialog and shutdown scrim, crash
+notice, Reveal, app menu), the server's A7 / A12 / stdin-EOF, the macOS dmg and the CI
+release jobs, PyQt6 and pyqtgraph out of the runtime. Built by three roles (backend,
+front-end, desktop shell and packaging) on the groundwork `b97129f`, integrated here.
+Screenshots: `web/screenshots/2026-11-15_wave8-desktop/` (25 window captures of the
+fixer's final DEV build, replacing the integration's 22: Observatory 1 440 x 900, Charcoal
+1 440 x 900, Observatory 1 280 x 800, and every W8 surface in Night Red in WKWebView;
+manifest; converted from Display P3 to sRGB, Night Red and brass audits run on them).
+
+**Status: integrated, reviewed (design and technical) and fixed 2026-11-15 (section 7).
+Exit criterion met on the macOS DEV build except two points: start to a connected UI is
+about 1.5 s (was 1.7-1.9 s; the server's own imports, in `argos/core`, take 1.1-1.2 s
+before its ready line), and release.yml is not yet validated by a workflow_dispatch run.
+Nothing committed.**
+
+Verification: every launch is the DEV build ("ARGOS Dev", `org.argos.argos.dev`) with
+temporary `HOME`, `TMPDIR`, `ARGOS_CONFIG_DIR`, `ARGOS_LOG_DIR`, the simulator, and a
+scratch driver script injected into the scratch UI build only (it records CSP violations,
+errors, unhandled rejections and `console.error`, and runs untrusted DOM events: keys,
+clicks, the hold button's keyboard confirmation); the release app was built and packed,
+never launched.
+
+### 1. Rows closed by the wave
+
+| Row | Web | Status |
+|---|---|---|
+| M18, A7 | Quit from ⌘Q (the UI's key and the app menu), the Dock / AppleScript `quit app` (`terminate:` routed to the UI), the title bar's close, the Help menu and the command palette (`Quit ARGOS ⌘Q`, desktop only): `POST /api/app/shutdown`; `409 busy` gives the Quit dialog in the server's words (confirmed by dialog, 01 2.4.3: text buttons, Cancel focused, Quit ARGOS destructive) and forcing gives the stages, then the window closes; a server stopping unasked gives the crash notice (Restart server, Open log folder, Quit ARGOS) | Done |
+| M20 | Text fields keep the webview's own menu; Night Red suppresses the native context menu everywhere (`theme.ts` `nativeMenuGuard`, browser and app) | Done |
+| A12 | Reveal in Finder: Settings › About and Privacy, the support-bundle toast, the new "Saved in Downloads" toast | Done (route live-checked for 403 / 404 only: a real reveal opens Finder) |
+| W8 components | Title bar (Q-G14, three themes), start-up stage, native menu (Q-G10, `menu.rs`), Mod+1-5 (desktop-only keys), Reset all layouts resets the window | Done |
+| Qt retirement | `PyQt6`, `PyQt6-Qt6`, `pyqtgraph` and now `pytest-qt` in the `qt` extra; `uv lock` (no sync) | Done |
+
+All 103 mapping rows of README §2 are now done or dropped by a decision (20 dropped:
+M10, M13, M24, M32, M42, M47, M53, M54, M57, M63, M64, M68, M70, M74, M82, M84, M86-M88,
+M93): M1-M17, M19, M21-M103 closed by W1-W7 (their "Rows closed" tables, M80-M92 as R1's
+range), M18 and M20 here.
+
+### 2. Exit criterion and its evidence
+
+- **Qt inventory re-run** (Appendix A's method, scratch `inventory.py`): the constructions
+  of `argos/ui` at the inventory's tree `9fa561a` (302) against the final tree (312): 13
+  new or changed, 3 removed or changed. Two are renames of inventoried controls
+  (`focuser_dock.py:105` Move, `mount_dock.py:117` Tracking). Ten are message boxes the
+  0.5.0 fixes added, each with a web home: `shell.py:365` `_confirm` (602f199: ask before
+  a disconnect ends a run or an autofocus; also the close), batch re-run refusals
+  `imaging_page.py:2304, 2315, 2333` (RerunDialog's refusals: no live solution, no
+  comparison, no frames of the object), `photometry_window.py:349-435` export messages
+  (the Export CSV / AAVSO dialogs: disabled with no data, one filter per export, inline
+  write errors), `analyze_page.py:777` "Light curve not identified" (Export AAVSO refuses
+  an unidentified curve). **One was new to the web**: the disconnect confirmation said
+  nothing of a running sequence or autofocus (`disconnectRisk` knew live view, exposure
+  and slew only, while 02 W10b asks for both): fixed (section 3).
+- **Runtime without Qt**: a venv from `uv export --no-extra qt --extra server --extra dev`
+  (158 requirements, no PyQt6, pyqtgraph or pytest-qt): `import argos.server` loads no Qt
+  module; `python -m argos.server --simulator` answers `/api/health` (0.4.2, API 2) and
+  stops on SIGTERM; `tests/server` and `tests/packaging`: 914 passed, 25 skipped, 1 failed
+  (`test_photometry.py::test_live_points_csvs_and_report_are_identical_to_the_qt_engine`
+  drives the Qt engine without `pytest.importorskip("PyQt6")`; that file belongs to the
+  science workflow, so it is section 5's item). Before the move, pytest did not even
+  start in such an environment: pytest-qt refuses without a Qt binding and the
+  `-p no:qt` of `pyproject.toml` does not block its entry point (`pytest-qt`).
+- **Sidecar** frozen one-dir from the final tree (groundwork's Qt-free build venv): 97 MB,
+  no Qt entry; ready line 1.04-1.3 s standalone, 22.3 s on the very first run of freshly
+  written binaries (macOS scans them once; READ ME FIRST warns).
+- **Start-up** (`open` to …, 6 warm launches): the UI's start-up screen attached 0.42-0.58 s
+  (shell log); server ready line 1.16-1.30 s after spawn (1.32-1.51 s after launch); UI
+  connected (start-up screen gone) 1.73-1.86 s. First launch of a rebuilt app binary:
+  2.3-2.8 s.
+- **Every screen under the CSP**: 8 launches, 19 page loads (Connection, Observe, Plan,
+  Review R0 and R1 on a cloned XX Cyg session, Settings › About and Appearance, the
+  palette, the Quit dialog, the crash notice, Export CSV, three themes): 0 CSP violations,
+  0 errors, 0 unhandled rejections, 0 `console.error`. The listener was proved live by a
+  probe image outside `img-src` (one violation, the probe's).
+- **Downloads (exports)**: Save log → `~/Downloads/argos-log-20261115T233922Z.txt` (the log
+  line); Review Export CSV "Download" → `XX_Cyg_ir_photometry.csv` (3 315 bytes), saved
+  again as `… (1).csv`, `… (2).csv`, byte-identical; the toast "Saved in Downloads" with
+  Reveal in Finder. Before the fix every download was cancelled (section 3).
+- **Quit with a run active**: AppleScript `quit app` during a 10-frame simulator run →
+  `409` → the Quit dialog ("A sequence is running: no object name, 0 of 10 frames.");
+  Cancel → the run still `running`, caffeinate 1, 3 assertions; ⌘Q → the dialog (1 of
+  10) → forced → `202` → server exit 0, gone 531 ms after the UI's quit, app gone 0.55 s;
+  then 0 sidecar, 0 caffeinate, 0 assertion. Idle quit: palette 0.49 s, ⌘Q 0.62 s,
+  AppleScript 0.52 s.
+- **No orphan, no assertion** after: SIGTERM of the shell during a run (app 0.19 s,
+  server 0.21 s); SIGKILL of the shell during a run (stdin EOF: server gone 0.11 s, its log
+  "Standard input closed … shutting down", "The computer may sleep again: the run ended");
+  a server crash (kill -9 → crash notice "signal 9" → Restart server, UI back 1.77 s);
+  a shutdown from another client (the stages, then "The ARGOS server was shut down") →
+  Quit ARGOS; a failed start (`--port 99999` → the UI's failure with exit status 2 and
+  the server's usage lines) → quit. Every case: 0 `argos-server`, 0 caffeinate, 0
+  `pmset` assertion naming caffeinate or argos.
+- **dmg**: the RELEASE app (`org.argos.argos`, 0.4.2, never launched) from a plain UI build
+  and the same sidecar: `codesign --verify --deep --strict` passes, minos 11.0, sdk 26.5
+  (Popover API: macOS 14+ SDK), 104 MB; `ARGOS-0.4.2-macOS-arm64.dmg` 51 MB holds
+  `ARGOS.app`, `READ ME FIRST.txt`, `LICENSE.txt`, `Applications -> /Applications`.
+- **Checks**: whole Python suite (dev env, temporary HOME / TMPDIR, offscreen) 1623
+  passed, 81 skipped + 38 passed; black, ruff clean; `npm run check` 0 / 0, `npm test`
+  1161 passed, `npm run build`; `cargo fmt --check`, `cargo clippy --all-targets`, `cargo test` (8);
+  audits on the 22 shots: Night Red pass (rule A 0, rule B 0 after rounding), brass
+  0-16 906 px per 1 440 x 900 shot (mostly the mark and the primary button).
+
+### 3. Fixed during the integration (found in the running app)
+
+- **Downloads did nothing in the app**: WKWebView cancels a download when the app has no
+  download handler (wry `navigation.rs`), so Export CSV / AAVSO downloads, Save log, plot
+  and view images were lost silently. The shell's `on_download` keeps wry's free name in
+  Downloads and sends `argos://download` {status, path, name}; the UI toasts "Saved in
+  Downloads" with Reveal in Finder (Rust and vitest tests).
+- **Review failed in the frozen server**: `argos/server/review.py` loads
+  `argos/core/session/review.py` from its file (its package imports PyQt6) and the freeze
+  did not ship the source ("No such file … _internal/argos/core/session/review.py").
+  `packaging/argos_server.spec` now ships it and its three imports; a packaging test
+  checks the pair.
+- **Disconnect during a run** (inventory re-run): `disconnectRisk` now names a running
+  sequence (ends when the camera or the wheel goes, as the server does) and autofocus;
+  checked in the app: Disconnect all during a run asks first, Cancel leaves it running.
+- **Quit in the waiting UI** would have asked the default address (maybe another server):
+  it now asks the shell only. The palette listed Connection … Settings twice in the app
+  (Mod+1-5 under Actions): skipped. A toast's action wrapped Dismiss to a second row.
+- `pytest-qt` moved to the `qt` extra (above); `pyproject.toml`'s version checked against
+  `__version__`; README and CONTRIBUTING install the `qt` and `server` extras.
+
+### 4. Wiring
+
+`wiring.patch` of the front-end role applied (App.svelte title bar and DesktopHost,
+`ArgosApp.desktop`, the app menu's commands, Quit in the Help menu and on ⌘Q,
+`revealAction`, toast actions, Reveal in About and Privacy, Reset all layouts resets the
+window, `app.quit` no longer `planned`), plus section 3's changes; protocol.md
+"Launching" names the desktop launch and `--sim-replay`.
+
+### 5. Open
+
+- release.yml (dmg on macOS, deb on Ubuntu, the sidecar smoke, the SDK ≥ 14 check) needs
+  the main session's workflow_dispatch run; Linux was never compiled locally.
+- Science workflow's file: `tests/server/test_photometry.py:363` needs
+  `pytest.importorskip("PyQt6")` first (it imports the Qt engine).
+- Review's export and re-run toasts carry no Reveal yet (`lib/review/**` belongs to the
+  science workflow): `app.toast('info', title, message, app.revealAction(result.path))`.
+- Owner: a save dialog for downloads instead of Downloads would need `tauri-plugin-dialog`
+  (OWNER DECISION, not added); Quit now's delay in the scrim (20 s) against the server's
+  60 s bound (Quit now now stops the server within 2 s); merging the title bar into the
+  44 px toolbar row (design review); a minimal native menu with Ctrl+Q on Linux (spec 01
+  §2, E4: Ctrl+Q works in the page there, also over dialogs and the start-up failure).
+- Version: 0.4.2 everywhere (`__version__`, Cargo.toml, pyproject.toml); 0.5.0 is the
+  owner's bump.
+
+### 6. Known gaps
+
+- A local quit's scrim now shows only after 0.4 s (no flash); a quit that ends sooner
+  shows none, so it was not captured (the remote shutdown's stage list was, shot 14).
+- Not exercised by hand: native menu items, real ⌘Q / ⌘1-5 keystrokes (System Events has
+  no Accessibility permission here; keys were sent in the page, quits by AppleScript),
+  title-bar drag, the system double-click setting live, edge resize of the borderless
+  window; whether ⌘1-5 / ⌘K fire twice (key and menu accelerator).
+- Start to a connected UI is about 1.5 s, above the "about 1 s" aim: the frozen server
+  prints its ready line 1.14-1.26 s after its spawn (importing `argos.server.app` pulls
+  numpy, astropy and requests through `argos.core.catalog` and `argos.core.imaging`;
+  `argos/core` is not changed in this wave).
+- The stages of a simulator shutdown are honestly "< 0.1 s" each but the sequence's
+  (0.4-0.6 s): a real mount's are longer.
+
+### 7. Design and technical review fixes (fixer, 2026-11-15)
+
+Every high and medium finding of the two reviews applied, and every low one; one point
+of each of three findings deliberately narrowed (below). Checked on a final DEV build and
+a final RELEASE build (never launched).
+
+**Design review.**
+- *Quit dialog (high)*: `QuitDialog` is a `ConfirmDialog` (destructive, `Quit ARGOS` /
+  `Cancel`, focus on Cancel, the button busy while the forced request runs; a refusal
+  that is not "busy" ends "Quit ARGOS still quits."). No hold, no nested confirmation;
+  the gallery's `w8-quit` updated. Shot 13 / 18 / 22.
+- *dmg READ ME (high)*: macOS 15+ path (open once, Done, System Settings › Privacy &
+  Security › Open Anyway) and the 11-14 right-click path; "GPL v3 or later"; the same in
+  release.yml's draft release text.
+- *One notice per cause (medium)*: a shutdown asked elsewhere keeps the scrim's panel
+  when the shell reports the exit ("The ARGOS server was shut down", "Another ARGOS window
+  or browser tab asked it to stop. Restart server starts it again.", no error mark, no
+  log); a crash is "The ARGOS server stopped unexpectedly"; `sawShutdown` resets with
+  the server (a later crash stays a crash). Shots 14, 15.
+- *Server's last lines (medium)*: `LogTail` (start-up failure and crash notice) opens at
+  its last line, keeps columns (`white-space: pre`, sideways scroll; its width never
+  widens the dialog), `PathText` breaks a path only after a slash; the failure column is
+  720 px. Shots 02, 15.
+- *Square corners (medium)*: first tried as the reviewer proposed (a titled window, its
+  title bar transparent, traffic lights hidden): rounded, but macOS draws a grey 1 px
+  outline around titled windows, and the Night Red audit failed (rule B 2 828 px). Done
+  instead as a borderless window whose content layer is rounded (10 pt) on a clear
+  background, with the system shadow (`appkit.rs round_corners`; square in full screen):
+  corner pixels transparent, Night Red 0 / 0. Native resize edges of a titled window are
+  not regained (the borderless window keeps tao's).
+- *Full screen (medium)*: `argos://window` {fullscreen}; the title bar hides in full
+  screen; Enter / Exit full screen in the palette and the rail's Help menu (⌃⌘F on
+  macOS); the Night Red help in Settings › Appearance says to use it. Checked live.
+- *Title bar (medium, minimal fix)*: the section alone, muted ("ARGOS" before a section
+  shows). Merging the bar into the toolbar row is an OWNER DECISION.
+- *Low*: the window behind the page is black, then the theme's `--bg` (`argos://theme`),
+  and the shell's fallback pages follow Night Red; stage times in tenths ("< 0.1 s" below),
+  `cut` has the attention mark and "cut short", the scrim's marks are the start-up
+  screen's (CSS aligned, no shared component), a local quit's scrim waits 0.4 s with the
+  app inert; title-bar controls are filled discs (`--border`, `--border-soft` unfocused)
+  at a 20 px pitch, double click follows `AppleActionOnDoubleClick`; wording (the unnamed
+  run "0 of 10 frames (no object name)", "Saved 1 line", the toast's file name on its own
+  line, bundle copyright and tagline as About, About's three buttons alike as text, Quit
+  ARGOS on the start-up failure); the palette and rail show ⌘1-⌘5 in the macOS app; the
+  W8 surfaces captured in Night Red in WKWebView (shots 06, 21-25: audit pass).
+
+**Technical review.**
+- *Abort on a closed stderr (medium)*: every diagnostic goes through `log!` (writes,
+  ignores EPIPE); checked: `argos-desktop 2>&1 | head -2` keeps the app and its server
+  running, no crash report.
+- *Start-up time (medium, partly)*: the sidecar is spawned at the top of `main` (ready
+  1.14-1.26 s after launch, was 1.32-1.51), and the waiting UI adopts the server in place
+  (`DesktopShell.adopt`: no reload; the address goes into the URL for a later reload):
+  UI connected at about 1.5 s (was 1.73-1.86). The server's import time is left (it is
+  `argos/core`'s).
+- *CI (medium)*: ci.yml job "Web UI and desktop shell" (npm ci, check, test, build; cargo
+  fmt, clippy -D warnings, test) and ruff / black over `packaging/`; release.yml runs the
+  same before its build; `hook-astropy.py` formatted.
+- *Low*: Mod+Q is `evenIfHandled` and the waiting / failed start-up handles it (shell
+  quits at once; checked); `STOP_GRACE` 65 s (the server's 60 s bound plus a margin, the
+  window hidden), "Quit now" asks the short path (`argos://quit` {now: true}, 2 s);
+  `ARGOS_SIDECAR` / `ARGOS_SIDECAR_ARGS` honoured by dev builds only, the extra arguments
+  first (checked: `--host 0.0.0.0` in them still listens on 127.0.0.1); release.yml's
+  deb check tests the executable bit and `_internal/`, and the smoke test runs the new
+  `argos-server --self-check` (loads `argos/core/session/review.py`); the reaper sweeps
+  the server's process group with `waitid(WNOWAIT)` before reaping on every exit (checked:
+  a helper left in the group by a wrapper is gone after an A7 quit); Reset all layouts
+  saves the window state once the resize has landed.
+
+**Evidence (final builds).** Freeze 97 MB, no Qt, smoke test with `--self-check` OK.
+DEV app, warm launches: UI attached 0.51-0.57 s, server ready 1.14-1.26 s after launch,
+UI connected about 1.5 s; idle quit 0.56-0.72 s; busy quit 409 → confirmation → Cancel
+keeps the run (3 assertions) → Quit ARGOS → 202, exit 0; SIGTERM of the shell during a
+run 1.0 s; SIGKILL of the shell (stdin EOF) server gone 0.9 s; kill -9 of the server →
+crash notice → Restart server; a remote shutdown → one notice → Restart server; a failed
+start (`--sim-replay` on a missing folder: `--port` in the dev arguments no longer
+overrides the shell's) → Quit ARGOS / Mod+Q; every case 0 sidecar, 0 caffeinate, 0
+assertion. 31 page loads, 0 CSP violations, 0 errors. RELEASE app `org.argos.argos`
+0.4.2, codesign verify ok, minos 11.0, sdk 26.5, 104 MB, copyright "Copyright © 2026 ARGOS
+contributors · GNU GPL v3 or later"; dmg 51 MB with the app, READ ME FIRST.txt (macOS 15+
+steps), LICENSE.txt, Applications link; never launched. Python suite 1624 passed, 85
+skipped + 38 passed; black and ruff (with packaging/) clean; npm check 0 / 0, 1165 tests,
+build; cargo fmt, clippy -D warnings, 11 tests.

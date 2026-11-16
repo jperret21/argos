@@ -1,0 +1,274 @@
+{
+  "title": "Wave 8: the desktop app, integrated and fixed",
+  "date": "2026-11-15",
+  "summary": "The ARGOS desktop app after the wave 8 fixer, on a DEV build (\"ARGOS Dev\", org.argos.argos.dev) of the Tauri shell with the one-dir sidecar frozen from the final tree (no PyQt6, no pyqtgraph), running the real web UI in WKWebView. Changed from the integration set: a borderless window with rounded corners and the system shadow (no grey macOS outline: Night Red holds), the title bar with the section only and filled discs at macOS's pitch, the Quit confirmation with text buttons (no hold), one notice for a shutdown asked elsewhere, stage times in tenths, log boxes opened at their last line with columns kept, the start-up failure's Quit ARGOS, the toast's file name on its own line, Cmd+1-Cmd+5 and full screen in the palette, and Night Red captures of every W8 surface in WebKit. Window captures (screencapture -l) at device scale 2, converted from Display P3 to sRGB so the Night Red and brass audits read true colours (Night Red: 6 of 6 pass, rule A 0 px, rule B 0 px; brass 0-16 906 px per shot). Test runs used temporary HOME, TMPDIR, configuration and log folders and the built-in simulator; the Review session is an APFS clone of a recorded XX Cyg session; windows were sized through the window-state plugin's file.",
+  "scale": 2,
+  "shots": [
+    {
+      "file": "desktop-observatory-1440x900-01-starting.png",
+      "caption": "Start-up in the UI's theme: the window shows the UI about 0.5 s after launch, before the server is ready; 'Starting the ARGOS server...' runs, 'Connecting' waits (a server slowed by 4 s on purpose for this capture). Normally the server is spawned first thing (before the window), its ready line comes 1.14-1.26 s after launch and the UI, which adopts it in place without reloading, is connected at about 1.5 s.",
+      "tags": [
+        "desktop",
+        "start-up",
+        "titlebar",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "desktop-observatory-1440x857-02-start-failure.png",
+      "caption": "Start-up failure in the UI (a server given --sim-replay on a missing folder on purpose): the cause and exit status, the server's last lines with their columns kept (argparse usage) and opened at the end, the log folder breaking only after a slash, then Copy details, Open log folder | Quit ARGOS, Retry (focused). Cmd+Q here quit at once (no server to stop). The default window, fitted to this display's work area.",
+      "tags": [
+        "desktop",
+        "start-up",
+        "failure",
+        "observatory",
+        "1440x857"
+      ]
+    },
+    {
+      "file": "desktop-observatory-1440x900-03-connection.png",
+      "caption": "Connection in the desktop window (fixer build): a borderless window with rounded corners (corner pixels transparent; no grey outline from macOS), the title bar naming only the section, muted, and three filled discs at macOS's 20 px pitch where the traffic lights sit.",
+      "tags": [
+        "desktop",
+        "titlebar",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "desktop-observatory-1440x900-04-observe.png",
+      "caption": "Observe, Observatory theme, with the token-drawn title bar.",
+      "tags": [
+        "desktop",
+        "titlebar",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "desktop-charcoal-1440x900-05-observe.png",
+      "caption": "Observe, Charcoal theme: the title bar follows the theme tokens.",
+      "tags": [
+        "desktop",
+        "titlebar",
+        "charcoal",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "desktop-night-red-1440x900-06-observe.png",
+      "caption": "Observe in Night Red during a run, captured in WKWebView: title bar, discs and words are red like the rest; Night Red audit rule A 0 px, rule B 0 px.",
+      "tags": [
+        "desktop",
+        "night-red",
+        "titlebar",
+        "night-red",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "desktop-observatory-1440x900-07-plan.png",
+      "caption": "Plan under the app's CSP (0 violations, 0 errors over 31 page loads of the fixer's runs).",
+      "tags": [
+        "desktop",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "desktop-observatory-1440x900-08-review-sessions.png",
+      "caption": "Review R0 in the desktop app: the test home's sessions folder with one recorded XX Cyg session (an APFS clone).",
+      "tags": [
+        "desktop",
+        "review",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "desktop-observatory-1440x900-09-review-session.png",
+      "caption": "Review R1, opened by the frozen sidecar (argos/core/session/review.py ships in it; the release workflow now proves it with `argos-server --self-check`).",
+      "tags": [
+        "desktop",
+        "review",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "desktop-observatory-1440x900-10-export-csv-download.png",
+      "caption": "Export CSV with 'Download': the server writes the file and the UI hands it to the webview as a download.",
+      "tags": [
+        "desktop",
+        "review",
+        "download",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "desktop-observatory-1440x900-11-saved-in-downloads.png",
+      "caption": "The download saved in Downloads by the shell: the toast's title row carries Reveal in Finder and Dismiss, the file name sits on its own full-width line, never broken at a hyphen (shortened in the middle when too long).",
+      "tags": [
+        "desktop",
+        "download",
+        "toast",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "desktop-observatory-1440x900-12-about.png",
+      "caption": "Settings > About in the desktop app: the three link buttons alike, as text (no icon set has a 'source code' symbol), Reveal in Finder after each folder (A12).",
+      "tags": [
+        "desktop",
+        "about",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "desktop-observatory-1440x900-13-quit-busy.png",
+      "caption": "Quit during a run (AppleScript 'quit app', which the shell turns into a quit request): A7 refused (409 busy) and the confirmation says what runs in the server's words; text buttons (BRAND 7, 01 2.4.3): Cancel has the focus, Quit ARGOS is the destructive one. Cancel left the run going (3 keep-awake assertions held); Cmd+Q then Quit ARGOS forced it: 202, the server's five stages, exit status 0, window gone 0.7 s later, nothing left.",
+      "tags": [
+        "desktop",
+        "quit",
+        "busy",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "desktop-observatory-1440x900-14-shut-down-elsewhere.png",
+      "caption": "A shutdown asked by another client during a run: one notice for the event ('The ARGOS server was shut down', no error mark, no log). The stages carry their real times ('< 0.1 s' under a tenth, tenths under 10 s); when the shell then reports the exit (status 0) the panel stays. Restart server brought the UI back on a new server.",
+      "tags": [
+        "desktop",
+        "quit",
+        "shutdown",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "desktop-observatory-1440x900-15-crash-notice.png",
+      "caption": "Crash notice after a kill -9 of the server during a run: 'stopped unexpectedly (signal 9)', the server's last lines opened at the end with their columns, the log folder; Restart server (focused) had the UI back on a new server; nothing left of the old one (no keep-awake assertion).",
+      "tags": [
+        "desktop",
+        "crash",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "desktop-observatory-1280x800-16-connection.png",
+      "caption": "Observatory at 1280 x 800: Connection.",
+      "tags": [
+        "desktop",
+        "1280",
+        "observatory",
+        "1280x800"
+      ]
+    },
+    {
+      "file": "desktop-observatory-1280x800-17-observe.png",
+      "caption": "Observatory at 1280 x 800: Observe.",
+      "tags": [
+        "desktop",
+        "1280",
+        "observatory",
+        "1280x800"
+      ]
+    },
+    {
+      "file": "desktop-observatory-1280x800-18-quit-busy.png",
+      "caption": "Observatory at 1280 x 800: the Quit confirmation during a run.",
+      "tags": [
+        "desktop",
+        "1280",
+        "quit",
+        "observatory",
+        "1280x800"
+      ]
+    },
+    {
+      "file": "desktop-observatory-1280x800-19-command-palette.png",
+      "caption": "The command palette in the macOS app: the sections show Cmd+1-Cmd+5 (the View menu's keys; F1-F5 stay as alternates), and Enter / Exit full screen (Ctrl+Cmd+F) is listed. In full screen the title bar hides (checked live: the palette toggle, then back).",
+      "tags": [
+        "desktop",
+        "1280",
+        "palette",
+        "fullscreen",
+        "observatory",
+        "1280x800"
+      ]
+    },
+    {
+      "file": "desktop-observatory-1280x800-20-saved-in-downloads.png",
+      "caption": "Save log in the desktop app at 1280 x 800: the toast, the file name on its own line.",
+      "tags": [
+        "desktop",
+        "1280",
+        "download",
+        "toast",
+        "observatory",
+        "1280x800"
+      ]
+    },
+    {
+      "file": "desktop-night-red-1440x900-21-starting.png",
+      "caption": "Night Red start-up in WKWebView (design review: the W8 surfaces in WebKit): audit rule A 0 px, rule B 0 px.",
+      "tags": [
+        "desktop",
+        "night-red",
+        "start-up",
+        "night-red",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "desktop-night-red-1440x900-22-quit-busy.png",
+      "caption": "Night Red: the Quit confirmation during a run. Audit pass.",
+      "tags": [
+        "desktop",
+        "night-red",
+        "quit",
+        "night-red",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "desktop-night-red-1440x900-23-shut-down-elsewhere.png",
+      "caption": "Night Red: a shutdown asked elsewhere, the stages and the one notice. Audit pass.",
+      "tags": [
+        "desktop",
+        "night-red",
+        "shutdown",
+        "night-red",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "desktop-night-red-1440x900-24-crash-notice.png",
+      "caption": "Night Red: the crash notice with the server's last lines. Audit pass.",
+      "tags": [
+        "desktop",
+        "night-red",
+        "crash",
+        "night-red",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "desktop-night-red-1440x900-25-close-hover.png",
+      "caption": "Night Red: the title bar's close control in its hover state (frozen through the component's own classes; the pointer cannot be moved in these runs): --danger fill, glyphs shown. Audit pass.",
+      "tags": [
+        "desktop",
+        "night-red",
+        "titlebar",
+        "night-red",
+        "1440x900"
+      ]
+    }
+  ]
+}

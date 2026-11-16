@@ -87,9 +87,6 @@ dependencies = [
     { name = "alpyca" },
     { name = "astropy" },
     { name = "numpy" },
-    { name = "pyqt6" },
-    { name = "pyqt6-qt6" },
-    { name = "pyqtgraph" },
     { name = "requests" },
 ]
 
@@ -102,7 +99,6 @@ dev = [
     { name = "pydash" },
     { name = "pyhocon" },
     { name = "pytest" },
-    { name = "pytest-qt" },
     { name = "ruff" },
     { name = "tomlkit" },
     { name = "tzlocal" },
@@ -116,6 +112,12 @@ docs = [
 ]
 package = [
     { name = "pyinstaller" },
+]
+qt = [
+    { name = "pyqt6" },
+    { name = "pyqt6-qt6" },
+    { name = "pyqtgraph" },
+    { name = "pytest-qt" },
 ]
 server = [
     { name = "fastapi" },
@@ -137,11 +139,11 @@ requires-dist = [
     { name = "pydash", marker = "extra == 'dev'", specifier = ">=8.0.6" },
     { name = "pyhocon", marker = "extra == 'dev'", specifier = ">=0.3.63" },
     { name = "pyinstaller", marker = "extra == 'package'", specifier = ">=6.6.0" },
-    { name = "pyqt6", specifier = "==6.7.1" },
-    { name = "pyqt6-qt6", specifier = "==6.7.1" },
-    { name = "pyqtgraph", specifier = ">=0.13.0,<0.14.0" },
+    { name = "pyqt6", marker = "extra == 'qt'", specifier = "==6.7.1" },
+    { name = "pyqt6-qt6", marker = "extra == 'qt'", specifier = "==6.7.1" },
+    { name = "pyqtgraph", marker = "extra == 'qt'", specifier = ">=0.13.0,<0.14.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
-    { name = "pytest-qt", marker = "extra == 'dev'", specifier = ">=4.4.0" },
+    { name = "pytest-qt", marker = "extra == 'qt'", specifier = ">=4.4.0" },
     { name = "requests", specifier = ">=2.31.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.3.0" },
     { name = "sphinx", marker = "extra == 'docs'", specifier = ">=7.0.0" },
@@ -151,7 +153,7 @@ requires-dist = [
     { name = "tzlocal", marker = "extra == 'dev'", specifier = ">=5.3.1" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'server'", specifier = ">=0.29.0" },
 ]
-provides-extras = ["dev", "server", "docs", "package"]
+provides-extras = ["dev", "qt", "server", "docs", "package"]
 
 [[package]]
 name = "astropy"

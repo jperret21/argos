@@ -10,13 +10,9 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Astronomy",
 ]
 
+# The desktop app (W8) is the web UI with the headless server: no Qt at
+# runtime. The Qt app and its tests use the `qt` extra.
 dependencies = [
-    "PyQt6==6.7.1",
-    "PyQt6-Qt6==6.7.1",
-    # pyqtgraph 0.14.0 has a circular import in pyqtgraph.Qt against PyQt6 6.7.1
-    # ("cannot import name 'internals' from partially initialized module
-    # pyqtgraph.Qt"). Pin to the last known-good 0.13 line until upstream fixes it.
-    "pyqtgraph>=0.13.0,<0.14.0",
     "requests>=2.31.0",
     "astropy>=6.0.0",
     "numpy>=1.26.0,<2.0.0",
@@ -26,7 +22,6 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
-    "pytest-qt>=4.4.0",
     "black>=24.0.0",
     "ruff>=0.3.0",
     "tomlkit>=0.14.0",
@@ -37,6 +32,20 @@ dev = [
     "tzlocal>=5.3.1",
     # FastAPI's TestClient, for the headless server tests (tests/server).
     "httpx>=0.27.0",
+]
+# The Qt app (main.py, argos/ui, argos/workers), retired as the shipped app in
+# W8 and kept for the parity tests (CI installs this extra for them).
+qt = [
+    "PyQt6==6.7.1",
+    "PyQt6-Qt6==6.7.1",
+    # pyqtgraph 0.14.0 has a circular import in pyqtgraph.Qt against PyQt6 6.7.1
+    # ("cannot import name 'internals' from partially initialized module
+    # pyqtgraph.Qt"). Pin to the last known-good 0.13 line until upstream fixes it.
+    "pyqtgraph>=0.13.0,<0.14.0",
+    # pytest-qt refuses to start pytest without a Qt binding (its entry point,
+    # "pytest-qt", is not blocked by addopts' "-p no:qt"): here, so that
+    # "--extra dev --extra server" runs tests/server with no Qt.
+    "pytest-qt>=4.4.0",
 ]
 # Headless server (argos.server) for the web front-end: no Qt, HTTP + WebSocket.
 server = [

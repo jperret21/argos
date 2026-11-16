@@ -8,8 +8,8 @@ traffic goes to the local ARGOS server (REST under `/api`, live state on
 `WS /ws/events`, binary frames on `WS /ws/frames`, contract API 2 in
 `argos/server/protocol.md`). Progress against the specification: `spec/progress.md`.
 
-The Tauri desktop shell is not part of this spike: the UI runs in a browser against
-the server.
+The same UI runs in a browser against the server, or in the desktop app (Tauri,
+`src-tauri/`, see [Desktop app](#desktop-app-tauri)), which starts the server itself.
 
 ## Run it (development)
 
@@ -41,7 +41,7 @@ npm run dev        # open http://localhost:5173/?api=http://127.0.0.1:8742&token
 | Script | What it does |
 |---|---|
 | `npm run dev` | Vite dev server (port 5173) |
-| `npm run build` | production bundle in `dist/` (relative paths, for the future Tauri shell) |
+| `npm run build` | production bundle in `dist/` (relative paths; the desktop app bundles it) |
 | `npm run check` | svelte-check (types + a11y); warnings fail |
 | `npm test` | vitest (pure modules and `scripts/*.test.mjs`, no browser) |
 | `npm run screenshot -- …` | headless-Chrome screenshots of the app (`scripts/screenshot.mjs`), see below |
@@ -49,12 +49,83 @@ npm run dev        # open http://localhost:5173/?api=http://127.0.0.1:8742&token
 | `npm run audit:brass -- PNGS` | brass pixel counts per token (BRAND 8 brass budget); Night Red shots get the Night Red audit instead |
 | `npm run capture:lab -- LAB --out DIR` | design-lab captures (`workspace`, `charts`, `controls`) or behaviour checks (`behave`), then the Night Red audit of the shots |
 
+## Desktop app (Tauri)
+
+`src-tauri/` is the macOS / Linux app: one window on this UI (custom title bar,
+native macOS menu), the frozen server as its sidecar. The shell's contract with the UI
+is `src/lib/shell/desktop/bridge.ts`; the life cycle is documented at the top of
+`src-tauri/src/main.rs`.
+
+```sh
+# 0. a Qt-free build environment (never `uv sync` the main .venv: it keeps the qt extra)
+uv export --frozen --extra server --extra package --no-emit-project --no-hashes \
+    -o /tmp/argos-reqs.txt                                          # repo root
+python3 -m venv /tmp/argos-build && /tmp/argos-build/bin/pip install -r /tmp/argos-reqs.txt
+# 1. the server, frozen one-dir (the spec fails if any Qt module is collected), then its
+#    smoke test: --self-check, the ready line, the version, the stdin end of file
+PYTHONPATH=$PWD /tmp/argos-build/bin/python -m PyInstaller packaging/argos_server.spec \
+    --noconfirm --distpath web/src-tauri/binaries --workpath /tmp/argos-pyi
+python3 packaging/smoke_sidecar.py web/src-tauri/binaries/argos-server/argos-server
+# 2. the app: a DEV build ("ARGOS Dev", org.argos.argos.dev) for every local run,
+#    so tests never touch the release app's WebKit data or window state
+cd web && npx tauri build --bundles app --config src-tauri/tauri.dev.conf.json
+open "src-tauri/target/release/bundle/macos/ARGOS Dev.app"   # or CARGO_TARGET_DIR's
+# 3. release (never launched locally): npx tauri build --bundles app, then
+#    ../packaging/make_dmg.sh <path>/ARGOS.app <out dir> (READ ME FIRST.txt, LICENSE.txt,
+#    the Applications link); the .deb is built by .github/workflows/release.yml on
+#    Ubuntu (also on workflow_dispatch)
+```
+
+- Dev builds only (a release build ignores them): `ARGOS_SIDECAR=<executable>` runs
+  another server (a script calling `.venv/bin/python -m argos.server "$@"`);
+  `ARGOS_SIDECAR_ARGS` adds arguments (`--simulator`), placed before the shell's own
+  (`--host 127.0.0.1 --port 0 --desktop --exit-on-stdin-eof` always win);
+  `ARGOS_DESKTOP_UI_PAGE`, `ARGOS_DESKTOP_TEST_PANIC` (test hooks). `ARGOS_CONFIG_DIR` /
+  `ARGOS_LOG_DIR` reach the server in every build: set them, and `HOME` / `TMPDIR`, to
+  temporary folders for test runs. After testing, delete `~/Library/WebKit`,
+  `~/Library/Caches`, `~/Library/Application Support` and `~/Library/Saved Application
+  State` entries named `org.argos.argos.dev*` (WKWebView writes there whatever `HOME`
+  says).
+- The version is `argos/__init__.py`'s: `src-tauri/Cargo.toml` must match (build.rs
+  refuses a mismatch), `tauri.conf.json` sets none.
+- Checks (also in CI, `.github/workflows/ci.yml` job "Web UI and desktop shell", and in
+  release.yml): `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+  `cargo test` in `src-tauri/` (they need `dist/`: run `npm run build` first).
+- macOS window: a titled window (rounded corners, the system shadow and resize edges)
+  with a transparent full-size title bar whose traffic lights are hidden; the UI draws
+  its own controls from tokens (Q-G14). Linux: no decorations. Diagnostics go to stderr
+  without ever panicking on a closed pipe (`log!`).
+
 ## The shell (every section)
 
 - **Start-up screen** (01 2.3.8): mark, wordmark, version and honest stages until
   `GET /api/health` answers and `/ws/events` sends its first `status`; a failure (server
   unreachable, token rejected, page refused) stays on screen with the exact cause,
   Copy details and Retry.
+- **Desktop app** (W8, `lib/shell/desktop/`): detected by `window.__TAURI_INTERNALS__`,
+  which Tauri v2 injects into its pages (no npm package, no query flag); the contract
+  with the shell (`argos://…` events, the window commands) is the header of
+  `shell/desktop/bridge.ts`. It adds the title bar drawn from tokens (Q-G14: the
+  section's name, muted; macOS-pitch discs; drag; the system's double-click setting;
+  close = Quit; hidden in full screen), Quit (`⌘Q`, Help menu, title bar, app menu)
+  through A7: the Quit dialog when something runs, in the server's words (a
+  confirmation with text buttons: Cancel, destructive Quit ARGOS; 01 2.4.3), then the
+  shutdown scrim with the server's stages (shown after 0.4 s, the app inert at once;
+  tenths under 10 s); the crash notice when the server stops while the UI runs
+  (Restart server, Open log folder; the log box opens at its last line); one notice for
+  a shutdown asked by another window or tab ("The ARGOS server was shut down", no error
+  mark); the stage "Starting the ARGOS server…" when the UI opens before its server,
+  and its failure (Quit ARGOS, Retry); Reveal in Finder (A12) on the support-bundle
+  toast and in Settings › About and Privacy; `⌘1`-`⌘5` (shown as the sections' keys in
+  the macOS app); Enter / Exit full screen (palette, Help menu; `⌃⌘F`); the app menu's
+  items (Q-G10); Reset all layouts also resets the window. The window behind the page
+  is painted in the theme's `--bg` (`argos://theme`). A browser tab shows none of it (a
+  shutdown asked from elsewhere still shows its scrim there).
+  `?chrome=native` keeps the OS title bar. Downloads (`<a download>`: exports, Save log,
+  plot and view images) are saved by the shell in the Downloads folder under a free name,
+  then a toast names the file with Reveal in Finder (a webview has no download bar).
+  Quit is also in the command palette; Night Red suppresses the native context menu
+  (M20) in the browser and in the app.
 - **Rail**: Connection, Observe, Plan, Review, Settings (F1 to F5) with state marks
   whose shape says the state (filled = ready, half = running, ring = needs attention;
   the word is in the tooltip; Settings carries the upright attention mark, a bar over
