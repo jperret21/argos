@@ -140,7 +140,9 @@ def test_progress_is_throttled_to_four_per_second_and_the_final_state_always_sen
 
     job = manager.start("demo", body)
     final = _wait_final(manager, job["id"])
-    assert final["result"]["steps"] > 100
+    # Many more progress calls than published events: about 600 on a fast machine,
+    # far fewer where time.sleep(0.001) lasts several ms (89 on a CI runner).
+    assert final["result"]["steps"] > 20
     states = events.states()
     assert states[-1] == "done"
     running = len(states) - 1

@@ -138,6 +138,8 @@ const QUIT_SETTLE: Duration = Duration::from_secs(3);
 mod events {
     pub const SERVER_STATE: &str = "argos://server-state";
     pub const QUIT_REQUESTED: &str = "argos://quit-requested";
+    // The native app menu exists on macOS only (`mod menu`).
+    #[cfg(target_os = "macos")]
     pub const MENU: &str = "argos://menu";
     pub const UI_READY: &str = "argos://ui-ready";
     pub const QUIT: &str = "argos://quit";
@@ -497,6 +499,8 @@ fn read_double_click(app: &AppHandle) {
     });
 }
 
+// Read on macOS only (the system's title-bar double-click setting); unit-tested everywhere.
+#[cfg(any(target_os = "macos", test))]
 fn double_click_action(setting: Option<&str>) -> &'static str {
     match setting {
         Some("Minimize") => "minimize",
