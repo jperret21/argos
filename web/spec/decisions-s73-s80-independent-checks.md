@@ -7,7 +7,8 @@ gates on every study run), a **science review** and a technical review. The owne
 the validation's open items (the same day) were then applied by a **fixer** pass, which
 also numbered the three new defects S81-S83. This file keeps the two independent-check
 reports as they were written (parts B and C), after part A: what the owner decided and what
-the final code measures.
+the final code measures. Part D, at the end: the owner's next calls of the same day (S76
+adopted, S73's order, S84) and that pass's final numbers.
 
 Every number names the script and evidence file that made it; they lived in the roles'
 scratch folders (`scratchpad/s73/<role>/scripts`, `evidence`), not in the repository.
@@ -99,6 +100,14 @@ process, same frames, ASTAP solver, saved Gaia answer): X07, X29, RR2, the RR Ly
 CSV on either side (no star above SNR 1) and identical recorders (fixer `parity_*.json`).
 
 ### A.5 Open after this pass
+
+The owner decided the first, third and fourth items below on 2026-11-16 and they are
+applied (release notes S76 adopted, S73 amended again, S84 new): the 3σ-clipped annulus
+mean with S75's factor 1 (RR Lyr − Siril 2 comps +0.0013 / 0.0101 → +0.0021 / 0.0083,
+blank apertures' scatter over the code's error 1.42 → 1.16; the other study runs in
+part D); the observer's photon-transfer file before the profile; the noise model in the
+S15 run lock (Qt, server, web Settings), with the camera's e-/ADU inputs (part D). The
+`zp_err` split and a C_Y refit wait for 0.5.x and more nights.
 
 - OWNER DECISION (S76, science review F1, new evidence): adopt the 3σ-clipped annulus mean
   (S75's factor 1), or add the median's quantisation term to S75. Recommended: the mean.
@@ -826,3 +835,165 @@ Evidence `edge_rows_RR6.txt`.
 - No process of mine is running, and the heavy lock is released.
 - Neither tree was touched: the release worktree status is unchanged, with no bytecode written.
 - 16.8 GB free.
+
+## D. S76 adopted, S73's order, S84 (the owner's calls of 2026-11-16)
+
+The owner's calls on the S73-S80 science and technical reviews were implemented in the
+release worktree, then on this branch, by an implementation role; checked by a
+**validation** (level (a), level (b), the gates on every study run, the live S84 path) and
+an adversarial **review** (science and code, its own photometry); then completed by a
+**fixer** pass (their findings). Scripts and evidence lived in `scratchpad/s76/<role>/`
+(the fixer copied the figures it cites into `evidence/cited/`). No site coordinates or
+observer data appear here.
+
+### D.1 The calls, applied
+
+| Item | Call | Done |
+|---|---|---|
+| S76 | The sky is the annulus' 3σ-clipped mean; S75's term at factor 1 | `aperture.sky_level` (median centre, standard deviation, bounds inclusive, repeated until nothing is rejected, at most 10 passes): astropy's `sigma_clipped_stats(sigma=3, maxiters=10)`, photutils' `ApertureStats` default; every aperture of the core and the server, both noise models |
+| S73 | The observer's photon-transfer file before the profile's measurement | Second in the chain, live, in `EGAIN`, at a re-run and in Open FITS; source "<sensor> PTC file", recorded as every step's |
+| S84 | `photometry.noise_model`, `photometry.read_noise_e` in the S15 run lock | Qt, the server (`409 run_active`), the web Settings page |
+| Not decided | The formal error split (random, per-run calibration) and a C_Y refit | Deferred to 0.5.x |
+
+The code's sky is astropy's: within 0.01 ADU on 502 of 504 re-run records (validation
+`sky_vs_astropy.json`; the two others hold a pixel 1e-5 px from the annulus edge) and
+0.0 ADU on 1244 RR Lyr annuli (review). The clip converges in at most 5 passes on 1646
+star annuli and 4 on 5838 blank ones, never 10, and keeps at least 95 % of the pixels
+(median 99.2 %; review `passes.json`).
+
+### D.2 Level (a), final
+
+Before = release `4e6493d` with this branch's `37a67ac` server (validation
+`level_a_before.json`); after = this pass. The fixer's re-run of RR2, RR6 (RR Lyr's own 6
+comparisons), X07 and X29 on the final tree equals the validation's after-state key by key
+(every count, gate tally, Siril, VSP, pair, time and airmass figure: fixer
+`level_a_fixer.json`, `same_as_validation.json`, `level_a_compare.json`).
+
+| Check | Before | After |
+|---|---|---|
+| RR Lyr − Siril green 2 comps (n = 195): offset / robust σ | +0.0013 / 0.0101 | +0.0021 / 0.0083 |
+| RR Lyr 6 comps − Siril: offset / robust σ | −0.0110 / 0.0147 | −0.0098 / 0.0130 |
+| 000-BCG-523 − VSP V (VSP ± 0.100), scatter | +0.0167 ± 0.0016, 0.0225 | +0.0166 ± 0.0015, 0.0213 |
+| 000-BJV-169 − VSP V (± 0.051) | −0.0647 ± 0.0091 | −0.0645 ± 0.0085 |
+| 000-BJV-171 − VSP V (± 0.030) | +0.0447 ± 0.0223 | +0.0436 ± 0.0204 |
+| Pair scatter / formal error, median (robust): RR6 (21 pairs) | 0.95 (0.80) | 0.94 (0.77) |
+| same, RR2 (6) | 0.89 (0.77) | 0.86 (0.75) |
+| same, X07 (36) | 1.11 (1.01) | 1.12 (0.95) |
+| same, X29 (3) | 0.71 (0.60) | 0.92 (0.94) |
+| Target `sigma_syst`: RR2; X07 | 0; 0.170 | 0; 0 |
+| Comparisons' median SNR: RR2; RR6; X07; X29 | 119.1; 111.7; 13.9; 1.4 | 121.7; 114.3; 15.2; 1.5 |
+| Blank apertures, bias (ADU): RR Lyr (1560); `040723Z` (960); `050148Z` (880) | +28 ± 8; +44 ± 14; +52 ± 15 | +10 ± 6; +32 ± 12; +25 ± 12 |
+| same, scatter / the code's error (validation, S75's selection) | 1.42; 1.31; 1.25 | 1.17; 1.19; 1.14 |
+| same, the review's strict mask: RR Lyr (2335); `050148Z`; `040723Z`; `052943Z` | 1.40; 1.20; 1.20; 1.20 | 1.10; 1.07; 1.07; 1.06 |
+| Model / measured green-plane sky σ, 31 frames at gains 80 and 100; the gain-65 frame | 0.959-1.049; 0.889 | 0.960-1.039; 0.883 |
+| RR Lyr aperture − Gaussian centroid, median (90th pct) | 0.077 (0.157) px | 0.077 (0.157) px, the same centres |
+| `jd_utc`, `bjd_tdb` − astropy | 0.0000 s | 0.0000 s |
+| Per-star airmass − astropy at the fitted site, max: targets; comparisons and checks | 0.00044; 0.00007 | 0.00044; 0.00007 |
+
+What the blank apertures' remaining excess is (review `*_blank.json`, `rr_sky_factor.json`):
+not the estimator, whose factor measured on real annuli (two halves of each, 9340 pairs)
+is 1.09 for the clipped mean (2.95 for the median), 1.00-1.09 on a sky quantised as the
+plane whatever its phase (the median 0.38-9.5), within 1.2 % of the total error; it is
+neighbouring pixels' correlation (0.02-0.04; a k × k box sum's variance 1.02-1.08 times
+that of independent pixels) and faint stars in the apertures (the positive bias: the clip
+and the median leave out their brightest pixels, which an aperture sums). The release notes
+S75 quoted 1.06, 1.06, 1.05 "with a clipped mean": those were against the median's model
+(π/2, every pixel); S75 now gives both sets above.
+
+### D.3 The numbers that moved away from 1, and why
+
+- RR2's offset against Siril moves +0.8 mmag (68 %: +0.1 to +1.2), within the offset's own
+  error (0.0007-0.0009); the target's magnitudes move −0.4 mmag median, 5.0 mmag rms; the
+  robust σ ratio is 0.83 (68 %: 0.74-0.91). The review's own photometry gives 0.70
+  (0.64-0.77) and an offset change of +0.5 mmag.
+- The bright pairs drift below 1 (RR2 0.89 → 0.86, RR6 0.95 → 0.94): their scatter falls,
+  their formal errors (S74's conservative C_Y = 1.5) stay (−0.4 %).
+- X29 (`050148Z`, 3 pairs): 0.71 → 0.92. The median sat at 1400 ADU on 17 of 22 frames:
+  hardly any noise, a bias no error counted; the clipped mean follows the far sky (residual
+  2.11 ADU for 1.85 expected, the median 2.47; review `x29_far.txt`) and adds a noise the
+  error counts. Its target's second-difference σ rises 0.122 → 0.163 on n = 22 at SNR 5-17
+  (about ±25 %); frame by frame it lies nearer the reference (0.122 against 0.132 mag rms;
+  review `x29_target.json`).
+- X07's target (SNR about 5): second-difference σ 0.283 → 0.124 mag, `sigma_syst` 0.170 →
+  0 (validation `second_diff.json`): the clearest gain.
+
+### D.4 Gates
+
+Every frame that changes state between before and after is explained (validation §4.3,
+`gates_diff.json`, `replay_diff.json`): the SNR rises ×1.02 for bright stars and ×1.06-1.08
+where the sky dominates (review `snr_*.json`), so faint comparisons of 2026-08-29 cross the
+anchors' SNR 5 and 10 (more anchors, fewer verification solves); `050148Z` frame 5 keeps 2
+comparisons after the clip, so no S71 flag; `052943Z` frame 3's target is flagged by the
+hot-pixel guard (9.9 % against the 10 % threshold); RR Lyr's check on the blank frame
+`_00053` falls below SNR 3 (3.33 → 2.71) and the blank frames' target stays below 3 (2.27 →
+0.39, 2.84 → 1.56). No unflagged target point lies more than 2 px from its star in the
+code. On the live path (one solve every 20 s) the cloudy `045626Z` sub, a lock lost before,
+is now measured on its one anchor with the target at SNR 0.8 (12.77 ± 1.28), unflagged in
+the live CSV; Review, the AAVSO export and a re-run leave it out (S67). Without S56's
+anchor-frame rule (a counterfactual) sub 44 of the 500 px jump would be an unflagged point
+494 px off: that rule is its only protection. The fixer's changes touch no gate (the four
+re-runs identical key by key).
+
+### D.5 Level (b)
+
+The validation's `parity.py` (the server's `rerun.BatchRun` against the fixed Qt worker,
+in one process): X07, X29, RR2, RR6, `195307Z` and X29 with a temporary photon-transfer
+file (0.25 e-/ADU, "IMX585 PTC file") **identical** (every CSV, `targets.json`, recorder
+record, count and solver call). The fixer's later core changes (a new frame's `RDNOISE`
+source, the read noise of a frame whose `EGAIN` the file wrote, a log line) do not touch
+those cases' data; parity was not run again.
+
+### D.6 S84 live and the web Settings pages
+
+Validation (simulator, `s84_live.json`): during a run, `PATCH` of `photometry.noise_model`
+and `photometry.read_noise_e` → `409 run_active` with the server's sentence; a mixed PATCH
+gets both sentences and writes nothing; after the stop, 200; the web Photometry page shows
+the six keys unavailable with the sentence in Observatory, Charcoal and Night Red (Night
+Red audit PASS). It also found `camera.egain_table` accepted mid-run, the next frames
+carrying `EGAIN` 0.3 instead of 0.25 (F1); the review measured +15 % on one star's SNR
+from a file written mid-run. The fixer added the e-/ADU's two keys to the lock (D.7) and
+checked them live the same way (fixer `s84_live.json`, `web_lock/`; simulator, a gain table
+`{"80": 0.3}` and a temporary photon-transfer file `{"80": {"egain": 0.25, "rdnoise": 3.0}}`):
+during a run each of the four keys gets `409 run_active` with "The noise model and the
+camera's e-/ADU are locked while a sequence runs (one curve, one error model).", a mixed
+PATCH both sentences and nothing written, an unlocked key 200; after the stop all four are
+accepted; all 10 frames of the run carry `EGAIN` 0.3 "(egain_table)" and `RDNOISE` 3.0
+"(IMX585 PTC file)" (D.7's provenance). The web Photometry and Instrument pages show the
+locked keys unavailable with the sentence (every control disabled, the unlocked rows
+editable) in Observatory, Charcoal and Night Red, and editable after the stop; Night Red
+3 of 3 pass (rule A 0 px, rule B 0 px). Screenshots: `web/screenshots/2026-11-16_settings-run-lock/`.
+
+### D.7 The fixer's changes (findings of the validation and the review)
+
+| Finding | Severity | Change | Test that fails before it |
+|---|---|---|---|
+| F1 / review: the e-/ADU not in the lock | medium | `camera.egain_table`, `data_paths.camera_calibration_directory` join S84 (core `params.NOISE_MODEL_KEYS`, Qt's folder field disabled in a run, server, web Instrument page and `EgainTable`'s `locked`); the sentence "The noise model and the camera's e-/ADU are locked while a sequence runs (one curve, one error model)." | `test_shell_three_mode_walkthrough`, `test_the_noise_model_is_locked_during_a_run_s84`, `test_the_settings_page_locks_what_the_server_locks_during_a_run_s15_s84`, `runlock.test.ts` |
+| F2 / review: `RDNOISE` named "IMX585 reference" for the file's value | low | `egain.calibration_read_noise`; the writer names "IMX585 PTC file" | `test_rdnoise_names_the_observers_photon_transfer_file_s73` |
+| Review: a frame whose `EGAIN` the file wrote loses its read noise in a re-run without the file | low | `of_frame` keeps the `RDNOISE` the file wrote | `test_the_observers_photon_transfer_file_comes_before_the_profile_s73` |
+| Review: a file entry without `rdnoise` takes 1.5 e- silently | low | Kept (the rule for every e-/ADU without a measured read noise; the profile's 2.6 e- is not mixed with another e-/ADU), logged once | same test (the log) |
+| Review: the locked keys in three copies | low | GUARD test: the server's keys are the core's | `test_the_server_locks_the_cores_noise_model_keys_s84` (overlay) |
+| F3 / review: S75's 1.06 figures | low | S75 and S76 give both sets of figures (D.2) | — |
+| Review: docsrc's faint-star sign | low | "bias the sky slightly low" | — |
+
+Every new test fails with its hunk reverted in a scratch copy (fixer `revert_checks.json`,
+10 of 10; `vitest_revert.json` for `runlock.test.ts`).
+
+### D.8 Open after this pass
+
+- OWNER DECISION (review medium; validation F4): the live path does not apply S67's
+  per-target rule, so the cloudy `045626Z` sub's target at SNR 0.8 is an unflagged live
+  point. Options: (a) flag a target point below SNR 3 `suspect` and `no_detection` when
+  measured (Qt engine and server live port; the live CSV then equals a re-run's), (b) S48
+  asks for 2 anchors at SNR ≥ 5, (c) leave it (Review, the export and a re-run exclude it).
+  Recommended (a): no new threshold.
+- OWNER DECISION (review medium): an edit of the photon-transfer file itself during a run
+  is read from the next frame (no key changes). Options: resolve the e-/ADU (value, source,
+  read noise) once per gain at the run's start and keep it (Qt `AcquisitionEngine._egain`,
+  the server's `TargetService.egain`), or leave it. Recommended: resolve once per run.
+- OWNER DECISION (minor, review): `site.elevation` feeds S74's scintillation every frame
+  and is not locked.
+- Not decided now: the formal error split (bright stars' `MERR` 1.3-1.6 times their
+  scatter; RR2 target and check second-difference σ / formal 0.64, 0.63) and a C_Y refit,
+  deferred to 0.5.x with more nights.
+- Not checked: a real camera's `EGAIN`/`RDNOISE`; Qt's S84 path live (its suite only); the
+  HTTP parity (A76); VSP not queried again.

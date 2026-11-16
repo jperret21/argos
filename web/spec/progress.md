@@ -2792,7 +2792,7 @@ source are in `web/spec/decisions-s73-s80-independent-checks.md`.
   web Photometry page). **S74** scintillation (Young, Osborn C_Y = 1.5, kept:
   conservative), each star at its row's airmass in a re-run. **S75** the sky estimate's
   error. **S76** the median stays (an owner decision, with new evidence: the median's 8-ADU
-  quantisation).
+  quantisation; adopted the same day, section 11).
 - **S77** proper motions (Gaia DR3) at each frame's date; the re-run's lookup gives up
   after 5 s per star, reads the cache after a failure and takes the cancel. **S78** each
   comparison's own airmass at the fitted site; without one, the Settings site only when it
@@ -2836,7 +2836,76 @@ re-run equals the fixed Qt worker byte for byte on the owner's frames (see the d
 file). Open: the owner decisions listed there (S76's estimator, the ensemble's `zp_err`
 branch, the user photon-transfer file's rank, `noise_model` in the S15 lock, Review of a
 re-run folder, `site.min_altitude_deg` on the Settings page), and every GUARD until the
-merge.
+merge. The first, third and fourth were decided on 2026-11-16: section 11.
+
+### 11. Sky estimator and run lock (S76, S73 order, S84)
+
+The owner's calls of 2026-11-16 on the S73-S80 science and technical reviews, made in the
+release worktree first (`notes/release_0_5_0.md` S73, S75, S76, S84), then on this branch
+(server, web Settings, protocol.md); checked by a validation and an adversarial review with
+their own code, then completed by a fixer pass (their findings). Nothing of it is live on
+this branch until the main session merges release/0.5.0, except the server's run lock.
+Details, scripts and every number's source: `web/spec/decisions-s73-s80-independent-checks.md`
+part D.
+
+- **S76 adopted**: the sky under every aperture is the annulus' 3σ-clipped mean
+  (`aperture.sky_level`: median centre, standard deviation, bounds inclusive, repeated
+  until nothing is rejected, at most 10 passes, astropy's `sigma_clipped_stats(sigma=3,
+  maxiters=10)`), S75's sky-estimate term at a mean's factor 1; the median sat on the
+  8-ADU-stepped plane's 4-8 ADU grid (median − clipped mean 2.4-3.0 ADU rms on the
+  study runs, in no error term).
+- **S73's order**: the observer's photon-transfer file (`camera_calibration*.json`) second,
+  after `camera.egain_table`, before the profile's measurement and the driver; source
+  "<sensor> PTC file". The fixer: a new frame's `RDNOISE` names the file when the e-/ADU
+  has no read noise of its own (it said "IMX585 reference"), a frame whose `EGAIN` the file
+  wrote keeps the `RDNOISE` it wrote, an entry without `rdnoise` is logged.
+- **S84**: the noise model, the read noise and (the fixer, validation F1) the camera's
+  e-/ADU inputs, `camera.egain_table` and `data_paths.camera_calibration_directory`, join
+  S15's run lock: Qt refuses them (the photon-transfer folder field disabled in a run),
+  `PATCH /api/config` answers `409 run_active` "The noise model and the camera's e-/ADU are
+  locked while a sequence runs (one curve, one error model).", the web Settings pages
+  (Photometry, Instrument) show them unavailable with that sentence (`settings/runlock.ts`,
+  `EgainTable.svelte`'s `locked`). Checked live on the simulator (all four keys 409 during a
+  run, 200 after; both pages in the three themes, Night Red audit pass; screenshots
+  `web/screenshots/2026-11-16_settings-run-lock/`).
+
+Final numbers (Qt batch re-runs with ASTAP, each night's Settings site; before = release
+`4e6493d` + this branch's `37a67ac` server, after = this pass):
+
+| Check | Before | After |
+|---|---|---|
+| RR Lyr − Siril green 2 comps, offset / robust σ | +0.0013 / 0.0101 | +0.0021 / 0.0083 |
+| RR Lyr 6 comps − Siril, offset / robust σ | −0.0110 / 0.0147 | −0.0098 / 0.0130 |
+| 000-BCG-523 − VSP V (VSP ± 0.100) | +0.0167 ± 0.0016 | +0.0166 ± 0.0015 |
+| 000-BJV-169 − VSP V (± 0.051) | −0.0647 ± 0.0091 | −0.0645 ± 0.0085 |
+| 000-BJV-171 − VSP V (± 0.030) | +0.0447 ± 0.0223 | +0.0436 ± 0.0204 |
+| Pair scatter / formal error, median (robust): RR Lyr 6 comps; 2 comps + check | 0.95 (0.80); 0.89 (0.77) | 0.94 (0.77); 0.86 (0.75) |
+| same, XX Cyg `040723Z`; `050148Z` (3 pairs) | 1.11 (1.01); 0.71 (0.60) | 1.12 (0.95); 0.92 (0.94) |
+| Blank apertures, bias (ADU): RR Lyr; `040723Z`; `050148Z` | +28; +44; +52 | +10; +32; +25 |
+| same, scatter / the code's error | 1.42; 1.31; 1.25 | 1.17; 1.19; 1.14 |
+| Model / measured sky σ, 31 frames at gains 80 and 100 | 0.959-1.049 | 0.960-1.039 |
+| `040723Z` target `sigma_syst` | 0.170 | 0 |
+| RR Lyr aperture − centroid, median | 0.077 px | 0.077 px (same centres) |
+
+The 2-comparison offset moves +0.8 mmag, within its own error (0.0007-0.0009); bright
+pairs drift below 1 because their scatter falls while their errors (S74's conservative
+C_Y = 1.5) stay; `050148Z`'s three pairs move toward 1 because the median sat at
+1400 ADU on 17 of 22 frames (a bias no error counted). Times and airmass are unchanged.
+The higher SNR moves faint stars across the gates' thresholds (anchors, verification
+solves and three flags on the XX Cyg runs, each explained in part D). Level (b): the
+server's re-run equals the fixed Qt worker byte for byte on six cases (validation); the
+fixer's later changes leave the four main study runs identical key by key.
+
+Open (owner decisions, part D.8): S67's per-target no-detection rule on the live path, or
+2 anchors for S48 (the cloudy `045626Z` sub is now measured live on one anchor, target at
+SNR 0.8, left out by Review, the export and a re-run); resolving the e-/ADU once per gain at
+a run's start (an edit of the photon-transfer file itself during a run is not locked);
+`site.elevation` (S74's scintillation) in the lock. Not decided now: splitting the formal
+error into a random part and a per-run calibration part (bright stars' `MERR` 1.3-1.6 times
+their scatter) and refitting C_Y, deferred to 0.5.x with more nights. GUARDs:
+`config_meta._CALIBRATION_FIRST` (the Settings help follows the core's order) and
+`test_the_server_locks_the_cores_noise_model_keys_s84` (the server's locked keys are the
+core's).
 
 ## Wave 8: Desktop app and Qt retirement (2026-11-15)
 
