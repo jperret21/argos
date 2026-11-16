@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { candidateRow, candidateRows, commonFlags, ensembleRows, ensembleSummary, roleByPosition, sortCandidates } from './candidates';
+import { candidateRow, candidateRows, commonFlags, crowdingLines, ensembleRows, ensembleSummary, roleByPosition, sortCandidates } from './candidates';
 import { checkField, checkLayers, checkSelection, checkTargets, FieldStore, pendingFrom, type FieldClient } from './field.svelte';
 import type { Candidate, TargetStar } from './types';
 
@@ -424,5 +424,27 @@ describe('field words and the star card places', () => {
     expect(dockKey(0, 'ArrowRight')).toBe(1);
     expect(dockKey(3, 'Home')).toBe(-1);
     expect(dockKey(2, 'x')).toBeNull();
+  });
+});
+
+
+describe('S79 crowded comparison', () => {
+  const crowded = {
+    neighbour: '000-BJV-169',
+    separation_arcsec: 50.63,
+    delta_mag: -1.474,
+    band: 'V',
+    radius_arcsec: 81.5,
+    text: '000-BJV-173: 000-BJV-169 (1.47 mag brighter in V) is 50.6" away, within 2 aperture radii (81.5"): its light reaches this star\'s aperture or sky annulus (S79).',
+  };
+  const star = (key: string, over: Partial<TargetStar> = {}): TargetStar =>
+    ({ key, role: 'comparison', name: key, ra_hours: 20, dec_deg: 58.9, auid: key, source: 'vsp_auto', mags: { V: 11 }, chart_id: null, note: null, ...over }) as TargetStar;
+
+  it("says the server's line for each crowded star, nothing when none is", () => {
+    const set = { stars: [star('a'), star('b', { crowded })], crowding: [crowded.text] };
+    expect(crowdingLines(set)).toEqual([crowded.text]);
+    expect(crowdingLines({ stars: [star('b', { crowded })] })).toEqual([crowded.text]);
+    expect(crowdingLines({ stars: [star('a')] })).toEqual([]);
+    expect(crowdingLines(null)).toEqual([]);
   });
 });

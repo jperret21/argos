@@ -1,7 +1,8 @@
 <!--
   Electron gain table (`camera.egain_table`, Instrument › Advanced; Q-C4):
-  measured e⁻/ADU per gain setting, used by the photometric noise model
-  when the driver gives none (imaging_page.py:2329; acquisition_engine.py:1248).
+  measured e⁻/ADU per gain setting, first in the photometric noise model's
+  e⁻/ADU chain: then the telescope profile's photon transfer (S73), the
+  driver's value and the sensor reference (hardware/egain.py).
   Rows are read-only facts with [remove] (Undo); a new row is added with
   its gain and value. Each change is one PATCH of the whole object; the
   server validates it (gain 0…10 000, e⁻/ADU in (0, 100]) and its words
@@ -100,7 +101,10 @@
       {/each}
     </ul>
   {:else}
-    <p class="empty">Empty: the driver's value or the sensor reference curve is used.</p>
+    <p class="empty">
+      Empty: the telescope profile's measured value (at a measured or scaled gain), else the
+      driver's, else the sensor reference curve.
+    </p>
   {/if}
   <div class="add">
     <input class="num" type="text" inputmode="numeric" placeholder="Gain" aria-label="Gain setting" bind:value={gainText} />

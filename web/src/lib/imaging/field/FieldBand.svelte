@@ -30,7 +30,7 @@
   import VirtualTable from '../../components/VirtualTable.svelte';
   import { fixed, int, signed } from '../../format/number';
   import type { LayerId, Marker } from '../../viewer/overlay/layers';
-  import { candidateRows, commonFlags, ensembleRows, ensembleSummary, maxSepArcmin, sortCandidates, MAX_DELTA_BV, type CandidateKey, type CandidateRow } from './candidates';
+  import { candidateRows, commonFlags, crowdingLines, ensembleRows, ensembleSummary, maxSepArcmin, sortCandidates, MAX_DELTA_BV, type CandidateKey, type CandidateRow } from './candidates';
   import { markerRowId, type FieldStore } from './field.svelte';
   import RoleGlyph from './RoleGlyph.svelte';
 
@@ -80,6 +80,8 @@
 
   const top = $derived(topCode ?? 65535);
   const setStars = $derived(field.targets?.stars ?? []);
+  /** S79: a comparison or check star with a brighter star of the set nearby, in words. */
+  const crowding = $derived(crowdingLines(field.targets));
   const candRows = $derived(candidateRows(field.candidates, 'candidates', top, { limits, stars: setStars }));
   const ensRows = $derived(ensembleRows(field.candidates, setStars, top, limits));
   const shown = $derived(tab === 'ensemble' ? ensRows : candRows);
@@ -273,6 +275,9 @@
       <p class="note" title="{contextText} · {commonText.join(' · ')} · {rulesText}">
         <span>{contextText}</span>{#each commonText as t (t)}<span class="sep" aria-hidden="true">·</span><span class="common">{t}</span>{/each}<span class="sep" aria-hidden="true">·</span><span>{rulesText}</span>
       </p>
+      {#each crowding as line (line)}
+        <p class="crowding" role="note" title={line}>{line}</p>
+      {/each}
     {/if}
     {#if !field.layersAvailable}
       <p class="empty">{field.solving ? 'Identifying the field…' : 'Identify the field (S) to list the comparison candidates, the variables and the Gaia stars of the frame.'}</p>
@@ -383,6 +388,19 @@
   }
   .note .common {
     color: var(--fg);
+  }
+  /* S79: a crowded comparison or check star, one line each, in the warning colour. */
+  .crowding {
+    flex: none;
+    margin: 0;
+    padding: 2px var(--space-3);
+    overflow: hidden;
+    border-bottom: var(--border-w) solid var(--border-soft);
+    color: var(--warning);
+    font-size: var(--text-xs);
+    line-height: 18px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .note .sep {
     padding: 0 0.45em;

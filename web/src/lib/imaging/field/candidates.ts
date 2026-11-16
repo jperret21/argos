@@ -242,3 +242,14 @@ export function ensembleSummary(
   const check = rows.find((r) => r.role === 'check');
   return { candidates: candidateRows(list, 'candidates').length, comparisons: comps.length, check: check?.name ?? null, flagged: comps.filter((r) => r.flags.length > 0).length };
 }
+
+
+/**
+ * S79: the set's crowded comparison and check stars, one line each (the server's words):
+ * a brighter star of the set, or one of unknown brightness, within about 2 aperture radii.
+ */
+export function crowdingLines(set: { stars: readonly TargetStar[]; crowding?: readonly string[] } | null): string[] {
+  if (!set) return [];
+  if (Array.isArray(set.crowding)) return set.crowding.filter((t): t is string => typeof t === 'string');
+  return set.stars.flatMap((s) => (s.crowded && typeof s.crowded.text === 'string' ? [s.crowded.text] : []));
+}

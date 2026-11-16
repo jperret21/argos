@@ -290,6 +290,30 @@ export interface TargetStar {
   /** Reference frame px when solved and in frame. */
   x?: number | null;
   y?: number | null;
+  /** S77: the proper motion the apertures follow (Gaia DR3), null without one. */
+  proper_motion?: ProperMotion | null;
+  /** S79: why this comparison or check star is crowded, null when it is not. */
+  crowded?: Crowded | null;
+}
+
+/** S77: a star's proper motion (mas/yr; RA as µα·cos δ) from `epoch` (Julian year). */
+export interface ProperMotion {
+  pm_ra_mas_yr: number;
+  pm_dec_mas_yr: number;
+  epoch: number;
+  source: string | null;
+}
+
+/** S79: a brighter star of the set (or one of unknown brightness) within about 2 aperture radii. */
+export interface Crowded {
+  neighbour: string;
+  separation_arcsec: number;
+  /** The neighbour's magnitude minus the star's in `band` (negative: brighter); null: unknown. */
+  delta_mag: number | null;
+  band: string | null;
+  radius_arcsec: number;
+  /** The server's sentence (the Qt Comparison stars tab's). */
+  text: string;
 }
 
 export interface PhotometryGeometry {
@@ -314,6 +338,8 @@ export interface TargetSet {
   summary: Record<string, unknown> | null;
   geometry: PhotometryGeometry | null;
   revision?: number;
+  /** S79: one line per crowded comparison or check star (absent before the release core). */
+  crowding?: readonly string[];
   /** DELETE /api/targets/{key}: the star as it was (Undo = POST with `star`). */
   removed?: TargetStar;
   /** POST /api/targets (W5): the comparisons chosen automatically with this call. */

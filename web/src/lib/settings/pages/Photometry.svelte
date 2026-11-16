@@ -39,6 +39,7 @@
       'photometry.default_band',
       'photometry.systematic_floor_mag',
       'photometry.track_apertures',
+      'photometry.noise_model',
       'photometry.read_noise_e',
       'photometry.min_comparisons',
       'photometry.comparison_validation_min_points',
