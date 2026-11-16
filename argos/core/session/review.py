@@ -43,7 +43,8 @@ STAR_SITE_MAX_OFFSET_DEG = SITE_FIT_MAX_RMS_DEG
 #: S66: a point takes the header AIRMASS of the light whose mid-exposure is this close (s).
 HEADER_AIRMASS_MATCH_S = 5.0
 #: S67 (S35's rule on old files): a frame on which a target's SNR is below this, or its
-#: ensemble zero point this far from the run's median, holds no detection.
+#: ensemble zero point this far from the run's median, holds no detection. S85: the live
+#: and sequence paths flag a target's point below this SNR when they measure it.
 NO_DETECTION_SNR = 3.0
 ZP_OUTLIER_MAG = 1.0
 #: The flight recorder rounds ``jd_utc`` to 4 decimals (diagnostics.py), 4.3 s at most.
@@ -694,9 +695,7 @@ def no_detection_flags(
     medians = {name: statistics.median(values) for name, values in zero_points.items()}
     out = []
     for snrs, zps in frames:
-        low = frozenset(
-            target for target, snr in snrs if snr is not None and snr < NO_DETECTION_SNR
-        )
+        low = frozenset(target for target, snr in snrs if below_detection(snr))
         outlier = any(
             zp is not None
             and math.isfinite(zp)
@@ -706,6 +705,30 @@ def no_detection_flags(
         )
         out.append((low, outlier))
     return out
+
+
+def below_detection(snr: float | None) -> bool:
+    """S67's per-target rule (S35): a target measured at ``snr`` below
+    :data:`NO_DETECTION_SNR` holds no detection on that frame. A missing value tells
+    nothing."""
+    return snr is not None and snr < NO_DETECTION_SNR
+
+
+def flag_no_detection(point, role: str, snr: float | None) -> bool:
+    """S85: S67's per-target rule on a live or sequence point, at measurement time.
+
+    A target's point measured below :data:`NO_DETECTION_SNR` is flagged ``suspect`` and
+    ``no_detection``: kept in its curve and CSV, left out of the curve's ``sigma_syst``
+    and of the AAVSO export, as Review and a batch re-run flag it. Only that target's
+    own point: a faint target flags no second, bright target, nor a comparison or check
+    star. S67's zero-point half needs the run's median and stays with Review and the
+    re-run. Returns whether ``point`` was flagged.
+    """
+    if role != ROLE_TARGET or not below_detection(snr):
+        return False
+    point.suspect = True
+    point.no_detection = True
+    return True
 
 
 @dataclass

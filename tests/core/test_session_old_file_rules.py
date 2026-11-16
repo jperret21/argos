@@ -326,6 +326,52 @@ def test_a_manual_floor_is_kept_when_no_detection_points_are_flagged_s67(tmp_pat
     assert {p.sigma_syst for p in target.points} == {0.02}
 
 
+def test_the_live_rule_is_s67s_per_target_rule_s85() -> None:
+    """S85: the live and sequence paths flag a point with the rule Review and the
+    re-run apply to the flight recorder (``no_detection_flags``' per-target half):
+    the same targets, at the same threshold, and never a comparison or check."""
+    from argos.core.session.review import NO_DETECTION_SNR, flag_no_detection, no_detection_flags
+
+    snrs = [None, float("nan"), -1.0, 0.8, NO_DETECTION_SNR - 1e-9, NO_DETECTION_SNR, 50.0]
+    names = [f"T{i}" for i in range(len(snrs))]
+    ((low, _outlier),) = no_detection_flags([(list(zip(names, snrs)), [])])
+    for name, snr in zip(names, snrs):
+        point = LcPoint(jd_utc=2461000.5, mag=12.0, mag_err=0.1)
+        assert flag_no_detection(point, "target", snr) is (name in low), (name, snr)
+        assert point.suspect is point.no_detection is (name in low)
+        for role in ("comparison", "check"):
+            other = LcPoint(jd_utc=2461000.5, mag=12.0, mag_err=0.1)
+            assert flag_no_detection(other, role, snr) is False
+            assert not other.suspect and not other.no_detection
+    assert low == {"T2", "T3", "T4"}
+
+
+def test_review_reads_a_live_csv_flagged_at_measurement_unchanged(tmp_path) -> None:
+    """A run written since S85 has its targets' no-detection points flagged and its
+    floor estimated without them: Review flags the same points (and, from the
+    recorder's zero point, the frame's comparison), keeps that floor, and the AAVSO
+    export names them."""
+    root, _header_airmass, written = _session(tmp_path, settings_site=TRUE_SITE, faint_frame=3)
+    live = written["t"]
+    for i in (3, BLANK):  # the target below SNR 3 (2.0 and 1.6): S85's live flags
+        live.points[i].suspect = True
+    rows = [(p.jd_utc, p.mag, p.formal_mag_err) for p in live.points]
+    floor = estimate_systematic_floor([r for i, r in enumerate(rows) if i not in (3, BLANK)])
+    assert estimate_systematic_floor(rows).sigma_systematic > floor.sigma_systematic + 0.01
+    for p in live.points:
+        p.mag_err = apply_systematic_floor(p.formal_mag_err, floor)
+        p.sigma_syst = floor.sigma_systematic
+    live.to_csv(root / "photometry" / "target_Var_X_000-AAA-000.csv")
+
+    _review, target, comp = _loaded(root)
+
+    assert [i for i, p in enumerate(target.points) if p.no_detection] == [3, BLANK]
+    assert [i for i, p in enumerate(comp.points) if p.no_detection] == [BLANK]
+    assert {p.sigma_syst for p in target.points} == {floor.sigma_systematic}
+    summary = write_aavso(tmp_path / "aavso.txt", [target], obscode="TST01")
+    assert summary.rows == N - 2 and summary.no_detection_excluded == 2
+
+
 def test_open_curve_csv_applies_the_rules_to_a_run_s_own_csv_only(tmp_path) -> None:
     """Analyze's Open curve CSV in a session folder does the same (S66, S67)."""
     from argos.core.photometry.lightcurve import read_curves_csv

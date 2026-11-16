@@ -2499,3 +2499,149 @@ def test_the_live_path_adds_the_subs_scintillation_s74(shot_rig, monkeypatch) ->
     assert params.exposure_s == 10.0
     assert params.airmass == pytest.approx(airmass_from_altitude(50.0))
     assert params.scint_frac() > 0.005  # 0 before: no exposure, no airmass
+
+
+def _faint_target_field(engine, monkeypatch, faint_peak: float):
+    """Targets V1 (bright) and V2 (``faint_peak`` ADU on the raw plane), four bright
+    comparisons (4 anchors: the lock is verified, S56 flags nothing)."""
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+
+    xy = {(10.0, 20.0): (150.0, 100.0), (10.005, 20.0): (110.0, 60.0)}
+    stars = [
+        TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1"),
+        TargetStar(role=ROLE_TARGET, ra_deg=10.005, dec_deg=20.0, name="V2"),
+    ]
+    for i, pos in enumerate([(60.0, 50.0), (230.0, 60.0), (70.0, 150.0), (220.0, 150.0)]):
+        ra = 10.0 + 0.01 * (i + 1)
+        xy[(ra, 20.0)] = pos
+        stars.append(
+            TargetStar(ROLE_COMPARISON, ra, 20.0, auid=f"C{i}", source="vsp", mags={"V": 10.0})
+        )
+    monkeypatch.setattr(engine, "target_set", lambda: TargetSet(object_name="V1", stars=stars))
+    bright = [pos for key, pos in xy.items() if key != (10.005, 20.0)]
+    frame = _field_frame(bright).astype(np.float64)
+    yy, xx = np.mgrid[0 : frame.shape[0], 0 : frame.shape[1]]
+    frame += faint_peak * np.exp(-((xx - 2 * 110.0) ** 2 + (yy - 2 * 60.0) ** 2) / (2 * 3.0**2))
+    return xy, np.clip(frame, 0, 65535).astype(np.uint16)
+
+
+def test_a_live_target_below_snr_3_is_flagged_no_detection_s85(shot_rig, monkeypatch) -> None:
+    """S85: S67's per-target rule when the point is measured. The live and sequence
+    paths wrote a target measured below SNR 3 unflagged (S76's replay of the cloudy
+    XX Cyg 2026-09-07 ``045626Z`` sub: the target at SNR 0.8, 12.77 ± 1.28, in the live
+    CSV, the curve and its ``sigma_syst``), where Review, the AAVSO export and a re-run
+    leave it out. Its point is now ``suspect`` and ``no_detection`` (the CSV's suspect
+    column) and the recorder says so; a second, bright target and the comparisons on
+    the same frame keep theirs unflagged."""
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.photometry.lightcurve import LightCurve
+
+    engine, _session, _form, _logs = shot_rig
+    xy, frame = _faint_target_field(engine, monkeypatch, faint_peak=14.0)
+    snrs: dict[str, float] = {}
+    measure = ae.measure_frame
+
+    def spy(*args, **kwargs):
+        results = measure(*args, **kwargs)
+        snrs.update({r.star.display_name: r.phot.snr for r in results if r.phot is not None})
+        return results
+
+    monkeypatch.setattr(ae, "measure_frame", spy)
+    events: list[dict] = []
+    record = ae.SessionDiagnostics.record
+
+    def recorded(self, kind, frame=None, **fields):
+        if kind == "event":
+            events.append(dict(fields, frame=frame))
+        return record(self, kind, frame, **fields)
+
+    monkeypatch.setattr(ae.SessionDiagnostics, "record", recorded)
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+    _measure_raw(engine, frame, 0)
+
+    assert 0.0 < snrs["V2"] < 3.0 and snrs["V1"] > 100.0  # the frame as intended
+    assert engine._tracker.anchors_used == 4
+    faint, bright = _lc(engine, "V2").points, _lc(engine, "V1").points
+    assert len(faint) == len(bright) == 1
+    assert faint[0].suspect and faint[0].no_detection  # unflagged before the fix
+    assert not bright[0].suspect and not bright[0].no_detection
+    comparisons = [c for c in engine.lightcurves.values() if c.role == "comparison"]
+    assert len(comparisons) == 4 and not any(p.suspect for c in comparisons for p in c.points)
+    csv = next(path for key, path in engine._preview_csvs.items() if key.startswith("V2@"))
+    assert [p.suspect for p in LightCurve.from_csv(csv).points] == [True]
+    assert [e for e in events if e.get("what") == "no_detection"] == [
+        {"what": "no_detection", "low_snr": ["V2"], "frame": 0}
+    ]
+
+
+def test_a_point_without_a_detection_sets_no_live_sigma_syst_s85(shot_rig, monkeypatch) -> None:
+    """S85: the live run-level floor was estimated with the no-detection point, so
+    its 3 mag excursion raised ``sigma_syst`` and every row's ``mag_err`` (S67's
+    complaint about old files, still made by new runs). The floor now leaves it out,
+    as a re-run's does, and still applies to that point's own error."""
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+    from argos.core.photometry.uncertainty import estimate_systematic_floor
+
+    engine, _session, _form, _logs = shot_rig
+    stars = [
+        TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1"),
+        TargetStar(role=ROLE_COMPARISON, ra_deg=10.01, dec_deg=20.0, auid="C1"),
+    ]
+    tset = TargetSet(object_name="V1", stars=stars)
+    scatter = np.random.default_rng(85).normal(0.0, 0.02, 14)
+    blank = 6  # the cloudy sub: the target at SNR 0.8, 3 mag off
+    frame = {"i": 0}
+
+    def measure(*_args, **_kwargs):
+        i = frame["i"]
+        out = []
+        for star in stars:
+            target = star.role == ROLE_TARGET
+            mag = (15.0 if i == blank else 12.0 + scatter[i]) if target else 10.0
+            err = 1.3 if target and i == blank else 0.01
+            diff = SimpleNamespace(
+                mag=mag,
+                mag_err=err,
+                formal_mag_err=err,
+                comps_used=1,
+                zero_point=0.0,
+                zp_rms=0.0,
+                note="",
+            )
+            snr = 0.8 if target and i == blank else 80.0
+            phot = SimpleNamespace(sky_adu=300.0, saturated=False, suspect=False, snr=snr)
+            out.append(SimpleNamespace(star=star, diff=diff, relative=None, phot=phot))
+        return out
+
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    monkeypatch.setattr(engine, "_wcs_for_frame", lambda *a: None)
+    monkeypatch.setattr(engine, "_write_live_quality_report", lambda tset: None)
+    monkeypatch.setattr(ae, "measure_frame", measure)
+    monkeypatch.setattr(ae, "bjd_tdb", lambda *a: None)  # no IERS download
+    monkeypatch.setattr(ae, "airmass_at", lambda *a: None)
+    engine.astrometry._wcs = object()
+    engine._last_raw = np.zeros((16, 16), np.uint16)
+    engine._last_raw_decimated = False
+    t0 = datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc)
+    for i in range(14):
+        frame["i"] = i
+        engine._last_exposure_mid = t0 + timedelta(minutes=i)
+        engine._measure_photometry()
+
+    points = _lc(engine, "V1").points
+    assert [k for k, p in enumerate(points) if p.suspect] == [blank]
+    assert points[blank].no_detection
+
+    def floor(rows):
+        return estimate_systematic_floor([(p.jd_utc, p.mag, p.formal_mag_err) for p in rows])
+
+    without = floor(p for k, p in enumerate(points) if k != blank).sigma_systematic
+    assert floor(points).sigma_systematic > without + 0.005  # what the curve carried before
+    assert {p.sigma_syst for p in points} == {without}
+    assert points[blank].mag_err == pytest.approx(float(np.hypot(1.3, without)))
+    assert not any(p.suspect for p in _lc(engine, "C1").points)

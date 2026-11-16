@@ -94,7 +94,7 @@ from argos.core.photometry.tracking import (
 from argos.core.photometry.uncertainty import apply_systematic_floor, estimate_systematic_floor
 from argos.core.session.device_session import DeviceSession
 from argos.core.session.diagnostics import SessionDiagnostics
-from argos.core.session.review import FROZEN_POINTING_S
+from argos.core.session.review import FROZEN_POINTING_S, flag_no_detection
 from argos.core.session.types import LiveFrame, PhotometryPoint
 from argos.workers.astrometry_controller import AstrometryController
 from argos.workers.autofocus_worker import AutofocusWorker
@@ -2375,6 +2375,7 @@ class AcquisitionEngine(QObject):
             egain_source=params.egain_source,
         )
         self.photometry_measuring.emit()  # the page samples the CCD temp if open
+        no_detection: list[str] = []  # S85: the targets measured below SNR 3
         for res in results:
             if res.diff is not None:
                 diag.record(
@@ -2396,7 +2397,7 @@ class AcquisitionEngine(QObject):
                 continue
             # S69 (b): an off-centre comparison or check star's own point is suspect.
             flagged = unverified or bool(excluded and res.star.key() in excluded)
-            self._emit_live_point(
+            point = self._emit_live_point(
                 res,
                 jd,
                 air,
@@ -2407,6 +2408,11 @@ class AcquisitionEngine(QObject):
                 airmass_site=star_site,
                 own_airmass=own_airmass,
             )
+            if point.no_detection:
+                no_detection.append(res.star.auid or res.star.display_name)
+        if no_detection:
+            # S85: as a batch re-run records it (S67); Review reads the star records.
+            diag.record("event", frame=frame_no, what="no_detection", low_snr=no_detection)
         if self._curves_dirty:
             # One whole-store re-render per frame, whatever the star count.
             self._curves_dirty = False
@@ -2502,14 +2508,17 @@ class AcquisitionEngine(QObject):
         *,
         airmass_site: tuple[float, float] | None = None,
         own_airmass: bool = True,
-    ) -> None:
+    ) -> LcPoint:
         """Append one measured star to its (star, filter) curve + CSV and signal it.
 
         ``unverified``: the frame's lock rests on fewer than 3 anchors (S56), or the
         star is more than 1 px off its aperture centre (S69 b): the point is flagged
         suspect, as a batch re-run flags a frame measured without the field (S43).
+        A target measured below SNR 3 holds no detection: its point is flagged suspect
+        and ``no_detection`` (S85, S67's per-target rule) and sets no ``sigma_syst``.
         ``own_airmass`` False (S78, amended): the star takes the mount's airmass ``air``
         (the field centre's), the Settings site being wrong and no site fitted yet.
+        Returns the point.
         """
         lat, lon, elev = site
         bjd = (
@@ -2552,6 +2561,8 @@ class AcquisitionEngine(QObject):
             relative_flux=res.relative.flux_ratio if res.relative else None,
             relative_flux_err=res.relative.flux_ratio_err if res.relative else None,
         )
+        # S85: S67's per-target rule when the point is measured, not only at Review.
+        flag_no_detection(point, res.star.role, getattr(res.phot, "snr", None))
         key = curve_key(res.star, token)
         lc = self._lightcurves.get(key)
         if lc is None or lc.role != res.star.role:
@@ -2597,6 +2608,7 @@ class AcquisitionEngine(QObject):
             lc.to_csv(self._photometry_csv_path(res.star, token))
         except OSError as exc:
             self.log_message.emit("WARN", f"photometry.csv: {exc}")
+        return point
 
     def _apply_systematic_floor(self, curve: LightCurve) -> bool:
         """Apply the star_var_script-compatible run-level uncertainty floor."""
@@ -2605,7 +2617,9 @@ class AcquisitionEngine(QObject):
             [
                 (point.jd_utc, point.mag, point.formal_mag_err or point.mag_err)
                 for point in curve.points
-                if math.isfinite(point.mag) and math.isfinite(point.formal_mag_err or point.mag_err)
+                if math.isfinite(point.mag)
+                and math.isfinite(point.formal_mag_err or point.mag_err)
+                and not point.no_detection  # S85: no star there (S67)
             ],
             manual_floor=manual,
         )
