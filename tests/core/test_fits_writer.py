@@ -234,3 +234,28 @@ def test_egain_header_is_the_value_the_photometry_uses(tmp_path: Path) -> None:
     (tmp_path / "b").mkdir()
     ctx = FrameContext(egain_driver=0.42, egain_table={"80": 1.9, "300": "bad"})
     assert _write_frame(tmp_path / "b", context=ctx, gain=300)["EGAIN"] == pytest.approx(0.42)
+
+
+def test_egain_header_is_the_measured_one_at_gain_80_s73(tmp_path: Path) -> None:
+    """S73: an S30 Pro frame at gain 80 carried the driver's 0.8 (or, without one, the
+    IMX585 reference's 1.723) e-/ADU, 3.5x and 7.6x the camera's photon transfer
+    (0.228); RDNOISE the reference's 2.8 e-. Both now come from the profile's
+    measurement, named in their comments; the observer's table still comes first."""
+    ctx = FrameContext(egain_driver=0.8)
+    hdr = _write_frame(tmp_path, context=ctx, gain=80)
+    assert hdr["EGAIN"] == pytest.approx(0.228)  # 0.8 (the driver) before the fix
+    assert "S30 Pro PTC" in hdr.comments["EGAIN"]
+    assert hdr["RDNOISE"] == pytest.approx(2.6)
+    assert "S30 Pro PTC" in hdr.comments["RDNOISE"]
+    (tmp_path / "b").mkdir()
+    assert _write_frame(tmp_path / "b", gain=80)["EGAIN"] == pytest.approx(0.228)  # not 1.723
+    (tmp_path / "c").mkdir()
+    scaled = _write_frame(tmp_path / "c", context=FrameContext(egain_driver=0.8), gain=100)
+    assert scaled["EGAIN"] == pytest.approx(0.1811, abs=1e-4)
+    assert "S30 Pro PTC scaled" in scaled.comments["EGAIN"]
+    # the read noise measured at gain 80, used at a scaled gain (owner's call, S73)
+    assert scaled["RDNOISE"] == pytest.approx(2.6)
+    assert "S30 Pro PTC scaled" in scaled.comments["RDNOISE"]
+    (tmp_path / "d").mkdir()
+    table = FrameContext(egain_driver=0.8, egain_table={"80": 0.25})
+    assert _write_frame(tmp_path / "d", context=table, gain=80)["EGAIN"] == pytest.approx(0.25)

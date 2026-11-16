@@ -25,6 +25,26 @@ ARCSEC_CONSTANT = 206.265
 
 
 @dataclass(frozen=True)
+class GainMeasurement:
+    """The camera's e-/ADU and read noise measured at one gain setting (S73).
+
+    Args:
+        gain: The gain setting the frames were taken at.
+        e_per_adu: Electrons per 16-bit ADU of one raw pixel.
+        e_per_adu_err: Its 1-sigma uncertainty.
+        read_noise_e: Read noise (e- RMS of one raw pixel) at ``black_level_adu``,
+            the ADC quantisation included: the intercept of the same fit.
+        method: Where the value comes from, short enough for a FITS comment.
+    """
+
+    gain: int
+    e_per_adu: float
+    e_per_adu_err: float
+    read_noise_e: float
+    method: str
+
+
+@dataclass(frozen=True)
 class TelescopeProfile:
     """One telescope model: what it is, and what its camera actually does.
 
@@ -56,6 +76,16 @@ class TelescopeProfile:
         black_level_adu: The sensor's black level (pedestal) in 16-bit ADU at
             the offset Argos uses: the part of a pixel value that is not
             light and carries no Poisson noise (S72). 0 when not measured.
+        gain_measurements: Photon-transfer measurements of this camera's e-/ADU
+            (S73), one per measured gain setting. They come before the driver's
+            value and the sensor reference curve (``hardware.egain``).
+        gain_step_db: Analog gain per step of the gain setting (dB), when a
+            second measured gain confirms it; 0 when unknown. Scales a
+            measurement to the other gains of ``gain_scaling_range``.
+        gain_scaling_range: The gain settings (inclusive) over which that scaling
+            holds: one conversion-gain mode of the sensor.
+        gain_scaling_checked: Gain settings where a measurement confirmed the
+            scaled value; any other scaled gain is logged "scaled, not measured".
         filter_names: Internal filter-wheel slots in position order. Empty
             when the model has no internal wheel.
         ap_host: Fixed address the telescope serves on when running its own
@@ -83,6 +113,10 @@ class TelescopeProfile:
     full_well_adu: int = 60000
     linearity_max_adu: int = 50000
     black_level_adu: float = 0.0
+    gain_measurements: tuple[GainMeasurement, ...] = field(default=())
+    gain_step_db: float = 0.0
+    gain_scaling_range: tuple[int, int] = (0, 0)
+    gain_scaling_checked: tuple[int, ...] = field(default=())
 
     # Filter wheel
     filter_names: tuple[str, ...] = field(default=())
@@ -123,6 +157,41 @@ class TelescopeProfile:
     @property
     def has_filter_wheel(self) -> bool:
         return bool(self.filter_names)
+
+    def measured_gain(self, gain_setting: int) -> tuple[GainMeasurement, bool] | None:
+        """The measurement that gives this camera's e-/ADU at ``gain_setting`` (S73).
+
+        Returns ``(measurement, scaled)``: the measurement at that very gain
+        (``scaled`` False), else the nearest one scaled by ``gain_step_db`` per step
+        when both gains lie in ``gain_scaling_range`` (``scaled`` True, its
+        ``e_per_adu`` already scaled, its read noise the measured one: the owner's
+        decision, S73, rather than a Settings default). None when no measurement
+        covers that gain.
+        """
+        try:
+            gain = int(gain_setting)
+        except (TypeError, ValueError):
+            return None
+        for m in self.gain_measurements:
+            if m.gain == gain:
+                return m, False
+        lo, hi = self.gain_scaling_range
+        if self.gain_step_db <= 0 or not lo <= gain <= hi:
+            return None
+        usable = [m for m in self.gain_measurements if lo <= m.gain <= hi]
+        if not usable:
+            return None
+        base = min(usable, key=lambda m: abs(m.gain - gain))
+        # e-/ADU falls as the analog gain rises: 20·log10(A) = step_db × setting.
+        factor = 10.0 ** (-(gain - base.gain) * self.gain_step_db / 20.0)
+        scaled = GainMeasurement(
+            gain=gain,
+            e_per_adu=base.e_per_adu * factor,
+            e_per_adu_err=base.e_per_adu_err * factor,
+            read_noise_e=base.read_noise_e,
+            method=f"{base.method} scaled",
+        )
+        return scaled, True
 
     def describe(self) -> str:
         """One-line summary for logs, the status bar and the splash screen."""

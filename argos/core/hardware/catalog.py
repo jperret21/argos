@@ -25,7 +25,7 @@ frame validation is available.
 
 from __future__ import annotations
 
-from argos.core.hardware.profile import TelescopeProfile
+from argos.core.hardware.profile import GainMeasurement, TelescopeProfile
 
 #: Fields that no unvalidated profile has confirmed. The CFA layout matters
 #: most: a wrong Bayer pattern does not fail loudly, it quietly measures the
@@ -69,6 +69,28 @@ S30_PRO = TelescopeProfile(
     # 982-1050 ADU (with 1.5-2.8 e- read noise); 1024 is the 12-bit code (x16)
     # nearest their median, 1019.
     black_level_adu=1024.0,
+    # Measured (S73): photon transfer of the owner's frames at gain 80 (frame-pair
+    # differences of raw G1 and G2 pixels, 14 sessions over three nights, one line
+    # var = (level - black) / g + R^2): g = 0.228 +/- 0.005 e-/ADU, the three nights
+    # 0.232, 0.230 and 0.231 (+/- 0.005 each); read noise 2.6 e- at the 1024 black
+    # level, the 16-ADU quantisation of the 12-bit data included. The driver's 0.8
+    # and the IMX585 reference's 1.723 are 3.5x and 7.6x too high.
+    gain_measurements=(
+        GainMeasurement(
+            gain=80, e_per_adu=0.228, e_per_adu_err=0.005, read_noise_e=2.6, method="S30 Pro PTC"
+        ),
+    ),
+    # 0.1 dB per gain step: gain 100 measures 0.183 e-/ADU where 0.228 x 10^(-20/200)
+    # gives 0.181, and gain 0 gives 0.573 e-/ADU, 37.6 ke- at the 12-bit full scale
+    # against the IMX585's 38 ke- full well. Below 252, where the IMX585 switches to
+    # its high-conversion-gain mode; above it no frame measures anything.
+    gain_step_db=0.1,
+    gain_scaling_range=(0, 251),
+    # Gain 100's photon transfer confirms the scaling there (0.183 measured, 0.181
+    # scaled); every other scaled gain is logged "scaled, not measured". The one gain-65
+    # light fits its scaled 0.271 e-/ADU (model / measured sky sigma 0.89 with the
+    # measured 2.6 e- read noise; notes S73).
+    gain_scaling_checked=(100,),
     filter_names=("Dark", "IR", "LP"),
     ap_host="10.0.0.1",
 )

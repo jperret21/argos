@@ -39,6 +39,7 @@ tests keep one stable surface):
 from __future__ import annotations
 
 import base64
+import functools
 import logging
 import math
 import time
@@ -75,12 +76,12 @@ from argos.core.session.types import (
     LiveFrame,
 )
 from argos.core.catalog import PointSourceIdentity, cached_exoplanet_hosts_in_cone
+from argos.core.catalog.gaia import gaia_sources_for_set
 from argos.core.catalog.offline import essential_catalogue_objects
 from argos.core.catalog.photometry import separation_arcmin
 from argos.core.catalog.object_resolver import is_variable_object_type
 from argos.core.catalog.targets import TargetStar
-from argos.core.hardware import active as hardware
-from argos.core.imaging import sensor_models
+from argos.core.hardware import egain as camera_egain
 from argos.core.imaging.astrometry_session import (
     batch_frame_solver,
     field_geometry,
@@ -202,6 +203,8 @@ class ImagingPage(QWidget):
         self._armed: set = set()  # overlays auto-shown once when first available
         # §6 P4: live photometry preview (light curve + metrics window).
         self._photometry_window: PhotometryWindow | None = None
+        #: S79: the crowded comparison/check stars already named in the Activity log.
+        self._crowding_warned: set[str] = set()
         self._metrics_t0: float | None = None
         self._batch_worker = None  # WS7 batch re-run (QThread) + its progress dialog
         self._batch_dialog: QProgressDialog | None = None
@@ -1758,7 +1761,10 @@ class ImagingPage(QWidget):
         self._project_targets()
 
     def _project_targets(self) -> None:
-        tset = self._engine.target_set()
+        from argos.core.photometry.airmass import julian_date
+
+        # S77: a star with a proper motion is drawn where it is now (as the web's).
+        tset = self._engine.target_set().at_jd(julian_date(datetime.now(timezone.utc)))
         wcs, gs = self._overlay_wcs(), self._green_shape
         self._target_green = project_points(wcs, gs, ((s.ra_deg, s.dec_deg) for s in tset.stars))
         pts = []
@@ -2235,6 +2241,21 @@ class ImagingPage(QWidget):
     def _refresh_target_table(self) -> None:
         if self._photometry_window is not None:
             self._photometry_window.set_targets(self._engine.target_set().stars)
+        self._warn_crowding()
+
+    def _warn_crowding(self) -> None:
+        """S79: a comparison or check star with a brighter star of the set (or a
+        variable) within about 2 aperture radii is named in the Comparisons tab, and once
+        in the Activity log for each new such star."""
+        crowded, radius = self._engine.crowding()
+        names = {s.key(): s.display_name for s in self._engine.target_set().stars}
+        lines = [why.text(names.get(key, key), radius) for key, why in crowded.items()]
+        if self._photometry_window is not None:
+            self._photometry_window.comparisons.set_crowding(lines)
+        for key, line in zip(crowded, lines):
+            if key not in self._crowding_warned:
+                self.log_message.emit("WARN", f"Comparison crowded — {line}")
+        self._crowding_warned = set(crowded)
 
     def _refresh_variable_table(self) -> None:
         """Feed the Variables tab: one row per cached VSX variable, in order."""
@@ -2356,6 +2377,11 @@ class ImagingPage(QWidget):
             # S43: a frame on which the tracker loses the field is re-solved near
             # the reference's centre and the apertures re-anchored on it.
             solver=batch_frame_solver(self._cfg, centre),
+            # S77: the proper motions of the set's VSX/VSP stars (Gaia DR3, cached).
+            proper_motions=functools.partial(
+                gaia_sources_for_set,
+                allow_network=bool(self._cfg("catalog.field_stars_enabled", True)),
+            ),
         )
         dialog = QProgressDialog("Re-running photometry…", "Cancel", 0, len(paths), self)
         dialog.setWindowTitle("Batch photometry")
@@ -2371,21 +2397,17 @@ class ImagingPage(QWidget):
         worker.start()
 
     def _engine_egain(self) -> float:
-        """e-/ADU for an offline batch: config table, then the sensor reference.
+        """e-/ADU for an offline batch: config table, the profile's photon transfer
+        (S73), then the sensor reference (``hardware.egain.live``).
 
         Mirrors ``AcquisitionEngine._egain`` minus the driver step, which needs
         a live handle. Falling back to 1.0 here — as this used to — silently
         treated ADU as electrons and made every batch SNR and formal error
-        wrong, without any warning.
+        wrong, without any warning. Each frame's own gain comes first (S41).
         """
-        gain = self._camera_dock.params().gain
-        table = self._cfg("camera.egain_table", {}) or {}
-        if isinstance(table, dict) and str(gain) in table:
-            try:
-                return float(table[str(gain)])
-            except (TypeError, ValueError):
-                pass
-        return sensor_models.lookup_egain(hardware.profile().sensor, gain)
+        return camera_egain.live(
+            self._camera_dock.params().gain, table=self._cfg("camera.egain_table", {}) or {}
+        )
 
     @pyqtSlot(object)
     def _on_batch_done(self, result) -> None:
@@ -2448,7 +2470,7 @@ class ImagingPage(QWidget):
                 "WARN",
                 f"Batch photometry: {result.frames_unverified} frame(s) steered by fewer than"
                 " 3 anchor stars had no verified lock (no solution of that frame or the one"
-                " before within 2 px): their points are flagged suspect and left out of the"
+                " before within 10 px): their points are flagged suspect and left out of the"
                 " AAVSO export.",
             )
         if result.frames_rotation_solved:

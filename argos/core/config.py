@@ -139,7 +139,10 @@ _DEFAULTS: dict[str, Any] = {
         "aperture_min_px": 4,
         "annulus_in_px": 8,
         "annulus_out_px": 12,
-        "read_noise_e": 1.5,
+        "read_noise_e": 1.5,  # green_plane: the profile's measured value at its gain (S73)
+        # S72: "green_plane" (the (G1+G2)/2 plane's noise, S74 scintillation and S75
+        # sky-estimate terms) or "pixel" (the 0.4.x model).
+        "noise_model": "green_plane",
         "default_band": "TG",
         "min_comparisons": 2,
         "auto_comparisons": 5,  # comps auto-picked when a target is chosen

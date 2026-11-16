@@ -46,14 +46,19 @@ from argos.core.catalog.targets import (
     TargetStar,
 )
 from argos.core.config import Config, observing_site
-from argos.core.hardware import active as hardware
-from argos.core.imaging import sensor_models
+from argos.core.hardware import egain as camera_egain
 from argos.core.imaging.astrometry_session import field_geometry
 from argos.core.imaging.fits_writer import FITSWriter, FrameContext, filter_token
 from argos.core.imaging.green import green_plane
 from argos.core.imaging.metrics import detect_stars, frame_metrics, measure_star_at
 from argos.core.imaging.platesolve import angular_separation_deg
 from argos.core.imaging.sequencer import DARK_FILTER_NAME
+from argos.core.imaging.sky_geometry import (
+    SITE_FIT_MAX_RMS_DEG,
+    SiteFit,
+    angle_between_directions,
+    horizontal_at,
+)
 from argos.core.photometry.airmass import (
     airmass_at,
     airmass_from_altitude,
@@ -73,6 +78,7 @@ from argos.core.photometry.params import (
     DEFAULT_FWHM,
     PhotometryParams,
     frame_egain,
+    frame_scintillation_inputs,
     measure_frame,
 )
 from argos.core.photometry.quality import comparison_quality_report, save_comparison_quality_report
@@ -88,6 +94,7 @@ from argos.core.photometry.tracking import (
 from argos.core.photometry.uncertainty import apply_systematic_floor, estimate_systematic_floor
 from argos.core.session.device_session import DeviceSession
 from argos.core.session.diagnostics import SessionDiagnostics
+from argos.core.session.review import FROZEN_POINTING_S
 from argos.core.session.types import LiveFrame, PhotometryPoint
 from argos.workers.astrometry_controller import AstrometryController
 from argos.workers.autofocus_worker import AutofocusWorker
@@ -106,10 +113,12 @@ _LOCK_MIN_SNR = 5.0
 #: solution: the lock is unverified, its points flagged suspect, a re-solve due...
 _LOCK_VERIFY_MIN_ANCHORS = 3
 #: ...unless the frame is measured through a solution of this sub or the previous one
-#: and the tracker moved no aperture of the set more than this (green px) from where
-#: that solution puts it: the tracker's own outlier floor (``RESIDUAL_FLOOR_PX``); a
-#: neighbour locked after a jump or a stale rebuild (S52) moved them 22-36 px.
-_LOCK_FRESH_MAX_SHIFT_PX = 2.0
+#: and the tracker moved no aperture of the set this much (green px) or more from where
+#: that solution puts it. S56 as amended on 2026-11-16: between the largest motion of the
+#: field between two subs that the converged tracker (S69) sees (4.2-7.5 px on XX Cyg
+#: 2026-09-07, 5.1 px on 2026-08-29) and what a neighbour locked after a jump or a stale
+#: rebuild (S52) moved them (22-36 px). It was 2 px, tuned on the lagging tracker.
+_LOCK_FRESH_MAX_SHIFT_PX = 10.0
 #: S54: 3 consecutive solutions refused by the anchor check that agree with each
 #: other within this many green px (where each puts the newest one's frame centre)
 #: are a re-pointing the mount did not report: the third is accepted. The owner's
@@ -124,7 +133,7 @@ def lock_unverified_text(n: int) -> str:
     return (
         f"Photometry: only {n} anchor star{'s' if n != 1 else ''} steer the apertures — the"
         " lock cannot be verified; points are flagged suspect while fewer than 3 anchor"
-        " stars steer the apertures (except within 2 px of a solution of this sub or the"
+        " stars steer the apertures (except within 10 px of a solution of this sub or the"
         " previous one). Re-solving."
     )
 
@@ -186,6 +195,14 @@ def _fits_utc(value) -> datetime | None:
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _gain_of(settings, default: int | None) -> int | None:
+    """The integer gain setting a frame's settings or record carries, else ``default``."""
+    gain = getattr(settings, "gain", None)
+    if isinstance(gain, bool) or not isinstance(gain, (int, float)) or gain != gain:
+        return default
+    return int(gain)
 
 
 def _new_preview_csv(
@@ -384,6 +401,12 @@ class AcquisitionEngine(QObject):
         self._last_raw_from_file = False
         #: e-/ADU of that opened frame (its own gain, see ``frame_egain``); None → live chain.
         self._file_egain: float | None = None
+        #: That opened frame's exposure, airmass and site height (S74's scintillation).
+        self._file_scintillation: dict = {}
+        #: The exposure (s) of the frame in hand, live or sequence (S74).
+        self._last_exposure_s: float | None = None
+        #: The gain setting of the frame in hand, live or sequence: its e-/ADU (S83).
+        self._last_gain: int | None = None
         self._green_shape: tuple[int, int] | None = None  # of the last processed frame
         self._last_metrics = None  # last displayed FrameMetrics (FITS QA uses the saved array)
         self._last_fwhm: float | None = None  # mean detected-star FWHM (green px)
@@ -453,6 +476,14 @@ class AcquisitionEngine(QObject):
         #: made due (None: none since the solution); (b): the off-centre episode logged.
         self._rotation_attempted: float | None = None
         self._off_centre_logged = False
+        #: S78: the mount's pointings (RA/Dec, altitude, azimuth) of the measured frames,
+        #: and the site fitted to them: every star's airmass is computed for it. The last
+        #: pointing added, since when it repeats (X1: frozen after 60 s), and whether the
+        #: mount's last pointing is frozen.
+        self._site_fit = SiteFit()
+        self._mount_key: tuple | None = None
+        self._mount_since: float | None = None
+        self._mount_frozen = False
         #: S54: the consecutive solutions refused by the anchor check (their WCS).
         self._repoint_refused: list = []
         #: S59: the current solution is an opened FITS's (its anchors never vet a
@@ -761,6 +792,8 @@ class AcquisitionEngine(QObject):
             self._last_exposure_mid = start_dt + (end_dt - start_dt) / 2
         except (TypeError, ValueError):
             self._last_exposure_mid = None
+        self._last_exposure_s = getattr(used, "exposure_s", None) or params.exposure_s  # S74
+        self._last_gain = _gain_of(used, params.gain)  # S83
         self._last_filter = self._live_filter(used, params)
         # Publish the (possibly decimated) preview; flag it so plate-solve /
         # photometry skip half-quality frames (their plate scale is wrong).
@@ -958,6 +991,8 @@ class AcquisitionEngine(QObject):
         self.invalidate_astrometry()
         self._last_exposure_mid = fits_exposure_mid(header)
         self._file_egain = frame_egain(header, self._cfg("camera.egain_table", {}))
+        self._last_gain = None  # S83: an opened frame's own e-/ADU, else the form's gain
+        self._file_scintillation = frame_scintillation_inputs(header)  # S74
         self._last_filter = str(header.get("FILTER", "") or "").strip()
         self._active_run_root = None
         self.ingest_frame(frame)
@@ -992,6 +1027,9 @@ class AcquisitionEngine(QObject):
                 self._last_exposure_mid = start + timedelta(seconds=(record.exposure_s or 0) / 2.0)
             except (TypeError, ValueError):
                 pass
+            self._last_exposure_s = getattr(record, "exposure_s", None)  # S74
+        if record is not None:
+            self._last_gain = _gain_of(record, None)  # S83: the sub's, not the form's
         self.frame_saved.emit(path, record)  # the page logs the summary line
         # P5: one differential point per saved Light sub (uses the latest solve's WCS).
         # S44: never a Dark, Flat or Bias sub: its point was junk, and measuring it
@@ -1464,6 +1502,36 @@ class AcquisitionEngine(QObject):
                     self._anchors_changed()
                     self.targets_changed.emit(tset)
             self._backfill_chart_ids(tset)
+        if self._field_stars:
+            self._backfill_proper_motions(self.target_set())
+
+    def _backfill_proper_motions(self, tset: TargetSet) -> None:
+        """S77: the set's VSX/VSP stars take the proper motion of their Gaia DR3 source.
+
+        Every path that places an aperture then moves them to the frame's date
+        (``TargetSet.at_jd``). The object's set is saved, and so is the running run's
+        ``targets.json`` snapshot, as for the VSP chart (S68).
+        """
+        changed = tset.backfill_proper_motions(self._field_stars)
+        if not changed:
+            return
+        self._save_target_set(tset)
+        self.log_message.emit(
+            "INFO",
+            f"Catalog: proper motion from Gaia DR3 for {changed} star(s) of the set; their"
+            " apertures are placed at each frame's date (S77).",
+        )
+        if self._active_run_root is None or self._sequence is None:
+            return
+        if not self._sequence.isRunning():
+            return
+        snapshot = self._active_run_root / "targets.json"
+        try:
+            run_set = TargetSet.load(snapshot) if snapshot.is_file() else None
+            if run_set is not None and run_set.backfill_proper_motions(self._field_stars):
+                run_set.save(snapshot)
+        except OSError as exc:
+            self.log_message.emit("WARN", f"Save run targets: {exc}")
 
     def _backfill_chart_ids(self, tset: TargetSet) -> None:
         """S68: comparisons kept from before 0.4.2 get the VSP chart of this answer.
@@ -1490,6 +1558,18 @@ class AcquisitionEngine(QObject):
     # ------------------------------------------------------------------
     # Target set persistence (targets.json per object)
     # ------------------------------------------------------------------
+
+    def crowding(self) -> tuple[dict, float]:
+        """S79: the set's crowded comparison and check stars (``crowded_stars``) and the
+        radius used, about 2 aperture radii (the series FWHM's aperture, else the
+        default one) at the active profile's green-plane scale, in arcsec."""
+        from argos.core.catalog.targets import CROWDING_APERTURE_RADII, crowded_stars
+        from argos.core.imaging.metrics import arcsec_per_green_px
+
+        params = PhotometryParams.from_config(self._cfg)
+        fwhm = self._phot_fwhm or self._last_fwhm or None
+        radius = CROWDING_APERTURE_RADII * params.aperture_px(fwhm) * arcsec_per_green_px()
+        return crowded_stars(self.target_set(), radius), radius
 
     def _object_name(self) -> str:
         params = self._params() if self._params is not None else None
@@ -1786,23 +1866,30 @@ class AcquisitionEngine(QObject):
     # ------------------------------------------------------------------
 
     def _egain(self) -> float:
-        """e-/ADU for photometric errors: config → driver → active sensor reference.
+        """e-/ADU for photometric errors (``hardware.egain.live``): the gain table, the
+        profile's photon transfer (S73), the driver, the active sensor reference.
 
-        An opened frame keeps its own gain (``frame_egain``) when it records one.
+        At the gain the frame in hand was taken at (S83: a sequence sub's step, a live
+        frame's settings), the Camera form's only before any frame. An opened frame
+        keeps its own gain (``frame_egain``) when it records one.
         """
         if self._last_raw_from_file and self._file_egain is not None:
             return self._file_egain
-        table = self._cfg("camera.egain_table", {}) or {}
-        gain = str(self._params().gain)
-        if isinstance(table, dict) and gain in table:
-            try:
-                return float(table[gain])
-            except (TypeError, ValueError):
-                pass
-        value = self._session.egain_driver()
-        if value:
-            return float(value)
-        return sensor_models.lookup_egain(hardware.profile().sensor, self._params().gain)
+        return camera_egain.live(
+            self._last_gain if self._last_gain is not None else self._params().gain,
+            table=self._cfg("camera.egain_table", {}) or {},
+            driver=self._session.egain_driver,
+        )
+
+    def _with_frame_scintillation(self, params: PhotometryParams) -> PhotometryParams:
+        """S74's inputs for the frame in hand: an opened frame's header (``EXPTIME``,
+        ``AIRMASS``, ``SITEELEV``), else its exposure, the mount's airmass and the
+        Settings site."""
+        if self._last_raw_from_file:
+            return params.with_frame(**self._file_scintillation)
+        pos = self._session.last_position
+        air = airmass_from_altitude(pos.altitude) if pos else None
+        return params.with_frame(exposure_s=self._last_exposure_s, airmass=air)
 
     def _photometry_csv_path(self, star, token: str) -> Path:
         """One CSV per (star, filter) (S49): the filter token in the name."""
@@ -1891,13 +1978,13 @@ class AcquisitionEngine(QObject):
     def _centred_anchors(self, offsets: dict[str, float]) -> int:
         """S69 (b): the tracker's anchors less those more than 1 px off their aperture
         centre on this frame (an anchor too faint to test counts, as before) and the
-        one its fit rejected (it verified nothing)."""
+        ones its fit rejected (they verified nothing; S80: every inconsistent one)."""
         bad = off_centre(offsets)
-        rejected = self._tracker.rejected_anchor if self._tracker is not None else None
+        rejected = self._tracker.rejected_anchors if self._tracker is not None else frozenset()
         return sum(
             1
             for index, star in enumerate(self._tracker_anchor_stars)
-            if star.key() not in bad and index != rejected
+            if star.key() not in bad and index not in rejected
         )
 
     def _lock_unverified(
@@ -1951,12 +2038,12 @@ class AcquisitionEngine(QObject):
 
     def _fresh_lock(self, tset: TargetSet, tracked) -> bool:
         """The frame is measured through a solution of this sub or the previous one,
-        and the tracker moved the set's apertures less than 2 px from it (S56).
+        and the tracker moved the set's apertures less than 10 px from it (S56).
 
         The quantity: the largest distance, over the set's stars, between a star's
         position through the raw solution and through the tracked one this frame
         is measured with (a set-change rebase included). Between two subs the
-        owner's fields drift 1-5 px; a neighbour taken for an anchor moves them
+        owner's fields move up to 7.5 px; a neighbour taken for an anchor moves them
         by the distance to that neighbour (22-36 px in the cases seen).
         """
         wcs = self._astrometry.wcs
@@ -2161,6 +2248,10 @@ class AcquisitionEngine(QObject):
                 "WARN", "Photometry skipped: the frame has no exposure time (DATE-OBS/EXPTIME)."
             )
             return
+        selection = tset
+        # S77: every star with a proper motion at the frame's date: the apertures, the
+        # tracker's anchors and the lock and centring checks of this frame place it there.
+        tset = tset.at_jd(julian_date(self._last_exposure_mid))
         # The recorder first: a new object (or run) resets the series FWHM, which
         # is then frozen on THIS frame. Freezing it before the reset gave the
         # first point its own aperture and the series the second frame's (S31).
@@ -2169,6 +2260,7 @@ class AcquisitionEngine(QObject):
             self._phot_fwhm = self._last_fwhm
         fwhm = self._phot_fwhm or DEFAULT_FWHM
         params = PhotometryParams.from_config(self._cfg, egain=self._egain())
+        params = self._with_frame_scintillation(params)  # S74
         frame_no = self._diag_frame
         self._diag_frame += 1
         green = green_plane(self._last_raw)
@@ -2265,10 +2357,22 @@ class AcquisitionEngine(QObject):
         # frame from another night (S34).
         pos = None if self._last_raw_from_file else self._session.last_position
         air = airmass_from_altitude(pos.altitude) if pos else None
+        star_site = self._note_mount_pointing(pos)  # S78
         # Never the 0/0 default: without a site, the airmass is the mount's
         # (or none) and there is no BJD_TDB.
         lat, lon, elev = observing_site(self._config) or (None, None, 0.0)
-        diag.record("frame", frame=frame_no, jd_utc=jd, airmass=air, fwhm=fwhm)
+        # S78 (amended): without a fitted site, a Settings site that does not reproduce the
+        # mount's pointing gives no star its own airmass: each takes the mount's.
+        own_airmass = star_site is not None or self._settings_site_reproduces(pos, lat, lon)
+        diag.record(
+            "frame",
+            frame=frame_no,
+            jd_utc=jd,
+            airmass=air,
+            fwhm=fwhm,
+            egain=float(params.egain),  # S73: the e-/ADU and where it came from
+            egain_source=params.egain_source,
+        )
         self.photometry_measuring.emit()  # the page samples the CCD temp if open
         for res in results:
             if res.diff is not None:
@@ -2291,12 +2395,22 @@ class AcquisitionEngine(QObject):
                 continue
             # S69 (b): an off-centre comparison or check star's own point is suspect.
             flagged = unverified or bool(excluded and res.star.key() in excluded)
-            self._emit_live_point(res, jd, air, fwhm, (lat, lon, elev), token, flagged)
+            self._emit_live_point(
+                res,
+                jd,
+                air,
+                fwhm,
+                (lat, lon, elev),
+                token,
+                flagged,
+                airmass_site=star_site,
+                own_airmass=own_airmass,
+            )
         if self._curves_dirty:
             # One whole-store re-render per frame, whatever the star count.
             self._curves_dirty = False
             self.curves_changed.emit()
-        self._write_live_quality_report(tset)
+        self._write_live_quality_report(selection)
 
     def _write_live_quality_report(self, target_set: TargetSet) -> None:
         """Persist non-destructive leave-one-out comparison diagnostics.
@@ -2337,14 +2451,64 @@ class AcquisitionEngine(QObject):
         except OSError as exc:
             self.log_message.emit("WARN", f"Save photometry quality: {exc}")
 
+    def _note_mount_pointing(self, pos) -> tuple[float, float] | None:
+        """S78: add the mount's pointing to the site fit; the fitted site, or None.
+
+        The mount reports altitude and azimuth from its own site and clock: the site
+        that reproduces them over the run is the telescope's, whatever Settings says
+        (X3). A pointing more than 6 hours after the last one starts a new fit (the
+        telescope may have moved); a slewing mount's is not added, nor one that repeats
+        the last (a lost mount's frozen poll, X1, which no site reproduces: it is frozen
+        60 s after it began, as Review's ``FrozenPointing``)."""
+        self._mount_frozen = False
+        if pos is not None and not getattr(pos, "slewing", False):
+            jd = julian_date(_utcnow())
+            key = (pos.ra, pos.dec, pos.altitude, pos.azimuth)
+            if key == self._mount_key and self._mount_since is not None:
+                self._mount_frozen = (jd - self._mount_since) * 86_400.0 >= FROZEN_POINTING_S
+                return self._site_fit.site()
+            self._mount_key, self._mount_since = key, jd
+            last = self._site_fit.last_jd
+            if last is not None and jd - last > 0.25:
+                self._site_fit = SiteFit()
+            self._site_fit.add(jd, pos.ra, pos.dec, pos.altitude, pos.azimuth)
+        return self._site_fit.site()
+
+    def _settings_site_reproduces(self, pos, lat, lon) -> bool:
+        """S78 (amended, Review's ``settings_site_reproduces`` on a live poll): whether
+        the Settings site gives a star its own airmass without a fitted site. True when
+        nothing can tell (no mount: an opened frame; a frozen pointing, whose airmass is
+        stale, X1; no site), as before S78; else whether that site reproduces the
+        mount's pointing within ``SITE_FIT_MAX_RMS_DEG``."""
+        if pos is None or self._mount_frozen or lat is None or lon is None:
+            return True
+        try:
+            alt, az = horizontal_at(julian_date(_utcnow()), pos.ra, pos.dec, float(lat), float(lon))
+            offset = angle_between_directions(alt, az, pos.altitude, pos.azimuth)
+        except (TypeError, ValueError):
+            return True
+        return offset <= SITE_FIT_MAX_RMS_DEG
+
     def _emit_live_point(
-        self, res, jd: float, air, fwhm, site, token: str = "clear", unverified: bool = False
+        self,
+        res,
+        jd: float,
+        air,
+        fwhm,
+        site,
+        token: str = "clear",
+        unverified: bool = False,
+        *,
+        airmass_site: tuple[float, float] | None = None,
+        own_airmass: bool = True,
     ) -> None:
         """Append one measured star to its (star, filter) curve + CSV and signal it.
 
         ``unverified``: the frame's lock rests on fewer than 3 anchors (S56), or the
         star is more than 1 px off its aperture centre (S69 b): the point is flagged
         suspect, as a batch re-run flags a frame measured without the field (S43).
+        ``own_airmass`` False (S78, amended): the star takes the mount's airmass ``air``
+        (the field centre's), the Settings site being wrong and no site fitted yet.
         """
         lat, lon, elev = site
         bjd = (
@@ -2355,8 +2519,13 @@ class AcquisitionEngine(QObject):
         # Prefer the target's own altitude at the exposure midpoint over the
         # mount's last reported altitude, which is sampled at an arbitrary
         # instant. Fall back to the frame-level value when the site is unknown.
-        if lat is not None and lon is not None:
-            target_air = airmass_at(jd, res.star.ra_deg, res.star.dec_deg, float(lat), float(lon))
+        # S78: each star's own, for the site fitted to the mount's pointing
+        # (``airmass_site``) when there is one, else for the Settings site.
+        a_lat, a_lon = airmass_site if airmass_site is not None else (lat, lon)
+        if own_airmass and a_lat is not None and a_lon is not None:
+            target_air = airmass_at(
+                jd, res.star.ra_deg, res.star.dec_deg, float(a_lat), float(a_lon)
+            )
             if target_air is not None:
                 air = target_air
         point = LcPoint(

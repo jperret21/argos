@@ -9,6 +9,7 @@ canonical 9-column CSVs that Analyze reloads. Runs the QThread synchronously via
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import replace
 
@@ -40,27 +41,39 @@ def _qapp():
     yield app
 
 
-class _FakeWCS:
-    """Maps (ra_deg, dec_deg) → a preset green-px (x, y)."""
+#: S81: a star is measured only when its 12 px sky annulus lies on the frame. The small
+#: scenes keep their positions (10-50 px on a 60 px plane): their fake WCS and painted
+#: frame both add this margin.
+_MARGIN = 4
 
-    def __init__(self, mapping):
+
+class _FakeWCS:
+    """Maps (ra_deg, dec_deg) → a preset green-px (x, y), plus ``margin``."""
+
+    def __init__(self, mapping, margin=0):
         self._m = mapping
+        self._margin = margin
 
     def world_to_pixel_deg(self, ra_deg, dec_deg):
-        return self._m[(ra_deg, dec_deg)]
+        x, y = self._m[(ra_deg, dec_deg)]
+        return x + self._margin, y + self._margin
 
 
-def _raw_with_green_stars(green_positions_peaks, sky=200.0, sigma=1.5, green_shape=(60, 60)):
+def _raw_with_green_stars(
+    green_positions_peaks, sky=200.0, sigma=1.5, green_shape=(60, 60), margin=0
+):
     """Build a raw GRBG frame whose green plane has stars at the given px.
 
     ``green_plane`` averages G1=raw[0::2,0::2] and G2=raw[1::2,1::2] → a green px
-    (gx, gy) maps to raw (2*gx, 2*gy). We paint both greens with the same PSF.
+    (gx, gy) maps to raw (2*gx, 2*gy). We paint both greens with the same PSF. The
+    plane is ``margin`` larger on each side, every star shifted by it (S81).
     """
-    gh, gw = green_shape
+    gh, gw = (n + 2 * margin for n in green_shape)
     raw = np.full((gh * 2, gw * 2), sky, dtype=np.float32)
     yy, xx = np.mgrid[0:gh, 0:gw]
     plane = np.zeros((gh, gw), dtype=np.float32)
     for (cx, cy), peak in green_positions_peaks:
+        cx, cy = cx + margin, cy + margin
         plane += peak * np.exp(-((xx - cx) ** 2 + (yy - cy) ** 2) / (2 * sigma**2))
     raw[0::2, 0::2] += plane  # G1
     raw[1::2, 1::2] += plane  # G2
@@ -81,7 +94,8 @@ def _scene(tmp_path):
             (1.0, 1.0): (30.0, 30.0),  # target
             (2.0, 2.0): (10.0, 10.0),  # comp 1
             (3.0, 3.0): (50.0, 50.0),  # comp 2
-        }
+        },
+        margin=_MARGIN,
     )
     ts = TargetSet(object_name="TST Tau")
     ts.set_role(TargetStar(role=ROLE_TARGET, ra_deg=1.0, dec_deg=1.0, auid="T"))
@@ -94,7 +108,7 @@ def _scene(tmp_path):
     stars = [((30.0, 30.0), 20000.0), ((10.0, 10.0), 8000.0), ((50.0, 50.0), 8000.0)]
     paths = []
     for i in range(3):
-        raw = _raw_with_green_stars(stars)
+        raw = _raw_with_green_stars(stars, margin=_MARGIN)
         p = tmp_path / f"sub_{i:03d}.fits"
         _write_fits(p, raw, f"2026-07-05T0{i}:00:00")
         paths.append(p)
@@ -398,11 +412,11 @@ def test_batch_points_carry_airmass_when_site_known(tmp_path) -> None:
     paths = []
     for i in range(2):
         p = tmp_path / f"sub_{i}.fits"
-        _write_fits(p, _raw_with_green_stars(stars), f"2026-07-05T0{i}:00:00")
+        _write_fits(p, _raw_with_green_stars(stars, margin=_MARGIN), f"2026-07-05T0{i}:00:00")
         paths.append(p)
     req = BatchRequest(
         fits_paths=paths,
-        wcs=_FakeWCS(ref),
+        wcs=_FakeWCS(ref, margin=_MARGIN),
         target_set=ts,
         params=PhotometryParams.from_config(lambda k, d: d),
         out_dir=tmp_path / "targets",
@@ -570,6 +584,25 @@ def test_discover_light_frames_keeps_the_object_s62(tmp_path) -> None:
     assert discover_light_frames(tmp_path) == [a, b, c]  # no object named: every light
 
 
+def test_discover_light_frames_reads_an_object_in_simbad_form_s82(tmp_path) -> None:
+    """S82: S62 compared the names letter for letter, so a light whose OBJECT is in
+    SIMBAD's form ("V* XX Cyg": 20260829T034413Z_V_XX_Cyg) was another object for the
+    "XX Cyg" set: 0 frames, "No frames". SIMBAD's identifier prefixes are ignored."""
+    from argos.workers.photometry_batch_worker import discover_light_frames
+
+    a = tmp_path / "s1" / "lights" / "a.fit"
+    b = tmp_path / "s2" / "lights" / "b.fit"
+    c = tmp_path / "s3" / "lights" / "c.fit"
+    _header_only_fits(a, IMAGETYP="Light Frame", OBJECT="V* XX Cyg", DATE_OBS="2026-08-29T03:44:13")
+    _header_only_fits(b, IMAGETYP="Light Frame", OBJECT="V* RR Lyr", DATE_OBS="2026-08-29T03:45:00")
+    _header_only_fits(c, IMAGETYP="Light Frame", OBJECT="NAME Polaris", DATE_OBS="2026-08-29T03:46")
+
+    assert discover_light_frames(tmp_path, "XX Cyg") == [a]  # no frame before the fix
+    assert discover_light_frames(tmp_path, "V* RR Lyr") == [b]
+    assert discover_light_frames(tmp_path, "V*_XX_Cyg") == [a]
+    assert discover_light_frames(tmp_path, "Polaris") == [c]
+
+
 def test_discover_light_frames_measures_a_session_s_lights_only_s63(tmp_path) -> None:
     """S63: pointed at a session folder, the subfolder search also found the FITS
     other programs wrote beside lights/: star_var_script's Siril ``process/`` holds
@@ -719,6 +752,54 @@ def test_batch_errors_use_each_frames_own_gain(_scene, monkeypatch) -> None:
     worker.run()
 
     assert seen == [pytest.approx(0.29), pytest.approx(0.42), pytest.approx(req.params.egain)]
+
+
+def test_batch_uses_the_cameras_measured_egain_and_scintillation_s73_s74(
+    _scene, monkeypatch
+) -> None:
+    """S73: an S30 Pro sub at gain 80 says EGAIN 0.8 (0.4.2) or 1.723 (0.4.1); the
+    re-run took that (S41, S70) where the camera's photon transfer gives 0.228. The
+    recorder names the source; S74's exposure, airmass and height come from the
+    sub's header."""
+    import json
+
+    import argos.workers.photometry_batch_worker as bw
+
+    req, out_dir = _scene
+    s30pro = {"TELESCOP": "ZWO Seestar S30 Pro", "GAIN": 80, "EXPTIME": 10.0}
+    headers = (
+        dict(s30pro, EGAIN=0.8, AIRMASS=1.03, SITEELEV=100.0),
+        dict(s30pro, EGAIN=1.723, AIRMASS=1.5),
+        {"GAIN": 80, "EGAIN": 0.42},  # no TELESCOP: its own EGAIN
+    )
+    for path, header in zip(req.fits_paths, headers):
+        with fits.open(path, mode="update") as hdul:
+            hdul[0].header.update(header)
+    seen: list = []
+    real = bw.measure_frame
+    monkeypatch.setattr(
+        bw,
+        "measure_frame",
+        lambda green, wcs, ts, params, **kw: seen.append(params)
+        or real(green, wcs, ts, params, **kw),
+    )
+    req.diagnostics = True
+    PhotometryBatchWorker(req).run()
+
+    assert [float(p.egain) for p in seen] == [
+        pytest.approx(0.228),  # 0.8 before the fix
+        pytest.approx(0.228),  # 1.723 before the fix
+        pytest.approx(0.42),
+    ]
+    assert [(p.airmass, p.site_height_m) for p in seen[:2]] == [(1.03, 100.0), (1.5, None)]
+    assert seen[0].scint_frac() > seen[0].scint_frac(1.0) > 0
+    records = [
+        json.loads(line)
+        for f in out_dir.glob("*_diagnostics.jsonl")
+        for line in f.read_text().splitlines()
+    ]
+    frames = [r for r in records if r.get("kind") == "frame"]
+    assert [r["egain_source"] for r in frames] == ["S30 Pro PTC", "S30 Pro PTC", "header EGAIN"]
 
 
 # ── S43: a field jump during a batch re-run ────────────────────────────────
@@ -966,7 +1047,7 @@ def test_a_re_run_flags_a_lock_on_two_anchors_without_a_fresh_solution_s58(tmp_p
 
 def test_a_re_run_verifies_two_anchors_on_a_fresh_solution_s58(tmp_path) -> None:
     """S58: a frame measured through its own solution or the previous frame's,
-    within 2 px of it, is verified: a solver re-solves every other frame and no
+    within 10 px of it, is verified: a solver re-solves every other frame and no
     point is flagged. After a jump onto a neighbour (the S43 check passes) the
     tracker moved the apertures 28 px: the frame is re-solved, never measured on
     blank sky."""
@@ -995,7 +1076,60 @@ def test_a_re_run_verifies_two_anchors_on_a_fresh_solution_s58(tmp_path) -> None
     assert len(solved) == 2  # frame 0 (no fresh solve) and frame 2 (the jump)
 
 
-def _site_scene(tmp_path, site, *, n=3, software="Argos v0.4.2"):
+def test_a_field_moving_6_px_per_frame_is_verified_on_the_previous_solution_s56(
+    tmp_path,
+) -> None:
+    """S56 as amended on 2026-11-16 (S58 in the re-run): a frame measured through the
+    previous frame's solution is verified when the tracker moved no aperture 10 px or
+    more from it. The converged tracker (S69) sees the owner's fields move 4-7.5 px
+    between subs; with the 2 px threshold every such frame was re-solved (6 solves in
+    6 frames here), with 10 px every other frame is (3), and no point is flagged."""
+    drift = (5.0, 3.0)  # 5.8 px per frame
+    base = {(1.0, 1.0): (40.0, 50.0), (2.0, 2.0): (80.0, 30.0), (3.0, 3.0): (30.0, 100.0)}
+    ts = TargetSet(object_name="TWO Tau")
+    ts.set_role(TargetStar(role=ROLE_TARGET, ra_deg=1.0, dec_deg=1.0, auid="T"))
+    for i in (2, 3):
+        ts.set_role(
+            TargetStar(ROLE_COMPARISON, float(i), float(i), auid=f"C{i - 1}", mags={"V": 11.0})
+        )
+    rng = np.random.default_rng(56)
+    paths, solutions = [], []
+    for i in range(6):
+        pos = {k: (x + i * drift[0], y + i * drift[1]) for k, (x, y) in base.items()}
+        solutions.append(_FakeWCS(pos))
+        stars = [(pos[(1.0, 1.0)], 20000.0), (pos[(2.0, 2.0)], 8000.0), (pos[(3.0, 3.0)], 8000.0)]
+        raw = _raw_with_green_stars(stars, green_shape=(160, 160))
+        raw += rng.normal(0.0, 3.0, raw.shape).astype(np.float32)
+        p = tmp_path / f"drift_{i:03d}.fits"
+        _write_fits(p, raw, f"2026-08-29T05:{i:02d}:00")
+        paths.append(p)
+    calls: list[int] = []
+
+    def solver(green):
+        y, x = np.unravel_index(int(np.argmax(green)), green.shape)  # the target, brightest
+        frame = min(
+            range(6),
+            key=lambda i: math.hypot(x - (40.0 + i * drift[0]), y - (50.0 + i * drift[1])),
+        )
+        calls.append(frame)
+        return solutions[frame]
+
+    req = BatchRequest(
+        fits_paths=paths,
+        wcs=_FakeWCS(base),
+        target_set=ts,
+        params=PhotometryParams.from_config(lambda k, d: d),
+        out_dir=tmp_path / "out",
+        object_name="TWO Tau",
+        solver=solver,
+    )
+    result, _points = _run_batch(req)
+    assert not any(p.suspect for p in result.curves["T@clear"].points)
+    assert result.frames_unverified == 0
+    assert calls == [0, 2, 4]  # [0, 1, 2, 3, 4, 5] with the 2 px threshold
+
+
+def _site_scene(tmp_path, site, *, n=3, software="Argos v0.4.2", step_min=10):
     """S66: frames whose headers say where the mount pointed from a synthetic site.
 
     The mount (true site 30°N 100°E) puts the field on its meridian at 80°; the
@@ -1010,7 +1144,7 @@ def _site_scene(tmp_path, site, *, n=3, software="Argos v0.4.2"):
     jd0 = julian_date(start)
     ra_h = ((18.697374558 + 24.06570982441908 * (jd0 - 2451545.0)) % 24.0 + 100.0 / 15.0) % 24.0
     coords = [(ra_h * 15.0, 40.0), (ra_h * 15.0 + 0.1, 40.1), (ra_h * 15.0 - 0.1, 39.9)]
-    wcs = _FakeWCS(dict(zip(coords, [(30.0, 30.0), (10.0, 10.0), (50.0, 50.0)])))
+    wcs = _FakeWCS(dict(zip(coords, [(30.0, 30.0), (10.0, 10.0), (50.0, 50.0)])), margin=_MARGIN)
     ts = TargetSet(object_name="SITE")
     ts.set_role(TargetStar(role=ROLE_TARGET, ra_deg=coords[0][0], dec_deg=40.0, auid="T"))
     for auid, (ra, dec) in zip(("C1", "C2"), coords[1:]):
@@ -1020,9 +1154,11 @@ def _site_scene(tmp_path, site, *, n=3, software="Argos v0.4.2"):
     stars = [((30.0, 30.0), 20000.0), ((10.0, 10.0), 8000.0), ((50.0, 50.0), 8000.0)]
     paths, header_airmass = [], []
     for i in range(n):
-        when = start + timedelta(minutes=10 * i)
+        when = start + timedelta(minutes=step_min * i)
         alt, az = horizontal_at(julian_date(when), ra_h, 40.0, 30.0, 100.0)
-        hdu = fits.PrimaryHDU(np.clip(_raw_with_green_stars(stars), 0, 65535).astype(np.uint16))
+        hdu = fits.PrimaryHDU(
+            np.clip(_raw_with_green_stars(stars, margin=_MARGIN), 0, 65535).astype(np.uint16)
+        )
         h = hdu.header
         h["DATE-OBS"] = when.strftime("%Y-%m-%dT%H:%M:%S")
         h["EXPTIME"] = 10.0
@@ -1056,10 +1192,26 @@ def test_a_re_run_takes_the_header_airmass_when_the_site_is_wrong_s66(tmp_path, 
     with caplog.at_level("WARNING"):
         result, _points = _run_batch(req)
 
-    for curve in result.curves.values():
-        assert [p.airmass for p in curve.points] == header_airmass
+    _assert_target_header_and_comparisons_own_airmass(req, result, header_airmass)
     warns = [r for r in caplog.records if "not where the telescope was" in r.getMessage()]
     assert len(warns) == 1
+
+
+def _assert_target_header_and_comparisons_own_airmass(req, result, header_airmass) -> None:
+    """S66: the target's airmass is the header AIRMASS (the field centre's). S78: a
+    comparison's is its own, for the site fitted to the headers' pointing (the mount's,
+    30°N 100°E), where it took the target's header AIRMASS before."""
+    from argos.core.photometry.airmass import airmass_at
+
+    stars = {s.auid: s for s in req.target_set.stars}
+    for curve in result.curves.values():
+        star = stars[curve.auid]
+        if curve.role == ROLE_TARGET:
+            assert [p.airmass for p in curve.points] == header_airmass
+            continue
+        own = [airmass_at(p.jd_utc, star.ra_deg, star.dec_deg, 30.0, 100.0) for p in curve.points]
+        assert [p.airmass for p in curve.points] == own
+        assert own != header_airmass
 
 
 def test_a_re_run_takes_the_header_airmass_when_the_site_is_right_too_s66(tmp_path, caplog) -> None:
@@ -1072,10 +1224,47 @@ def test_a_re_run_takes_the_header_airmass_when_the_site_is_right_too_s66(tmp_pa
     with caplog.at_level("WARNING"):
         result, _points = _run_batch(req)
 
-    for curve in result.curves.values():
-        assert [p.airmass for p in curve.points] == header_airmass
+    _assert_target_header_and_comparisons_own_airmass(req, result, header_airmass)
     assert result.frames_header_airmass == 3 and result.frames_site_wrong == 0
     assert not [r for r in caplog.records if "not where the telescope was" in r.getMessage()]
+
+
+@pytest.mark.parametrize("site", [(30.0, 40.0), (32.0, 100.0)])
+def test_a_short_re_run_at_a_wrong_site_gives_comparisons_the_header_airmass_s78(
+    tmp_path, site
+) -> None:
+    """S78 amended (validation F1): 3 frames over 4 minutes fit no site, and the
+    Settings site does not reproduce the mount's pointing (60° off, or 2° off as XX Cyg
+    2026-08-29's). Every star keeps the frame's header AIRMASS, within 0.002 of a
+    comparison's own; the comparisons took the airmass computed for that site (RR Lyr
+    2026-09-25 195307Z: 4.0-4.9 for 1.03)."""
+    from argos.core.photometry.airmass import airmass_at
+
+    req, header_airmass = _site_scene(tmp_path, site, step_min=2)
+
+    result, _points = _run_batch(req)
+
+    stars = {s.auid: s for s in req.target_set.stars}
+    for curve in result.curves.values():
+        star = stars[curve.auid]
+        own = [airmass_at(p.jd_utc, star.ra_deg, star.dec_deg, 30.0, 100.0) for p in curve.points]
+        assert [p.airmass for p in curve.points] == header_airmass
+        assert max(abs(a - b) for a, b in zip(own, header_airmass)) < 0.002
+
+
+def test_a_short_re_run_at_a_right_site_gives_comparisons_their_own_airmass_s78(tmp_path) -> None:
+    """S78: without a fitted site, a Settings site that reproduces the mount's pointing
+    gives each comparison its own airmass."""
+    from argos.core.photometry.airmass import airmass_at
+
+    req, header_airmass = _site_scene(tmp_path, (30.0, 100.0), step_min=2)
+
+    result, _points = _run_batch(req)
+
+    for star in req.target_set.stars[1:]:
+        points = result.curves[f"{star.auid}@clear"].points
+        own = [airmass_at(p.jd_utc, star.ra_deg, star.dec_deg, 30.0, 100.0) for p in points]
+        assert [p.airmass for p in points] == own != header_airmass
 
 
 def test_a_re_run_computes_the_airmass_of_frames_argos_did_not_write_s66(tmp_path) -> None:
@@ -1120,6 +1309,40 @@ def test_a_re_run_computes_the_airmass_of_frozen_frames_at_a_right_site_s66(tmp_
     assert [p.airmass for p in target[1:]] == expected[1:]
     assert abs(target[-1].airmass - header_airmass[0]) > 0.01  # not the frozen value
     assert result.frames_header_airmass == 1 and result.frames_site_wrong == 0
+
+
+def test_a_frozen_frames_scintillation_takes_its_rows_airmass_s74(tmp_path, monkeypatch) -> None:
+    """S74 amended (science and technical reviews): each frame's scintillation took the
+    header AIRMASS, even a frozen pointing's stale one (X1: 2.0 here, where the star is
+    at 1.02), and the same for every star. Each star's now takes the airmass its row
+    gets (S66: computed for a frozen frame; S78: a comparison's own)."""
+    import argos.workers.photometry_batch_worker as bw
+    from argos.core.photometry.airmass import airmass_at
+
+    req, _header_airmass = _site_scene(tmp_path, (30.0, 100.0), n=3)
+    with fits.open(req.fits_paths[0], mode="update") as hdul:
+        hdul[0].header["AIRMASS"] = 2.0  # a lost mount's stale value
+    _freeze_pointing(req, 0)
+    got = []
+    real = bw.measure_frame
+
+    def spy(*args, **kwargs):
+        star_airmass = kwargs.get("star_airmass")
+        tset = args[2]
+        got.append([star_airmass(s) if star_airmass else None for s in tset.stars])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(bw, "measure_frame", spy)
+    result, _points = _run_batch(req)
+
+    assert result.frames_done == 3
+    target = req.target_set.stars[0]
+    jds = [p.jd_utc for p in result.curves["T@clear"].points]
+    for jd, airmasses in zip(jds[1:], got[1:]):  # the frozen frames
+        assert airmasses[0] == pytest.approx(
+            airmass_at(jd, target.ra_deg, target.dec_deg, 30.0, 100.0)
+        )  # None before: the frame's stale 2.0 for every star
+        assert airmasses[0] < 1.1
 
 
 def test_a_re_run_computes_the_airmass_of_frozen_frames_at_a_wrong_site_s66(tmp_path) -> None:
@@ -1427,3 +1650,100 @@ def test_the_tracker_and_lock_use_the_frames_own_gain_s70(tmp_path, monkeypatch)
     assert req.params.egain != pytest.approx(0.42)
     assert seen["anchors"] and all(g == pytest.approx(0.42) for g in seen["anchors"])
     assert seen["lock"] and all(g == pytest.approx(0.42) for g in seen["lock"])
+
+
+def test_a_cancel_during_the_proper_motion_lookup_ends_the_run_before_frame_1_s77(
+    _scene,
+) -> None:
+    """S77 amended (technical review): the lookup ran before the frame loop without the
+    cancel: an archive that did not answer held the run at "measuring 0/N" for up to
+    20 s per star. The lookup now gets the cancel, and a cancelled run measures no
+    frame."""
+    from dataclasses import replace as dc_replace
+
+    req, _ = _scene
+    tset = TargetSet(
+        object_name=req.target_set.object_name,
+        stars=[dc_replace(s, source="vsx") for s in req.target_set.stars],
+    )
+    worker = PhotometryBatchWorker(dc_replace(req, target_set=tset))
+    seen = []
+
+    def lookup(_ts, cancel=None):
+        worker.cancel()  # the observer presses Cancel while the archive is asked
+        seen.append(cancel())
+        return []
+
+    worker._req = dc_replace(worker._req, proper_motions=lookup)
+    results = []
+    worker.finished_batch.connect(results.append)
+    worker.run()
+
+    assert seen == [True]  # the lookup sees the cancel (no cancel argument before)
+    assert results[0].frames_done == 0
+
+
+def test_a_re_run_places_a_high_proper_motion_target_at_the_frames_date_s77(tmp_path) -> None:
+    """S77: the re-run placed RR Lyr's aperture at its J2000.0 position, 6" (1.0 green
+    px on the S30 Pro) from the star in 2026. With the Gaia DR3 proper motion from the
+    request's lookup, every frame places it at its date: here 3.0 px (2"/px) from the
+    J2000.0 position, the aperture now on the star. The set saved with the CSVs carries
+    the motion."""
+    from argos.core.catalog.gaia import GaiaStar
+    from argos.core.imaging.platesolve import FrameWCS
+
+    rr = dict(
+        source_id="2125982599343482624",
+        ra_deg=291.36564029422567,
+        dec_deg=42.783488792618705,
+        g_mag=7.62,
+        pmra_mas_yr=-109.59872730873641,
+        pmdec_mas_yr=-195.85073064533083,
+    )
+    scale = 2.0 / 3600.0
+    wcs = FrameWCS(291.366, 42.784, 60.0, 60.0, (-scale, 0.0, 0.0, scale))
+    ts = TargetSet(object_name="RR Lyr")
+    ts.set_role(TargetStar(ROLE_TARGET, 291.36629, 42.78436, auid="000-BCG-719", source="vsx"))
+    comps = [(291.3600, 42.7800), (291.3720, 42.7790), (291.3620, 42.7905)]
+    for i, (ra, dec) in enumerate(comps):
+        ts.set_role(TargetStar(ROLE_COMPARISON, ra, dec, auid=f"C{i}", mags={"V": 8.0}))
+    moved = ts.stars[0]
+    probe = TargetSet(object_name="RR Lyr", stars=[moved])
+    probe.backfill_proper_motions([GaiaStar(**rr)])
+    jd = 2461309.337  # 2026-09-25T20:05 UTC
+    star_now = probe.at_jd(jd).stars[0]
+    tx, ty = (float(v) for v in wcs.world_to_pixel_deg(star_now.ra_deg, star_now.dec_deg))
+    jx, jy = (float(v) for v in wcs.world_to_pixel_deg(291.36629, 42.78436))
+    assert 2.8 < math.hypot(tx - jx, ty - jy) < 3.2
+    stars = [((tx, ty), 20000.0)] + [
+        (tuple(float(v) for v in wcs.world_to_pixel_deg(ra, dec)), 9000.0) for ra, dec in comps
+    ]
+    paths = []
+    for i in range(3):
+        raw = _raw_with_green_stars(stars, green_shape=(120, 120))
+        p = tmp_path / f"rr_{i}.fit"
+        _write_fits(p, raw, f"2026-09-25T20:0{5 + i}:00")
+        paths.append(p)
+    req = BatchRequest(
+        fits_paths=paths,
+        wcs=wcs,
+        target_set=ts,
+        params=PhotometryParams.from_config(lambda k, d: d),
+        out_dir=tmp_path / "out",
+        object_name="RR Lyr",
+        proper_motions=lambda _ts: [GaiaStar(**rr)],
+    )
+    result, _points = _run_batch(req)
+    assert result.ok and result.frames_done == 3
+    records = [
+        json.loads(line) for line in next((tmp_path / "out").glob("*_diagnostics.jsonl")).open()
+    ]
+    placed = [
+        (r["x"], r["y"]) for r in records if r["kind"] == "star" and r.get("role") == "target"
+    ]
+    assert len(placed) == 3
+    for x, y in placed:
+        assert math.hypot(x - tx, y - ty) < 0.05  # 3.0 px off before (the J2000.0 position)
+    saved = TargetSet.load(tmp_path / "out" / "targets.json")
+    assert saved.by_role(ROLE_TARGET)[0].pm_source == "Gaia DR3 2125982599343482624"
+    assert ts.stars[0].pm_source is None  # the request's set is never changed

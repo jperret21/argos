@@ -82,6 +82,39 @@ CENTRING_MIN_WINDOW_PX = 2.0
 #: 000-BJV-178, frame 5: 2.68 px where a Gaussian fit puts it 0.08 px from its
 #: aperture centre).
 CENTRING_WINDOW_PX = 3.0
+#: S80: two matched anchors agree when their separation on the frame differs from
+#: their separation through the solution by less than this (green px). A rigid motion
+#: keeps distances; the centroids of the anchors (SNR >= 10) scatter by 0.1-0.3 px, a
+#: window that slid onto a neighbour or onto noise is several px off (the web
+#: overlay tracker's rule, ``argos/server/field_track.py``, since wave 4).
+PAIR_TOL_PX = 1.5
+
+
+def consistent_pairs(
+    refs: list[tuple[float, float]],
+    meas: list[tuple[float, float]],
+    tol: float = PAIR_TOL_PX,
+) -> list[int]:
+    """S80: indices of the matched anchors whose separations agree with the reference.
+
+    An anchor is kept when its separation from at least ``max(1, (n - 1) // 2)`` of the
+    other ``n - 1`` matched anchors is the reference's within ``tol``: a minority of
+    wrong locks cannot carry the fit, however many there are. Two anchors that disagree
+    are both dropped (nothing tells which one is wrong); one anchor is kept.
+    """
+    n = len(refs)
+    if n < 2:
+        return list(range(n))
+    agree = [0] * n
+    for i in range(n):
+        for j in range(i + 1, n):
+            d_ref = math.hypot(refs[i][0] - refs[j][0], refs[i][1] - refs[j][1])
+            d_meas = math.hypot(meas[i][0] - meas[j][0], meas[i][1] - meas[j][1])
+            if abs(d_ref - d_meas) < tol:
+                agree[i] += 1
+                agree[j] += 1
+    need = max(1, (n - 1) // 2)
+    return [i for i in range(n) if agree[i] >= need]
 
 
 def tracker_search_r(params) -> float:
@@ -576,6 +609,12 @@ class ApertureTracker:
         self.anchors_rejected = 0  # dropped by the last residual clip
         #: S69: the index (in ``anchors_xy``) of the anchor that clip dropped, or None.
         self.rejected_anchor: int | None = None
+        #: S80: the indices of every anchor the last update rejected: those whose
+        #: separations disagree with the others' (:func:`consistent_pairs`) and the one
+        #: the residual clip dropped. None of them verifies the lock (S56, S58).
+        self.rejected_anchors: frozenset[int] = frozenset()
+        #: S80: how many anchors :func:`consistent_pairs` rejected on the last update.
+        self.anchors_inconsistent = 0
         self.anchors_signal_rejected = 0  # measurements rejected as a lost anchor
         self.residual_px = 0.0  # median |fit − measured| of the kept anchors
         self.frames_lost = 0  # consecutive frames with no anchor found
@@ -618,6 +657,25 @@ class ApertureTracker:
 
         self.anchors_rejected = 0
         self.rejected_anchor = None
+        # S80: every anchor whose separations from the others are not the solution's
+        # leaves before the fit. The residual clip below drops one anchor at most: with
+        # two wrong locks (XX Cyg 2026-09-07 sub _00020: one on a neighbour, one on
+        # noise) the second one moved every aperture.
+        keep = consistent_pairs(matched_ref, matched_meas)
+        kept = set(keep)
+        inconsistent = frozenset(matched_index[i] for i in range(len(matched_ref)) if i not in kept)
+        self.anchors_inconsistent = len(inconsistent)
+        self.rejected_anchors = inconsistent
+        if inconsistent:
+            logger.warning(
+                "Tracker: %d anchor(s) rejected (their distances to the other anchors are"
+                " not the solution's) — fit on %d",
+                len(inconsistent),
+                len(keep),
+            )
+            matched_ref = [matched_ref[i] for i in keep]
+            matched_meas = [matched_meas[i] for i in keep]
+            matched_index = [matched_index[i] for i in keep]
         if not matched_ref:
             self.anchors_used = 0
             self.frames_lost += 1
@@ -645,6 +703,7 @@ class ApertureTracker:
                 )
                 self.anchors_rejected = 1
                 self.rejected_anchor = matched_index[worst]
+                self.rejected_anchors = self.rejected_anchors | {matched_index[worst]}
                 matched_ref, matched_meas = kept_ref, kept_meas
                 t, residuals = t2, res2
 

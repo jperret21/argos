@@ -771,8 +771,14 @@ def test_no_site_set_means_no_site_products_not_latitude_0_longitude_0(
     ((_, hdr),) = _saved_headers(tmp_path / "sessions")
     assert "SITELAT" not in hdr and "SITELONG" not in hdr
 
-    # A site that was set (here typed, without a name) is used as before.
+    # A site that was set (here typed, without a name) is used as before, when the
+    # mount points where it says (S78 amended: else every star takes the mount's).
     engine._config._data["site"] = {"name": "", "latitude": 48.85, "longitude": 2.35}
+    from argos.core.imaging.sky_geometry import horizontal_at
+
+    monkeypatch.setattr(ae, "_utcnow", lambda: mid)
+    alt, az = horizontal_at(jd, 325.678 / 15.0, 43.586, 48.85, 2.35)
+    session._last_position = MountPosition(325.678 / 15.0, 43.586, alt, az, True, False)
     point = measure()
     assert point.airmass == pytest.approx(airmass_at(jd, 325.678, 43.586, 48.85, 2.35))
     assert point.bjd_tdb is not None
@@ -1493,7 +1499,7 @@ def test_a_lock_on_fewer_than_three_anchors_flags_its_points_s56(shot_rig, monke
     2026-09-25 replays: 1 or 2 anchors after the VSP backfill). Such a frame's
     points are now flagged suspect (the CSV's suspect column, kept, left out of
     the AAVSO export) and a re-solve is due at once, unless the frame is measured
-    within 2 px of a solution of this sub or the previous one (S56 as amended)."""
+    within 10 px of a solution of this sub or the previous one (S56 as amended)."""
     from datetime import datetime, timezone
 
     from argos.core.photometry.lightcurve import LightCurve
@@ -1564,10 +1570,12 @@ def _measure_raw(engine, raw, minute: int) -> None:
 def test_a_few_anchor_lock_near_a_fresh_solution_is_verified_s56(shot_rig, monkeypatch) -> None:
     """S56 as amended (2026-11-15): with 1-2 anchors a frame is verified when it is
     measured through a solution of this sub or the previous one and the tracker
-    moved no aperture 2 px or more from where that solution puts it (XX Cyg
+    moved no aperture 10 px or more from where that solution puts it (XX Cyg
     2026-08-29 050148Z: 2 anchors, every point within 2 px of its star, all 22
     flagged before). No re-solve is made due then. Two subs after the solve, or
-    3 px from it, the frame is flagged and a re-solve is due, as before."""
+    12 px from it, the frame is flagged and a re-solve is due, as before. The
+    threshold was 2 px until 2026-11-16 (6 px flagged): the converged tracker (S69)
+    sees the owner's fields move 4-7.5 px between subs."""
     engine, _session, _form, _logs = shot_rig
     xy, frame = _two_anchor_field(engine, monkeypatch)
     engine._take_raw(frame)
@@ -1583,7 +1591,7 @@ def test_a_few_anchor_lock_near_a_fresh_solution_is_verified_s56(shot_rig, monke
     assert _lc(engine, "V1").points[-1].suspect
     assert engine.astrometry._resolve_due is True
 
-    for minute, (shift, flagged) in enumerate(((1.0, False), (3.0, True)), start=3):
+    for minute, (shift, flagged) in enumerate(((1.0, False), (6.0, False), (12.0, True)), start=3):
         engine.astrometry._resolve_due = False
         base = frame.copy()
         engine._take_raw(base)
@@ -2003,6 +2011,77 @@ def test_an_opened_frame_uses_its_own_gain_for_errors(shot_rig, tmp_path, monkey
     assert engine._egain() == pytest.approx(1.4)
 
 
+def test_the_s30_pros_measured_egain_comes_before_the_driver_s73(
+    shot_rig, tmp_path, monkeypatch
+) -> None:
+    """S73: live, the e-/ADU at the form's gain 80 was the driver's (0.8 on the owner's
+    S30 Pro, 2.5 here), and an opened S30 Pro frame at gain 80 kept its header's 0.8
+    or 1.723; the camera's photon transfer gives 0.228 for both, with its source."""
+    from argos.core.photometry.params import PhotometryParams
+
+    engine, session, form, _logs = shot_rig
+    monkeypatch.setattr(session, "egain_driver", lambda: 2.5)
+    assert form["p"].gain == 80
+    live = engine._egain()
+    assert live == pytest.approx(0.228)  # 2.5 (the driver) before the fix
+    assert live.source == "S30 Pro PTC"
+    path = tmp_path / "old.fit"
+    _write_fits(
+        path,
+        {
+            "DATE-OBS": "2026-09-07T04:07:23",
+            "EXPTIME": 20.0,
+            "GAIN": 80,
+            "EGAIN": 1.723,
+            "TELESCOP": "ZWO Seestar S30 Pro",
+            "AIRMASS": 1.09,
+        },
+    )
+    engine.open_fits_frame(path)
+    assert engine._egain() == pytest.approx(0.228)  # 1.723 (its EGAIN) before the fix
+    params = engine._with_frame_scintillation(
+        PhotometryParams.from_config(engine._cfg, egain=engine._egain())
+    )
+    assert (params.exposure_s, params.airmass) == (20.0, 1.09)  # S74: the frame's own
+    assert params.read_noise_e == pytest.approx(2.6)
+
+
+def test_a_sequence_sub_is_measured_at_its_own_gains_egain_s83(
+    shot_rig, tmp_path, monkeypatch
+) -> None:
+    """S83 (technical review): live and sequence photometry took the e-/ADU at the
+    Camera form's gain, the FITS EGAIN and a later re-run (S70) the sub's own. Since
+    S73 the two differ (0.228 at gain 80, 0.181 at gain 100): a gain-100 step measured
+    with the form at 80 got 0.228. The sub's gain is used."""
+    from types import SimpleNamespace
+
+    from argos.core.catalog.targets import ROLE_TARGET, TargetSet, TargetStar
+
+    engine, _session, form, _logs = shot_rig
+    assert form["p"].gain == 80
+    tset = TargetSet(
+        object_name="V1", stars=[TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0)]
+    )
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    engine.astrometry._wcs = object()
+    used = []
+    monkeypatch.setattr(engine, "_measure_photometry", lambda: used.append(engine._egain()))
+    run = tmp_path / "20261112T200000Z_V1"
+    (run / "lights").mkdir(parents=True)
+    for i, gain in enumerate((100, 80)):
+        record = SimpleNamespace(
+            image_type="Light Frame",
+            timestamp=f"2026-11-12T20:0{i}:00Z",
+            exposure_s=10.0,
+            gain=gain,
+        )
+        engine._on_seq_frame_saved(str(run / "lights" / f"f{i}.fit"), record)
+
+    assert used[0] == pytest.approx(0.181, abs=0.001)  # 0.228 (the form's 80) before
+    assert used[0].source == "S30 Pro PTC scaled"
+    assert used[1] == pytest.approx(0.228) and used[1].source == "S30 Pro PTC"
+
+
 def test_a_sequence_measures_only_its_light_subs(shot_rig, tmp_path, monkeypatch) -> None:
     """S44: every saved sub of a run was measured, Dark, Flat and Bias included:
     junk points in the run's CSVs, and the aperture tracker moved on a dark frame,
@@ -2226,3 +2305,197 @@ def test_an_off_centre_comparison_leaves_the_ensemble_s69(shot_rig, monkeypatch)
     assert point.comps_used == 3 and not point.suspect  # 4 comparisons before the fix
     assert _lc(engine, "C3").points[-1].suspect
     assert [m for level, m in logs if level == "WARN" and "more than 1 px" in m]
+
+
+def test_live_points_take_the_airmass_of_the_site_fitted_to_the_mount_s78(
+    shot_rig, monkeypatch
+) -> None:
+    """S78: the live path computed every star's airmass for the Settings site, 60° of
+    longitude from the telescope here (X3 only warns): a comparison 1.2° from the
+    target (the check star here) got 1.5 instead of about 1.02. The mount's polled RA/Dec, altitude and
+    azimuth give its own site; once 3 or more span 10 minutes, every star's airmass is
+    computed for it (the target's then agrees with the header AIRMASS)."""
+    from datetime import datetime, timedelta, timezone
+
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.alpaca.telescope import MountPosition
+    from argos.core.catalog.targets import (
+        ROLE_CHECK,
+        ROLE_COMPARISON,
+        ROLE_TARGET,
+        TargetSet,
+        TargetStar,
+    )
+    from argos.core.imaging.sky_geometry import horizontal_at
+    from argos.core.photometry.airmass import airmass_at, airmass_from_altitude, julian_date
+
+    engine, session, _form, _logs = shot_rig
+    true_site, wrong_site = (30.0, 100.0), (30.0, 40.0)
+    engine._config.set("site.name", "Settings")
+    engine._config.set("site.latitude", wrong_site[0])
+    engine._config.set("site.longitude", wrong_site[1])
+    start = datetime(2026, 3, 1, 15, 0, 0, tzinfo=timezone.utc)
+    jd0 = julian_date(start)
+    ra_h = ((18.697374558 + 24.06570982441908 * (jd0 - 2451545.0)) % 24.0 + 100.0 / 15.0) % 24.0
+    coords = [(ra_h * 15.0, 40.0)] + [(ra_h * 15.0 + 0.02 * i, 38.8) for i in range(1, 5)]
+    px = [(150.0, 100.0), (260.0, 160.0), (40.0, 40.0), (260.0, 40.0), (40.0, 160.0)]
+    xy = dict(zip(coords, px))
+    stars = [TargetStar(ROLE_TARGET, *coords[0], name="V1")] + [
+        TargetStar(ROLE_COMPARISON, ra, dec, auid=f"C{i}", source="vsp", mags={"V": 10.0})
+        for i, (ra, dec) in enumerate(coords[2:])
+    ]
+    stars.append(TargetStar(ROLE_CHECK, *coords[1], auid="K1", source="vsp", mags={"V": 10.0}))
+    monkeypatch.setattr(engine, "target_set", lambda: TargetSet(object_name="V1", stars=stars))
+    frame = _field_frame(px)
+    engine._take_raw(frame)
+    _land_solution(engine, monkeypatch, _GridWCS(xy), frame)
+    for minute in range(0, 16, 3):
+        when = start + timedelta(minutes=minute)
+        alt, az = horizontal_at(julian_date(when), ra_h, 40.0, *true_site)
+        session._last_position = MountPosition(ra_h, 40.0, alt, az, True, False)
+        monkeypatch.setattr(ae, "_utcnow", lambda when=when: when)
+        engine._take_raw(frame.copy())
+        engine._last_raw_decimated = False
+        engine._last_exposure_mid = when
+        engine._measure_photometry()
+
+    comp = _lc(engine, "K1")
+    last = comp.points[-1]
+    own = airmass_at(last.jd_utc, coords[1][0], coords[1][1], *true_site)
+    assert abs(last.airmass - own) < 0.0005  # the Settings site's: 1.5 before the fix
+    # The first 10 minutes fit no site, and the Settings site is 60° off (S78 amended,
+    # validation F1): the mount's airmass, the field centre's, never that site's 1.5.
+    first = comp.points[0]
+    alt0, _az0 = horizontal_at(julian_date(start), ra_h, 40.0, *true_site)
+    assert first.airmass == pytest.approx(airmass_from_altitude(alt0), abs=1e-9)
+    assert abs(first.airmass - airmass_at(first.jd_utc, *coords[1], *true_site)) < 0.02
+    target = _lc(engine, "V1").points[-1]
+    assert abs(target.airmass - airmass_at(target.jd_utc, *coords[0], *true_site)) < 0.0005
+
+
+def test_a_frozen_mount_pointing_keeps_the_live_site_fit_s78(shot_rig, monkeypatch) -> None:
+    """S78 amended (technical review): a lost mount repeats its last poll (X1). Added to
+    the fit, those pointings left no site within 0.1° for the rest of the night, and
+    the comparisons fell back to the Settings site (60° off here: 1.5 for 1.02). A
+    pointing that repeats the last is not added: the site fitted before it stays."""
+    from datetime import datetime, timedelta, timezone
+
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.alpaca.telescope import MountPosition
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+    from argos.core.imaging.sky_geometry import horizontal_at
+    from argos.core.photometry.airmass import airmass_at, julian_date
+
+    engine, session, _form, _logs = shot_rig
+    true_site = (30.0, 100.0)
+    engine._config.set("site.name", "Settings")
+    engine._config.set("site.latitude", 30.0)
+    engine._config.set("site.longitude", 40.0)
+    start = datetime(2026, 3, 1, 15, 0, 0, tzinfo=timezone.utc)
+    jd0 = julian_date(start)
+    ra_h = ((18.697374558 + 24.06570982441908 * (jd0 - 2451545.0)) % 24.0 + 100.0 / 15.0) % 24.0
+    coords = [(ra_h * 15.0, 40.0)] + [(ra_h * 15.0 + 0.02 * i, 38.8) for i in range(1, 4)]
+    px = [(150.0, 100.0), (40.0, 40.0), (260.0, 40.0), (40.0, 160.0)]
+    xy = dict(zip(coords, px))
+    stars = [TargetStar(ROLE_TARGET, *coords[0], name="V1")] + [
+        TargetStar(ROLE_COMPARISON, ra, dec, auid=f"C{i}", source="vsp", mags={"V": 10.0})
+        for i, (ra, dec) in enumerate(coords[1:])
+    ]
+    monkeypatch.setattr(engine, "target_set", lambda: TargetSet(object_name="V1", stars=stars))
+    frame = _field_frame(px)
+    engine._take_raw(frame)
+    _land_solution(engine, monkeypatch, _GridWCS(xy), frame)
+    polled = None
+    for minute in range(0, 40, 3):
+        when = start + timedelta(minutes=minute)
+        if minute <= 15:  # then the mount is lost: its last poll repeats
+            alt, az = horizontal_at(julian_date(when), ra_h, 40.0, *true_site)
+            polled = MountPosition(ra_h, 40.0, alt, az, True, False)
+        session._last_position = polled
+        monkeypatch.setattr(ae, "_utcnow", lambda when=when: when)
+        engine._take_raw(frame.copy())
+        engine._last_raw_decimated = False
+        engine._last_exposure_mid = when
+        engine._measure_photometry()
+
+    last = _lc(engine, "C0").points[-1]
+    own = airmass_at(last.jd_utc, *coords[1], *true_site)
+    assert abs(last.airmass - own) < 0.0005  # the Settings site's 1.5 before the fix
+    assert engine._site_fit.site() is not None
+
+
+def _capture_live_measure(shot_rig, monkeypatch, stars, mid, pos):
+    """Run the live path's ``_measure_photometry`` once on a frame exposed at ``mid``
+    with the mount at ``pos``; the set and the params ``measure_frame`` received."""
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.catalog.targets import TargetSet
+
+    engine, session, _form, _logs = shot_rig
+    monkeypatch.setattr(engine, "target_set", lambda: TargetSet(object_name="V1", stars=stars))
+    seen = []
+    monkeypatch.setattr(ae, "measure_frame", lambda g, w, t, p, **k: seen.append((t, p)) or [])
+    monkeypatch.setattr(engine, "_wcs_for_frame", lambda *a: None)
+    monkeypatch.setattr(engine, "_write_live_quality_report", lambda tset: None)
+    monkeypatch.setattr(ae, "_utcnow", lambda: mid)
+    session._last_position = pos
+    engine.astrometry._wcs = object()
+    engine._last_raw, engine._last_raw_decimated = _star_frame(), False
+    engine._last_exposure_mid = mid
+    engine._last_exposure_s = 10.0
+    engine._last_filter = "IR"
+    engine._measure_photometry()
+    (got,) = seen
+    return got
+
+
+def test_the_live_path_measures_a_star_at_the_frames_date_s77(shot_rig, monkeypatch) -> None:
+    """S77 (technical review: no test failed without the live hunk): the live path
+    measures every star with a proper motion at the frame's date; RR Lyr's J2000.0
+    position is 6" off in 2026."""
+    from datetime import datetime, timezone
+
+    from argos.core.alpaca.telescope import MountPosition
+    from argos.core.catalog.targets import ROLE_TARGET, TargetStar
+    from argos.core.photometry.airmass import julian_date
+
+    rr = TargetStar(
+        ROLE_TARGET,
+        291.36629,
+        42.78436,
+        auid="000-BCG-719",
+        pm_ra_mas_yr=-109.6,
+        pm_dec_mas_yr=-195.85,
+        pm_epoch=2016.0,
+        pm_ra_deg=291.36564,
+        pm_dec_deg=42.783489,
+        pm_source="Gaia DR3",
+    )
+    mid = datetime(2026, 9, 25, 20, 5, tzinfo=timezone.utc)
+    pos = MountPosition(291.366 / 15.0, 42.784, 70.0, 280.0, True, False)
+
+    tset, _params = _capture_live_measure(shot_rig, monkeypatch, [rr], mid, pos)
+
+    measured = tset.stars[0]
+    expected = rr.at_jd(julian_date(mid))
+    assert (measured.ra_deg, measured.dec_deg) == (expected.ra_deg, expected.dec_deg)
+    assert abs(measured.dec_deg - rr.dec_deg) * 3600.0 > 5.0  # the J2000.0 one before
+
+
+def test_the_live_path_adds_the_subs_scintillation_s74(shot_rig, monkeypatch) -> None:
+    """S74 (technical review: no test failed without the live hunk): a live frame's
+    errors carry the scintillation of its exposure at the mount's airmass."""
+    from datetime import datetime, timezone
+
+    from argos.core.alpaca.telescope import MountPosition
+    from argos.core.catalog.targets import ROLE_TARGET, TargetStar
+    from argos.core.photometry.airmass import airmass_from_altitude
+
+    mid = datetime(2026, 9, 25, 20, 5, tzinfo=timezone.utc)
+    pos = MountPosition(291.366 / 15.0, 42.784, 50.0, 280.0, True, False)
+    star = TargetStar(ROLE_TARGET, 291.366, 42.784, auid="000-BCG-719")
+
+    _tset, params = _capture_live_measure(shot_rig, monkeypatch, [star], mid, pos)
+
+    assert params.exposure_s == 10.0
+    assert params.airmass == pytest.approx(airmass_from_altitude(50.0))
+    assert params.scint_frac() > 0.005  # 0 before: no exposure, no airmass

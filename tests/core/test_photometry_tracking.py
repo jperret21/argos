@@ -443,3 +443,41 @@ def test_a_re_solve_is_due_past_2_deg_of_rotation_and_retried_per_2_deg_s69() ->
     assert rotation_resolve_due(-2.1)
     assert not rotation_resolve_due(-3.9, attempted_deg=-2.1)
     assert rotation_resolve_due(-4.2, attempted_deg=-2.1)
+
+
+# ── S80: every inconsistent anchor leaves the fit ───────────────────────────
+
+
+def test_two_wrong_anchors_are_both_rejected_s80() -> None:
+    """XX Cyg 2026-09-07 sub _00020: two of six anchors locked on the wrong thing (a
+    neighbour, noise). The residual clip drops one anchor at most, so the second one
+    moved every aperture; their separations from the four good anchors are not the
+    solution's, and both leave the fit (the web tracker's rule)."""
+    anchors = [(60.0, 60.0), (200.0, 70.0), (330.0, 90.0), (90.0, 300.0), (240.0, 340.0)]
+    anchors.append((350.0, 330.0))
+    center = (210.0, 210.0)
+    tracker = ApertureTracker(anchors, center, search_r=12.0)
+    angle = 0.7
+    pos = [_rotate(x, y, *center, angle) for x, y in anchors]
+    pos[4] = (pos[4][0] + 6.5, pos[4][1] + 2.0)  # a neighbour 6.8 px away
+    pos[5] = (pos[5][0] - 3.0, pos[5][1] - 6.0)  # a noise lock 6.7 px away
+    used = tracker.update(_green_with_stars(pos, shape=(420, 420)))
+    assert used == 4
+    assert tracker.rejected_anchors == frozenset({4, 5})
+    assert tracker.anchors_inconsistent == 2
+    assert abs(tracker.transform.rotation_deg - angle) < 0.05
+    for (x, y), truth in zip(anchors[:4], pos[:4]):
+        px, py = tracker.transform.apply(x, y)
+        assert math.hypot(px - truth[0], py - truth[1]) < 0.3
+
+
+def test_consistent_pairs_keeps_a_rigid_constellation_s80() -> None:
+    """A clean rotated and shifted constellation keeps every anchor; two anchors that
+    disagree are both dropped (nothing tells which one is wrong); one is kept."""
+    from argos.core.photometry.tracking import consistent_pairs
+
+    refs = [(10.0, 10.0), (100.0, 20.0), (50.0, 120.0), (140.0, 140.0)]
+    meas = [(x + 3.0, y - 2.0) for x, y in (_rotate(x, y, 70, 70, 1.0) for x, y in refs)]
+    assert consistent_pairs(refs, meas) == [0, 1, 2, 3]
+    assert consistent_pairs(refs[:2], [meas[0], (meas[1][0] + 4.0, meas[1][1])]) == []
+    assert consistent_pairs(refs[:1], meas[:1]) == [0]

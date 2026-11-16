@@ -322,3 +322,134 @@ def compute_target_geometry(
     if "moon_sep" in moon:
         out["moon_sep"] = moon["moon_sep"]
     return out
+
+
+# ---------------------------------------------------------------------------
+# S78: the site the mount computes its altitude and azimuth from
+# ---------------------------------------------------------------------------
+
+#: S78: a fitted site needs this many pointings spanning this long (seconds): with one
+#: direction the (latitude, hour angle) pair has two solutions; the field's motion over
+#: minutes tells them apart.
+SITE_FIT_MIN_SAMPLES = 3
+SITE_FIT_MIN_SPAN_S = 600.0
+#: S78: the fit is used only when the mount's directions agree with it this well (rms,
+#: degrees). The owner's runs: 0.0005-0.0055° median, 0.018° at most (astropy fits).
+SITE_FIT_MAX_RMS_DEG = 0.1
+#: S78: the fit uses at most this many pointings, spread over the run.
+SITE_FIT_MAX_SAMPLES = 60
+
+
+class SiteFit:
+    """S78: the observing site (latitude, longitude) fitted to the mount's pointings.
+
+    A pointing is the mount's RA/Dec (J2000) and the altitude and azimuth it reports
+    for them at a JD (a light's header ``RA``, ``DEC``, ``ALTITUDE``, ``AZIMUTH`` at
+    ``DATE-OBS``, or a live mount poll). The mount computes altitude and azimuth from
+    its own site and clock (the Seestar takes them from the phone), so the site that
+    reproduces them is the telescope's, whatever the Settings site says (X3, S66).
+    Gauss-Newton on (lat, lon) from a coarse grid, then from the last solution; the
+    same fast spherical trig as :func:`horizontal_at`.
+    """
+
+    def __init__(self) -> None:
+        self._samples: list[tuple[float, float, float, float, float]] = []
+        self._fitted: tuple[float, float, float] | None = None  # lat, lon, rms
+        self._fitted_n = 0
+
+    def add(self, jd: float, ra_hours: float, dec_deg: float, alt: float, az: float) -> None:
+        values = (jd, ra_hours, dec_deg, alt, az)
+        if all(v is not None and math.isfinite(float(v)) for v in values) and alt > 0:
+            self._samples.append(tuple(float(v) for v in values))
+
+    def __len__(self) -> int:
+        return len(self._samples)
+
+    @property
+    def last_jd(self) -> float | None:
+        """The JD of the newest pointing added, or None."""
+        return max((s[0] for s in self._samples), default=None)
+
+    def site(self) -> tuple[float, float] | None:
+        """(latitude, longitude) degrees, or None: too few pointings, too short a span,
+        or the pointings disagree with every site (``SITE_FIT_MAX_RMS_DEG``)."""
+        samples = self._samples
+        if len(samples) < SITE_FIT_MIN_SAMPLES:
+            return None
+        jds = [s[0] for s in samples]
+        if (max(jds) - min(jds)) * 86_400.0 < SITE_FIT_MIN_SPAN_S:
+            return None
+        if self._fitted is None or self._fitted_n != len(samples):
+            self._fitted = _fit_site(_spread(samples, SITE_FIT_MAX_SAMPLES), self._fitted)
+            self._fitted_n = len(samples)
+        if self._fitted is None or self._fitted[2] > SITE_FIT_MAX_RMS_DEG:
+            return None
+        return self._fitted[0], self._fitted[1]
+
+    @property
+    def rms_deg(self) -> float | None:
+        """The fit's rms (degrees) over the pointings it used, once fitted."""
+        return self._fitted[2] if self._fitted is not None else None
+
+
+def _spread(samples, n: int):
+    """At most ``n`` of ``samples`` (time-ordered), evenly spread, first and last kept."""
+    ordered = sorted(samples)
+    if len(ordered) <= n:
+        return ordered
+    step = (len(ordered) - 1) / (n - 1)
+    return [ordered[round(i * step)] for i in range(n)]
+
+
+def _site_residuals(samples, lat: float, lon: float) -> list[float]:
+    out = []
+    for jd, ra, dec, alt, az in samples:
+        a, z = horizontal_at(jd, ra, dec, lat, lon)
+        out.append(a - alt)
+        out.append(((z - az + 180.0) % 360.0 - 180.0) * math.cos(math.radians(alt)))
+    return out
+
+
+def _fit_site(samples, start: tuple[float, float, float] | None):
+    """Gauss-Newton on (lat, lon) -> (lat, lon, rms) or None. From ``start`` when given
+    (the last fit), else from the best of a 10° x 15° grid."""
+
+    def cost(p):
+        return sum(r * r for r in _site_residuals(samples, p[0], p[1]))
+
+    if start is not None:
+        p = [start[0], start[1]]
+    else:
+        coarse = samples[:: max(1, len(samples) // 8)]
+        best = None
+        for lat in range(-80, 81, 10):
+            for lon in range(-180, 180, 15):
+                c = sum(r * r for r in _site_residuals(coarse, lat, lon))
+                if best is None or c < best[0]:
+                    best = (c, [float(lat), float(lon)])
+        p = best[1]
+    step = 1e-4
+    for _ in range(30):
+        r0 = _site_residuals(samples, p[0], p[1])
+        cols = []
+        for k in range(2):
+            q = list(p)
+            q[k] += step
+            rk = _site_residuals(samples, q[0], q[1])
+            cols.append([(b - a) / step for a, b in zip(r0, rk)])
+        # 2x2 normal equations J^T J d = -J^T r
+        a11 = sum(x * x for x in cols[0])
+        a12 = sum(x * y for x, y in zip(cols[0], cols[1]))
+        a22 = sum(y * y for y in cols[1])
+        b1 = -sum(x * r for x, r in zip(cols[0], r0))
+        b2 = -sum(y * r for y, r in zip(cols[1], r0))
+        det = a11 * a22 - a12 * a12
+        if abs(det) < 1e-18:
+            return None
+        d0 = (b1 * a22 - b2 * a12) / det
+        d1 = (a11 * b2 - a12 * b1) / det
+        p = [max(-90.0, min(90.0, p[0] + d0)), (p[1] + d1 + 180.0) % 360.0 - 180.0]
+        if abs(d0) < 1e-7 and abs(d1) < 1e-7:
+            break
+    rms = math.sqrt(cost(p) / (2 * len(samples)))
+    return p[0], p[1], rms

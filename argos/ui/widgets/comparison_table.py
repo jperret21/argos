@@ -128,6 +128,13 @@ class ComparisonEnsembleTable(QWidget):
         )
         layout.addWidget(self._table, 1)
 
+        # S79: a comparison or check star with a brighter star of the set nearby.
+        self._crowding = QLabel("")
+        self._crowding.setWordWrap(True)
+        self._crowding.setStyleSheet(f"color:{theme.WARNING}; font-size:11px; padding:2px 0;")
+        self._crowding.hide()
+        layout.addWidget(self._crowding)
+
         row = QHBoxLayout()
         self._count = QLabel("")
         self._count.setStyleSheet(f"color:{theme.FG_MUTED};")
@@ -198,6 +205,16 @@ class ComparisonEnsembleTable(QWidget):
             )
         else:
             self._count.setText(f"{len(calibrated)} calibrated comparison star(s)")
+
+    def set_crowding(self, lines: list[str]) -> None:
+        """S79: one warning line per crowded comparison or check star (none: hidden)."""
+        self._crowding.setText("\n".join(f"⚠ {line}" for line in lines))
+        self._crowding.setVisible(bool(lines))
+
+    @property
+    def crowding_text(self) -> str:
+        """S79: the warning shown, or ''."""
+        return self._crowding.text() if not self._crowding.isHidden() else ""
 
     def set_quality_report(self, report: dict | None) -> None:
         """Show the latest non-destructive leave-one-out assessment."""
