@@ -1,7 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window. Core defaults only; W8 adds what the title bar, the menu and the window-state reset need.",
+  "description": "The main window: core defaults, plus what the custom title bar needs (decorations off, Q-G14). The shell's own commands (shell_attach, shell_quit, shell_reset_window) are app commands, allowed to the app's pages by default.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close"
+  ]
 }

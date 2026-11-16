@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "ARGOS",
-  "version": "0.4.2",
   "identifier": "org.argos.argos",
   "build": {
     "frontendDist": "../dist",
@@ -32,7 +31,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "app",
+      "deb"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -40,15 +42,27 @@
       "icons/icon.png",
       "icons/icon.icns"
     ],
-    "externalBin": ["binaries/argos-server"],
-    "copyright": "GNU GPL v3 — free software, with no warranty",
+    "copyright": "Copyright © 2026 ARGOS contributors · GNU GPL v3 or later",
     "license": "GPL-3.0-or-later",
-    "shortDescription": "Astrophotography control and differential photometry for Seestar telescopes",
+    "shortDescription": "Scientific acquisition and differential photometry for ZWO Seestar telescopes",
     "longDescription": "ARGOS controls ZWO Seestar telescopes over ASCOM Alpaca and measures variable stars by differential photometry. The web interface runs in this window; the ARGOS server runs alongside it on this computer only.",
     "macOS": {
       "minimumSystemVersion": "11.0",
       "signingIdentity": "-",
-      "hardenedRuntime": false
+      "hardenedRuntime": false,
+      "files": {
+        "Resources/argos-server": "binaries/argos-server"
+      }
+    },
+    "linux": {
+      "deb": {
+        "section": "science",
+        "desktopTemplate": "../../packaging/argos.desktop.hbs",
+        "files": {
+          "/usr/lib/argos/argos-server": "binaries/argos-server",
+          "/usr/share/doc/argos/copyright": "../../LICENSE"
+        }
+      }
     }
   }
 }

@@ -1,25 +1,29 @@
 # PyInstaller spec for the headless ARGOS server: the Tauri desktop app's
-# sidecar (web/src-tauri, `bundle.externalBin`).
+# sidecar (web/src-tauri), frozen ONE-DIR (owner decision W8).
 #
 #   python -m PyInstaller packaging/argos_server.spec --noconfirm \
-#       --distpath <dist> --workpath <build>
-#   cp <dist>/argos-server \
-#       web/src-tauri/binaries/argos-server-$(rustc --print host-tuple)
+#       --distpath web/src-tauri/binaries --workpath <build>
+#
+# gives web/src-tauri/binaries/argos-server/ (the executable `argos-server`
+# and `_internal/`), which tauri.conf.json copies into the bundles:
+# `bundle.macOS.files` to ARGOS.app/Contents/Resources/argos-server/,
+# `bundle.linux.deb.files` to /usr/lib/argos/argos-server/. Freeze it on the
+# machine of each target (macOS arm64, Linux x86_64): the folder is native.
 #
 # Build it from an environment with the runtime dependencies, the `server`
-# extra and `pyinstaller` (the `package` extra). PyQt6 and pyqtgraph need not
-# be installed: the server never imports Qt (tests/server/test_no_qt.py), they
-# are excluded below, and the build fails if any Qt module is collected.
+# extra and `pyinstaller` (the `package` extra), without the `qt` extra:
+# the server never imports Qt (tests/server/test_no_qt.py), Qt is excluded
+# below, and the build fails if any Qt module is collected all the same.
 #
-# One file, because externalBin is a single executable. The bootloader
-# unpacks the bundle into $TMPDIR at each start, forwards SIGTERM / SIGINT to
-# the Python process and removes the folder when it ends.
+# One-dir rather than one-file: the server starts in about 1 s instead of
+# about 16 s (a one-file bootloader unpacks some 100 MB into $TMPDIR at each
+# start), runs as a single process (no bootloader parent to forward
+# signals) and leaves no _MEI folder behind after a SIGKILL.
 #
-# Signing: the bootloader dlopens the unpacked libpython and extension
-# modules, ad-hoc signed by PyInstaller. Under the hardened runtime, library
-# validation refuses them ("different Team IDs"), so the Tauri bundle signs
-# ad hoc without it (tauri.conf.json `hardenedRuntime: false`). Notarisation
-# needs the hardened runtime: an open W8 item.
+# Signing: PyInstaller signs each collected binary ad hoc. Under the
+# hardened runtime, library validation would refuse them ("different Team
+# IDs"), so the Tauri bundle signs ad hoc without it (tauri.conf.json
+# `hardenedRuntime: false`); there is no notarisation (owner decision W8).
 #
 # ASTAP is not bundled (separately licensed, gigabytes of star databases): the
 # server finds a user-installed copy, as the Qt app does (packaging/argos.spec).
@@ -32,9 +36,14 @@ from PyInstaller.utils.hooks import collect_submodules
 PROJECT_ROOT = Path(SPECPATH).parent
 
 # Files the server reads by path at runtime: the bundled offline catalogue
-# (argos/core/catalog/offline.py). The Qt splash assets are not needed.
+# (argos/core/catalog/offline.py) and argos/core/session/review.py, which
+# argos/server/review.py loads from its file (core_review: the package's
+# __init__ imports PyQt6), so the frozen Review needs the source next to the
+# archive. The Qt splash assets are not needed.
+CORE_REVIEW = PROJECT_ROOT / "argos" / "core" / "session" / "review.py"
 datas = [
     (str(PROJECT_ROOT / "argos" / "resources" / "catalogues"), "argos/resources/catalogues"),
+    (str(CORE_REVIEW), "argos/core/session"),
     (str(PROJECT_ROOT / "LICENSE"), "."),
 ]
 
@@ -45,6 +54,9 @@ hiddenimports = (
     + collect_submodules("uvicorn")
     # Every server module, including those only imported inside functions.
     + collect_submodules("argos.server")
+    # What the path-loaded core review imports (not seen by the analysis).
+    + ["argos.core.imaging.session_log", "argos.core.catalog.targets"]
+    + ["argos.core.photometry.lightcurve"]
 )
 
 #: Top-level packages that must never reach the server bundle.
@@ -97,20 +109,27 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="argos-server",
     debug=False,
-    bootloader_ignore_signals=False,  # forward SIGTERM / SIGINT to Python
+    bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    upx_exclude=[],
-    runtime_tmpdir=None,
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,  # native arch
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name="argos-server",
 )

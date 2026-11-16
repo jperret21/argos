@@ -35,18 +35,22 @@ jobs:
       - name: Install Graphviz
         run: brew install graphviz
 
+      # PyQt6 and pyqtgraph are no runtime dependency since the desktop app
+      # (W8): the Qt code and its parity tests need the `qt` extra; the
+      # headless server's tests (tests/server) need the `server` extra.
       - name: Install dependencies
-        run: uv sync --extra dev --extra docs
+        run: uv sync --extra dev --extra docs --extra qt --extra server
 
       # main.py is real source and was outside the local lint habit — which is
       # how it drifted out of black. scripts/ stays out on purpose: those are
       # throwaway dev utilities (the mock Alpaca server is deliberately loose)
       # and holding them to the app's standard would buy nothing.
+      # packaging/ holds release code too (the sidecar's freeze spec hooks, its smoke test).
       - name: Lint (ruff)
-        run: uv run --extra dev ruff check argos/ tests/ main.py
+        run: uv run --extra dev ruff check argos/ tests/ main.py packaging/
 
       - name: Format check (black)
-        run: uv run --extra dev black --check argos/ tests/ main.py
+        run: uv run --extra dev black --check argos/ tests/ main.py packaging/
 
       # The public documentation is part of the product. Treat warnings as
       # failures so stale API references or broken links cannot reach a
@@ -63,5 +67,52 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          uv run --extra dev pytest -q --deselect tests/ui/test_photometry_window.py
-          uv run --extra dev pytest -q tests/ui/test_photometry_window.py
+          uv run --extra dev --extra qt --extra server pytest -q --deselect tests/ui/test_photometry_window.py
+          uv run --extra dev --extra qt --extra server pytest -q tests/ui/test_photometry_window.py
+
+  # The shipped UI and the desktop shell (W8): the same gates as the local workflow
+  # (web/README.md). The shell's tests compile against web/dist (tauri's generate_context!
+  # embeds it), so the web build comes first.
+  desktop:
+    name: Web UI and desktop shell
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            web/src-tauri/target
+          key: cargo-ci-${{ runner.os }}-${{ hashFiles('web/src-tauri/Cargo.lock') }}
+          restore-keys: cargo-ci-${{ runner.os }}-
+
+      - name: Web UI (check, tests, build)
+        working-directory: web
+        run: |
+          npm ci
+          npm run check
+          npm test
+          npm run build
+
+      - name: Desktop shell (format, clippy, tests)
+        working-directory: web/src-tauri
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test

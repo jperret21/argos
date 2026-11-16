@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Argos
-Comment=Scientific acquisition and differential photometry for Seestar telescopes
+Comment=Scientific acquisition and differential photometry for ZWO Seestar telescopes
 Exec=argos
 Icon=argos
 Terminal=false
