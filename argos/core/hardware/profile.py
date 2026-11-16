@@ -53,6 +53,9 @@ class TelescopeProfile:
         full_well_adu: Saturation threshold in ADU, for the clipping indicator.
         linearity_max_adu: Upper bound of the trusted linear range — the
             saturation flag in aperture photometry uses this, not full well.
+        black_level_adu: The sensor's black level (pedestal) in 16-bit ADU at
+            the offset Argos uses: the part of a pixel value that is not
+            light and carries no Poisson noise (S72). 0 when not measured.
         filter_names: Internal filter-wheel slots in position order. Empty
             when the model has no internal wheel.
         ap_host: Fixed address the telescope serves on when running its own
@@ -79,6 +82,7 @@ class TelescopeProfile:
     adc_bits: int = 12
     full_well_adu: int = 60000
     linearity_max_adu: int = 50000
+    black_level_adu: float = 0.0
 
     # Filter wheel
     filter_names: tuple[str, ...] = field(default=())

@@ -12,6 +12,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
+#: Raw pixels averaged in one green-plane value, (G1+G2)/2 (``imaging.green``): the
+#: ``plane_pixels`` of S72's noise model. The default, 1, is the 0.4.x model.
+GREEN_PIXELS = 2
+
 
 @dataclass(frozen=True)
 class AperturePhot:
@@ -39,17 +43,29 @@ def measure_aperture(
     egain: float = 1.0,
     read_noise_e: float = 1.5,
     sat_adu: float = 60000.0,
+    black_adu: float = 0.0,
+    plane_pixels: int = 1,
 ) -> AperturePhot | None:
     """Measure a star at (x, y) green px with a circular aperture + sky annulus.
 
     Args:
-        green: 2-D green plane (float-able).
+        green: 2-D green plane (G1+G2)/2 (float-able).
         x, y:  Centre, green px.
         r_ap:  Aperture radius (green px).
         r_in, r_out: Sky-annulus inner/outer radii (green px).
-        egain: e-/ADU for the CCD-equation noise (≤0 → treated as 1).
-        read_noise_e: Read noise (e- RMS) per pixel.
+        egain: e-/ADU of one raw pixel, the frame's EGAIN (≤0 → treated as 1).
+        read_noise_e: Read noise (e- RMS) of one raw pixel.
         sat_adu: Linearity/full-well threshold for the saturation flag.
+        black_adu: The camera's black level (ADU): the part of the sky level
+            that is no photon and carries no Poisson noise (S72).
+        plane_pixels: Raw pixels averaged in each value of ``green``.
+
+    S72's noise model (``plane_pixels=2``, :data:`GREEN_PIXELS`): each value of the
+    (G1+G2)/2 plane holds two pixels' electrons, ``2 × egain`` per ADU, and two
+    pixels' read noise, ``rn/√2`` ADU at the raw gain; the sky's Poisson term
+    counts only the electrons above ``black_adu``. With ``plane_pixels=1`` and no
+    black level it is the 0.4.x model: one raw pixel's gain, the whole sky level
+    as photons. :class:`~argos.core.photometry.params.PhotometryParams` chooses.
 
     Returns:
         An :class:`AperturePhot`, or ``None`` if the aperture falls off the frame.
@@ -80,10 +96,9 @@ def measure_aperture(
     saturated = bool(peak >= sat_adu)
     suspect = _peak_lacks_psf_support(sub, ap, sky, sky_sigma, peak)
 
-    egain = egain if egain and egain > 0 else 1.0
-    flux_e = max(flux, 0.0) * egain
-    sky_e = max(sky, 0.0) * egain
-    var_e = flux_e + n_pix * (sky_e + read_noise_e * read_noise_e)
+    k = _plane_gain(egain, plane_pixels)
+    flux_e = max(flux, 0.0) * k
+    var_e = flux_e + n_pix * _pixel_variance_e(sky, k, read_noise_e, black_adu, plane_pixels)
     flux_err_e = math.sqrt(var_e) if var_e > 0 else 0.0
     snr = (flux_e / flux_err_e) if flux_err_e > 0 else 0.0
 
@@ -104,6 +119,37 @@ def measure_aperture(
         inst_mag_err=inst_mag_err if inst_mag_err is None else round(inst_mag_err, 4),
         suspect=suspect,
     )
+
+
+def sky_sigma_adu(
+    sky_adu: float,
+    *,
+    egain: float = 1.0,
+    read_noise_e: float = 1.5,
+    black_adu: float = 0.0,
+    plane_pixels: int = 1,
+) -> float:
+    """The noise model's sigma (ADU) of one plane pixel at ``sky_adu`` (S72).
+
+    What :func:`measure_aperture` assumes for every aperture and annulus pixel
+    with the same arguments: Poisson noise of the electrons above the black
+    level, plus ``plane_pixels`` pixels' read noise.
+    """
+    k = _plane_gain(egain, plane_pixels)
+    return math.sqrt(_pixel_variance_e(sky_adu, k, read_noise_e, black_adu, plane_pixels)) / k
+
+
+def _plane_gain(egain: float, plane_pixels: int) -> float:
+    """e- per ADU of a plane whose values average ``plane_pixels`` raw pixels."""
+    return max(int(plane_pixels), 1) * (egain if egain and egain > 0 else 1.0)
+
+
+def _pixel_variance_e(
+    level_adu: float, k: float, read_noise_e: float, black_adu: float, plane_pixels: int
+) -> float:
+    """Variance (e-², at gain ``k``) of one plane pixel at ``level_adu``."""
+    photons_e = max(level_adu - (black_adu or 0.0), 0.0) * k
+    return photons_e + max(int(plane_pixels), 1) * read_noise_e * read_noise_e
 
 
 def _peak_lacks_psf_support(

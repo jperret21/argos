@@ -41,6 +41,7 @@ from argos.core.config import Config
 from argos.core.photometry.lightcurve import read_curves_csv
 from argos.core.session.review import (
     SessionReviewError,
+    apply_old_file_rules_to_file,
     identify_curve_file,
     load_session,
     load_session_curves,
@@ -755,6 +756,9 @@ class AnalyzeScreen(QWidget):
         # file name and targets.json, or a comparison star would be exported
         # to AAVSO as the variable, named after the file.
         curves, problems = identify_curve_file(path, curves, targets or TargetSet())
+        # S66, S67: a run's own CSV gets the old-file rules Review applies (header
+        # AIRMASS on a wrong site, no-detection frames flagged), from its session.
+        rules = apply_old_file_rules_to_file(path, curves)
 
         window = PhotometryWindow()
         window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
@@ -773,6 +777,9 @@ class AnalyzeScreen(QWidget):
         window.show()
         window.raise_()
         self._windows.append(window)
+        notes = rules.messages() if rules is not None else []
+        if notes:
+            QMessageBox.information(self, "Light curve of an older run", "\n\n".join(notes))
         if problems:
             QMessageBox.warning(
                 self,

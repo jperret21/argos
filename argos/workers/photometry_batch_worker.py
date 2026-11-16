@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from argos.core.catalog.targets import ROLE_CHECK, ROLE_COMPARISON, TargetSet
+from argos.core.catalog.targets import ROLE_CHECK, ROLE_COMPARISON, ROLE_TARGET, TargetSet
 from argos.core.imaging.green import green_plane
 from argos.core.photometry.airmass import airmass_at, bjd_tdb, julian_date
 from argos.core.imaging.fits_writer import filter_token
@@ -43,10 +43,20 @@ from argos.core.photometry.tracking import (
     ApertureTracker,
     TrackedWCS,
     anchors_seen,
+    centring_offsets,
+    off_centre,
+    rotation_resolve_due,
     select_tracking_anchors,
 )
 from argos.core.photometry.uncertainty import apply_systematic_floor, estimate_systematic_floor
 from argos.core.session.diagnostics import SessionDiagnostics
+from argos.core.session.review import (
+    SITE_CHECK_TOLERANCE_DEG,
+    FrozenPointing,
+    no_detection_flags,
+    read_frame_pointing,
+    site_offset_deg,
+)
 from argos.core.session.types import PhotometryPoint
 
 logger = logging.getLogger(__name__)
@@ -205,6 +215,25 @@ class BatchResult:
     #: S58: frames whose lock rested on 1-2 anchors with no solution of that frame or
     #: the one before within 2 px: their points are flagged suspect.
     frames_unverified: int = 0
+    #: S69 (a): frames re-solved because the tracked rotation since the solution
+    #: exceeded 2°.
+    frames_rotation_solved: int = 0
+    #: S69 (b): comparison and check star measurements more than 1 px from their
+    #: aperture centre, left out of their frame's ensemble (their rows suspect).
+    stars_off_centre: int = 0
+    #: S69 (b): frames whose target got no point because every comparison was
+    #: off-centre (no ensemble left).
+    frames_no_target_point: int = 0
+    #: S69 (a): re-solves for rotation that failed (no solution, or its apertures
+    #: failed the lock check): the apertures followed the tracker.
+    frames_rotation_unsolved: int = 0
+    #: S67: frames with no detection (a target below SNR 3: its points; a target's zero
+    #: point more than 1 mag from its median over the run: every point), flagged suspect.
+    frames_no_detection: int = 0
+    #: S66: frames whose airmass is their FITS header AIRMASS (the mount's), and frames
+    #: whose header shows the Settings site more than 5° wrong (X3, a WARN).
+    frames_header_airmass: int = 0
+    frames_site_wrong: int = 0
 
     @property
     def ok(self) -> bool:
@@ -247,6 +276,29 @@ class PhotometryBatchWorker(QThread):
         self._frames_unverified = 0
         self._frames_verify_solved = 0
         self._unverified_logged = False
+        # S66: (file index, its header AIRMASS or None) once per frame; X1: frozen
+        # header pointings; the site check's one WARN per run.
+        self._frame_air: tuple[int, float | None] | None = None
+        self._frozen = FrozenPointing()
+        self._frozen_logged = False
+        self._site_logged = False
+        self._frames_header_airmass = 0
+        self._frames_site_wrong = 0
+        # S67: each measured frame's points, its targets' SNRs and zero points.
+        self._frame_judging: list[tuple[int, str, list, list, list]] = []
+        self._frames_no_detection = 0
+        # S70: the frame's params (its own e-/ADU) for the tracker, lock and measure.
+        self._params = request.params
+        # S69 (a): re-solves for rotation, the rotation of the last failed attempt.
+        self._frames_rotation_solved = 0
+        self._rotation_attempted: float | None = None
+        self._rotation_failed_logged = False
+        self._frames_rotation_unsolved = 0
+        # S69 (b): off-centre stars measured, and one WARN per run; frames whose target
+        # got no point (every comparison off-centre).
+        self._stars_off_centre = 0
+        self._off_centre_logged = False
+        self._frames_no_target_point = 0
 
     def cancel(self) -> None:
         """Ask the run to stop at the next frame boundary."""
@@ -283,6 +335,7 @@ class PhotometryBatchWorker(QThread):
                 handled += 1
                 self.progress.emit(handled, total)
             cancelled = self._cancel
+            self._flag_no_detection(diag)  # S67, before the floors leave them out
             self._apply_systematic_floors(curves, self._flagged)
             if not cancelled:  # a partial run must not replace any file
                 self._write_csvs(curves)
@@ -295,6 +348,13 @@ class PhotometryBatchWorker(QThread):
                 frames_resolved=self._frames_resolved,
                 frames_unanchored=self._frames_unanchored,
                 frames_unverified=self._frames_unverified,
+                frames_rotation_solved=self._frames_rotation_solved,
+                stars_off_centre=self._stars_off_centre,
+                frames_no_target_point=self._frames_no_target_point,
+                frames_rotation_unsolved=self._frames_rotation_unsolved,
+                frames_no_detection=self._frames_no_detection,
+                frames_header_airmass=self._frames_header_airmass,
+                frames_site_wrong=self._frames_site_wrong,
             )
             multi_filter = len({lc.filter_name for lc in curves.values()}) > 1
             for key in sorted(self._check_keys):
@@ -334,6 +394,38 @@ class PhotometryBatchWorker(QThread):
                         result.shift_px,
                         done,
                     )
+            if self._frames_rotation_solved:
+                logger.info(
+                    "Batch tracking: %d frame(s) re-solved after the field turned more than"
+                    " 2° since the solution",
+                    self._frames_rotation_solved,
+                )
+            if self._frames_rotation_unsolved:
+                logger.warning(
+                    "Batch tracking: the field turned more than 2° since the solution on"
+                    " %d frame(s) that did not re-solve; their apertures followed the tracker",
+                    self._frames_rotation_unsolved,
+                )
+            if self._stars_off_centre:
+                logger.warning(
+                    "Batch photometry: %d comparison/check measurement(s) more than 1 px"
+                    " from their aperture centre were left out of their frame's ensemble"
+                    " (their rows flagged suspect)",
+                    self._stars_off_centre,
+                )
+            if self._frames_no_target_point:
+                logger.warning(
+                    "Batch photometry: %d frame(s) have no target point: every comparison"
+                    " was more than 1 px from its aperture centre",
+                    self._frames_no_target_point,
+                )
+            if self._frames_no_detection:
+                logger.warning(
+                    "Batch photometry: %d frame(s) show no detection (a target below SNR 3,"
+                    " or a zero point more than 1 mag from the run's): their points are"
+                    " flagged suspect and left out of sigma_syst",
+                    self._frames_no_detection,
+                )
             if self._frames_unverified or self._frames_verify_solved:
                 logger.warning(
                     "Batch tracking: %d frame(s) steered by fewer than 3 anchor stars were"
@@ -351,6 +443,13 @@ class PhotometryBatchWorker(QThread):
                 frames_resolved=self._frames_resolved,
                 frames_unanchored=self._frames_unanchored,
                 frames_unverified=self._frames_unverified,
+                frames_rotation_solved=self._frames_rotation_solved,
+                stars_off_centre=self._stars_off_centre,
+                frames_no_target_point=self._frames_no_target_point,
+                frames_rotation_unsolved=self._frames_rotation_unsolved,
+                frames_no_detection=self._frames_no_detection,
+                frames_header_airmass=self._frames_header_airmass,
+                frames_site_wrong=self._frames_site_wrong,
             )
             self.finished_batch.emit(result)
         except Exception as exc:  # pragma: no cover - safety net
@@ -380,6 +479,12 @@ class PhotometryBatchWorker(QThread):
             logger.warning("%s: no usable DATE-OBS — skipped (a point needs a time)", fpath.name)
             diag.record("event", what="frame_skipped", file=fpath.name, reason="no DATE-OBS")
             return False
+        # S70: the frame's own e-/ADU in every SNR of the frame: the tracker's anchors,
+        # the lock checks and the measurement (it was the measurement's only).
+        params = self._req.params
+        if egain is not None and egain != params.egain:
+            params = replace(params, egain=egain)
+        self._params = params
         green = green_plane(arr)
         wcs = self._wcs_for_frame(green, fpath.name)
         if self._series_fwhm is None:
@@ -387,7 +492,11 @@ class PhotometryBatchWorker(QThread):
         diag.record("frame", frame=frame_no, file=fpath.name, jd_utc=jd, fwhm=self._series_fwhm)
         wcs, anchored = self._anchor(green, wcs, diag, frame_no, fpath.name)
         if anchored:
-            wcs, anchored = self._verify(green, wcs, diag, frame_no, fpath.name)
+            wcs = self._resolve_rotation(green, wcs, diag, frame_no, fpath.name)
+        offsets = self._centring(green, wcs)
+        if anchored:
+            wcs, anchored, offsets = self._verify(green, wcs, diag, frame_no, fpath.name, offsets)
+        excluded = off_centre(offsets)
         if self._tracker is not None:
             diag.record(
                 "tracking",
@@ -399,17 +508,39 @@ class PhotometryBatchWorker(QThread):
                 shift_px=self._tracker.transform.shift_px,
                 frames_lost=self._tracker.frames_lost,
                 anchored=anchored,
+                off_centre=len(excluded) or None,
             )
-        params = self._req.params
-        if egain is not None and egain != params.egain:
-            params = replace(params, egain=egain)
+        if excluded:
+            self._stars_off_centre += len(excluded)
+            if not self._off_centre_logged:
+                self._off_centre_logged = True  # once per run; the recorder has each
+                logger.warning(
+                    "%s: %d comparison/check star(s) more than 1 px from their aperture"
+                    " centre — left out of the frame's ensemble, their rows flagged suspect",
+                    fpath.name,
+                    len(excluded),
+                )
+
+        def on_star(s, phot, x, y):
+            offset = offsets.get(s.key())
+            diag.star(
+                frame_no,
+                s,
+                phot,
+                x,
+                y,
+                centroid_offset_px=offset if offset is not None and math.isfinite(offset) else None,
+                off_centre=True if s.key() in excluded else None,
+            )
+
         results = measure_frame(
             green,
             wcs,
             self._req.target_set,
             params,
             fwhm=self._series_fwhm,
-            on_star=lambda s, phot, x, y: diag.star(frame_no, s, phot, x, y),
+            on_star=on_star,
+            exclude=excluded,
         )
         for res in results:
             if res.diff is not None:
@@ -423,15 +554,125 @@ class PhotometryBatchWorker(QThread):
                     note=res.diff.note or None,
                 )
         token = filter_token(self._read_filter(fpath))  # one curve per (star, filter): S49
-        self._emit_points(results, jd, curves, flagged=not anchored, token=token)
+        points = self._emit_points(
+            results, jd, curves, flagged=not anchored, token=token, off_centre=excluded
+        )
+        self._judge_later(frame_no, fpath.name, results, points, excluded)
         return True
+
+    def _judge_later(self, frame_no: int, fname: str, results, points, excluded) -> None:
+        """Keep what S67's rule judges at the end of the run (the zero points' median
+        is the run's), and count a target left without a point by S69 (b). ``points``:
+        ``(role, identity, point)`` of the frame's points."""
+        targets = [res for res in results if res.star.role == ROLE_TARGET]
+        snrs = [
+            (res.star.auid or res.star.display_name, res.phot.snr)
+            for res in targets
+            if res.phot is not None
+        ]
+        zps = [
+            (res.star.auid or res.star.display_name, res.diff.zero_point)
+            for res in targets
+            if res.diff is not None
+        ]
+        self._frame_judging.append((frame_no, fname, points, snrs, zps))
+        if excluded and any(
+            not (res.diff is not None and res.diff.mag is not None)
+            and not (res.relative is not None and res.relative.flux_ratio is not None)
+            for res in targets
+        ):
+            self._frames_no_target_point += 1
+
+    def _flag_no_detection(self, diag) -> None:
+        """S67 (S35's rule, as Review applies it to a live run's recorder): a target's
+        points on a frame where it was measured below SNR 3, and every point of a frame
+        where a target's zero point is more than 1 mag from its median over the run,
+        are flagged suspect (the AAVSO export leaves them out) and do not set the run's
+        ``sigma_syst``. A faint target does not flag a second, bright one."""
+        judged = no_detection_flags((snrs, zps) for *_head, snrs, zps in self._frame_judging)
+        for (frame_no, fname, points, _snrs, _zps), (low, outlier) in zip(
+            self._frame_judging, judged
+        ):
+            if not (low or outlier):
+                continue
+            self._frames_no_detection += 1
+            for role, identity, point in points:
+                if not (outlier or (role == ROLE_TARGET and identity in low)):
+                    continue
+                point.suspect = True
+                point.no_detection = True
+                self._flagged.add(id(point))
+            diag.record(
+                "event",
+                frame=frame_no,
+                what="no_detection",
+                file=fname,
+                low_snr=sorted(low) or None,
+                zp_outlier=outlier or None,
+            )
 
     def _lock_holds(self, green, wcs) -> bool:
         """The tracker found anchors and half of them show a star where it put them."""
         if self._tracker is None or not self._tracker.anchors_used or not self._anchor_stars:
             return False
-        seen = anchors_seen(green, wcs, self._anchor_stars, self._req.params, min_snr=_LOCK_MIN_SNR)
+        seen = anchors_seen(green, wcs, self._anchor_stars, self._params, min_snr=_LOCK_MIN_SNR)
         return seen >= max(1, math.ceil(len(self._anchor_stars) / 2))
+
+    def _centring(self, green, wcs) -> dict[str, float]:
+        """S69 (b): each comparison and check star's centroid offset from its aperture
+        centre on this frame through ``wcs`` (stars seen at SNR >= 5 only)."""
+        tset = self._req.target_set
+        stars = tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK)
+        return centring_offsets(
+            green, wcs, stars, self._params, fwhm=self._series_fwhm, neighbours=list(tset.stars)
+        )
+
+    def _adopt(self, solution, green) -> TrackedWCS:
+        """A frame's own solution becomes the reference: the tracker is rebuilt on it."""
+        self._reference = solution
+        self._reference_index = self._file_index
+        self._rotation_attempted = None
+        self._tracker = self._build_tracker(green)
+        self._tracker.update(green)
+        return TrackedWCS(self._reference, self._tracker)
+
+    def _resolve_rotation(self, green, wcs, diag, frame_no: int, fname: str):
+        """S69 (a): re-solve the frame once the tracked rotation since the solution
+        exceeds 2° (``tracking.RESOLVE_ROTATION_DEG``).
+
+        The rigid fit carries one solution's geometry across the field; the frame's
+        own solution resets it. A solve that fails, or whose apertures fail the S43
+        lock check, keeps the tracked solution, and the next attempt waits for 2° more
+        rotation: a failing or slow solver costs one solve per 2°, never one per frame.
+        """
+        if self._tracker is None or self._req.solver is None:
+            return wcs
+        rotation = self._tracker.transform.rotation_deg
+        if not rotation_resolve_due(rotation, self._rotation_attempted):
+            return wcs
+        solution = self._solve(green, fname, flags=False)
+        if solution is not None:
+            kept = (self._reference, self._reference_index, self._tracker, self._anchor_stars)
+            tracked = self._adopt(solution, green)
+            if self._lock_holds(green, tracked):
+                self._frames_rotation_solved += 1
+                diag.record(
+                    "event", frame=frame_no, what="re_solved_rotation", rotation_deg=rotation
+                )
+                return tracked
+            self._reference, self._reference_index, self._tracker, self._anchor_stars = kept
+        self._rotation_attempted = rotation
+        self._frames_rotation_unsolved += 1
+        diag.record("event", frame=frame_no, what="rotation_not_re_solved", rotation_deg=rotation)
+        if not self._rotation_failed_logged:
+            self._rotation_failed_logged = True
+            logger.warning(
+                "%s: the field turned %.1f° since the solution and the frame did not re-solve;"
+                " the apertures follow the tracker (next attempt after 2° more)",
+                fname,
+                rotation,
+            )
+        return wcs
 
     def _anchor(self, green, wcs, diag, frame_no: int, fname: str):
         """Check the tracker's lock; re-solve and re-anchor the frame when it is lost (S43).
@@ -455,11 +696,7 @@ class PhotometryBatchWorker(QThread):
             )
         solution = self._solve(green, fname)
         if solution is not None:
-            self._reference = solution
-            self._reference_index = self._file_index
-            self._tracker = self._build_tracker(green)
-            self._tracker.update(green)
-            tracked = TrackedWCS(self._reference, self._tracker)
+            tracked = self._adopt(solution, green)
             if self._lock_holds(green, tracked):
                 self._anchored = True
                 self._frames_resolved += 1
@@ -492,34 +729,51 @@ class PhotometryBatchWorker(QThread):
             shift = max(shift, d)
         return shift < _LOCK_FRESH_MAX_SHIFT_PX
 
-    def _verify(self, green, wcs, diag, frame_no: int, fname: str):
+    def _centred_anchors(self, offsets: dict[str, float]) -> int:
+        """S69 (b): the tracker's anchors less those more than 1 px off their aperture
+        centre on this frame (an anchor too faint to test counts, as before) and the
+        one its fit rejected (it verified nothing)."""
+        bad = off_centre(offsets)
+        rejected = self._tracker.rejected_anchor if self._tracker is not None else None
+        return sum(
+            1
+            for index, star in enumerate(self._anchor_stars)
+            if star.key() not in bad and index != rejected
+        )
+
+    def _verify(self, green, wcs, diag, frame_no: int, fname: str, offsets: dict[str, float]):
         """S58: S56's rule for a lock on fewer than 3 anchors, in the re-run.
 
         With 1 or 2 anchors the S43 check is met by the very anchor that moved the
         apertures: a neighbour or noise passes. Such a frame is verified only near
         a fresh solution (:meth:`_fresh`); otherwise it is re-solved now (the live
         path makes a re-solve due) and verified on its own solution, else its
-        points are flagged suspect. Returns ``(wcs, verified)``.
+        points are flagged suspect. S69 (b): the anchors counted are those centred
+        within 1 px of their aperture (``offsets``), so a lock whose off-centre
+        anchors leave fewer than 3 is treated the same way. Returns ``(wcs,
+        verified, offsets)``, the offsets of the frame's final solution.
         """
-        n = len(self._anchor_stars)
-        if self._tracker is None or not 0 < n < _LOCK_VERIFY_MIN_ANCHORS or self._fresh(wcs):
+        n = self._centred_anchors(offsets)
+        if (
+            self._tracker is None
+            or not self._anchor_stars
+            or n >= _LOCK_VERIFY_MIN_ANCHORS
+            or self._fresh(wcs)
+        ):
             self._unverified_logged = False
-            return wcs, True
+            return wcs, True, offsets
         solution = self._solve(green, fname)
         if solution is not None:
-            self._reference = solution
-            self._reference_index = self._file_index
-            self._tracker = self._build_tracker(green)
-            self._tracker.update(green)
-            tracked = TrackedWCS(self._reference, self._tracker)
-            n = len(self._anchor_stars)
+            tracked = self._adopt(solution, green)
+            offsets = self._centring(green, tracked)
+            n = self._centred_anchors(offsets)
             if self._lock_holds(green, tracked) and (
                 n >= _LOCK_VERIFY_MIN_ANCHORS or self._fresh(tracked)
             ):
                 self._frames_verify_solved += 1
                 self._unverified_logged = False
                 diag.record("event", frame=frame_no, what="lock_verified_by_solve", anchors=n)
-                return tracked, True
+                return tracked, True, offsets
             wcs = tracked
         self._frames_unverified += 1
         if not self._unverified_logged:
@@ -533,10 +787,14 @@ class PhotometryBatchWorker(QThread):
                 n,
             )
         diag.record("event", frame=frame_no, what="lock_unverified", anchors=n)
-        return wcs, False
+        return wcs, False, offsets
 
-    def _solve(self, green, fname: str):
-        """The frame's own solution from the request's solver, or None."""
+    def _solve(self, green, fname: str, *, flags: bool = True):
+        """The frame's own solution from the request's solver, or None.
+
+        ``flags``: a failure flags the frame's points (S43, S58), and the first such
+        failure of the run says so; a re-solve for rotation (S69 a) flags nothing and
+        has its own message."""
         if self._req.solver is None:
             return None
         try:
@@ -544,7 +802,7 @@ class PhotometryBatchWorker(QThread):
         except Exception as exc:  # a solver failure flags the frame, never ends the run
             logger.warning("%s: re-solve failed: %s", fname, exc)
             return None
-        if solution is None and not self._solver_failed_logged:
+        if solution is None and flags and not self._solver_failed_logged:
             self._solver_failed_logged = True
             logger.warning("%s: the frame did not solve — its points are flagged", fname)
         return solution
@@ -593,12 +851,16 @@ class PhotometryBatchWorker(QThread):
         tset = self._req.target_set
         wcs = self._reference
         candidates = tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK)
-        anchors = select_tracking_anchors(green, wcs, candidates, self._req.params)
+        # S70: the anchors' SNR >= 10 with the frame's own e-/ADU (self._params).
+        # S69: a candidate beside a brighter star of the set (targets included) is none.
+        anchors = select_tracking_anchors(
+            green, wcs, candidates, self._params, neighbours=list(tset.stars)
+        )
         if not anchors:
             # Any star of the set seen where the solution places it (S35); with
             # none seen, the lock check fails and the frame is re-solved (S43).
             anchors = select_tracking_anchors(
-                green, wcs, list(tset.stars), self._req.params, min_snr=_LOCK_MIN_SNR
+                green, wcs, list(tset.stars), self._params, min_snr=_LOCK_MIN_SNR
             ) or list(tset.stars)
         self._anchor_stars = anchors
         xy = [wcs.world_to_pixel_deg(s.ra_deg, s.dec_deg) for s in anchors]
@@ -618,15 +880,22 @@ class PhotometryBatchWorker(QThread):
         *,
         flagged: bool = False,
         token: str = "clear",
-    ) -> None:
+        off_centre: frozenset[str] = frozenset(),
+    ) -> list[LcPoint]:
         """Convert one frame's measurements into curve points + point signals.
 
         ``results`` carry targets, check stars (P2) and leave-one-out
         comparison vetting curves; checks flow into their own curves/CSVs and
         their keys are remembered for the K-RMS summary (comps are not). Each
         (star, filter) has its own curve (S49): ``token`` is the frame's filter.
+        ``off_centre`` (S69): stars measured more than 1 px from their centroid,
+        whose own rows are flagged suspect like a frame measured without the field.
+        Returns the points made, ``(role, identity, point)`` (S67 may flag them at the
+        end of the run).
         """
+        made: list[tuple[str, str, LcPoint]] = []
         for res in results:
+            star_flagged = flagged or bool(off_centre and res.star.key() in off_centre)
             # Keep a point when *either* product exists. Requiring the flux
             # ratio discarded good differential magnitudes whenever every
             # comparison was flagged suspect (the ratio path rejects those,
@@ -652,8 +921,12 @@ class PhotometryBatchWorker(QThread):
                 comps_used=res.diff.comps_used if res.diff else 0,
                 relative_comps_used=res.relative.comps_used if res.relative else 0,
                 saturated=bool(res.phot and res.phot.saturated),
-                # S43: measured without the field (the tracker lost it, no re-solve).
-                suspect=bool(res.phot and res.phot.suspect) or flagged,
+                # S43: measured without the field (the tracker lost it, no re-solve);
+                # S69: the star more than 1 px off its aperture centre; S71: the
+                # comparison carrying the zero point disagrees with the others.
+                suspect=bool(res.phot and res.phot.suspect)
+                or star_flagged
+                or bool(getattr(res.diff, "suspect", False)),
                 formal_mag_err=(
                     res.diff.formal_mag_err or res.diff.mag_err
                     if res.diff and res.diff.mag_err is not None
@@ -672,7 +945,8 @@ class PhotometryBatchWorker(QThread):
                 ),
             )
             lc.append(pt)
-            if flagged:
+            made.append((res.star.role, res.star.auid or res.star.display_name, pt))
+            if star_flagged:
                 self._flagged.add(id(pt))
             multi = any(c.filter_name != token for c in curves.values())
             self.point.emit(
@@ -688,6 +962,7 @@ class PhotometryBatchWorker(QThread):
                     relative_flux_err=pt.relative_flux_err,
                 )
             )
+        return made
 
     @staticmethod
     def _apply_systematic_floors(
@@ -726,13 +1001,65 @@ class PhotometryBatchWorker(QThread):
     def _airmass(self, jd: float | None, star) -> float | None:
         """Per-star airmass at this frame's JD (P4), or None without site/time.
 
-        Delegates to :func:`airmass_at`, which the live path now uses too, so
-        the two never drift apart.
+        S66: an Argos frame's header ``AIRMASS`` (the mount's, within 0.0004 of
+        astropy whatever the Settings site) when it has one and its pointing is not
+        frozen (:meth:`_frame_header_airmass`); otherwise :func:`airmass_at` for the
+        Settings site, which the live path uses too, so the two never drift apart.
         """
+        header = self._frame_header_airmass()
+        if header is not None:
+            return header
         lat, lon, _elev = self._req.site
         if jd is None or lat is None or lon is None:
             return None
         return airmass_at(jd, star.ra_deg, star.dec_deg, float(lat), float(lon))
+
+    def _frame_header_airmass(self) -> float | None:
+        """S66: the header ``AIRMASS`` of the frame being measured (read once per
+        frame), or None: not written by Argos, no ``AIRMASS``, or a frozen pointing
+        (X1: RA, DEC, ALTITUDE, AZIMUTH and AIRMASS those of a frame a minute or more
+        before; its AIRMASS is a lost mount's last poll). The frame's site check (X3:
+        the mount's direction more than 5° from the one computed for the Settings site
+        in use) only warns, once per run: the airmass no longer depends on the site."""
+        index = self._file_index
+        if self._frame_air is not None and self._frame_air[0] == index:
+            return self._frame_air[1]
+        paths = self._req.fits_paths
+        pointing = read_frame_pointing(paths[index]) if 0 <= index < len(paths) else None
+        airmass = None
+        if self._frozen.frozen(pointing):
+            if not self._frozen_logged:
+                self._frozen_logged = True
+                logger.warning(
+                    "Batch photometry: %s keeps the pointing of a frame a minute or more"
+                    " before it (a lost mount's last poll): its airmass is computed for the"
+                    " site in Settings",
+                    paths[index].name,
+                )
+        elif pointing is not None and pointing.argos:
+            airmass = pointing.airmass
+            lat, lon, _elev = self._req.site
+            offset = (
+                site_offset_deg(pointing, float(lat), float(lon))
+                if lat is not None and lon is not None
+                else None
+            )
+            if offset is not None and offset > SITE_CHECK_TOLERANCE_DEG:
+                self._frames_site_wrong += 1
+                if not self._site_logged:
+                    self._site_logged = True
+                    logger.warning(
+                        "Batch photometry: the site in Settings is not where the telescope"
+                        " was (%s: the mount's direction is %.1f° from the one computed for"
+                        " that site). Fix the site in Settings › Observer & site; the airmass"
+                        " is each frame's FITS header AIRMASS, from the mount.",
+                        paths[index].name,
+                        offset,
+                    )
+        if airmass is not None:
+            self._frames_header_airmass += 1
+        self._frame_air = (index, airmass)
+        return airmass
 
     @staticmethod
     def _read_frame(

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from argos.core.catalog.targets import TargetSet
+from argos.core.photometry.aperture import GREEN_PIXELS
 from argos.core.photometry.session import TargetResult, measure_targets
 
 #: Fallback FWHM (green px) when a frame's FWHM is unknown.
@@ -24,6 +25,14 @@ from argos.core.photometry.session import TargetResult, measure_targets
 #: measured FWHM. A measurement taken without a FWHM is therefore not directly
 #: comparable with one taken with it — more sky, and more neighbours.
 DEFAULT_FWHM = 3.0
+
+#: ``photometry.noise_model`` (S72). ``pixel``, the default: the 0.4.x model, one raw
+#: pixel's e-/ADU and the whole sky level as photons. ``green_plane``: the (G1+G2)/2
+#: plane's model, 2 × e-/ADU, read noise rn/√2, the profile's black level subtracted.
+#: S72 is decided, but its test fails with the frames' EGAIN (notes/release_0_5_0.md
+#: S72, S73): it stays off until the owner decides the e-/ADU.
+NOISE_MODEL_PIXEL = "pixel"
+NOISE_MODEL_GREEN = "green_plane"
 
 
 @dataclass(frozen=True)
@@ -44,6 +53,11 @@ class PhotometryParams:
     band: str
     min_comps: int
     track_apertures: bool = True  # follow field rotation / drift across a batch
+    #: S72's model (``photometry.noise_model = green_plane``): the telescope profile's
+    #: black level (ADU, no photon in it) and the raw pixels in a plane value (2);
+    #: 0 and 1 are the 0.4.x model.
+    black_adu: float = 0.0
+    plane_pixels: int = 1
 
     @classmethod
     def from_config(
@@ -55,6 +69,7 @@ class PhotometryParams:
         driver/gain table, batch from the config table — since only the caller
         knows the frame's gain. Everything else is config-keyed.
         """
+        green = str(cfg("photometry.noise_model", NOISE_MODEL_PIXEL)) == NOISE_MODEL_GREEN
         return cls(
             aperture_min_px=float(cfg("photometry.aperture_min_px", 4)),
             aperture_fwhm_mult=float(cfg("photometry.aperture_fwhm_mult", 2.5)),
@@ -66,6 +81,8 @@ class PhotometryParams:
             band=str(cfg("photometry.default_band", "TG") or "TG"),
             min_comps=int(cfg("photometry.min_comparisons", 2)),
             track_apertures=bool(cfg("photometry.track_apertures", True)),
+            black_adu=profile_black_level(cfg) if green else 0.0,
+            plane_pixels=GREEN_PIXELS if green else 1,
         )
 
     def aperture_px(self, fwhm: float | None) -> float:
@@ -76,6 +93,19 @@ class PhotometryParams:
         """
         f = fwhm if fwhm else DEFAULT_FWHM
         return max(self.aperture_min_px, self.aperture_fwhm_mult * f)
+
+
+def profile_black_level(cfg: Callable[[str, object], object]) -> float:
+    """Black level (ADU) of the telescope profile the config names (S72).
+
+    Read from the config's own profile key rather than the process-wide active
+    profile, so a batch built from a config measures as that config says.
+    """
+    from argos.core.hardware import catalog
+
+    key = cfg("hardware.profile", catalog.DEFAULT_PROFILE.key)
+    profile = catalog.get(str(key or "")) or catalog.DEFAULT_PROFILE
+    return float(profile.black_level_adu)
 
 
 def frame_egain(header, table=None) -> float | None:
@@ -115,12 +145,14 @@ def measure_frame(
     *,
     fwhm: float | None = None,
     on_star=None,
+    exclude: frozenset[str] = frozenset(),
 ) -> list[TargetResult]:
     """Aperture-measure one solved green frame with the shared parameter set.
 
     Thin wrapper over :func:`measure_targets` that resolves the FWHM-adaptive
     aperture and the annulus ordering constraints from ``params`` — the one
-    place live and batch agree on geometry.
+    place live and batch agree on geometry. ``exclude``: comparisons left out of
+    the frame's ensemble (S69, off-centre).
     """
     r_ap = params.aperture_px(fwhm)
     r_in = max(params.annulus_in_px, r_ap + 1)
@@ -135,7 +167,10 @@ def measure_frame(
         egain=params.egain,
         read_noise_e=params.read_noise_e,
         sat_adu=params.sat_adu,
+        black_adu=params.black_adu,
+        plane_pixels=params.plane_pixels,
         band=params.band,
         min_comps=params.min_comps,
         on_star=on_star,
+        exclude=exclude,
     )

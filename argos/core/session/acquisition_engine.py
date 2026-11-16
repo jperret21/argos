@@ -80,6 +80,9 @@ from argos.core.photometry.tracking import (
     ApertureTracker,
     TrackedWCS,
     anchors_seen,
+    centring_offsets,
+    off_centre,
+    rotation_resolve_due,
     select_tracking_anchors,
 )
 from argos.core.photometry.uncertainty import apply_systematic_floor, estimate_systematic_floor
@@ -123,6 +126,15 @@ def lock_unverified_text(n: int) -> str:
         " lock cannot be verified; points are flagged suspect while fewer than 3 anchor"
         " stars steer the apertures (except within 2 px of a solution of this sub or the"
         " previous one). Re-solving."
+    )
+
+
+def off_centre_text(n: int) -> str:
+    """S69 (b)'s Activity line (once per episode)."""
+    return (
+        f"Photometry: {n} comparison/check star{'s' if n != 1 else ''} more than 1 px from"
+        " the aperture centre — left out of the frame's ensemble, their points flagged"
+        " suspect."
     )
 
 
@@ -437,6 +449,10 @@ class AcquisitionEngine(QObject):
         #: S56: the current unverified-lock episode was logged (once per episode: until
         #: a verified frame, a slew or invalidation, or a set change).
         self._unverified_logged = False
+        #: S69 (a): the tracked rotation at which the last re-solve for rotation was
+        #: made due (None: none since the solution); (b): the off-centre episode logged.
+        self._rotation_attempted: float | None = None
+        self._off_centre_logged = False
         #: S54: the consecutive solutions refused by the anchor check (their WCS).
         self._repoint_refused: list = []
         #: S59: the current solution is an opened FITS's (its anchors never vet a
@@ -1447,6 +1463,29 @@ class AcquisitionEngine(QObject):
                     self._save_target_set(tset)
                     self._anchors_changed()
                     self.targets_changed.emit(tset)
+            self._backfill_chart_ids(tset)
+
+    def _backfill_chart_ids(self, tset: TargetSet) -> None:
+        """S68: comparisons kept from before 0.4.2 get the VSP chart of this answer.
+
+        The object's set is saved, and so is the running run's ``targets.json``
+        snapshot (taken on its first sub, maybe before this answer), so that the
+        run's AAVSO report names the sequence in CHART.
+        """
+        if not tset.backfill_chart_ids(self._comparisons):
+            return
+        self._save_target_set(tset)
+        if self._active_run_root is None or self._sequence is None:
+            return
+        if not self._sequence.isRunning():
+            return
+        snapshot = self._active_run_root / "targets.json"
+        try:
+            run_set = TargetSet.load(snapshot) if snapshot.is_file() else None
+            if run_set is not None and run_set.backfill_chart_ids(self._comparisons):
+                run_set.save(snapshot)
+        except OSError as exc:
+            self.log_message.emit("WARN", f"Save run targets: {exc}")
 
     # ------------------------------------------------------------------
     # Target set persistence (targets.json per object)
@@ -1703,6 +1742,8 @@ class AcquisitionEngine(QObject):
                 egain=params.egain,
                 read_noise_e=params.read_noise_e,
                 sat_adu=params.sat_adu,
+                black_adu=params.black_adu,
+                plane_pixels=params.plane_pixels,
             )
 
         target_phot = measure(target.ra_deg, target.dec_deg)
@@ -1807,6 +1848,8 @@ class AcquisitionEngine(QObject):
             self._tracker, self._tracker_anchor_stars = self._build_live_tracker(
                 green, wcs, tset, params, chosen_on=self._anchor_frame(green)
             )
+            if wcs is self._astrometry.wcs:
+                self._rotation_attempted = None  # S69 (a): on the solution, a new count
         telescope = self._session.telescope
         # The alt-az tracker needs a rigid rotation + translation.  On an EQ
         # wedge there is no field rotation, so only retain measured drift;
@@ -1845,7 +1888,21 @@ class AcquisitionEngine(QObject):
         seen = anchors_seen(green, tracked, stars, params, min_snr=_LOCK_MIN_SNR)
         return seen < max(1, math.ceil(len(stars) / 2))
 
-    def _lock_unverified(self, params: PhotometryParams, tset: TargetSet, tracked) -> bool:
+    def _centred_anchors(self, offsets: dict[str, float]) -> int:
+        """S69 (b): the tracker's anchors less those more than 1 px off their aperture
+        centre on this frame (an anchor too faint to test counts, as before) and the
+        one its fit rejected (it verified nothing)."""
+        bad = off_centre(offsets)
+        rejected = self._tracker.rejected_anchor if self._tracker is not None else None
+        return sum(
+            1
+            for index, star in enumerate(self._tracker_anchor_stars)
+            if star.key() not in bad and index != rejected
+        )
+
+    def _lock_unverified(
+        self, params: PhotometryParams, tset: TargetSet, tracked, offsets=None
+    ) -> bool:
         """The tracker steers on fewer than 3 anchors: the S48 check verifies nothing (S56).
 
         With n = 1 or 2 anchors, ceil(n/2) = 1 anchor must be seen, and the
@@ -1858,15 +1915,21 @@ class AcquisitionEngine(QObject):
         through a solution of this sub or the previous one on which the tracker
         moved no aperture of the set more than ``_LOCK_FRESH_MAX_SHIFT_PX`` from
         where that solution puts it (:meth:`_fresh_lock`).
+
+        S69 (b): the anchors counted are those centred within 1 px of their aperture
+        (``offsets``, :func:`centring_offsets`): off-centre anchors that leave fewer
+        than 3 put the frame in this case.
         """
-        n = len(self._tracker_anchor_stars)
         if not (params.track_apertures and self._tracker is not None):
             return False
-        if not 0 < n < _LOCK_VERIFY_MIN_ANCHORS:
+        if not self._tracker_anchor_stars:
+            return False
+        n = self._centred_anchors(offsets or {})
+        if n >= _LOCK_VERIFY_MIN_ANCHORS:
             return False
         return not self._fresh_lock(tset, tracked)
 
-    def _verified_on_previous_solution(self, params: PhotometryParams) -> bool:
+    def _verified_on_previous_solution(self, params: PhotometryParams, offsets=None) -> bool:
         """A run's sub of 1 or 2 anchors verified through the previous sub's solution
         (S56 as amended on 2026-11-15, second set): its own solve is due now.
 
@@ -1875,10 +1938,11 @@ class AcquisitionEngine(QObject):
         2026-08-29 050148Z: 12 of 22 flagged). Outside a run a live point follows
         each solve, of the newest frame or the one before: nothing more is due.
         """
-        n = len(self._tracker_anchor_stars)
         if not (params.track_apertures and self._tracker is not None):
             return False
-        if not 0 < n < _LOCK_VERIFY_MIN_ANCHORS:
+        if not self._tracker_anchor_stars:
+            return False
+        if self._centred_anchors(offsets or {}) >= _LOCK_VERIFY_MIN_ANCHORS:  # S69 (b)
             return False
         if self._camera_service.state is not CameraState.SEQUENCE:
             return False
@@ -2004,7 +2068,10 @@ class AcquisitionEngine(QObject):
         when given: the solved frame, where its solution is exact (S56)."""
         pick_green, pick_wcs = chosen_on if chosen_on is not None else (green, wcs)
         candidates = tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK)
-        anchors = select_tracking_anchors(pick_green, pick_wcs, candidates, params)
+        # S69: a candidate beside a brighter star of the set (targets included) is none.
+        anchors = select_tracking_anchors(
+            pick_green, pick_wcs, candidates, params, neighbours=list(tset.stars)
+        )
         if not anchors:
             # Comparisons too faint to steer: any star of the set will do, a
             # variable near minimum included — but only one seen where the
@@ -2047,6 +2114,7 @@ class AcquisitionEngine(QObject):
         self._tracker_anchor_stars = []
         self._rebase = None
         self._repoint_refused = []  # S54: no anchors to refuse a solution against
+        self._rotation_attempted = None  # S69 (a): a new solution, a new count
 
     def _anchors_changed(self) -> None:
         """The set's stars changed between two solves: rebuild the tracker (S52).
@@ -2124,30 +2192,69 @@ class AcquisitionEngine(QObject):
             diag.record("event", frame=frame_no, what="frame_skipped", reason="lock_lost")
             self._resolve_now(green)
             return
-        unverified = self._lock_unverified(params, tset, tracked)
+        # S69 (b): each comparison and check star's centroid against its aperture.
+        offsets = (
+            centring_offsets(
+                green,
+                tracked,
+                tset.by_role(ROLE_COMPARISON) + tset.by_role(ROLE_CHECK),
+                params,
+                fwhm=fwhm,
+                neighbours=list(tset.stars),
+            )
+            if tracked is not None
+            else {}
+        )
+        excluded = off_centre(offsets)
+        resolve = False
+        unverified = self._lock_unverified(params, tset, tracked, offsets)
         if unverified:
             # S56: 1 or 2 anchors verify nothing (the anchor that moved the solution is
             # always seen) away from a fresh solution: flag the points, solve again now.
-            n = len(self._tracker_anchor_stars)
+            # S69 (b): the anchors counted are those centred on their apertures.
+            n = self._centred_anchors(offsets)
             if not self._unverified_logged:
                 self._unverified_logged = True  # once per episode
                 self.log_message.emit("WARN", lock_unverified_text(n))
             diag.record("event", frame=frame_no, what="lock_unverified", anchors=n)
-            self._resolve_now(green)
+            resolve = True
         else:
             self._unverified_logged = False  # a verified frame ends the episode
-            if self._verified_on_previous_solution(params):
-                # S56 (2026-11-15, second set): the sub in hand is solved too, so the
-                # next sub is measured through the previous one's solution, never two
-                # subs from it (one solve per run flagged every other sub).
-                self._resolve_now(green)
+            # S56 (2026-11-15, second set): the sub in hand is solved too, so the
+            # next sub is measured through the previous one's solution, never two
+            # subs from it (one solve per run flagged every other sub).
+            resolve = self._verified_on_previous_solution(params, offsets)
+        rotation = tracked.rotation_deg if isinstance(tracked, TrackedWCS) else 0.0
+        if rotation_resolve_due(rotation, self._rotation_attempted):
+            # S69 (a): the field turned more than 2° since the solution: a solve is due
+            # (once per 2° until one lands, so a failing solver never loops).
+            self._rotation_attempted = rotation
+            diag.record("event", frame=frame_no, what="rotation_resolve_due", rotation_deg=rotation)
+            resolve = True
+        if resolve:
+            self._resolve_now(green)
+        if excluded:
+            diag.record("event", frame=frame_no, what="off_centre", stars=len(excluded))
+            if not self._off_centre_logged:
+                self._off_centre_logged = True  # once per episode
+                self.log_message.emit("WARN", off_centre_text(len(excluded)))
+        else:
+            self._off_centre_logged = False
+
+        def on_star(s, phot, x, y):
+            offset = offsets.get(s.key())
+            diag.star(
+                frame_no,
+                s,
+                phot,
+                x,
+                y,
+                centroid_offset_px=offset if offset is not None and math.isfinite(offset) else None,
+                off_centre=True if s.key() in excluded else None,
+            )
+
         results = measure_frame(
-            green,
-            tracked,
-            tset,
-            params,
-            fwhm=fwhm,
-            on_star=lambda s, phot, x, y: diag.star(frame_no, s, phot, x, y),
+            green, tracked, tset, params, fwhm=fwhm, on_star=on_star, exclude=excluded
         )
         jd = julian_date(self._last_exposure_mid)
         token = filter_token(self._last_filter)  # one curve per (star, filter): S49
@@ -2182,7 +2289,9 @@ class AcquisitionEngine(QObject):
             has_ratio = res.relative is not None and res.relative.flux_ratio is not None
             if not (has_mag or has_ratio):
                 continue
-            self._emit_live_point(res, jd, air, fwhm, (lat, lon, elev), token, unverified)
+            # S69 (b): an off-centre comparison or check star's own point is suspect.
+            flagged = unverified or bool(excluded and res.star.key() in excluded)
+            self._emit_live_point(res, jd, air, fwhm, (lat, lon, elev), token, flagged)
         if self._curves_dirty:
             # One whole-store re-render per frame, whatever the star count.
             self._curves_dirty = False
@@ -2233,9 +2342,9 @@ class AcquisitionEngine(QObject):
     ) -> None:
         """Append one measured star to its (star, filter) curve + CSV and signal it.
 
-        ``unverified``: the frame's lock rests on fewer than 3 anchors (S56): the
-        point is flagged suspect, as a batch re-run flags a frame measured
-        without the field (S43).
+        ``unverified``: the frame's lock rests on fewer than 3 anchors (S56), or the
+        star is more than 1 px off its aperture centre (S69 b): the point is flagged
+        suspect, as a batch re-run flags a frame measured without the field (S43).
         """
         lat, lon, elev = site
         bjd = (
@@ -2261,7 +2370,10 @@ class AcquisitionEngine(QObject):
             comps_used=res.diff.comps_used if res.diff else 0,
             relative_comps_used=res.relative.comps_used if res.relative else 0,
             saturated=bool(res.phot and res.phot.saturated),
-            suspect=bool(res.phot and res.phot.suspect) or unverified,
+            # S71: the comparison carrying the zero point disagrees with the others.
+            suspect=bool(res.phot and res.phot.suspect)
+            or unverified
+            or bool(getattr(res.diff, "suspect", False)),
             formal_mag_err=(
                 res.diff.formal_mag_err or res.diff.mag_err
                 if res.diff and res.diff.mag_err is not None

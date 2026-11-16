@@ -165,3 +165,28 @@ def test_summary_counts_roles_and_readiness() -> None:
     assert s["n_comparison"] == 2
     assert s["n_check"] == 1
     assert s["complete"] is True
+
+
+def test_comparisons_saved_without_a_chart_get_the_vsp_answer_s_s68() -> None:
+    """S68: a set picked before Argos kept VSP's chart (0.4.1) kept CHART at na forever."""
+    from argos.core.catalog.aavso import Band, ComparisonStar
+
+    ts = TargetSet(object_name="XX Cyg")
+    ts.set_role(_star(role=ROLE_TARGET, auid="T"))
+    for auid, mag in (("C1", 11.4), ("C2", 12.1), ("C3", 12.5)):
+        ts.set_role(
+            replace(_star(role=ROLE_COMPARISON, auid=auid), source="vsp_auto", mags={"V": mag})
+        )
+    ts.set_role(replace(_star(role=ROLE_COMPARISON, auid="M"), source="manual", mags={"V": 13.0}))
+    answer = [
+        ComparisonStar("C1", 0, 0, "114", (Band("V", 11.4), Band("B", 12.0)), chart_id="X9"),
+        ComparisonStar("C2", 0, 0, "121", (Band("V", 12.1),), chart_id="X9"),
+        ComparisonStar("C3", 0, 0, "126", (Band("V", 12.6),), chart_id="X9"),  # revised
+        ComparisonStar("M", 0, 0, "130", (Band("V", 13.0),), chart_id="X9"),
+    ]
+
+    assert ts.backfill_chart_ids(answer) == 2
+
+    charts = {s.auid: s.chart_id for s in ts.by_role(ROLE_COMPARISON)}
+    assert charts == {"C1": "X9", "C2": "X9", "C3": None, "M": None}
+    assert ts.backfill_chart_ids(answer) == 0  # a chart already named is kept

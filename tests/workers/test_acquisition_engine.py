@@ -2106,3 +2106,123 @@ def test_identifying_the_field_keeps_the_check_star(shot_rig, monkeypatch) -> No
         "000-CMP-2",
         "000-CMP-3",
     ]
+
+
+def test_a_vsp_answer_names_the_chart_of_comparisons_kept_without_one_s68(
+    shot_rig, tmp_path
+) -> None:
+    """S68: comparisons picked before 0.4.2 kept chart_id None in the object's set,
+    and every run copied it: the AAVSO CHART stayed na. The next VSP answer listing
+    them with the same magnitudes names its chart, in the set and in the running
+    run's targets.json snapshot."""
+    from types import SimpleNamespace
+
+    from argos.core.catalog.aavso import Band, ComparisonStar
+    from argos.core.catalog.targets import ROLE_COMPARISON, TargetSet, TargetStar
+    from argos.workers.catalog_worker import CatalogResult
+
+    engine, _session, _form, _logs = shot_rig
+    old = TargetSet(
+        object_name="V1",
+        stars=[
+            TargetStar("target", 300.0, 22.5, auid="000-AAA-000", name="V1", source="vsx"),
+            TargetStar(
+                "comparison", 300.1, 22.4, auid="000-AAA-001", source="vsp_auto", mags={"V": 11.4}
+            ),
+            TargetStar(
+                "comparison", 299.9, 22.6, auid="000-AAA-002", source="vsp_auto", mags={"V": 12.1}
+            ),
+        ],
+    )
+    old.save(engine._target_path("V1"))
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    old.save(run_root / "targets.json")  # the snapshot of the run's first sub
+    engine._active_run_root = run_root
+    engine._sequence = SimpleNamespace(isRunning=lambda: True)
+    engine._target_set = None
+
+    engine._on_catalog(
+        CatalogResult(
+            comparisons=[
+                ComparisonStar(
+                    "000-AAA-001", 300.1, 22.4, "114", (Band("V", 11.4),), chart_id="X7"
+                ),
+                ComparisonStar(
+                    "000-AAA-002", 299.9, 22.6, "121", (Band("V", 12.1),), chart_id="X7"
+                ),
+            ]
+        )
+    )
+
+    for path in (engine._target_path("V1"), run_root / "targets.json"):
+        charts = {s.chart_id for s in TargetSet.load(path).by_role(ROLE_COMPARISON)}
+        assert charts == {"X7"}, path
+
+
+# ── S69: the tracker on an alt-az run (live and sequence paths) ─────────────
+
+
+def _turned(xy: dict, deg: float, centre=(150.0, 100.0)) -> list:
+    import math
+
+    a = math.radians(deg)
+    out = []
+    for x, y in xy.values():
+        dx, dy = x - centre[0], y - centre[1]
+        out.append(
+            (
+                centre[0] + math.cos(a) * dx - math.sin(a) * dy,
+                centre[1] + math.sin(a) * dx + math.cos(a) * dy,
+            )
+        )
+    return out
+
+
+def test_a_field_turned_more_than_2_deg_since_the_solution_makes_a_solve_due_s69(
+    shot_rig, monkeypatch
+) -> None:
+    """S69 (a): the tracker carried one solution over the whole field rotation as long
+    as its lock held (XX Cyg 2026-09-07: 16.5° in 32 min, outer apertures up to 8.5 px
+    off). A solve is now due once the tracked rotation since the solution exceeds 2°,
+    and, while none lands, again only after 2° more (never on every frame)."""
+    from datetime import datetime, timezone
+
+    engine, _session, _form, _logs = shot_rig
+    xy, frame_a, _b = _s48_field(engine, monkeypatch)
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+    due: list[float] = []
+    for minute, deg in enumerate((0.0, 1.0, 2.5, 3.5, 4.0, 4.7)):
+        engine.astrometry._resolve_due = False
+        engine._last_raw = frame_a if deg == 0.0 else _field_frame(_turned(xy, deg))
+        engine._last_raw_decimated = False
+        engine._last_exposure_mid = datetime(2026, 11, 1, 3, minute, tzinfo=timezone.utc)
+        engine._measure_photometry()
+        if engine.astrometry._resolve_due:
+            due.append(deg)
+    assert due == [2.5, 4.7]  # never before the fix (the lock held on 4 anchors)
+    assert abs(engine._tracker.transform.rotation_deg - 4.7) < 0.1
+    assert not any(p.suspect for p in _lc(engine, "V1").points)
+
+
+def test_an_off_centre_comparison_leaves_the_ensemble_s69(shot_rig, monkeypatch) -> None:
+    """S69 (b): a comparison whose centroid is more than 1 px from its aperture centre
+    is left out of the frame's ensemble and its own point is flagged suspect; the
+    target keeps its point from the other comparisons. C3's star sits 2.5 px from
+    where the solution puts it (the tracker rejects it as an anchor)."""
+    from datetime import datetime, timezone
+
+    engine, _session, _form, logs = shot_rig
+    xy, _a, _b = _s48_field(engine, monkeypatch)
+    stars = list(xy.values())
+    stars[-1] = (stars[-1][0] + 2.5, stars[-1][1])
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+    engine._last_raw, engine._last_raw_decimated = _field_frame(stars), False
+    engine._last_exposure_mid = datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc)
+    engine._measure_photometry()
+    (point,) = _lc(engine, "V1").points
+    assert point.comps_used == 3 and not point.suspect  # 4 comparisons before the fix
+    assert _lc(engine, "C3").points[-1].suspect
+    assert [m for level, m in logs if level == "WARN" and "more than 1 px" in m]

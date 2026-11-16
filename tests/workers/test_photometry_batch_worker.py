@@ -8,13 +8,21 @@ canonical 9-column CSVs that Analyze reloads. Runs the QThread synchronously via
 
 from __future__ import annotations
 
+import json
 import os
+from dataclasses import replace
 
 import numpy as np
 import pytest
 from astropy.io import fits
 
-from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+from argos.core.catalog.targets import (
+    ROLE_CHECK,
+    ROLE_COMPARISON,
+    ROLE_TARGET,
+    TargetSet,
+    TargetStar,
+)
 from argos.core.photometry.lightcurve import LightCurve
 from argos.core.photometry.params import PhotometryParams
 from argos.workers.photometry_batch_worker import (
@@ -245,8 +253,11 @@ def test_batch_tracks_field_rotation(tmp_path) -> None:
 def test_batch_without_tracking_corrupts_the_rotating_curve(tmp_path) -> None:
     """Control: the same rotating scene, tracking off — the reference WCS
     alone cannot follow the field, so the apertures slide off the stars and
-    the light curve acquires a spurious fade (~0.4 mag here, a plausible
-    'eclipse'). This is the artefact the tracker exists to remove."""
+    the light curve acquired a spurious fade (~0.4 mag here, a plausible
+    'eclipse'). This is the artefact the tracker exists to remove. Since S69
+    (b) a comparison more than 1 px from its aperture centre leaves the
+    ensemble, so the fade never reaches the curve: the frames whose comparisons
+    are all off their apertures give no point."""
     req = _rotating_scene(tmp_path, total_deg=10.0, n_frames=10, track=False)
     result_box = []
     worker = PhotometryBatchWorker(req)
@@ -255,9 +266,10 @@ def test_batch_without_tracking_corrupts_the_rotating_curve(tmp_path) -> None:
 
     result = result_box[0]
     assert result.ok and result.rotation_deg == 0.0  # no tracker ran
+    assert result.stars_off_centre >= 2 * 7  # both comparisons, from frame 2 or 3 on
     curve = next(iter(result.curves.values()))
     mags = [p.mag for p in curve.points]
-    assert max(mags) - min(mags) > 0.2  # constant star reads as variable
+    assert len(mags) <= 3 and max(mags) - min(mags) < 0.05
 
 
 def test_batch_writes_diagnostics_jsonl(tmp_path) -> None:
@@ -981,3 +993,437 @@ def test_a_re_run_verifies_two_anchors_on_a_fresh_solution_s58(tmp_path) -> None
     mags = [p.mag for p in points]
     assert max(mags) - min(mags) < 0.05, mags  # never a blank-sky value
     assert len(solved) == 2  # frame 0 (no fresh solve) and frame 2 (the jump)
+
+
+def _site_scene(tmp_path, site, *, n=3, software="Argos v0.4.2"):
+    """S66: frames whose headers say where the mount pointed from a synthetic site.
+
+    The mount (true site 30°N 100°E) puts the field on its meridian at 80°; the
+    request's Settings site is ``site``; ``software`` None: frames Argos did not write.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from argos.core.imaging.sky_geometry import compute_airmass, horizontal_at
+    from argos.core.photometry.airmass import julian_date
+
+    start = datetime(2026, 3, 1, 15, 0, 0, tzinfo=timezone.utc)
+    jd0 = julian_date(start)
+    ra_h = ((18.697374558 + 24.06570982441908 * (jd0 - 2451545.0)) % 24.0 + 100.0 / 15.0) % 24.0
+    coords = [(ra_h * 15.0, 40.0), (ra_h * 15.0 + 0.1, 40.1), (ra_h * 15.0 - 0.1, 39.9)]
+    wcs = _FakeWCS(dict(zip(coords, [(30.0, 30.0), (10.0, 10.0), (50.0, 50.0)])))
+    ts = TargetSet(object_name="SITE")
+    ts.set_role(TargetStar(role=ROLE_TARGET, ra_deg=coords[0][0], dec_deg=40.0, auid="T"))
+    for auid, (ra, dec) in zip(("C1", "C2"), coords[1:]):
+        ts.set_role(
+            TargetStar(role=ROLE_COMPARISON, ra_deg=ra, dec_deg=dec, auid=auid, mags={"V": 11.0})
+        )
+    stars = [((30.0, 30.0), 20000.0), ((10.0, 10.0), 8000.0), ((50.0, 50.0), 8000.0)]
+    paths, header_airmass = [], []
+    for i in range(n):
+        when = start + timedelta(minutes=10 * i)
+        alt, az = horizontal_at(julian_date(when), ra_h, 40.0, 30.0, 100.0)
+        hdu = fits.PrimaryHDU(np.clip(_raw_with_green_stars(stars), 0, 65535).astype(np.uint16))
+        h = hdu.header
+        h["DATE-OBS"] = when.strftime("%Y-%m-%dT%H:%M:%S")
+        h["EXPTIME"] = 10.0
+        h["RA"], h["DEC"] = ra_h, 40.0
+        h["ALTITUDE"], h["AZIMUTH"] = round(alt, 4), round(az, 4)
+        h["AIRMASS"] = round(compute_airmass(alt), 4)
+        h["SITELAT"], h["SITELONG"] = site
+        if software:
+            h["SOFTWARE"] = software
+        p = tmp_path / f"sub_{i}.fit"
+        hdu.writeto(p)
+        paths.append(p)
+        header_airmass.append(h["AIRMASS"])
+    req = BatchRequest(
+        fits_paths=paths,
+        wcs=wcs,
+        target_set=ts,
+        params=PhotometryParams.from_config(lambda k, d: d),
+        out_dir=tmp_path / "out",
+        object_name="SITE",
+        site=(site[0], site[1], 0.0),
+    )
+    return req, header_airmass
+
+
+def test_a_re_run_takes_the_header_airmass_when_the_site_is_wrong_s66(tmp_path, caplog) -> None:
+    """S66: a re-run computed every point's airmass for the Settings site, even when
+    the frames' headers show the telescope was elsewhere (X3): 1.5 instead of 1.015."""
+    req, header_airmass = _site_scene(tmp_path, (30.0, 40.0))
+
+    with caplog.at_level("WARNING"):
+        result, _points = _run_batch(req)
+
+    for curve in result.curves.values():
+        assert [p.airmass for p in curve.points] == header_airmass
+    warns = [r for r in caplog.records if "not where the telescope was" in r.getMessage()]
+    assert len(warns) == 1
+
+
+def test_a_re_run_takes_the_header_airmass_when_the_site_is_right_too_s66(tmp_path, caplog) -> None:
+    """S66 as decided (option b): an Argos frame's header AIRMASS, the mount's, is used
+    whatever the Settings site. A Settings site under the 5° tolerance still erred (XX
+    Cyg 2026-08-29: 0.013-0.015 too high at 67-71°, where the header is within 0.0004
+    of astropy); the site check only warns."""
+    req, header_airmass = _site_scene(tmp_path, (30.0, 100.0))
+
+    with caplog.at_level("WARNING"):
+        result, _points = _run_batch(req)
+
+    for curve in result.curves.values():
+        assert [p.airmass for p in curve.points] == header_airmass
+    assert result.frames_header_airmass == 3 and result.frames_site_wrong == 0
+    assert not [r for r in caplog.records if "not where the telescope was" in r.getMessage()]
+
+
+def test_a_re_run_computes_the_airmass_of_frames_argos_did_not_write_s66(tmp_path) -> None:
+    from argos.core.photometry.airmass import airmass_at
+
+    req, _header_airmass = _site_scene(tmp_path, (30.0, 100.0), software=None)
+
+    result, _points = _run_batch(req)
+
+    for star in req.target_set.stars:  # each star's own, for the Settings site
+        points = result.curves[f"{star.auid}@clear"].points
+        expected = [airmass_at(p.jd_utc, star.ra_deg, star.dec_deg, 30.0, 100.0) for p in points]
+        assert [p.airmass for p in points] == expected
+    assert result.frames_header_airmass == 0
+
+
+def _freeze_pointing(req, after: int) -> None:
+    """X1: the lights after ``after`` keep its RA, DEC, ALTITUDE, AZIMUTH and AIRMASS."""
+    with fits.open(req.fits_paths[after]) as hdul:
+        polled = {k: hdul[0].header[k] for k in ("RA", "DEC", "ALTITUDE", "AZIMUTH", "AIRMASS")}
+    for path in req.fits_paths[after + 1 :]:
+        with fits.open(path, mode="update") as hdul:
+            hdul[0].header.update(polled)
+
+
+def test_a_re_run_computes_the_airmass_of_frozen_frames_at_a_right_site_s66(tmp_path) -> None:
+    """S66 with X1 (technical review): a frame whose pointing is a lost mount's last
+    poll keeps that poll's AIRMASS (and drifts from the direction computed for the right
+    site by about 0.2° per minute: 30 min after the freeze the per-frame check said
+    "wrong site", with a false WARN). Such a frame's airmass is computed, as before."""
+    from argos.core.photometry.airmass import airmass_at
+
+    req, header_airmass = _site_scene(tmp_path, (30.0, 100.0), n=6)  # 0-50 min
+    _freeze_pointing(req, 0)
+
+    result, _points = _run_batch(req)
+
+    target = result.curves["T@clear"].points
+    star = req.target_set.stars[0]
+    expected = [airmass_at(p.jd_utc, star.ra_deg, star.dec_deg, 30.0, 100.0) for p in target]
+    assert target[0].airmass == header_airmass[0]  # polled before the freeze
+    assert [p.airmass for p in target[1:]] == expected[1:]
+    assert abs(target[-1].airmass - header_airmass[0]) > 0.01  # not the frozen value
+    assert result.frames_header_airmass == 1 and result.frames_site_wrong == 0
+
+
+def test_a_re_run_computes_the_airmass_of_frozen_frames_at_a_wrong_site_s66(tmp_path) -> None:
+    """S66 with X1: a frozen frame's header AIRMASS is stale; its airmass is computed for
+    the Settings site (wrong here, as the WARN says), as before S66."""
+    from argos.core.photometry.airmass import airmass_at
+
+    req, header_airmass = _site_scene(tmp_path, (30.0, 40.0), n=4)
+    _freeze_pointing(req, 1)
+
+    result, _points = _run_batch(req)
+
+    target = result.curves["T@clear"].points
+    star = req.target_set.stars[0]
+    assert [p.airmass for p in target[:2]] == header_airmass[:2]
+    assert [p.airmass for p in target[2:]] == [
+        airmass_at(p.jd_utc, star.ra_deg, star.dec_deg, 30.0, 40.0) for p in target[2:]
+    ]
+    assert result.frames_header_airmass == 2 and result.frames_site_wrong == 2
+
+
+def test_a_re_run_flags_the_points_of_a_frame_without_a_detection_s67(tmp_path) -> None:
+    """S67 in the batch re-run (science review): a frame on which the target is measured
+    below SNR 3 (XX Cyg 2026-09-07 _00021: SNR 1.6, 13.29 ± 0.75 among 11.7-12.2) was
+    written unflagged and reached the AAVSO export of the re-run, which S67 now drops
+    from the live run's own file. Its points are flagged suspect, left out of the
+    run's sigma_syst and of the AAVSO export, and counted. The SNR rule is per target
+    (owner's decision): a second, bright target and the comparisons keep their points."""
+    from argos.core.photometry.lightcurve import write_aavso
+
+    wcs = _FakeWCS(
+        {
+            (1.0, 1.0): (60.0, 60.0),
+            (2.0, 2.0): (35.0, 35.0),
+            (3.0, 3.0): (85.0, 85.0),
+            (4.0, 4.0): (35.0, 85.0),
+        }
+    )
+    ts = TargetSet(object_name="TST Tau")
+    ts.set_role(TargetStar(role=ROLE_TARGET, ra_deg=1.0, dec_deg=1.0, auid="T"))
+    ts.set_role(TargetStar(role=ROLE_TARGET, ra_deg=4.0, dec_deg=4.0, auid="T2"))
+    for i, auid in ((2, "C1"), (3, "C2")):
+        ts.set_role(
+            TargetStar(
+                role=ROLE_COMPARISON, ra_deg=float(i), dec_deg=float(i), auid=auid, mags={"V": 11.0}
+            )
+        )
+    rng = np.random.default_rng(67)
+    paths = []
+    for i in range(12):
+        target_peak = 0.0 if i == 5 else 3000.0 * (1.0 + 0.01 * rng.normal())
+        stars = [
+            ((60.0, 60.0), target_peak),
+            ((35.0, 35.0), 8000.0),
+            ((85.0, 85.0), 8000.0),
+            ((35.0, 85.0), 6000.0),
+        ]
+        raw = _raw_with_green_stars(stars, green_shape=(120, 120))
+        raw += rng.normal(0.0, 3.0, raw.shape).astype(np.float32)
+        p = tmp_path / f"sub_{i:03d}.fits"
+        _write_fits(p, raw, f"2026-07-05T01:{i:02d}:00")
+        paths.append(p)
+    req = BatchRequest(
+        fits_paths=paths,
+        wcs=wcs,
+        target_set=ts,
+        # tracking off: the reference solve as chosen (2 anchors would be S58's case)
+        params=replace(PhotometryParams.from_config(lambda k, d: d), track_apertures=False),
+        out_dir=tmp_path / "out",
+        object_name="TST Tau",
+    )
+
+    result, _points = _run_batch(req)
+
+    assert result.frames_no_detection == 1
+    for key, curve in result.curves.items():
+        flagged = [i for i, p in enumerate(curve.points) if p.suspect]
+        assert flagged == ([5] if key == "T@clear" else []), key
+    target = result.curves["T@clear"]
+    floors = {p.sigma_syst for p in target.points}
+    assert len(floors) == 1 and floors.pop() < 0.05  # the blank frame did not set it
+    summary = write_aavso(tmp_path / "aavso.txt", [target], obscode="TST01")
+    assert summary.rows == 11
+    records = [json.loads(line) for line in next(req.out_dir.glob("*.jsonl")).open()]
+    events = [r for r in records if r.get("what") == "no_detection"]
+    assert [(r["frame"], r["low_snr"]) for r in events] == [(5, ["T"])]
+
+
+# ── S69, S70: the tracker on an alt-az run, the frame's gain in the frame loop ──
+
+
+class _RotWCS:
+    """The rotating scene's stars, ``deg`` degrees about the green-frame centre."""
+
+    def __init__(self, ref, deg, center=(80.0, 80.0)):
+        self._ref, self._deg, self._center = ref, deg, center
+
+    def world_to_pixel_deg(self, ra_deg, dec_deg):
+        return _rotate(*self._ref[(ra_deg, dec_deg)], *self._center, self._deg)
+
+
+def _turning_scene(tmp_path, *, deg_per_frame, n_frames, check_offset=(0.0, 0.0)):
+    """A field turning ``deg_per_frame`` per frame about the centre of a 160 px green
+    plane (an alt-az run): target, 4 comparisons, a check star whose catalogue place
+    is ``check_offset`` green px from the star, and a light sky noise."""
+    ref = {
+        (1.0, 1.0): (80.0, 40.0),  # target
+        (2.0, 2.0): (125.0, 75.0),
+        (3.0, 3.0): (40.0, 100.0),
+        (4.0, 4.0): (110.0, 130.0),
+        (5.0, 5.0): (30.0, 45.0),
+        (6.0, 6.0): (70.0, 120.0),  # check
+    }
+    ts = TargetSet(object_name="ALT Tau")
+    ts.set_role(TargetStar(role=ROLE_TARGET, ra_deg=1.0, dec_deg=1.0, auid="T"))
+    for i in (2, 3, 4, 5):
+        ts.set_role(
+            TargetStar(
+                role=ROLE_COMPARISON,
+                ra_deg=float(i),
+                dec_deg=float(i),
+                auid=f"C{i - 1}",
+                mags={"V": 11.0},
+            )
+        )
+    ts.set_role(TargetStar(role=ROLE_CHECK, ra_deg=6.0, dec_deg=6.0, auid="K", mags={"V": 11.0}))
+    star_at = dict(ref)
+    star_at[(6.0, 6.0)] = (70.0 + check_offset[0], 120.0 + check_offset[1])
+    rng = np.random.default_rng(69)
+    paths = []
+    for i in range(n_frames):
+        deg = deg_per_frame * i
+        stars = [(_rotate(*star_at[k], 80.0, 80.0, deg), 8000.0) for k in sorted(star_at)]
+        raw = _raw_with_green_stars(stars, green_shape=(160, 160))
+        raw += rng.normal(0.0, 3.0, raw.shape).astype(np.float32)
+        p = tmp_path / f"alt_{i:03d}.fits"
+        _write_fits(p, raw, f"2026-09-07T04:{i:02d}:00")
+        paths.append(p)
+    req = BatchRequest(
+        fits_paths=paths,
+        wcs=_RotWCS(ref, 0.0),
+        target_set=ts,
+        params=PhotometryParams.from_config(lambda k, d: d),
+        out_dir=tmp_path / "out",
+        object_name="ALT Tau",
+    )
+    return req, ref
+
+
+def _frame_angle(green, ref):
+    """The scene's rotation on a green plane, from the target's centroid (a 'solve')."""
+    import math
+
+    from argos.core.photometry.tracking import refine_centroid
+
+    best = None
+    for deg10 in range(-300, 301):
+        x, y = _rotate(*ref[(1.0, 1.0)], 80.0, 80.0, deg10 / 10.0)
+        if best is None or green[int(round(y)), int(round(x))] > best[0]:
+            best = (green[int(round(y)), int(round(x))], x, y)
+    cx, cy = refine_centroid(green, best[1], best[2], 4.0)
+    tx, ty = ref[(1.0, 1.0)]
+    return math.degrees(math.atan2(cy - 80.0, cx - 80.0) - math.atan2(ty - 80.0, tx - 80.0))
+
+
+def test_a_re_run_re_solves_once_the_field_turned_2_deg_s69(tmp_path, caplog) -> None:
+    """S69 (a): the tracker carried the request's solution over XX Cyg 2026-09-07's
+    whole 16.5° of rotation (no re-solve: the lock held). A frame is now re-solved
+    once the tracked rotation since its solution exceeds 2°; a solver that fails is
+    tried again only after 2° more, never on every frame."""
+    req, ref = _turning_scene(tmp_path, deg_per_frame=0.75, n_frames=10)
+    calls: list[int] = []
+
+    def solver(green):
+        calls.append(1)
+        return _RotWCS(ref, _frame_angle(green, ref))
+
+    req.solver = solver
+    result, _points = _run_batch(req)
+    assert result.ok and result.frames_done == 10
+    assert len(calls) == 3  # at 2.25° (frame 3), frames 6 and 9; none before the fix
+    assert result.frames_rotation_solved == 3
+    assert not any(p.suspect for p in result.curves["T@clear"].points)
+    assert abs(result.rotation_deg) < 0.1  # frame 9 is its own solution
+
+    (tmp_path / "fail").mkdir()
+    req, ref = _turning_scene(tmp_path / "fail", deg_per_frame=0.75, n_frames=10)
+    failed: list[int] = []
+    req.solver = lambda green: failed.append(1)
+    with caplog.at_level("WARNING"):
+        result, _points = _run_batch(req)
+    assert result.ok and result.frames_done == 10 and result.frames_rotation_solved == 0
+    assert len(failed) == 3  # 2.25°, then 4.5° and 6.75°: 2° apart, of 7 frames past 2°
+    assert not any(p.suspect for p in result.curves["T@clear"].points)
+    # Technical review: counted, and never worded as flagging the points.
+    assert result.frames_rotation_unsolved == 3
+    assert not any("its points are flagged" in r.getMessage() for r in caplog.records)
+
+
+def test_a_re_run_leaves_an_off_centre_star_out_of_the_ensemble_s69(tmp_path) -> None:
+    """S69 (b): a comparison or check star whose centroid is more than 1 px from its
+    aperture centre is left out of the frame's ensemble, its own row flagged suspect,
+    and counted; the target keeps its point from the other comparisons. Here the
+    check star's catalogue place is 2.5 px off its star, comparison C4 sits 1.8 px
+    off it (its star moved), every frame; tracking off, so that the apertures are
+    the solution's own."""
+    import dataclasses
+
+    req, _ref = _turning_scene(tmp_path, deg_per_frame=0.0, n_frames=4, check_offset=(2.5, 0.0))
+    req.params = dataclasses.replace(req.params, track_apertures=False)
+    # C4's star 1.8 px from its catalogue place: patch the frames, not the set.
+    for path in req.fits_paths:
+        with fits.open(path, mode="update") as hdul:
+            green_add = _raw_with_green_stars(
+                [((31.8, 45.0), 8000.0)], sky=0.0, green_shape=(160, 160)
+            )
+            green_sub = _raw_with_green_stars(
+                [((30.0, 45.0), 8000.0)], sky=0.0, green_shape=(160, 160)
+            )
+            data = hdul[0].data.astype(np.float32) + green_add - green_sub
+            hdul[0].data = np.clip(data, 0, 65535).astype(np.uint16)
+    result, _points = _run_batch(req)
+    assert result.ok and result.frames_done == 4
+    target = result.curves["T@clear"].points
+    assert all(p.comps_used == 3 for p in target)  # C4 left out (4 before the fix)
+    assert not any(p.suspect for p in target)
+    assert all(p.suspect for p in result.curves["K@clear"].points)
+    assert all(p.suspect for p in result.curves["C4@clear"].points)
+    assert result.stars_off_centre == 8  # K and C4 on each of the 4 frames
+
+
+def test_off_centre_anchors_leaving_fewer_than_3_make_a_re_solve_due_s69(
+    tmp_path, monkeypatch
+) -> None:
+    """S69 (b): when off-centre anchors leave fewer than 3 centred, the lock is
+    S56/S58's case: verified only near a fresh solution, else the frame is re-solved
+    now, and without a solution its points are flagged suspect. Three of the five
+    anchors (C1-C4, K) off: 2 centred."""
+    import argos.workers.photometry_batch_worker as bw
+
+    req, _ref = _turning_scene(tmp_path, deg_per_frame=0.0, n_frames=4)
+
+    def three_off(green, wcs, stars, params, **kw):
+        return {"auid:C1": 1.6, "auid:C2": 1.6, "auid:C3": 1.6}  # C4 and K: centred
+
+    monkeypatch.setattr(bw, "centring_offsets", three_off, raising=False)
+    result, _points = _run_batch(req)  # no solver
+    assert result.frames_unverified == 4
+    assert all(p.suspect for p in result.curves["T@clear"].points)
+
+    (tmp_path / "solved").mkdir()
+    req, ref = _turning_scene(tmp_path / "solved", deg_per_frame=0.0, n_frames=4)
+    calls: list[int] = []
+    req.solver = lambda green: calls.append(1) or _RotWCS(ref, 0.0)
+    result, _points = _run_batch(req)
+    assert len(calls) == 2  # frames 0 and 2; 1 and 3 are fresh (the previous frame's)
+    assert result.frames_unverified == 0
+    assert not any(p.suspect for p in result.curves["T@clear"].points)
+
+
+def test_a_frame_whose_comparisons_are_all_off_centre_is_counted_s69(tmp_path, monkeypatch) -> None:
+    """S69 (b), technical review: with every comparison off-centre the frame has no
+    ensemble and its target no point; the epoch left the CSV with no count or note."""
+    import dataclasses
+
+    import argos.workers.photometry_batch_worker as bw
+
+    req, _ref = _turning_scene(tmp_path, deg_per_frame=0.0, n_frames=3)
+    req.params = dataclasses.replace(req.params, track_apertures=False)
+    monkeypatch.setattr(
+        bw,
+        "centring_offsets",
+        lambda green, wcs, stars, params, **kw: {f"auid:C{i}": 1.6 for i in (1, 2, 3, 4)},
+    )
+    result, _points = _run_batch(req)
+    assert "T@clear" not in result.curves
+    assert result.frames_no_target_point == 3
+
+
+def test_the_tracker_and_lock_use_the_frames_own_gain_s70(tmp_path, monkeypatch) -> None:
+    """S70 (S41's residue): the anchors (SNR >= 10) and the S43 lock check (SNR >= 5)
+    used the request's e-/ADU while the measurement used the frame's; every SNR of
+    the frame now uses the frame's EGAIN."""
+    import argos.workers.photometry_batch_worker as bw
+
+    req, _ref = _turning_scene(tmp_path, deg_per_frame=0.0, n_frames=3)
+    for path in req.fits_paths:
+        with fits.open(path, mode="update") as hdul:
+            hdul[0].header["EGAIN"] = 0.42
+    seen: dict[str, list[float]] = {"anchors": [], "lock": []}
+    real_select, real_seen = bw.select_tracking_anchors, bw.anchors_seen
+    monkeypatch.setattr(
+        bw,
+        "select_tracking_anchors",
+        lambda g, w, c, params, **kw: seen["anchors"].append(params.egain)
+        or real_select(g, w, c, params, **kw),
+    )
+    monkeypatch.setattr(
+        bw,
+        "anchors_seen",
+        lambda g, w, s, params, **kw: seen["lock"].append(params.egain)
+        or real_seen(g, w, s, params, **kw),
+    )
+    _run_batch(req)
+    assert req.params.egain != pytest.approx(0.42)
+    assert seen["anchors"] and all(g == pytest.approx(0.42) for g in seen["anchors"])
+    assert seen["lock"] and all(g == pytest.approx(0.42) for g in seen["lock"])

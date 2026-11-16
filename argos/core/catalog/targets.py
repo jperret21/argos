@@ -95,6 +95,34 @@ class TargetSet:
     def by_role(self, role: str) -> list[TargetStar]:
         return [s for s in self.stars if s.role == role]
 
+    def backfill_chart_ids(self, comparisons) -> int:
+        """S68: name the VSP chart of comparisons saved without one; returns how many.
+
+        A comparison taken from VSP (``vsp`` or ``vsp_auto``) before Argos kept the
+        chart (0.4.1), and kept since in the object's set, never got one: only a new
+        pick did, so CHART stayed ``na`` on every report. It gets the chart of a VSP
+        answer (``comparisons``, :class:`ComparisonStar`) that lists its AUID with the
+        same catalogue magnitude in every band it holds: the sequence it is measured
+        against. A star whose magnitudes differ (the sequence was revised) keeps none.
+        """
+        answer = {c.auid: c for c in comparisons if c.auid and c.chart_id}
+        changed = 0
+        for index, star in enumerate(self.stars):
+            if star.role != ROLE_COMPARISON or star.chart_id:
+                continue
+            match = answer.get(star.auid) if star.source in {"vsp", "vsp_auto"} else None
+            if match is None or not star.mags:
+                continue
+            mags = {band.band: band.mag for band in match.bands}
+            if any(
+                mags.get(band) is None or abs(float(mags[band]) - float(mag)) > 5e-4
+                for band, mag in star.mags.items()
+            ):
+                continue
+            self.stars[index] = replace(star, chart_id=match.chart_id)
+            changed += 1
+        return changed
+
     def summary(self) -> dict:
         """A display/readiness summary of the selection (Qt-free).
 

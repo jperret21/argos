@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import csv
+import math
 from datetime import datetime, timezone
 
 import numpy as np
+import pytest
 
 from argos.core.photometry.airmass import (
     airmass_from_altitude,
@@ -64,9 +66,10 @@ def test_measure_aperture_no_flux_has_no_mag() -> None:
 
 
 def test_ensemble_zero_point() -> None:
-    zp, rms, n, rejected = ensemble_zero_point([(-5.0, 10.0), (-5.0, 10.0)])
+    zp, rms, n, rejected, zp_err = ensemble_zero_point([(-5.0, 10.0), (-5.0, 10.0)])
     assert zp == 15.0 and rms == 0.0 and n == 2 and rejected == 0
-    assert ensemble_zero_point([]) == (None, None, 0, 0)
+    assert zp_err == pytest.approx(0.01 / math.sqrt(2))  # the 10 mmag floor, twice
+    assert ensemble_zero_point([]) == (None, None, 0, 0, None)
 
 
 def test_relative_flux_needs_no_catalogue_magnitudes() -> None:
@@ -81,7 +84,7 @@ def test_ensemble_clips_a_bad_comp() -> None:
     zero-point — median+MAD clipping drops it and reports it."""
     good = [(-5.0, 10.0), (-5.005, 10.0), (-4.995, 10.0)]
     bad = [(-5.5, 10.0)]  # 0.5 mag off
-    zp, rms, n, rejected = ensemble_zero_point(good + bad)
+    zp, rms, n, rejected, _err = ensemble_zero_point(good + bad)
     assert rejected == 1 and n == 3
     assert abs(zp - 15.0) < 0.01  # the clean answer, not the dragged mean
     r = differential_mag(-6.0, 0.01, good + bad)
@@ -91,11 +94,11 @@ def test_ensemble_clips_a_bad_comp() -> None:
 
 def test_ensemble_never_clips_below_two_or_tight_pairs() -> None:
     # Two comps: no clipping possible even if they disagree.
-    zp, _, n, rejected = ensemble_zero_point([(-5.0, 10.0), (-5.3, 10.0)])
+    zp, _, n, rejected, _err = ensemble_zero_point([(-5.0, 10.0), (-5.3, 10.0)])
     assert n == 2 and rejected == 0
     # Scatter within the 10 mmag floor: nothing rejected.
     tight = [(-5.0, 10.0), (-5.004, 10.0), (-4.996, 10.0), (-5.002, 10.0)]
-    _, _, n, rejected = ensemble_zero_point(tight)
+    _, _, n, rejected, _err = ensemble_zero_point(tight)
     assert n == 4 and rejected == 0
 
 
@@ -116,6 +119,143 @@ def test_differential_mag_flags_too_few_comps() -> None:
 def test_differential_mag_no_comps_or_no_flux() -> None:
     assert differential_mag(-6.0, 0.01, []).mag is None
     assert differential_mag(None, None, [(-5.0, 10.0)]).note == "no target flux"
+
+
+# S71: the zero point weighs each comparison by 1 / (err² + 10 mmag²).
+
+#: XX Cyg 2026-08-29 (session 20260829T050148Z), flight-recorder frames 15 and 18: each
+#: comparison's (inst_mag, VSP V, inst_mag_err); one comparison at SNR 21, the others
+#: at SNR 0.6-3.1. The check 000-BJV-171 (V 10.606) is (inst_mag, inst_mag_err).
+_XX_CYG_0829 = {
+    15: (
+        [(-5.5103, 13.397, 1.9016), (-9.454, 10.389, 0.0511), (-6.6663, 12.948, 0.6598)]
+        + [(-6.7387, 14.153, 0.6142)],
+        (-9.2352, 0.0632),
+    ),
+    18: (
+        [(-7.3488, 13.397, 0.3506), (-9.4859, 10.389, 0.05), (-6.8229, 12.948, 0.57)],
+        (-9.1663, 0.0668),
+    ),
+}
+
+
+def test_zero_point_follows_the_comparisons_errors_s71() -> None:
+    """XX Cyg 2026-08-29: the unweighted mean of four comparisons, three of them at SNR
+    0.6-1.8, put the check 0.2-0.6 mag off its VSP V (run mean +0.28 ± 0.08). Weighted,
+    the bright comparison carries the zero point and the error says how well."""
+    for frame, (comps, (inst, err)) in _XX_CYG_0829.items():
+        zp, _rms, n, rejected, zp_err = ensemble_zero_point(comps)
+        assert n == len(comps) and rejected == 0, frame  # the bright one is not clipped
+        bright = 10.389 - comps[1][0]  # 000-BJV-170, 97-99 % of the weight
+        assert abs(zp - bright) < 0.02, frame  # plain mean: 0.029 and 0.052 off
+        assert zp_err >= 0.05, frame
+        r = differential_mag(inst, err, comps)
+        assert r.zp_err == pytest.approx(zp_err, abs=1e-4)
+        assert r.formal_mag_err == pytest.approx(math.hypot(err, zp_err), abs=2e-4)
+        assert abs(r.mag - 10.606) <= 2 * r.formal_mag_err, frame
+
+
+def test_one_bright_comparison_cannot_take_all_the_weight_s71() -> None:
+    # Without the 10 mmag floor a 0.1 mmag error would weigh 40 000 times the other.
+    zp, *_rest, zp_err = ensemble_zero_point([(-5.0, 10.0, 0.0001), (-5.02, 10.0, 0.02)])
+    assert zp == pytest.approx(15.0 + 0.02 * 0.2 / 1.2, abs=1e-4)  # weights 1 : 0.2
+    assert zp_err >= 0.01 / math.sqrt(1.2)
+
+
+def test_reddish_comparison_still_clipped_s71() -> None:
+    """RR Lyr 2026-09-25, recorder frame 0 (check 000-BCG-523 left out): 000-BCG-953,
+    B−V 1.67, sits 0.16 mag off the ensemble; the normalised clip drops it."""
+    comps = [
+        (-11.8564, 7.567, 0.0089),  # 000-BJW-665
+        (-11.6749, 7.924, 0.0103),  # 000-BCG-953
+        (-11.5633, 7.902, 0.0111),  # 000-BJW-666
+        (-11.3584, 8.099, 0.0132),  # 000-BJW-667
+        (-10.9351, 8.493, 0.0188),  # 000-BJW-668
+    ]
+    zp, _rms, n, rejected, _err = ensemble_zero_point(comps)
+    assert rejected >= 1 and n == len(comps) - rejected
+    without = ensemble_zero_point(comps[:1] + comps[2:])
+    assert zp == pytest.approx(without[0], abs=1e-9)  # as if 953 were not there
+    assert abs(zp - ensemble_zero_point([c[:2] for c in comps])[0]) < 0.01
+
+
+def test_a_heavy_comparison_its_ensemble_contradicts_flags_the_point_s71() -> None:
+    """S71 (technical review): the clip is centred on the weighted median, so a comparison
+    holding over half the weight is never clipped. A bright one 0.30 mag off (variable,
+    blended, coloured) against two good faint ones set the zero point at +0.25 with
+    nothing clipped and nothing flagged; its point is now suspect, with a note."""
+    comps = [(0.0, 0.30, 0.002), (0.0, 0.0, 0.03), (0.0, 0.0, 0.03)]
+    zp, _rms, _n, rejected, _err = ensemble_zero_point(comps)
+    assert rejected == 0 and zp == pytest.approx(0.248, abs=0.001)
+    r = differential_mag(10.0, 0.01, comps)
+    assert r.suspect and "disagrees with the others" in r.note
+    # the same bright comparison agreeing with them: no flag
+    agreeing = [(0.0, 0.0, 0.002), (0.0, 0.02, 0.03), (0.0, -0.02, 0.03)]
+    assert not differential_mag(10.0, 0.01, agreeing).suspect
+    # two comparisons that disagree: no majority against the heavier one, no flag
+    assert not differential_mag(10.0, 0.01, [(0.0, 0.0, 0.005), (0.0, 0.1, 0.01)]).suspect
+    # no comparison over half the weight (RR Lyr-like ensemble): never flagged
+    assert not differential_mag(10.0, 0.01, [(0.0, 0.0, 0.01)] * 3 + [(0.0, 0.5, 0.01)]).suspect
+
+
+def test_the_xx_cyg_frames_keep_their_bright_comparison_unflagged_s71() -> None:
+    """XX Cyg 2026-08-29 frames 15 and 18: 000-BJV-170 holds 97-99 % of the weight and its
+    faint comparisons agree within their errors: no flag (3 of the run's 22 frames are)."""
+    for frame, (comps, (inst, err)) in _XX_CYG_0829.items():
+        assert not differential_mag(inst, err, comps).suspect, frame
+
+
+# S72: the noise model of the (G1+G2)/2 plane, with the black level.
+
+
+def _cfa_frame(rng, *, egain, black, sky_e, rn_e, star_e=0.0, shape=(240, 240)):
+    """A GRBG raw frame in ADU: black + (Poisson(sky + star) + read noise) / egain."""
+    h, w = shape
+    yy, xx = np.mgrid[0:h, 0:w]
+    # the star on the green plane's grid (green px = raw px / 2), sigma 1.2 green px
+    gx, gy = xx / 2.0, yy / 2.0
+    psf = np.exp(-((gx - 40.0) ** 2 + (gy - 40.0) ** 2) / (2 * 1.2**2)) / (2 * np.pi * 1.2**2)
+    electrons = rng.poisson(sky_e + star_e * psf / 4.0) + rng.normal(0.0, rn_e, shape)
+    return black + electrons / egain
+
+
+def test_noise_model_is_the_green_planes_s72() -> None:
+    """The model's sky sigma and a star's error match what a (G1+G2)/2 plane measures.
+
+    Before S72 the model took the raw pixel's gain and counted the black level as sky
+    photons: here 2.4 times the real sky sigma (W7: 38.3 against 20.6 ADU on RR Lyr).
+    """
+    from argos.core.imaging.green import green_plane
+    from argos.core.photometry.aperture import sky_sigma_adu
+
+    rng = np.random.default_rng(72)
+    egain, black, sky_e, rn_e, star_e = 0.8, 1024.0, 150.0, 2.8, 60000.0
+    fluxes, snrs, skies = [], [], []
+    for _ in range(200):
+        raw = _cfa_frame(rng, egain=egain, black=black, sky_e=sky_e, rn_e=rn_e, star_e=star_e)
+        g = green_plane(raw)
+        phot = measure_aperture(
+            g,
+            40.0,
+            40.0,
+            r_ap=4.0,
+            r_in=12.0,
+            r_out=38.0,
+            egain=egain,
+            read_noise_e=rn_e,
+            black_adu=black,
+            plane_pixels=2,
+        )
+        fluxes.append(phot.flux_adu)
+        snrs.append(phot.snr)
+        skies.append(g[85:, 85:].std())
+    measured_sky = float(np.mean(skies))
+    model_sky = sky_sigma_adu(
+        black + sky_e / egain, egain=egain, read_noise_e=rn_e, black_adu=black, plane_pixels=2
+    )
+    assert model_sky == pytest.approx(measured_sky, rel=0.03)
+    model_err = float(np.mean(fluxes) / np.mean(snrs))
+    assert model_err == pytest.approx(float(np.std(fluxes, ddof=1)), rel=0.10)
 
 
 # --------------------------------------------------------------------------- #
@@ -584,3 +724,32 @@ def test_frame_egain_is_the_frames_own_gain() -> None:
     for bad in (0, -1.0, 150.0, float("nan"), "x", True, None):
         assert frame_egain({"EGAIN": bad}) is None, bad
     assert frame_egain({}) is None
+
+
+def test_black_level_comes_from_the_profile_s72() -> None:
+    """``photometry.noise_model = green_plane`` (S72) brings the S30 Pro's measured
+    black level and the two-pixel plane to every aperture the params drive; a profile
+    without one (S30, S50) subtracts nothing. The default keeps the 0.4.x model until
+    the owner decides the e-/ADU (S73)."""
+    from argos.core.hardware import catalog
+    from argos.core.photometry.params import PhotometryParams
+
+    assert catalog.get("s30pro").black_level_adu == 1024.0
+    defaults = PhotometryParams.from_config(lambda key, default=None: default, egain=0.8)
+    assert (defaults.black_adu, defaults.plane_pixels) == (0.0, 1)
+
+    def green(profile=None):
+        def cfg(key, default=None):
+            if key == "photometry.noise_model":
+                return "green_plane"
+            return profile if key == "hardware.profile" and profile else default
+
+        return PhotometryParams.from_config(cfg, egain=0.8)
+
+    assert (green().black_adu, green().plane_pixels) == (1024.0, 2)
+    assert (green("s50").black_adu, green("s50").plane_pixels) == (0.0, 2)
+    g = _star(20, 20, peak=2000.0, sky=1100.0)
+    with_black = measure_aperture(g, 20, 20, 6, 8, 12, egain=0.8, black_adu=1024.0)
+    without = measure_aperture(g, 20, 20, 6, 8, 12, egain=0.8)
+    assert with_black.flux_adu == without.flux_adu  # the magnitude is unchanged
+    assert with_black.snr > without.snr  # 76 ADU of sky photons, not 1100
