@@ -90,6 +90,16 @@ export interface IndexSource {
   nightCommands?(): NightCommands | null;
   // -- Wave 7 (optional, as above): Review's dialogs --
   reviewCommands?(): ReviewCommands | null;
+  // -- Wave 8 (optional, as above): the desktop app's window --
+  desktopCommands?(): DesktopCommands | null;
+}
+
+/** What the palette needs from the desktop app (W8; null in a browser). */
+export interface DesktopCommands {
+  /** macOS: the sections' key is ⌘1-⌘5 (F-keys need Fn; the View menu says ⌘1-⌘5). */
+  mac: boolean;
+  fullscreen: boolean;
+  toggleFullscreen(): void;
 }
 
 /** What the palette needs from Review (W7; M8 "Re-run subs…", D2; M92 exports). */
@@ -221,10 +231,23 @@ const ICON: Record<string, string> = {
   'help.shortcuts': 'help',
   'rail.toggle': 'panels',
   'settings.filter': 'search',
+  'app.quit': 'quit',
 };
 
-/** Bindings the palette does not list: Escape is not a command, the palette is itself. */
-const SKIP = new Set(['motion.abort', 'palette.open', 'nav.settings.mod']);
+/**
+ * Bindings the palette does not list: Escape is not a command, the palette is itself; the
+ * desktop app's Mod+1-5 are the Sections' own commands (listed once, with F1-F5).
+ */
+const SKIP = new Set([
+  'motion.abort',
+  'palette.open',
+  'nav.settings.mod',
+  'nav.connection.desktop',
+  'nav.observe.desktop',
+  'nav.plan.desktop',
+  'nav.review.desktop',
+  'nav.settings.desktop',
+]);
 
 /** The scope a binding needs, mapped to the section that provides it. */
 function sectionOf(def: ShortcutDef): Section | null {
@@ -595,7 +618,11 @@ export function buildIndex(app: IndexSource, afterMount: AfterMount): Command[] 
 
   // -- The registry: every built binding, by its label -------------------------------------
   const seen = new Set<string>();
-  for (const d of app.shortcuts.list()) {
+  const desktop = app.desktopCommands?.() ?? null;
+  const defs = app.shortcuts.list();
+  // macOS app: ⌘1-⌘5 (the sections' desktop binding) instead of F1-F5.
+  const navKey = (d: ShortcutDef) => (desktop?.mac ? defs.find((x) => x.id === `${d.id}.desktop`)?.keys[0] : undefined) ?? d.keys[0];
+  for (const d of defs) {
     if (d.planned || d.local || SKIP.has(d.id) || (d.desktopOnly && !app.shortcuts.desktop)) continue;
     const nav = NAV[d.id];
     if (nav) {
@@ -604,7 +631,7 @@ export function buildIndex(app: IndexSource, afterMount: AfterMount): Command[] 
         title: SECTION_WORDS[nav],
         group: 'Sections',
         icon: SECTION_ICONS[nav],
-        keys: d.keys[0],
+        keys: navKey(d),
         keywords: d.label,
         hint: app.section === nav ? 'you are here' : undefined,
         run: () => app.go(nav),
@@ -761,5 +788,19 @@ export function buildIndex(app: IndexSource, afterMount: AfterMount): Command[] 
       run: () => app.openSettings('about'),
     },
   );
+  // -- The desktop app's window (W8): full screen hides the menu bar and the Dock, which
+  // macOS draws in grey (Night Red at the telescope). ⌃⌘F is the native menu's key.
+  if (desktop) {
+    out.push({
+      id: 'window.fullscreen',
+      title: desktop.fullscreen ? 'Exit full screen' : 'Enter full screen',
+      group: 'Appearance',
+      icon: 'expand-pane',
+      // The native menu's key (the shortcut grammar has no separate Control on macOS).
+      hint: desktop.mac ? '⌃⌘F' : undefined,
+      keywords: 'window menu bar dock hide night telescope',
+      run: () => desktop.toggleFullscreen(),
+    });
+  }
   return out;
 }

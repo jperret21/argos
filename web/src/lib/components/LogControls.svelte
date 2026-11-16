@@ -59,7 +59,7 @@
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    say(`Saved ${fmt(lines.length)} lines`);
+    say(`Saved ${fmt(lines.length)} ${lines.length === 1 ? 'line' : 'lines'}`);
   }
 </script>
 

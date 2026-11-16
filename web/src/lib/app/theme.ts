@@ -56,6 +56,24 @@ export function saveTheme(theme: Theme, storage: StorageLike | null = defaultSto
   }
 }
 
+/**
+ * M20 (01 A.3): the browser's and the webview's own context menu is light grey, so Night Red
+ * suppresses it everywhere (keyboard copy and paste remain); the UI's own menus (viewer,
+ * theme) prevent it themselves. Other themes keep it (text fields' Cut / Copy / Paste).
+ */
+export function suppressNativeMenu(theme: Theme): boolean {
+  return theme === 'night-red';
+}
+
+/** Listen on `target` (the window) and drop the native menu while `theme()` says so. */
+export function nativeMenuGuard(target: EventTarget, theme: () => Theme): () => void {
+  const onMenu = (e: Event) => {
+    if (suppressNativeMenu(theme())) e.preventDefault();
+  };
+  target.addEventListener('contextmenu', onMenu);
+  return () => target.removeEventListener('contextmenu', onMenu);
+}
+
 /** Parse a CSS colour token ("#d80000", "#fff", "rgb(216, 0, 0)") to linear-free 0..1 RGB. */
 export function parseCssColor(value: string): [number, number, number] | null {
   const text = value.trim().toLowerCase();

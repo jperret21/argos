@@ -440,6 +440,10 @@ export interface RunningState {
   live: boolean;
   exposing: boolean;
   slewing: boolean;
+  /** A sequence runs (not merely scheduled): the server ends it when the camera or the wheel goes. */
+  sequence?: boolean;
+  /** Autofocus runs (focuser and camera). */
+  autofocus?: boolean;
 }
 
 /**
@@ -449,9 +453,21 @@ export interface RunningState {
  */
 export function disconnectRisk(run: RunningState, devices: readonly DeviceId[] = DEVICE_IDS): string | null {
   const parts: string[] = [];
+  // W8 (Qt fix 602f199, found by the inventory re-run): a run or an autofocus is asked about too.
+  if (run.sequence) {
+    if (devices.includes('camera') || devices.includes('filterwheel')) {
+      parts.push('A sequence is running: it ends (a frame being exposed is lost); the frames already saved stay on disk.');
+    } else if (devices.includes('mount') || devices.includes('focuser')) {
+      parts.push('A sequence is running and uses this device.');
+    }
+  }
+  if (run.autofocus && (devices.includes('focuser') || devices.includes('camera'))) {
+    parts.push('Autofocus is running: it is interrupted.');
+  }
   if (devices.includes('camera')) {
     if (run.live) parts.push('Live view is running: it stops.');
-    else if (run.exposing) parts.push('An exposure is running: the frame is lost.');
+    // The run's own exposure is said by the sentence above.
+    else if (run.exposing && !run.sequence) parts.push('An exposure is running: the frame is lost.');
   }
   // The server closes the link without AbortSlew (hub.py _disconnect_device):
   // the mount finishes its slew on its own and ARGOS can no longer stop it.

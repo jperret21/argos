@@ -13,9 +13,15 @@
 -->
 <script lang="ts">
   import { useApp } from '../app/state.svelte';
+  import Button from '../components/Button.svelte';
   import IconButton from '../components/IconButton.svelte';
   import UndoToast from '../components/UndoToast.svelte';
   import AttentionMark from './attention/AttentionMark.svelte';
+
+  /** The kept end of a file name shown shortened in the middle. */
+  const TAIL = 14;
+  const fileHead = (name: string) => (name.length > TAIL ? name.slice(0, -TAIL) : '');
+  const fileTail = (name: string) => (name.length > TAIL ? name.slice(-TAIL) : name);
 
   const app = useApp();
 </script>
@@ -32,7 +38,7 @@
     <UndoToast queue={app.undo} {entry} />
   {/each}
   {#each app.toasts as t (t.id)}
-    <div class="toast level-{t.level}" role={t.level === 'error' ? 'alert' : 'status'}>
+    <div class="toast level-{t.level}" class:with-action={!!t.action} role={t.level === 'error' ? 'alert' : 'status'}>
       <!-- The attention vocabulary's shapes (BRAND §8): error = filled disc, warning = bar over
            dot, info = hollow ring; Night Red tells them apart without hue. -->
       <span class="mark"><AttentionMark level={t.level === 'error' ? 'critical' : t.level === 'warning' ? 'attention' : 'info'} size={10} /></span>
@@ -41,8 +47,11 @@
           {t.title}
           {#if t.count > 1}<span class="count num">×{t.count}</span>{/if}
         </p>
-        {#if t.message}<p class="message">{t.message}</p>{/if}
+        {#if t.message && !t.action}<p class="message">{t.message}</p>{/if}
       </div>
+      {#if t.action}
+        <Button label={t.action.label} size="s" onclick={() => (t.action?.run(), app.dismissToast(t.id))} />
+      {/if}
       <IconButton
         icon="close"
         label="Dismiss"
@@ -51,11 +60,28 @@
         tooltip="none"
         onclick={() => app.dismissToast(t.id)}
       />
+      {#if t.message && t.action}
+        <!-- With an action: the message on its own full-width line under the title row. A
+             file name stays on one line, shortened in the middle (its end, the extension
+             and the time stamp, stays), never broken at a hyphen. -->
+        {#if t.file}
+          <p class="message below file">
+            <span class="visually-hidden">{t.message}</span><span class="head" aria-hidden="true">{fileHead(t.message)}</span><span class="tail" aria-hidden="true">{fileTail(t.message)}</span>
+          </p>
+        {:else}
+          <p class="message below">{t.message}</p>
+        {/if}
+      {/if}
     </div>
   {/each}
 </div>
 
 <style>
+  /* W8: the action (Reveal in Finder) sits between the title and Dismiss, on one row; the
+     message goes under it, full width. */
+  .toast.with-action {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+  }
   .toasts {
     position: fixed;
     right: var(--space-4);
@@ -144,6 +170,24 @@
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 3;
     line-clamp: 3;
+  }
+  .message.below {
+    grid-column: 2 / -1;
+    margin-top: calc(-1 * var(--space-2));
+  }
+  .message.file {
+    display: flex;
+    min-width: 0;
+    padding-right: var(--space-2);
+    white-space: nowrap;
+  }
+  .file .head {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .file .tail {
+    flex: none;
   }
 
   @keyframes enter {

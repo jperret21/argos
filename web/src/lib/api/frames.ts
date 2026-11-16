@@ -146,7 +146,8 @@ export class FrameStream {
   constructor(config: ArgosConfig, options: FrameStreamOptions) {
     this.opts = options;
     this.socket = new ReconnectingSocket({
-      url: withToken(`${config.wsBase}/ws/frames`, config.token),
+      // Read at each connection: the desktop app's waiting UI adopts its server in place.
+      url: () => withToken(`${config.wsBase}/ws/frames`, config.token),
       binaryType: 'arraybuffer',
       backoff: options.backoff,
       onMessage: (data) => this.handle(data),

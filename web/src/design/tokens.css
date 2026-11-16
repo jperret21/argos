@@ -112,6 +112,7 @@
   --sidebar-w: 92px;
   --toolbar-h: 44px; /* section toolbar, one row (Observe was 47 px) */
   --statusbar-h: 28px; /* one 12 px row (was 32 px) */
+  --titlebar-h: 28px; /* desktop app: the custom title bar (decorations off, Q-G14), as tall as macOS's own */
   --rail-min-w: 360px; /* right panel: drag limits and default */
   --rail-w: 400px;
   --rail-max-w: 580px;

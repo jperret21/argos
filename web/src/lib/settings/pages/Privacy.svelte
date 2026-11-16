@@ -12,6 +12,7 @@
   import type { CrashReports } from '../../api/types';
   import { useApp } from '../../app/state.svelte';
   import Control from '../../components/Control.svelte';
+  import RevealButton from '../../shell/desktop/RevealButton.svelte';
   import { int } from '../../format/number';
   import { NETWORK_EXPOSURE, PRIVACY_MIRRORS, utcTime } from '../categories';
   import SettingsBlock from '../SettingsBlock.svelte';
@@ -70,7 +71,7 @@
     <ul class="facts" aria-label="Logs and crash reports">
       <li>
         <span class="k">Log file</span>
-        <span class="mono">{app.appInfo?.paths.log_file ?? 'file logging is off'}</span>
+        <span class="path"><span class="mono">{app.appInfo?.paths.log_file ?? 'file logging is off'}</span><RevealButton path={app.appInfo?.paths.log_file} target={app.desktop} iconOnly variant="ghost" /></span>
       </li>
       <li>
         <span class="k">Crash reports</span>
@@ -139,6 +140,12 @@
   }
   .k {
     color: var(--text-muted);
+  }
+  .path {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
   }
   .mono {
     font-family: var(--font-mono);

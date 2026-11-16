@@ -260,6 +260,23 @@ describe('command palette index', () => {
   });
 });
 
+describe('desktop app (W8)', () => {
+  it('lists Quit ARGOS (Mod+Q, A7 through its handler) and each section once', async () => {
+    const desktop = new ShortcutRegistry(KEYMAP, { mac: true, desktop: true });
+    const quit = vi.fn();
+    desktop.handle('app.quit', quit);
+    const idx = buildIndex(source({ shortcuts: desktop }), none);
+    const entry = idx.find((c) => c.id === 'km.app.quit');
+    expect(entry).toMatchObject({ title: 'Quit ARGOS', icon: 'quit', keys: 'Mod+Q' });
+    await entry?.run();
+    expect(quit).toHaveBeenCalledTimes(1);
+    expect(idx.filter((c) => c.id.startsWith('km.nav.'))).toEqual([]);
+    expect(idx.filter((c) => c.group === 'Sections')).toHaveLength(5);
+    // A browser tab has no Quit.
+    expect(buildIndex(source(), none).some((c) => c.id === 'km.app.quit')).toBe(false);
+  });
+});
+
 describe('registry trigger (palette)', () => {
   it('runs a bound, active binding with its guard, and refuses the others', () => {
     const r = new ShortcutRegistry(KEYMAP, { mac: false, desktop: false });

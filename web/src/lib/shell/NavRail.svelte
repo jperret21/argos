@@ -150,6 +150,10 @@
       onpalette={() => (app.paletteOpen = true)}
       onsupportbundle={() => (app.supportBundleOpen = true)}
       onabout={() => app.openSettings('about')}
+      onquit={app.desktop.available ? () => void app.desktop.quit.request() : undefined}
+      onfullscreen={app.desktop.available ? () => app.desktop.toggleFullscreen() : undefined}
+      fullscreen={app.desktop.fullscreen}
+      fullscreenDetail={app.desktop.platform === 'macos' ? '⌃⌘F · hides the menu bar and the Dock' : undefined}
     />
     {#each footer as e (e.id)}{@render entry(e)}{/each}
   </div>

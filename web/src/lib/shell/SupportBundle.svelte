@@ -10,7 +10,7 @@
     UTC time in the name; [browse] opens the in-app FilePicker (save mode).
     An existing file asks "Replace?" (409 file_exists).
   - Success: a toast with the file count ("ARGOS did not upload it") and a
-    log line from the server.
+    log line from the server; in the desktop app its action reveals the ZIP (A12).
 -->
 <script lang="ts">
   import type { SessionSummary } from '../api/types';
@@ -64,5 +64,5 @@
   create={(req) => app.createSupportBundle(req)}
   list={app.listFiles}
   {stage}
-  oncreated={(r) => app.toast('info', 'Support bundle', bundleCreatedText(r) + (r.path ? ` Saved as ${r.path}` : ''))}
+  oncreated={(r) => app.toast('info', 'Support bundle', bundleCreatedText(r) + (r.path ? ` Saved as ${r.path}` : ''), app.revealAction(r.path))}
 />

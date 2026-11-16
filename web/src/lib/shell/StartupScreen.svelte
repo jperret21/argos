@@ -6,8 +6,11 @@
   - Honest stages: each line is marked when it really completes (a spinner
     while it runs, a filled mark when done); no fake progress bar.
   - Failure: the screen stays until the observer acts. It says what failed,
-    the exact text in mono, the log folder, and offers Copy details, Open log
-    folder (desktop app only) and Retry. It never hides an error.
+    the exact text in mono (columns kept, opened at its last line: LogTail),
+    the log folder (breaking only after a slash: PathText), and offers Copy
+    details, Open log folder (desktop app only) | Quit ARGOS (desktop app
+    only), Retry: the crash notice's order. It never hides an error. The
+    failure column is wider (80 columns of mono).
   - The mark comes from brand/argos-mark.svg (the generator's output,
     currentColor), never redrawn; the wordmark is "ARGOS" in Plex Sans 600.
   - `leaving` fades it out (--duration-base; instant with reduced motion).
@@ -16,6 +19,8 @@
   import mark from '../../design/brand/argos-mark.svg?raw';
   import { failureReport, type StartupFailure, type StartupStage } from '../app/startup';
   import Button from '../components/Button.svelte';
+  import LogTail from './LogTail.svelte';
+  import PathText from './PathText.svelte';
 
   interface Props {
     stages: readonly StartupStage[];
@@ -24,6 +29,8 @@
     onretry?: () => void;
     /** Desktop app only: reveal the log folder. */
     onopenlogs?: () => void;
+    /** Desktop app only: quit (nothing is left to stop). */
+    onquit?: () => void;
     leaving?: boolean;
     /** Fill the parent instead of the window (component gallery). */
     contained?: boolean;
@@ -35,6 +42,7 @@
     failure = null,
     onretry,
     onopenlogs,
+    onquit,
     leaving = false,
     contained = false,
   }: Props = $props();
@@ -67,7 +75,7 @@
 </script>
 
 <div class="startup" class:contained class:leaving role="main" aria-busy={!failure && !leaving} bind:this={root}>
-  <div class="center">
+  <div class="center" class:wide={!!failure}>
     <div class="mark" aria-hidden="true">{@html mark}</div>
     <h1 class="wordmark">ARGOS</h1>
     {#if version}<p class="version num">Version {version}</p>{/if}
@@ -76,14 +84,15 @@
       <section class="failure" role="alert" aria-labelledby="startup-fail-title">
         <h2 id="startup-fail-title"><span class="x" aria-hidden="true"></span>{failure.title}</h2>
         <p class="message">{failure.message}</p>
-        {#if failure.detail}<pre class="detail">{failure.detail}</pre>{/if}
+        {#if failure.detail}<div class="detail"><LogTail text={failure.detail} maxHeight="200px" /></div>{/if}
         {#if failure.logPath}
-          <p class="logpath"><span class="key">Log folder</span> <span class="num">{failure.logPath}</span></p>
+          <p class="logpath"><span class="key">Log folder</span> <PathText path={failure.logPath} /></p>
         {/if}
         <div class="actions">
           <Button label={copied ? 'Copied' : 'Copy details'} onclick={() => void copyDetails()} />
           {#if onopenlogs}<Button label="Open log folder" onclick={() => onopenlogs?.()} />{/if}
           <span class="spacer"></span>
+          {#if onquit}<Button label="Quit ARGOS" onclick={() => onquit?.()} />{/if}
           {#if onretry}<Button label="Retry" variant="primary" data-startup-retry onclick={() => onretry?.()} />{/if}
         </div>
       </section>
@@ -143,6 +152,9 @@
     justify-content: flex-start;
     width: min(560px, calc(100% - 48px));
     padding-top: max(0px, calc(30vh - var(--space-6)));
+  }
+  .center.wide {
+    width: min(720px, calc(100% - 48px));
   }
 
   .mark {
@@ -254,23 +266,11 @@
     margin: var(--space-2) 0 0;
   }
   .detail {
-    max-height: 200px;
     margin: var(--space-3) 0 0;
-    padding: var(--space-3);
-    overflow: auto;
-    border: var(--border-w) solid var(--border-soft);
-    border-radius: var(--radius-s);
-    background: var(--bg-2);
-    color: var(--fg);
-    font-family: var(--font-mono);
-    font-size: var(--text-s);
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
   }
   .logpath {
     margin: var(--space-3) 0 0;
     font-size: var(--text-s);
-    overflow-wrap: anywhere;
   }
   .key {
     color: var(--text-muted);

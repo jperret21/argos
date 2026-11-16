@@ -70,7 +70,7 @@ import type {
   ProfilesState,
   SiteCheck,
 } from '../api/types';
-import { type ArgosConfig, loadConfig } from '../config';
+import { type ArgosConfig, loadConfig, toWsBase } from '../config';
 import { ConditionsStore } from '../charts/conditions.svelte';
 import { overdueAfter, type ConditionsPage, type TimelinePeriod } from '../charts/conditions';
 import { clockUtc } from '../format/time';
@@ -108,7 +108,10 @@ import type { AttentionTarget } from '../api/attention';
 import { AttentionStore } from '../shell/attention/attention.svelte';
 import { ALERT_KEYS, prefsFrom, type SoundLevel } from '../shell/attention/model';
 import { checkKeepAwake } from '../shell/watch';
-import type { FieldCommands, NightCommands, PhotometryCommands, ReviewCommands, SequenceCommands } from '../shell/commandIndex';
+import type { MenuCommand } from '../shell/desktop/bridge';
+import { DesktopShell } from '../shell/desktop/desktop.svelte';
+import type { LocalActivity } from '../shell/desktop/words';
+import type { DesktopCommands, FieldCommands, NightCommands, PhotometryCommands, ReviewCommands, SequenceCommands } from '../shell/commandIndex';
 import { openLayers, setReservedKeys, topModalIndex } from '../components/layers';
 import type { FsLister } from '../components/filepicker';
 import type { BundleRequest, BundleResult } from '../components/supportbundle';
@@ -121,10 +124,10 @@ import { LogStore } from './log.svelte';
 import { type FrameMetrics, FrameRateMeter } from './metrics';
 import { clearAllLayouts } from './panels';
 import { isBoolean, loadPref, removePrefsWithPrefix, savePref } from './prefs';
-import { ShortcutRegistry } from './shortcuts';
+import { matchesShortcut, ShortcutRegistry } from './shortcuts';
 import { type StartupFailure, startupView, type StartupView } from './startup';
 import { deviceUsable } from './status';
-import { loadTheme, nextTheme, parseCssColor, saveTheme, THEME_STORAGE_KEY, type Theme } from './theme';
+import { loadTheme, nativeMenuGuard, nextTheme, parseCssColor, saveTheme, THEME_STORAGE_KEY, type Theme } from './theme';
 import { applyDensity, type Density, loadDensity, saveDensity, seedFromQt } from './viewerprefs';
 import { LiveCurveStore } from '../charts/lightcurve/store';
 import { ReviewExportApi } from '../review/dialogs/api';
@@ -199,6 +202,10 @@ export interface Toast {
   message: string;
   /** Identical toasts are merged; this counts the repeats. */
   count: number;
+  /** One action on the toast (W8: Reveal in Finder, desktop app only). */
+  action?: { label: string; run: () => void };
+  /** The message is a file name (one line, shortened in the middle, never broken). */
+  file?: boolean;
 }
 
 /** Observer-facing titles for the server's error codes (protocol.md). */
@@ -328,6 +335,12 @@ export class ArgosApp {
    * run_active` becomes the one question "Pause the run and slew" (InterlockDialog in App).
    */
   readonly interlock = new MountInterlock();
+  /**
+   * The desktop app (W8, lib/shell/desktop): the shell's server state (start-up stage,
+   * crash notice), the quit flow (A7), Reveal (A12), the title bar, the app menu. Inert
+   * in a browser tab (`available` false).
+   */
+  readonly desktop: DesktopShell;
   /** Wave 6b (D3): the server's attention items, the shared acknowledgement and the tones. */
   readonly attention = new AttentionStore({ by: 'web' });
   /** Wave 6b (D2): the last run's end-of-night wrap-up (`sequence.wrapup`). */
@@ -453,9 +466,24 @@ export class ArgosApp {
   private nextToastId = 1;
   private toastTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
-  constructor(config: ArgosConfig = loadConfig()) {
+  constructor(initial: ArgosConfig = loadConfig()) {
+    // Reactive: the desktop app's waiting UI adopts its server's address and token in
+    // place (W8), and what shows the address (Connection, the status bar) follows.
+    const config = $state(initial);
     this.config = config;
     this.client = new ArgosClient(config);
+    this.desktop = new DesktopShell({
+      client: this.client,
+      config,
+      activity: () => this.quitActivity(),
+      adopt: (api, token) => this.adoptServer(api, token),
+      onmenu: (id) => this.runMenu(id),
+      // The webview has no download bar: the shell saved the file in Downloads; say where.
+      ondownload: (d) =>
+        d.saved
+          ? this.toast('info', 'Saved in Downloads', d.name ?? d.path ?? '', this.revealAction(d.path), { file: true })
+          : this.toast('error', 'Download failed', 'The file could not be saved in the Downloads folder.'),
+    });
     this.events = new ArgosEvents(config, {
       onLog: (msg) => this.onLogLine(msg),
       onJob: (msg) => this.onJobEvent(msg.job),
@@ -612,16 +640,23 @@ export class ArgosApp {
   /** What runs on the equipment now (a disconnection would stop it). */
   get running(): RunningState {
     const cam = this.events.camera?.state;
-    return { live: cam === 'live', exposing: cam === 'exposing' || cam === 'downloading', slewing: this.slewing };
+    return {
+      live: cam === 'live',
+      exposing: cam === 'exposing' || cam === 'downloading',
+      slewing: this.slewing,
+      sequence: isActive(this.sequence.state),
+      autofocus: this.autofocusRunning,
+    };
   }
 
   /** The start-up screen's stages and outcome (01 2.3.8). */
   get startup(): StartupView {
     return startupView({
-      desktop: false,
+      desktop: this.desktop.available,
+      sidecar: this.desktop.sidecar,
       health: this.health,
       firstStatus: this.events.everStatus,
-      failure: this.startupFailure(),
+      failure: this.desktop.startupFailure ?? this.startupFailure(),
     });
   }
 
@@ -749,6 +784,67 @@ export class ArgosApp {
   start(): () => void {
     this.applyTheme(this.theme);
     applyDensity(this.density);
+    // M20: no light-grey native context menu in Night Red (browser and desktop app).
+    const stopMenuGuard = typeof window === 'undefined' ? () => {} : nativeMenuGuard(window, () => this.theme);
+    const stopDesktop = this.desktop.start(this.events);
+    // W8: the desktop app opened before its server is ready: only the shell's server state
+    // (start-up stage, failure) until the server is ready; then it runs on it in place
+    // (adoptServer), no reload.
+    if (this.desktop.waiting) {
+      // Mod+Q while the server starts or after it failed (no keymap yet; Linux has no
+      // native menu to catch it): the shell quits at once, there is nothing to stop.
+      const onKey = (e: KeyboardEvent) => {
+        if (e.repeat || !matchesShortcut(e, 'Mod+Q')) return;
+        e.preventDefault();
+        this.desktop.quit.exitNow();
+      };
+      window.addEventListener('keydown', onKey);
+      let stopLive: (() => void) | null = null;
+      this.goLive = () => {
+        window.removeEventListener('keydown', onKey);
+        stopLive ??= this.runOnServer();
+      };
+      return () => {
+        this.goLive = null;
+        window.removeEventListener('keydown', onKey);
+        stopLive?.();
+        stopDesktop();
+        stopMenuGuard();
+      };
+    }
+    const stopLive = this.runOnServer();
+    return () => {
+      stopLive();
+      stopDesktop();
+      stopMenuGuard();
+    };
+  }
+
+  /** W8: start the live UI later (a waiting desktop UI whose server became ready). */
+  private goLive: (() => void) | null = null;
+
+  /**
+   * W8: the shell's server is ready and this page waited for it: take its address and
+   * token (the URL too, so a reload finds them) and start the live UI in place.
+   */
+  private adoptServer(api: string, token: string): void {
+    this.config.apiBase = api;
+    this.config.wsBase = toWsBase(api);
+    this.config.token = token;
+    this.config.source = { api: 'query', token: 'query' };
+    try {
+      const url = new URL(location.href);
+      url.searchParams.set('api', api);
+      url.searchParams.set('token', token);
+      history.replaceState(history.state, '', url.toString());
+    } catch {
+      /* no history (tests): a reload would wait for the shell again */
+    }
+    this.goLive?.();
+  }
+
+  /** Everything that runs on a server: the links, health, attention, effects, keys. */
+  private runOnServer(): () => void {
     this.events.start();
     this.frames.start();
     this.frameStats ??= new FrameStatsWorker();
@@ -1226,6 +1322,8 @@ export class ArgosApp {
       }),
       // M103: Mod+Shift+O shows the Review sessions (R0) from anywhere.
       this.shortcuts.handle('review.sessions', () => this.showReviewSessions()),
+      // W8 (M18): Quit, desktop app only (the registry skips desktopOnly keys in a browser).
+      this.shortcuts.handle('app.quit', () => void this.desktop.quit.request()),
     ];
     const detach = typeof window === 'undefined' ? () => {} : this.shortcuts.attach(window);
     setReservedKeys((e) => this.shortcuts.reserves(e));
@@ -1233,6 +1331,62 @@ export class ArgosApp {
       setReservedKeys(null);
       detach();
       for (const f of off) f();
+    };
+  }
+
+  // -- W8: the desktop app ----------------------------------------------------------------
+
+  /** What runs, for the Quit dialog (M18): A7's 409 names it, the UI adds the object and frames. */
+  private quitActivity(): LocalActivity {
+    const s = this.sequence.state;
+    return {
+      sequence: s && isEngaged(s) ? { state: s.state, object: s.object_name, done: s.frames_done, total: s.frames_total } : null,
+      camera: this.events.camera?.state ?? null,
+      exposureS: this.cameraBusy ? (this.camera?.exposure_s ?? null) : null,
+      autofocus: this.autofocusRunning,
+      slewing: this.slewing,
+      solving: this.field.solving,
+      jobs: this.jobs.active,
+    };
+  }
+
+  /** A native app menu item (Q-G10): the in-window command of the same id. */
+  private runMenu(id: MenuCommand): void {
+    switch (id) {
+      case 'app.quit':
+        void this.desktop.quit.request();
+        return;
+      case 'help.about':
+        this.openSettings('about');
+        return;
+      case 'help.bundle':
+        this.supportBundleOpen = true;
+        return;
+      case 'help.docs':
+        window.open(this.appInfo?.docs_url ?? 'https://perretjules.com/argos/', '_blank', 'noopener,noreferrer');
+        return;
+      case 'theme.cycle':
+        this.setTheme(nextTheme(this.theme));
+        return;
+      case 'layout.reset-all':
+        this.resetAllLayouts();
+        return;
+      case 'palette.open':
+        // Opens (a menu item is no toggle: a key the page also saw must not close it again).
+        this.paletteOpen = true;
+        return;
+      default:
+        // nav.*, nav.settings.mod, file.open-fits, review.sessions, log.toggle, palette.open, help.shortcuts
+        this.shortcuts.trigger(id);
+    }
+  }
+
+  /** The toast action "Reveal in Finder" for a file the server wrote (desktop app only). */
+  revealAction(path: string | null | undefined): Toast['action'] {
+    if (!this.desktop.available || !path) return undefined;
+    return {
+      label: this.desktop.revealLabel,
+      run: () => void this.desktop.reveal(path).catch((err: unknown) => this.toast('error', this.desktop.revealLabel, err instanceof Error ? err.message : String(err))),
     };
   }
 
@@ -1378,6 +1532,8 @@ export class ArgosApp {
       /* blocked storage */
     }
     clearAllLayouts(store);
+    // W8: the desktop window's size and place too (the shell forgets its saved state; not undone).
+    this.desktop.resetWindowState();
     removePrefsWithPrefix('argos.card.');
     removePrefsWithPrefix('argos.levels-strip');
     const rail = this.railOpen;
@@ -1388,7 +1544,9 @@ export class ArgosApp {
     this.observe.reload();
     this.undo.push({
       title: 'Layouts reset',
-      detail: saved.length ? `${saved.length} remembered panel ${saved.length === 1 ? 'state' : 'states'} cleared` : 'Every section is back to its default panels',
+      detail:
+        (saved.length ? `${saved.length} remembered panel ${saved.length === 1 ? 'state' : 'states'} cleared` : 'Every section is back to its default panels') +
+        (this.desktop.available ? '; the window is back to its default size (not undone)' : ''),
       undo: () => {
         try {
           for (const [k, v] of saved) store?.setItem(k, v);
@@ -1422,6 +1580,8 @@ export class ArgosApp {
     const token = getComputedStyle(root).getPropertyValue('--viewer-tint');
     this.viewerTint = parseCssColor(token) ?? [1, 1, 1];
     this.viewerSaturated = parseCssColor(getComputedStyle(root).getPropertyValue('--viewer-saturated')) ?? (theme === 'night-red' ? [0, 0, 0] : [1, 0.2, 0.33]);
+    // W8: the shell paints the window behind the page in this theme's --bg (BRAND 4.3).
+    this.desktop.themeChanged(theme);
   }
 
   // -- Display ------------------------------------------------------------------------
@@ -1501,14 +1661,14 @@ export class ArgosApp {
 
   // -- Feedback -------------------------------------------------------------------------
 
-  toast(level: ToastLevel, title: string, message = ''): void {
+  toast(level: ToastLevel, title: string, message = '', action?: Toast['action'], opts: { file?: boolean } = {}): void {
     const same = this.toasts.find((t) => t.title === title && t.message === message);
     if (same) {
       same.count += 1;
       this.armToast(same.id, level);
       return;
     }
-    const toast: Toast = { id: this.nextToastId++, level, title, message, count: 1 };
+    const toast: Toast = { id: this.nextToastId++, level, title, message, count: 1, action, file: opts.file };
     this.toasts = [...this.toasts, toast].slice(-MAX_TOASTS);
     this.armToast(toast.id, level);
   }
@@ -2194,6 +2354,13 @@ export class ArgosApp {
   private stopReviewLive(): void {
     this.reviewLiveOff?.();
     this.reviewLiveOff = null;
+  }
+
+  /** The palette's desktop entries (W8): full screen, the sections' keys on macOS. */
+  desktopCommands(): DesktopCommands | null {
+    const d = this.desktop;
+    if (!d.available) return null;
+    return { mac: d.platform === 'macos', fullscreen: d.fullscreen, toggleFullscreen: () => d.toggleFullscreen() };
   }
 
   /** The palette's Review entries (W7, M8 "Re-run subs…", M92): R1's dialogs. */

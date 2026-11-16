@@ -227,6 +227,14 @@ describe('disconnectRisk (02 W10b, Q-C5): asked only while something runs', () =
     expect(disconnectRisk({ ...idle, slewing: true }, ['mount'])).toMatch(/slewing/);
     expect(disconnectRisk({ ...idle, slewing: true }, ['camera'])).toBeNull();
   });
+  it('a running sequence or autofocus is asked about too (Qt 602f199)', () => {
+    expect(disconnectRisk({ ...idle, sequence: true })).toMatch(/A sequence is running: it ends/);
+    expect(disconnectRisk({ ...idle, sequence: true, exposing: true })).not.toMatch(/An exposure is running/);
+    expect(disconnectRisk({ ...idle, sequence: true }, ['filterwheel'])).toMatch(/it ends/);
+    expect(disconnectRisk({ ...idle, sequence: true }, ['mount'])).toBe('A sequence is running and uses this device.');
+    expect(disconnectRisk({ ...idle, autofocus: true }, ['focuser'])).toMatch(/Autofocus is running/);
+    expect(disconnectRisk({ ...idle, autofocus: true }, ['mount'])).toBeNull();
+  });
 });
 
 describe('deviceUsable: each device by its own record (technical review, camera-only repro)', () => {

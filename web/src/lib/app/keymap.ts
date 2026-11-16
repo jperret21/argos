@@ -75,7 +75,8 @@ export const KEYMAP: readonly ShortcutDef[] = [
   { id: 'nav.settings.mod', keys: ['Mod+,'], label: 'Settings', scope: 'global' },
   { id: 'file.open-fits', keys: ['Mod+O'], label: 'Open FITS image', scope: 'global' },
   { id: 'review.sessions', keys: ['Mod+Shift+O'], label: 'Review sessions', scope: 'global' },
-  { id: 'app.quit', keys: ['Mod+Q'], label: 'Quit ARGOS', scope: 'global', desktopOnly: true, planned: true },
+  // Also over a dialog, the crash notice or the start-up failure (Linux has no native menu).
+  { id: 'app.quit', keys: ['Mod+Q'], label: 'Quit ARGOS', scope: 'global', desktopOnly: true, evenIfHandled: true },
   { id: 'help.shortcuts', keys: ['?'], label: 'Keyboard shortcuts', scope: 'global' },
   // Command palette (PROPOSAL 3.1, W2 end): every action with its key or its
   // unavailable reason; a hardware action opens its confirmation, never runs on Enter.

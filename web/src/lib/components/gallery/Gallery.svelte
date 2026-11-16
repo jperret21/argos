@@ -27,6 +27,7 @@
   import NightGallery from '../../shell/attention/gallery/NightGallery.svelte';
   import ReviewFilesGallery from '../../review/gallery/FilesGallery.svelte';
   import ReviewGallery from '../../review/gallery/ReviewGallery.svelte';
+  import DesktopGallery from '../../shell/desktop/gallery/DesktopGallery.svelte';
   import RailFooter from '../../shell/RailFooter.svelte';
   import ShortcutSheet from '../../shell/ShortcutSheet.svelte';
   import StartupScreen from '../../shell/StartupScreen.svelte';
@@ -262,6 +263,9 @@
       onchange={(t: Theme) => saveTheme(t)}
     />
   </header>
+
+  <!-- Wave 8, the desktop app: title bar, Quit dialog, shutdown scrim, crash notice, desktop start-up, Reveal in Finder. -->
+  <DesktopGallery />
 
   <!-- Wave 7, Review R1: the session review (toolbar, plot wall, rail, drawer) in every state, the rail cards, menus, health strip, large session. -->
   <ReviewGallery />

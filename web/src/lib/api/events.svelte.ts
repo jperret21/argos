@@ -186,7 +186,8 @@ export class ArgosEvents {
     this.options = options;
     this.clientId = `web-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`;
     this.socket = new ReconnectingSocket({
-      url: `${withToken(`${config.wsBase}/ws/events`, config.token)}&client=${this.clientId}`,
+      // Read at each connection: the desktop app's waiting UI adopts its server in place.
+      url: () => `${withToken(`${config.wsBase}/ws/events`, config.token)}&client=${this.clientId}`,
       backoff: options.backoff,
       onMessage: (data) => this.handle(data),
       onState: (state) => {

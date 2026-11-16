@@ -20,6 +20,10 @@
   - Global overlays (wave 2): the support bundle dialog (Help menu,
     Settings › Privacy & diagnostics, D14), the command palette (Mod+K) and
     the one Undo queue, drawn in the toasts' column.
+  - The desktop app (W8, lib/shell/desktop): the custom title bar over everything
+    (decorations off, Q-G14), the Quit dialog, the shutdown scrim and the crash notice
+    (DesktopHost); the start-up screen waits for the shell's server when the UI opened
+    first, and its Open log folder / Retry go to the shell then.
   Add ?perf to the URL to log per-frame decode/upload/stats/draw timings
   (upload and draw are then fenced with a 1-px readPixels: measurements only).
 -->
@@ -33,6 +37,8 @@
   import InterlockDialog from './lib/run/InterlockDialog.svelte';
   import SettingsScreen from './lib/settings/SettingsScreen.svelte';
   import CommandPalette from './lib/shell/CommandPalette.svelte';
+  import DesktopHost from './lib/shell/desktop/DesktopHost.svelte';
+  import TitleBar from './lib/shell/desktop/TitleBar.svelte';
   import KeyHintBanner from './lib/shell/KeyHintBanner.svelte';
   import SupportBundle from './lib/shell/SupportBundle.svelte';
   import OpenFits from './lib/shell/OpenFits.svelte';
@@ -47,6 +53,9 @@
   const perf = new URLSearchParams(location.search).has('perf');
 
   const key = (id: string) => app.shortcuts.keyFor(id) ?? '';
+  // W8: in the macOS app the sections' key is ⌘1-⌘5 (F-keys need Fn there; the View menu
+  // says ⌘1-⌘5); F1-F5 stay as alternates (the shortcuts sheet), and in a browser.
+  const navKey = (id: string) => (app.desktop.available && app.desktop.platform === 'macos' ? key(`${id}.desktop`) : '') || key(id);
 
   const NAV: readonly NavEntry[] = [
     {
@@ -54,35 +63,35 @@
       icon: 'nav-connection',
       label: 'Connection',
       hint: 'Connection: telescope profile, link and the four devices',
-      shortcut: key('nav.connection'),
+      shortcut: navKey('nav.connection'),
     },
     {
       id: 'imaging',
       icon: 'nav-imaging',
       label: 'Observe',
       hint: 'Observe: frame, focus and monitor the observation',
-      shortcut: key('nav.observe'),
+      shortcut: navKey('nav.observe'),
     },
     {
       id: 'sequencer',
       icon: 'nav-sequencer',
       label: 'Plan',
       hint: "Plan: build and run the night's sequence",
-      shortcut: key('nav.plan'),
+      shortcut: navKey('nav.plan'),
     },
     {
       id: 'analyze',
       icon: 'nav-analyze',
       label: 'Review',
       hint: 'Review: inspect the light curve and export to AAVSO',
-      shortcut: key('nav.review'),
+      shortcut: navKey('nav.review'),
     },
     {
       id: 'configuration',
       icon: 'nav-configuration',
       label: 'Settings',
       hint: 'Settings: observer, site, paths, appearance',
-      shortcut: key('nav.settings'),
+      shortcut: navKey('nav.settings'),
     },
   ];
 
@@ -97,7 +106,19 @@
   });
 </script>
 
-<div class="shell" inert={!app.started || undefined}>
+{#if app.desktop.showTitleBar}
+  <TitleBar
+    platform={app.desktop.platform}
+    subtitle={app.started ? NAV.find((n) => n.id === app.section)?.label : null}
+    focused={app.desktop.focused}
+    doubleClick={app.desktop.doubleClick}
+    onclose={() => void app.desktop.quit.request()}
+    onminimize={() => void app.desktop.bridge.minimize()}
+    onzoom={() => void app.desktop.bridge.toggleMaximize()}
+    ondrag={() => void app.desktop.bridge.startDragging()}
+  />
+{/if}
+<div class="shell" class:titled={app.desktop.showTitleBar} inert={!app.started || app.desktop.quit.scrim || undefined}>
   <NavRail entries={NAV} />
   <main class="section" aria-label={NAV.find((n) => n.id === app.section)?.label}>
     {#if app.section === 'imaging'}
@@ -130,13 +151,17 @@
 {#if app.watchOpen}
   <WatchHost attention={app.attention} keepAwake={app.keepAwake} onclose={() => (app.watchOpen = false)} />
 {/if}
+<!-- W8 (M18): Quit dialog, shutdown scrim, crash notice (a remote shutdown also in a browser). -->
+<DesktopHost desktop={app.desktop} version={app.serverVersion ?? app.desktop.version} onreconnect={() => app.reconnect()} />
 {#if !startupGone}
   <StartupScreen
     stages={app.startup.stages}
-    version={app.serverVersion}
+    version={app.serverVersion ?? app.desktop.version}
     failure={app.startup.failure}
     leaving={app.started}
-    onretry={() => app.retryStartup()}
+    onretry={() => (app.desktop.startupFailure ? app.desktop.restartServer() : app.retryStartup())}
+    onopenlogs={app.desktop.available ? () => app.desktop.openLogFolder() : undefined}
+    onquit={app.desktop.available ? () => app.desktop.quit.exitNow() : undefined}
   />
 {/if}
 
@@ -146,6 +171,10 @@
     grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) var(--statusbar-h);
     height: 100%;
+  }
+  /* Desktop app: the title bar takes the native one's place above the shell. */
+  .shell.titled {
+    height: calc(100% - var(--titlebar-h));
   }
 
   .section {

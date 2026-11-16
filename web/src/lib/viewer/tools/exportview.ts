@@ -107,7 +107,7 @@ export function viewFileName(seq: number | null, now = new Date()): string {
   return `argos_view_${seq !== null ? `${seq}_` : ''}${t}.png`;
 }
 
-/** Hand a blob to the browser as a download (the desktop build will use a save dialog, W8). */
+/** Hand a blob to the browser as a download (the desktop app saves it in Downloads, W8). */
 export function download(blob: Blob, name: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

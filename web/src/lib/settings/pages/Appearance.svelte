@@ -42,7 +42,11 @@
         <p class="caption">Kept per viewer: another window or computer keeps its own.</p>
       </div>
       <div class="rows">
-        <PrefRow id="theme" label="Theme" help="Night Red keeps every pixel red for dark adaptation. Also one click on the rail's theme button.">
+        <PrefRow
+          id="theme"
+          label="Theme"
+          help={`Night Red keeps every pixel red for dark adaptation. Also one click on the rail's theme button.${app.desktop.available && app.desktop.platform === 'macos' ? ' At the telescope, use full screen (⌃⌘F) to hide the menu bar and the Dock, which macOS draws in grey.' : ''}`}
+        >
           <Segmented
             label="Theme"
             options={THEMES.map((t) => ({ value: t, label: THEME_LABELS[t] }))}

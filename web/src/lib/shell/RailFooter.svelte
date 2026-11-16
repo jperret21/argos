@@ -33,6 +33,10 @@
     onsupportbundle?: () => void;
     /** Desktop app only. */
     onquit?: () => void;
+    /** Desktop app only: Enter / Exit full screen (W8), its state and its detail line. */
+    onfullscreen?: () => void;
+    fullscreen?: boolean;
+    fullscreenDetail?: string;
     /** Gallery: draw one menu open in place. */
     preview?: 'help' | 'theme' | null;
   }
@@ -48,6 +52,9 @@
     onabout,
     onsupportbundle,
     onquit,
+    onfullscreen,
+    fullscreen = false,
+    fullscreenDetail,
     preview = null,
   }: Props = $props();
 
@@ -79,6 +86,12 @@
       disabledReason: onsupportbundle ? null : NOT_YET,
     },
     { id: 'about', label: 'About ARGOS', icon: 'about', disabledReason: onabout ? null : NOT_YET },
+    ...(onfullscreen
+      ? ([
+          { kind: 'separator', id: 'sep-window' },
+          { id: 'fullscreen', label: fullscreen ? 'Exit full screen' : 'Enter full screen', icon: 'expand-pane', detail: fullscreenDetail },
+        ] as MenuEntry[])
+      : []),
     ...(onquit
       ? ([
           { kind: 'separator', id: 'sep' },
@@ -110,6 +123,9 @@
         break;
       case 'quit':
         onquit?.();
+        break;
+      case 'fullscreen':
+        onfullscreen?.();
         break;
     }
   }

@@ -70,12 +70,14 @@ export class ApiError extends Error {
   readonly fields: Record<string, string> | null;
   /** API 2: id of the job holding the resource (`409 busy` on a job start). */
   readonly owner: string | null;
+  /** API 2: the whole `error` member, for refusals with more members (W8: A7's `409 busy` `what`). */
+  readonly body: Record<string, unknown> | null;
 
   constructor(
     status: number,
     code: string,
     message: string,
-    extra: { fields?: Record<string, string> | null; owner?: string | null } = {},
+    extra: { fields?: Record<string, string> | null; owner?: string | null; body?: Record<string, unknown> | null } = {},
   ) {
     super(message);
     this.name = 'ApiError';
@@ -83,6 +85,7 @@ export class ApiError extends Error {
     this.code = code;
     this.fields = extra.fields ?? null;
     this.owner = extra.owner ?? null;
+    this.body = extra.body ?? null;
   }
 
   get isUnauthorized(): boolean {
@@ -121,6 +124,7 @@ export function errorFromResponse(status: number, statusText: string, bodyText: 
     return new ApiError(status, parsed.error.code, parsed.error.message, {
       fields: fields && typeof fields === 'object' ? fields : null,
       owner: typeof owner === 'string' ? owner : null,
+      body: parsed.error as unknown as Record<string, unknown>,
     });
   }
   const fallbackCode = status === 401 ? 'unauthorized' : `http_${status}`;

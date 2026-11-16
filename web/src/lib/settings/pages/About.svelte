@@ -15,6 +15,7 @@
   import { isDesktopApp } from '../../app/shortcuts';
   import { useApp } from '../../app/state.svelte';
   import Control from '../../components/Control.svelte';
+  import RevealButton from '../../shell/desktop/RevealButton.svelte';
 
   const app = useApp();
   const info = $derived(app.appInfo);
@@ -84,11 +85,11 @@
   </div>
 
   <div class="actions">
-    <Control icon="copy" label={copied ? 'Copied' : 'Copy version info'} showLabel size="s" variant="secondary" onclick={() => void copy()} />
+    <!-- Three text buttons alike (design review W8: no icon set has a "source code" symbol,
+         so none of the three carries one). -->
+    <Control label={copied ? 'Copied' : 'Copy version info'} size="s" variant="secondary" onclick={() => void copy()} />
     <Control
-      icon="help"
       label="Documentation & website"
-      showLabel
       size="s"
       variant="secondary"
       tooltip="top"
@@ -129,11 +130,11 @@
       <h3 class="title" id="paths-title">Folders</h3>
       <dl class="paths">
         <dt>Configuration</dt>
-        <dd class="mono">{info.paths.config ?? 'in memory (not saved)'}</dd>
+        <dd><span class="mono">{info.paths.config ?? 'in memory (not saved)'}</span><RevealButton path={info.paths.config} target={app.desktop} iconOnly variant="ghost" /></dd>
         <dt>Sessions</dt>
-        <dd class="mono">{info.paths.sessions}</dd>
+        <dd><span class="mono">{info.paths.sessions}</span><RevealButton path={info.paths.sessions} target={app.desktop} iconOnly variant="ghost" /></dd>
         <dt>Logs</dt>
-        <dd class="mono">{info.paths.log_file ?? info.paths.diagnostics ?? 'file logging is off'}</dd>
+        <dd><span class="mono">{info.paths.log_file ?? info.paths.diagnostics ?? 'file logging is off'}</span><RevealButton path={info.paths.log_file ?? info.paths.diagnostics} target={app.desktop} iconOnly variant="ghost" /></dd>
       </dl>
     </section>
   {/if}
@@ -239,6 +240,9 @@
     color: var(--text-muted);
   }
   dd {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
     margin: 0;
     overflow-wrap: anywhere;
   }

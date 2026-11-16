@@ -77,7 +77,8 @@ export interface WebSocketLike {
 export type WebSocketFactory = (url: string) => WebSocketLike;
 
 export interface ReconnectingSocketOptions {
-  url: string;
+  /** The URL, or a function read at each connection (the desktop app adopts its server in place). */
+  url: string | (() => string);
   binaryType?: BinaryType;
   backoff?: BackoffOptions;
   onMessage: (data: unknown) => void;
@@ -147,7 +148,7 @@ export class ReconnectingSocket {
     const create = this.opts.createSocket ?? ((url: string) => new WebSocket(url));
     let ws: WebSocketLike;
     try {
-      ws = create(this.opts.url);
+      ws = create(typeof this.opts.url === 'function' ? this.opts.url() : this.opts.url);
     } catch {
       // Malformed URL or a browser refusing the socket: treat as a drop.
       this.scheduleRetry();
