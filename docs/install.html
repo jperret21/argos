@@ -3,17 +3,27 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Install ARGOS 0.4.2</title>
-  <meta name="description" content="Install ARGOS 0.4.2: macOS arm64 .dmg and Debian x86-64 .deb, how to link ASTAP, and what to do in the Seestar app first.">
-  <meta property="og:title" content="Install ARGOS 0.4.2">
-  <meta property="og:description" content="macOS arm64 .dmg and Debian x86-64 .deb, built and smoke-tested on the v0.4.2 tag. Free software, GPL v3.">
+  <title>Install ARGOS 0.5.0</title>
+  <meta name="description" content="Install ARGOS 0.5.0, the first beta: the macOS .dmg for Apple silicon, the x86_64 .deb for Debian and Ubuntu, the first launch on macOS, ASTAP and the Seestar link.">
+  <link rel="canonical" href="https://perretjules.com/argos/install.html">
+  <meta name="theme-color" content="#f3f3ee">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://perretjules.com/argos/install.html">
+  <meta property="og:title" content="Install ARGOS 0.5.0">
+  <meta property="og:description" content="macOS .dmg (Apple silicon) and x86_64 .deb (Debian, Ubuntu; technical preview), built by the release workflow on the v0.5.0 tag. Free software, GPL v3.">
+  <meta property="og:image" content="https://perretjules.com/argos/img/connection.jpg">
+  <meta property="og:image:width" content="1600">
+  <meta property="og:image:height" content="537">
+  <meta property="og:image:alt" content="The ARGOS Connection screen with the simulator connected: four of four devices ready.">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="stylesheet" href="css/argos.css">
 </head>
 <body class="release-page">
+  <a class="skip-link" href="#main">Skip to content</a>
   <header class="site-header">
-    <a class="site-brand" href="index.html"><img src="favicon.svg" alt="">ARGOS</a>
+    <a class="site-brand" href="index.html"><img src="favicon.svg" alt="" width="25" height="25">ARGOS</a>
     <nav aria-label="Main navigation">
       <a href="install.html" aria-current="page">Install</a>
       <a href="docs/">Documentation</a>
@@ -26,110 +36,123 @@
         <a href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub ↗</a>
       </div>
     </details>
-    <a class="site-external" href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub <span>↗</span></a>
+    <a class="site-external" href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub <span aria-hidden="true">↗</span></a>
   </header>
 
-  <main>
-    <section class="page-hero">
+  <main id="main">
+    <section class="page-hero" aria-labelledby="install-title">
       <div>
-        <p class="mono-label">Version 0.4.2 · 1 November 2026</p>
-        <h1>Install.</h1>
-        <p>Built and smoke-tested on the <code>v0.4.2</code> tag, on the platform each package targets. Free software under the GNU GPL v3.</p>
+        <p class="mono-label">Version 0.5.0 · first beta</p>
+        <h1 id="install-title">Install.</h1>
+        <p>The new ARGOS: its interface in a desktop window, with the ARGOS server running beside it on the same computer. Built by the release workflow on the <code>v0.5.0</code> tag, after the test suites and a smoke test of the bundled server. Free software under the GNU GPL v3.</p>
       </div>
-      <aside class="release-note">
-        <b>First launch on macOS</b>
-        The build is unsigned: control-click ARGOS, then choose Open. If macOS reports the app is damaged, run<br>
-        <code>xattr -dr com.apple.quarantine /Applications/Argos.app</code>
+      <aside class="release-note" aria-labelledby="first-launch">
+        <b id="first-launch">First launch on macOS</b>
+        ARGOS is signed ad hoc and not notarised (the project has no paid Apple certificate), so macOS blocks it once. Drag it to Applications, open it, click Done. Then:<br>
+        macOS 15 or later: System Settings › Privacy &amp; Security › Open Anyway, and Open Anyway again.<br>
+        macOS 11 to 14: right-click ARGOS in Applications › Open, then Open.<br>
+        If macOS says it is damaged:<br>
+        <code>xattr -dr com.apple.quarantine "/Applications/ARGOS.app"</code>
       </aside>
     </section>
 
-    <section class="download-section band">
+    <section class="download-section band" aria-labelledby="get-title">
       <p class="mono-label">01 · Installers</p>
-      <h2>Get ARGOS 0.4.2.</h2>
+      <h2 id="get-title">Get ARGOS 0.5.0.</h2>
       <div class="download-table">
         <div class="download-row">
           <span class="platform">macOS</span>
-          <strong>Argos-0.4.2-macOS-arm64.dmg</strong>
-          <p>67.4 MB · Apple silicon · unsigned</p>
-          <a href="https://github.com/jperret21/argos/releases/download/v0.4.2/Argos-0.4.2-macOS-arm64.dmg">Download .dmg ↓</a>
+          <strong>ARGOS-0.5.0-macOS-arm64.dmg</strong>
+          <p>Apple silicon · signed ad hoc, not notarised · <code>READ ME FIRST.txt</code> inside</p>
+          <a href="https://github.com/jperret21/argos/releases/download/v0.5.0/ARGOS-0.5.0-macOS-arm64.dmg">Download .dmg ↓</a>
         </div>
         <div class="download-row">
-          <span class="platform">Debian</span>
-          <strong>argos_0.4.2_amd64.deb</strong>
-          <p>82.4 MB · x86-64 · technical preview, never field-validated on Linux</p>
-          <a href="https://github.com/jperret21/argos/releases/download/v0.4.2/argos_0.4.2_amd64.deb">Download .deb ↓</a>
+          <span class="platform">Linux</span>
+          <strong>ARGOS_0.5.0_amd64.deb</strong>
+          <p>x86_64 · Ubuntu 22.04 or Debian 12 and later · WebKitGTK 4.1 · technical preview</p>
+          <a href="https://github.com/jperret21/argos/releases/download/v0.5.0/ARGOS_0.5.0_amd64.deb">Download .deb ↓</a>
         </div>
         <div class="download-row">
           <span class="platform">Source</span>
-          <strong>Tag v0.4.2</strong>
-          <p>Python 3.11 · <code>uv sync --extra dev</code> · <code>uv run python main.py</code></p>
-          <a href="https://github.com/jperret21/argos/tree/v0.4.2" target="_blank" rel="noopener">Source ↗</a>
+          <strong>Tag v0.5.0</strong>
+          <p>Python 3.11 and Node.js · <code>uv sync --extra dev --extra qt --extra server</code> · <code>(cd web &amp;&amp; npm install)</code> · <code>uv run python run_web.py --sim</code></p>
+          <a href="https://github.com/jperret21/argos/tree/v0.5.0" target="_blank" rel="noopener">Source ↗</a>
         </div>
+      </div>
+      <p class="download-sizes">File sizes are listed with the assets on the <a href="https://github.com/jperret21/argos/releases/tag/v0.5.0" target="_blank" rel="noopener">v0.5.0 release page</a>.</p>
+
+      <div class="release-checklist platform-floors" id="requirements">
+        <div><span>macOS</span><strong>Apple silicon</strong><p>The app declares macOS 11.0 as its minimum. Its interface needs the WebKit of Safari 16.2 or later (container queries, <code>color-mix()</code>): on macOS 11 and 12, keep Safari updated. Tested on macOS 26 only.</p></div>
+        <div><span>Linux · technical preview</span><strong>x86_64, Ubuntu 22.04 or Debian 12 and later</strong><p>Built on Ubuntu 22.04 against WebKitGTK 4.1, so it needs glibc 2.34 or later (inferred from the build system; not yet checked on the package). Its server is smoke-tested in CI; the window has not yet been tested on a Linux desktop.</p></div>
+        <div><span>Not yet</span><strong>Live use on a telescope</strong><p>0.5.0 was tested with its built-in simulator and with replays of real nights. Live use on a Seestar is still to come: watch the first nights closely.</p></div>
       </div>
     </section>
 
-    <section class="download-section">
+    <section class="download-section" aria-labelledby="setup-title">
       <p class="mono-label">02 · Setup</p>
-      <h2>Four steps, once.</h2>
+      <h2 id="setup-title">Four steps, once.</h2>
       <ol class="sequence-table">
         <li>
           <span>01</span>
           <strong>Install ASTAP</strong>
-          <p>ARGOS does not bundle it. Install the <a href="https://www.hnsky.org/astap.htm" target="_blank" rel="noopener">ASTAP</a> executable <em>and</em> one of its star databases — both are separate downloads, and plate solving needs both.</p>
+          <p>ARGOS does not bundle it. Install the <a href="https://www.hnsky.org/astap.htm" target="_blank" rel="noopener">ASTAP</a> executable <em>and</em> one of its star databases: they are separate downloads, and plate solving needs both.</p>
         </li>
         <li>
           <span>02</span>
           <strong>Install ARGOS</strong>
-          <p>macOS: open the <code>.dmg</code>, drag ARGOS to Applications, then control-click it and choose Open — the build is unsigned. Debian: <code>sudo apt install ./argos_0.4.2_amd64.deb</code>.</p>
+          <p>macOS: open the <code>.dmg</code>, drag ARGOS to Applications, then open it once as in the box above. Debian or Ubuntu: <code>sudo apt install ./ARGOS_0.5.0_amd64.deb</code>.</p>
         </li>
         <li>
           <span>03</span>
           <strong>Point ARGOS at ASTAP</strong>
-          <p>In <code>Settings → Astrometry</code>, browse to the ASTAP executable, and to the star-database folder if it is not auto-detected. The status line must confirm both: ARGOS cannot solve from the executable alone.</p>
+          <p>In <b>Settings › Plate solving</b>, set <b>ASTAP executable</b>, and <b>Star database folder</b> if ARGOS does not find the database. It cannot solve from the executable alone.</p>
         </li>
         <li>
           <span>04</span>
           <strong>Start the telescope in the Seestar app</strong>
-          <p>Every night begins in the official app: power and initialise the Seestar, complete its GoTo calibration and the first focus there. ARGOS does not replace that step. Then connect it over Alpaca — <code>10.0.0.1:32323</code> in access-point mode — and wait for telescope, camera, filter wheel and focuser to read Ready.</p>
+          <p>Every night begins in the official app: power and initialise the Seestar, complete its GoTo calibration and the first focus there. Then, on the <b>Connection</b> screen, choose <b>Seestar (Alpaca)</b>: <code>10.0.0.1</code>, port <code>32323</code>, in access-point mode, then <b>Connect all</b>. Wait for mount, camera, filter wheel and focuser to read Ready.</p>
         </li>
       </ol>
+      <figure class="capture install-shot">
+        <picture><source srcset="img/connection.webp" type="image/webp"><img src="img/connection.jpg" width="1600" height="537" alt="The ARGOS Connection screen with the simulator connected: four of four devices ready (mount, camera, filter wheel, focuser), the Seestar S30 Pro profile, the site check agreeing with the mount, and the Link card where Seestar (Alpaca) is the other choice." loading="lazy"></picture>
+        <figcaption><b>Connection</b><span>the built-in simulator, four of four devices ready; for a Seestar, choose Seestar (Alpaca) in the Link card · 0.5.0</span></figcaption>
+      </figure>
     </section>
 
-    <section class="release-notes band">
+    <section class="release-notes band" id="profiles" aria-labelledby="profiles-title">
       <p class="mono-label">03 · Instruments</p>
-      <h2>Telescope profiles.</h2>
+      <h2 id="profiles-title">Telescope profiles.</h2>
       <div class="release-checklist">
-        <div><span>Reference</span><strong>Seestar S30 Pro</strong><p>30 mm, f/5.3, IMX585, 3.74″/px, 4.0° × 2.2°. The profile ARGOS is validated against.</p></div>
-        <div><span>Unvalidated</span><strong>Seestar S30</strong><p>30 mm, f/5.0, IMX662, 3.99″/px. Selectable, but GRBG is assumed and the gain curve is inherited.</p></div>
-        <div><span>Unvalidated</span><strong>Seestar S50</strong><p>50 mm, f/5.0, IMX462, 2.39″/px. Selectable, but GRBG is assumed and the gain curve is inherited.</p></div>
+        <div><span>Reference</span><strong>Seestar S30 Pro</strong><p>30&nbsp;mm, f/5.3, IMX585, 3.74″/px, 4.0° × 2.2°. The reference profile, its gain measured by photon transfer on one unit over three nights: 0.228&nbsp;e<sup>−</sup>/ADU and 2.6&nbsp;e<sup>−</sup> read noise at gain&nbsp;80.</p></div>
+        <div><span>Unvalidated</span><strong>Seestar S30</strong><p>30&nbsp;mm, f/5.0, IMX662, 3.99″/px. Selectable, but GRBG is assumed and the gain curve is inherited.</p></div>
+        <div><span>Unvalidated</span><strong>Seestar S50</strong><p>50&nbsp;mm, f/5.0, IMX462, 2.39″/px. Selectable, but GRBG is assumed and the gain curve is inherited.</p></div>
       </div>
     </section>
 
-    <section class="release-notes">
+    <section class="release-notes" aria-labelledby="notes-title">
       <p class="mono-label">04 · Release notes</p>
-      <h2>What changed in 0.4.2.</h2>
+      <h2 id="notes-title">What changed in 0.5.0.</h2>
       <ul>
-        <li><strong>Re-run batch photometry from 0.4.1.</strong> With <code>camera.egain_table</code> empty — the default — the offline path used a gain of 1.0: every SNR and formal error was wrong by the gain, 1.723 e⁻/ADU on an IMX585 at gain 80.</li>
-        <li><strong>No more silently lost points.</strong> A frame whose comparisons were all flagged suspect lost a valid magnitude; it is kept now. <code>comps_used</code> counts the magnitude ensemble, and <code>suspect</code> is a column.</li>
-        <li><strong>Airmass at the point's own time</strong>, from the target's coordinates, not from the mount's last reported altitude.</li>
-        <li><strong>GoTo in the mount's own coordinates.</strong> J2000 targets are converted to the system the driver declares — at the equator, about 21′ of precession. GoTo and Sync are refused while the mount clock is more than a minute off.</li>
-        <li><strong>AAVSO export.</strong> <code>CHART</code> names the VSP chart; <code>KNAME</code> and <code>KMAG</code> carry the check star.</li>
-        <li><strong>EQ mode: apertures follow by translation only</strong>, so centroid noise no longer rotates them about the sensor. Live only — the offline re-measurement cannot tell the mount mode.</li>
-        <li><strong>Observe stays responsive</strong> when catalogues, plate solves and tracking update at once.</li>
+        <li><strong>A new interface, in a desktop app.</strong> Connection, Observe (Framing, Focus, Field, Run), Plan, Review and Settings in one window, in three dark themes, Night Red among them for dark-adapted eyes. The PyQt6 app is retired.</li>
+        <li><strong>Error bars from the camera's measured noise.</strong> The noise model is the green plane's, with the camera's measured e<sup>−</sup>/ADU (0.4.x used one that put the stars' photon noise 1.9 to 2.7 times off), scintillation and the sky estimate's own error; the sky is the annulus' 3σ-clipped mean; the comparisons are weighted by their errors. The noise model and the e<sup>−</sup>/ADU are locked while a run lasts. The error bars are about right for faint stars and on the safe side for bright ones (1.3 to 1.6 times their scatter) until 0.5.x.</li>
+        <li><strong>Times, site and airmass.</strong> Frames are timed by their exposure, not their download; BJD_TDB is computed offline; the Settings site is checked against the mount, and Review and the re-run take the airmass from the frames' headers.</li>
+        <li><strong>Apertures that follow the field.</strong> They are placed from the plate solution and anchor stars, with proper motion and each star's own airmass; a frame where they do not line up gets no point, and a crowded comparison is named.</li>
+        <li><strong>Review and the AAVSO export.</strong> Old sessions reopen with a batch re-run on today's code; a report holds one filter, leaves out saturated, suspect and no-detection points, names the VSP chart and the ARGOS version.</li>
+        <li><strong>Files you already hold.</strong> Several 0.4.x defects wrote wrong values into frames, curves and AAVSO reports. <a href="docs/release_0_5_0.html#check-your-old-files">Check your old files</a> before you reuse them.</li>
       </ul>
       <p class="release-scope"><b>Before you observe</b>
-      The live curve is a quick-look: uncalibrated, no dark, flat or bias. Keep the raw FITS; the publishable measurement comes from Siril. Attended use only — there is no weather safety and no restart recovery.</p>
+      The live curve and the re-run measure raw frames: no dark, flat or bias. Keep the raw FITS; the calibrated measurement comes from Siril. Attended use only: there is no weather safety. And 0.5.0 has not yet been used live on a telescope.</p>
       <div class="actions">
-        <a class="action" href="https://github.com/jperret21/argos/blob/v0.4.2/notes/release_0_4_2.md" target="_blank" rel="noopener">Full 0.4.2 notes <span>↗</span></a>
-        <a class="action" href="https://github.com/jperret21/argos/releases" target="_blank" rel="noopener">All releases <span>↗</span></a>
-        <a class="action" href="docs/">Documentation</a>
+        <a class="action" href="docs/release_0_5_0.html">What changed, by task</a>
+        <a class="action" href="https://github.com/jperret21/argos/blob/v0.5.0/notes/release_0_5_0.md" target="_blank" rel="noopener">Full 0.5.0 notes <span aria-hidden="true">↗</span></a>
+        <a class="action" href="https://github.com/jperret21/argos/releases" target="_blank" rel="noopener">All releases <span aria-hidden="true">↗</span></a>
       </div>
     </section>
 
   </main>
 
   <footer class="site-footer">
-    <a class="site-brand" href="index.html"><img src="favicon.svg" alt="">ARGOS</a>
+    <a class="site-brand" href="index.html"><img src="favicon.svg" alt="" width="20" height="20">ARGOS</a>
     <p>Open-source observing software · GNU GPL v3+ · Jules Perret — built under Californian skies</p>
     <a href="https://github.com/jperret21/argos" target="_blank" rel="noopener">GitHub ↗</a>
   </footer>
