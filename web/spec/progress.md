@@ -3376,7 +3376,8 @@ Settings site's city twice, from `site_check.py`'s docstring (code, below); 6 el
 pattern matches, all digits inside SVG coordinates (chart points, a diagram polygon).
 
 **Main session, after the pass (2026-11-16).**
-- The h1 is "Variable-star photometry with a Seestar." (the art director's wording);
+- The h1 went back to the owner's tagline, "Put your smart telescope to scientific work."
+  (ARGOS is not meant to stay Seestar-only; the art director's alternative was declined);
   MathJax stays vendored (nothing remote); the section 04 lede no longer says Siril
   calibrated that night; the method page's known limits name the field-rotation trends
   and calibration for 0.6.
