@@ -11,7 +11,10 @@ the reference of the parity tests. The release also brings every fix listed
 below: data-integrity, hardware-safety and photometry fixes (S1–S85, H1–H17,
 X1–X3), the photometry ones checked against references independent of the old
 app (the Siril reduction of a real night, astropy, the VSP catalogue, the
-frames' own noise). Patch releases 0.5.x will follow. The web interface was
+frames' own noise). ARGOS does not calibrate its frames (no bias, dark or flat),
+and neither did that Siril reduction: the agreement checks the measurement, not
+a calibration (see *Not in 0.5.0: calibration* below). Patch releases 0.5.x
+will follow. The web interface was
 tested with its simulator and with replays of real nights; it has not yet been
 used live on a telescope. This file lists the fixes; the interface is described
 in the documentation and in `web/spec/progress.md`.
@@ -3446,6 +3449,34 @@ patch:
   the host, saving the port when edited, reverting the GoTo flash), H17 (the
   search's time budget, up to about 48 s, and cancellation).
 
+## Not in 0.5.0: calibration
+
+ARGOS measures raw sub-exposures: no bias (offset), dark or flat is applied,
+live, in a re-run or in Review, although the sequencer captures all three frame
+types into a Siril layout. The reference reduction of RR Lyr 2026-09-25
+(`star_var_script` with Siril) ran on the raw lights too ("No calibration frames
+— proceeding with raw lights"), so the ARGOS–Siril agreement (S71, S76) checks
+the photometry engine on the same data, not the effect of calibration.
+
+What that leaves, term by term, in a differential aperture measurement with a
+local sky annulus: the bias and the dark's signal are additive and are
+subtracted with the sky (what remains is their fixed pattern between aperture
+and annulus, and the dark's shot noise, which no error term counts); hot pixels
+are flagged (`_peak_lacks_psf_support`). The flat is multiplicative and stays:
+a star on the same pixels all night carries a constant offset, but the alt-az
+mount's field rotation moves the comparisons across the sensor during a run, so
+vignetting, dust and pixel response can add slow trends, the red noise the
+run's `sigma_syst` does not contain. Its size on the S30 Pro has not been
+measured. Times, periods and the curve's shape are not affected; magnitude
+levels and slow trends may be, and the check star's curve is the guard.
+
+The AAVSO export says so in its dialog (owner's decision, 2026-11-16: a warning,
+the file unchanged). Planned for 0.6: measure the effect first (a dark library
+and flats taken with the Seestar, the RR Lyr night reduced in Siril with and
+without them), then bias, dark and flat masters applied to the green plane
+before photometry, live and in a re-run, checked against that calibrated
+reduction.
+
 ## State of the branch
 
 - 779 tests pass, 47 skipped on 2026-11-16 with S84 (0.4.2: 534 and 45; the skipped
@@ -3477,10 +3508,11 @@ patch:
 - [x] Review findings fixed (X1, X2, gaps in S1, S3, S4, S10, S23, H3) and the
       notes corrected (S10 file names, S4, S23, the `SOFTWARE` header).
 - [x] Site check against the mount (X3) added, with its tests.
-- [ ] Bump the version to 0.5.0 in `pyproject.toml` and `argos/__init__.py`
-      (both still say 0.4.2). Until then the branch writes `SOFTWARE = 'Argos
-      v0.4.2'` and the site-search User-Agent says 0.4.2; *Check your old
-      files* relies on that header to tell fixed frames from affected ones.
+- [x] Bump the version to 0.5.0, on explore/web-ui (`175abf6`: `argos/__init__.py`,
+      `pyproject.toml`, `uv.lock`, the desktop shell's `Cargo.toml` and
+      `Cargo.lock`, `docsrc/conf.py`); this branch, never released alone, keeps
+      0.4.2. Frames written by the release say `SOFTWARE = 'Argos v0.5.0'`, which
+      *Check your old files* relies on to tell fixed frames from affected ones.
 - [ ] Tag `v0.5.0`. The Release workflow builds the DMG and the Debian package
       and attaches them to a **draft** release.
 - [ ] At the telescope: a Dark Take shot with Filter IR is refused; **+ Add**
