@@ -99,7 +99,7 @@ xattr -dr com.apple.quarantine "/Applications/ARGOS.app"
 | | macOS | Linux |
 |---|---|---|
 | Processor | Apple silicon (M1 or later). There is no Intel build. | x86-64 |
-| System | macOS 11 (Big Sur) or later, the minimum the app declares. The window draws the interface with macOS's own WebKit, and the interface uses WebKit features of Safari 16.2: on macOS 11 and 12, install the Safari updates up to 16.2 or later. | A Debian or Ubuntu system with the WebKitGTK 4.1 library, which `apt` installs with the package. The package is built on Ubuntu 22.04, so it needs Ubuntu 22.04 or Debian 12 or later (glibc 2.34 or later; inferred from the build system, not yet checked on the package). |
+| System | macOS 11 (Big Sur) or later, the minimum the app declares. The window draws the interface with macOS's own WebKit, and the interface uses WebKit features of Safari 16.2: on macOS 11 and 12, install the Safari updates up to 16.2 or later. | A Debian or Ubuntu system with the WebKitGTK 4.1 library, which `apt` installs with the package. The package is built on Ubuntu 22.04, so it needs Ubuntu 22.04 or Debian 12 or later (glibc 2.35 or later, the highest version the 0.5.0 package's binaries ask for). |
 | Tested | Built and run on a recent macOS (26) only; older versions down to 11 are allowed by the build but untested. | Built and its server smoke-tested by the release workflow; not yet installed and run on a Linux desktop. |
 | Disk | Room for a night of frames in the sessions folder: plan on a few GB. | Same. |
 
