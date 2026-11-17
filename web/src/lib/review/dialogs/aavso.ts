@@ -128,6 +128,15 @@ export function excludedText(e: Excluded | null | undefined): string | null {
   return bits.length ? `Left out: ${bits.join(' · ')}` : null;
 }
 
+/**
+ * Said on every AAVSO export (owner's decision, 0.5.0): ARGOS measures raw frames. The
+ * bias and dark are additive and leave with the local sky; the flat is multiplicative and
+ * stays, and the alt-az field rotation moves the comparisons across it during a run.
+ * Calibration is planned for 0.6; the file itself is unchanged.
+ */
+export const UNCALIBRATED_NOTE =
+  'Uncalibrated frames: no bias, dark or flat applied. Times and the curve’s shape hold; magnitude levels and slow trends may carry flat-field errors.';
+
 /** The preview's notes not already shown beside their field (the band note, the airmass message). */
 export function otherNotes(pv: Pick<AavsoPreview, 'notes' | 'band_note' | 'airmass'>): string[] {
   return pv.notes.filter((n) => n !== pv.band_note && n !== pv.airmass.message);

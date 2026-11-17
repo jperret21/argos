@@ -48,6 +48,7 @@
     flagWarnings,
     flaggedPointText,
     rowsText,
+    UNCALIBRATED_NOTE,
     type CurveRef,
     type Destination,
   } from './aavso';
@@ -291,6 +292,9 @@
 
     <span class="k">DATE</span>
     <div class="v"><span class="muted">JD UTC at mid-exposure · MTYPE STD · CNAME ENSEMBLE · TRANS NO</span></div>
+
+    <span class="k">Frames</span>
+    <div class="v"><span class="warn-line"><Icon name="attention" size={14} />{UNCALIBRATED_NOTE}</span></div>
 
     {#if pv}
       {@const left = excludedText(pv.excluded)}

@@ -18,6 +18,7 @@ import {
   joinPath,
   otherNotes,
   rowsText,
+  UNCALIBRATED_NOTE,
   type CurveRef,
 } from './aavso';
 import { parseAavsoPreview, parseExportResult, parseRerunPlan, parseRerunResult, parseSource, ReviewExportApi, type AavsoPreview, type ReviewRequest } from './api';
@@ -158,6 +159,11 @@ describe('AAVSO dialog: the request and what blocks Export', () => {
     expect(parseAavsoPreview({ ...PREVIEW_RAW, excluded: { no_detection: 2 } }).excluded.no_detection).toBe(2);
     expect(rowsText(1)).toBe('1 row');
     expect(rowsText(1365)).toBe(`1${NNBSP}365 rows`);
+  });
+
+  it('says the frames are uncalibrated (owner decision 0.5.0: warn, the file unchanged)', () => {
+    expect(UNCALIBRATED_NOTE).toMatch(/no bias, dark or flat/);
+    expect(UNCALIBRATED_NOTE).toMatch(/flat-field/);
   });
 
   it('sends a null path for a download, the trimmed path for a file', () => {
