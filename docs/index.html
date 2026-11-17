@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ARGOS — variable-star observing with a Seestar</title>
+  <title>ARGOS — put your smart telescope to scientific work</title>
   <meta name="description" content="ARGOS 0.5.0, a desktop app for ZWO Seestar telescopes: timed FITS runs, a live differential light curve, Review and the AAVSO export. macOS, Linux, GPL v3.">
   <link rel="canonical" href="https://perretjules.com/argos/">
   <meta name="theme-color" content="#f3f3ee">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://perretjules.com/argos/">
-  <meta property="og:title" content="ARGOS — variable-star observing with a Seestar">
+  <meta property="og:title" content="ARGOS — put your smart telescope to scientific work">
   <meta property="og:description" content="A desktop app for ZWO Seestar telescopes: plan a timed run, follow the differential light curve as frames arrive, review every point against its frame and export the AAVSO report. Free software, GPL v3.">
   <meta property="og:image" content="https://perretjules.com/argos/img/observe-run.jpg">
   <meta property="og:image:width" content="1600">
@@ -44,8 +44,8 @@
       <div class="hero-text">
         <div>
           <p class="release-line">ARGOS 0.5.0 &nbsp;/&nbsp; first beta &nbsp;/&nbsp; free software, GNU GPL v3</p>
-          <h1 id="hero-title">Variable-star photometry with a Seestar.</h1>
-          <p class="lede">A desktop app for variable-star observing with ZWO Seestar telescopes. Plan a timed run, follow the differential light curve as the frames arrive, then review every point against the frame that produced it and export the AAVSO report.</p>
+          <h1 id="hero-title">Put your smart telescope to scientific work.</h1>
+          <p class="lede">A desktop app for variable-star observing with ZWO Seestar telescopes. Plan a timed run, watch the light curve grow as the frames arrive, check every point against the frame that made it, and export the AAVSO report.</p>
           <p class="gap-line">Its own software stops at the picture. ARGOS starts at the measurement.</p>
         </div>
         <div class="hero-side">
@@ -54,36 +54,36 @@
             <a class="action" href="docs/">Documentation</a>
           </div>
           <p class="existing-data">macOS on Apple silicon · Linux x86_64 (.deb, technical preview) · <a href="install.html">installers and release notes</a></p>
-          <p class="beta-note"><b>First beta.</b> 0.5.0 is the first beta of the new ARGOS, a stable version with the new interface: the web interface in a desktop app, replacing the Qt app, with a batch of optimisations and fixes checked against Siril, astropy, the AAVSO VSP catalogue and the frames' own noise. It was tested with its built-in simulator and with replays of real nights; live use on a telescope is still to come. Patch releases 0.5.x will follow.</p>
+          <p class="beta-note"><b>First beta.</b> A new desktop interface, and photometry checked against an independent Siril reduction, astropy and the AAVSO catalogues. Tested with the built-in simulator and with replays of real nights, not yet live at the telescope: watch your first night closely. Patches 0.5.x will follow.</p>
         </div>
       </div>
 
       <figure class="capture hero-capture">
         <picture><source type="image/webp" srcset="img/observe-run-800.webp 800w, img/observe-run.webp 1600w" sizes="(max-width: 800px) calc(100vw - 40px), min(1200px, calc(100vw - 80px))"><img src="img/observe-run.jpg" srcset="img/observe-run-800.jpg 800w, img/observe-run.jpg 1600w" sizes="(max-width: 800px) calc(100vw - 40px), min(1200px, calc(100vw - 80px))" width="1600" height="1000" fetchpriority="high" alt="ARGOS Observe in Run mode during a replayed run of the RR Lyr field: RR Lyr circled, the comparison stars in squares and the check star in a triangle on the identified frame, the run's progress and the photometry card in the right rail, and below the frame the live light curve of RR Lyr with the check star's curve under it."></picture>
-        <figcaption><b>Observe · Run</b><span>simulator replay of copied RR Lyr frames · live quick-look on raw frames, uncalibrated · 0.5.0</span></figcaption>
+        <figcaption><b>Observe · Run</b><span>a real RR Lyr night replayed through the built-in simulator · live curve on raw frames</span></figcaption>
       </figure>
     </section>
 
     <section class="home-section" aria-labelledby="frame-title">
       <div class="section-heading">
-        <p class="mono-label">01 · The frame</p>
-        <h2 id="frame-title">Pixels alone are not photometry.</h2>
+        <p class="mono-label">01 · Your data</p>
+        <h2 id="frame-title">Raw frames, kept as they came.</h2>
       </div>
-      <p class="section-lede">Flux comes from the array. Time, plate scale, gain and airmass come from the header, and a light curve needs all of them.</p>
+      <p class="section-lede">Every frame is written once, as the sensor read it, with a header that says when, where and how it was taken. Nothing in ARGOS ever modifies it: re-run the photometry next year with better code, and the photons are still there.</p>
       <div class="keyword-grid">
-        <div><code>DATE-AVG</code><p>The exposure's midpoint, not its start or its download. Frames written by 0.4.x carry a late one; ARGOS times them by <code>DATE-OBS</code> + half the exposure.</p></div>
-        <div><code>BAYERPAT</code><p><b>GRBG</b>, not RGGB. ARGOS measures the two green pixels of each tile; with the wrong pattern it would measure red and blue.</p></div>
-        <div><code>EGAIN</code> <code>RDNOISE</code><p>The e<sup>−</sup>/ADU and read noise behind every error bar, with their source in the comment. On an S30 Pro at gain&nbsp;80: 0.228&nbsp;e<sup>−</sup>/ADU and 2.6&nbsp;e<sup>−</sup>, measured by photon transfer.</p></div>
-        <div><code>FOCALLEN</code> <code>XPIXSZ</code><p>3.74″ per pixel on an S30 Pro by design (160&nbsp;mm, 2.9&nbsp;µm); ASTAP solves about 3.67″. An aperture in pixels means nothing without them.</p></div>
-        <div><code>AIRMASS</code><p>The mount's value at the frame. Review, the re-run and the AAVSO export take it from the header rather than recompute it for a Settings site that may be wrong.</p></div>
-        <div><code>IMAGETYP</code><p>Light, dark, flat or bias, in the folders Siril expects. Point it at the session and go.</p></div>
+        <div><code>DATE-AVG</code><p>The middle of the exposure, the time a light curve needs. Curves also carry JD and BJD<sub>TDB</sub>, ready for timings and O&#8211;C.</p></div>
+        <div><code>BAYERPAT</code><p>The colour mosaic stays as recorded, its pattern declared. ARGOS measures the green pixels, the closest to the <i>V</i> band; any tool can do the same.</p></div>
+        <div><code>EGAIN</code> <code>RDNOISE</code><p>The camera's gain and read noise, measured on an S30 Pro (0.228&nbsp;e<sup>−</sup>/ADU and 2.6&nbsp;e<sup>−</sup> at gain&nbsp;80): the error bars come from the sensor's real noise.</p></div>
+        <div><code>FOCALLEN</code> <code>XPIXSZ</code><p>Focal length and pixel size, so any plate solver or photometry tool knows the scale: about 3.7″ per pixel on an S30 Pro.</p></div>
+        <div><code>AIRMASS</code> <code>OBJECT</code><p>The airmass of every frame from the mount, with the target, the site and the observer: what a report asks for, without a logbook.</p></div>
+        <div><code>IMAGETYP</code><p>Light, dark, flat or bias, in the folders Siril expects: point Siril at the night's folder and go.</p></div>
       </div>
       <div class="stat-row">
-        <div><b>16-bit</b><span>FITS, still in its Bayer mosaic, never stretched</span></div>
-        <div><b>0</b><span>pixels modified on disk</span></div>
-        <div><b>0.0000&nbsp;s</b><span>re-run times against astropy (JD UTC, BJD_TDB)</span></div>
+        <div><b>Raw</b><span>16-bit FITS as the sensor read it: no debayer, no stretch, no stack</span></div>
+        <div><b>Yours</b><span>on your disk: no account, no cloud, no telemetry</span></div>
+        <div><b>Open</b><span>standard FITS and CSV: Siril, Python, a spreadsheet</span></div>
       </div>
-      <p class="method-boundary">Every keyword is listed in the <a href="docs/fits_headers.html">FITS reference</a>. Debayer, stretch or stack once and none of it comes back.</p>
+      <p class="method-boundary">Every keyword is listed in the <a href="docs/fits_headers.html">FITS reference</a>. The stretch, zoom and colours on screen change only what you see, never the file.</p>
     </section>
 
     <section class="home-section band" aria-labelledby="night-title">
@@ -91,7 +91,7 @@
         <p class="mono-label">02 · The night</p>
         <h2 id="night-title">One night, one session folder.</h2>
       </div>
-      <p class="section-lede">Connection, Observe, Plan, Review and Settings: five screens, one window, with the instrument's server running beside it on the same computer.</p>
+      <p class="section-lede">Five screens in one window take you from the plan to the report, and everything runs on your own computer.</p>
 
       <div class="showcase">
         <div class="showcase-text">
@@ -101,6 +101,7 @@
           </div>
           <div>
             <p>Type the star's name: ARGOS resolves it and draws its altitude through the night at your site, with the planned run on it. Set the steps (lights, darks, flats, biases), each with its exposure, gain, count and cadence; the run's length shows before you start.</p>
+            <p>For an exoplanet, type the planet instead: ARGOS predicts the night's transit from the NASA Exoplanet Archive and builds a series that covers it, with a baseline on each side.</p>
             <p>Before the start, a check lists what is missing, such as tonight's darks, flats and biases, and whether the target stays above your altitude limit.</p>
           </div>
         </div>
@@ -117,13 +118,13 @@
             <h3>Watch the run, keep your night vision.</h3>
           </div>
           <div>
-            <p>Observe in Run mode, at the top of this page, follows the run frame by frame: the live curve of the target and of the check star, the run's progress, and what needs your attention, such as a focus drift. The live curve is a quick-look on raw frames.</p>
-            <p>Every screen comes in three dark themes. In Night Red, shown here on Review, nothing on the screen emits anything but red light; every Night Red capture is checked pixel by pixel, this image included.</p>
+            <p>Observe in Run mode, at the top of this page, follows the run frame by frame: the live curve of the target and of the check star, and the run's progress. Watch mode shows the essentials in large type from across the room, and ARGOS raises an alert when frames stop arriving, the stars swell or thin out, or the target sinks toward your altitude limit.</p>
+            <p>Every screen comes in three dark themes. Night Red, shown here on Review, keeps your eyes dark-adapted: nothing on the screen emits anything but red light, checked pixel by pixel on every capture, this one included.</p>
           </div>
         </div>
         <figure class="capture">
           <picture><source srcset="img/review-wall-night-red.webp" type="image/webp"><img src="img/review-wall-night-red.png" width="1600" height="1000" alt="ARGOS Review in the Night Red theme: the plot wall of a recorded RR Lyr session, every plot, label and control drawn in reds on near-black." loading="lazy"></picture>
-          <figcaption><b>Review in Night Red</b><span>pixel audit of this image: 0 non-red pixels (stored losslessly)</span></figcaption>
+          <figcaption><b>Review in Night Red</b><span>pixel audit of this image: no pixel other than red</span></figcaption>
         </figure>
       </div>
 
@@ -134,7 +135,7 @@
             <h3>Read it back, star by star.</h3>
           </div>
           <div>
-            <p>Review lists every session folder and opens one as a wall of plots, as above: the target, the check star, each comparison on its own, and the frames' HFD. Click a point to read every star at that time, and open the frame behind it.</p>
+            <p>Review lists every session folder and opens one as a wall of plots, as above: the target, the check star, each comparison on its own, and the frames' HFD. Click a point to read every star at that time, and open the frame behind it. Doubtful points are marked, never hidden: saturated, suspect, no detection.</p>
             <p>Re-run the photometry on the raw frames with today's code: it writes a new folder in the session and never rewrites a file.</p>
           </div>
         </div>
@@ -149,7 +150,7 @@
           <p class="mono-label">The report</p>
           <h3>Export it for the AAVSO.</h3>
           <p>One filter per report, target rows only, with the check star (<code>KNAME</code>, <code>KMAG</code>), the comparisons' VSP chart and the version in <code>#SOFTWARE</code>. Saturated, suspect and no-detection points stay out of the file, and the dialog counts them.</p>
-          <p>The rows come from raw, uncalibrated frames, in untransformed green (<code>FILT</code> TG, <code>TRANS</code> NO) against the sequence's <i>V</i> magnitudes, and the dialog says so: treat the report as a field check and submit from the calibrated reduction (<a href="docs/guide.html#can-i-submit-this-to-the-aavso">can I submit this?</a>). The rows were checked field by field against the AAVSO Extended File Format, offline; they have not yet been through the AAVSO WebObs validator, and whether the AAVSO accepts <code>#OBSTYPE=CCD</code> for a CMOS camera is unconfirmed.</p>
+          <p>The rows are untransformed green (<code>FILT</code> TG, <code>TRANS</code> NO) measured on raw frames: calibration is planned for 0.6. The dialog says so, and the guide tells you when a report is worth sending and what to write in its notes (<a href="docs/guide.html#can-i-submit-this-to-the-aavso">can I submit this?</a>).</p>
         </div>
         <figure class="capture">
           <picture><source srcset="img/aavso-export.webp" type="image/webp"><img src="img/aavso-export.jpg" width="1296" height="1208" alt="The ARGOS AAVSO export dialog: 59 RR Lyr rows with the check star 000-BCG-523, observer code TST, filter TG, the VSP chart X43374ACY, and a preview of the AAVSO Extended File header naming Argos v0.5.0." loading="lazy"></picture>
@@ -165,13 +166,13 @@
       </div>
       <p class="section-lede">Solve it with ASTAP, then let the catalogues name the stars and propose the comparisons.</p>
       <div class="output-grid">
-        <article><span>01</span><h3>Plate solving</h3><p>ASTAP recovers the frame's coordinates. During a run the apertures follow the field from that solution, on anchor stars, and a frame where they do not line up gets no point.</p></article>
+        <article><span>01</span><h3>Plate solving</h3><p>ASTAP finds where the telescope points. During a run the apertures follow the field on anchor stars as it drifts and turns (the Seestar is alt-azimuth), and a frame where the stars do not line up gets no point rather than a wrong one.</p></article>
         <article><span>02</span><h3>Catalogues on the image</h3><p>AAVSO VSX for the variables and VSP for the comparison sequences, Gaia DR3 for the field stars and their proper motions, SIMBAD for names, the NASA Exoplanet Archive for transit hosts. Cached on disk.</p></article>
         <article><span>03</span><h3>The ensemble, proposed</h3><p>ARGOS takes the VSP sequence, measures each candidate on the frame and proposes the comparison stars; a check star stays out of the ensemble. Every choice can be changed.</p></article>
       </div>
       <figure class="capture field-capture">
         <picture><source srcset="img/observe-field.webp" type="image/webp"><img src="img/observe-field.jpg" width="1600" height="1000" alt="ARGOS Observe in Field mode on a replayed frame of the RR Lyr field: the frame identified at 3.67″/px, RR Lyr circled, five comparison stars in squares and the check star 000-BCG-523 in a triangle among the VSX variables, with the comparison-candidates table below." loading="lazy"></picture>
-        <figcaption><b>Observe · Field</b><span>simulator replay of copied frames · VSX and VSP layers (Gaia, SIMBAD and the NASA Exoplanet Archive did not answer during this capture)</span></figcaption>
+        <figcaption><b>Observe · Field</b><span>a real night replayed through the simulator · VSX variables, the VSP comparison stars and the chosen roles</span></figcaption>
       </figure>
     </section>
 
@@ -180,7 +181,7 @@
         <p class="mono-label">04 · One night, checked</p>
         <h2 id="result-title">The same night, reduced twice.</h2>
       </div>
-      <p class="section-lede">ARGOS keeps every raw frame, so the same frames can go through <a href="https://siril.org" target="_blank" rel="noopener">Siril</a>, which registers them (and calibrates them when given darks, flats and biases), and its <a href="https://github.com/jperret21/star_var_script" target="_blank" rel="noopener">star_var_script</a> extension, which reduces them. Here is RR Lyr on 2026-09-25, re-run by ARGOS 0.5.0 and reduced by star_var_script with the same two comparison stars. Neither reduction used calibration frames: both read the same raw frames.</p>
+      <p class="section-lede">ARGOS keeps every raw frame, so the same night can also go through <a href="https://siril.org" target="_blank" rel="noopener">Siril</a>, which registers the frames (and calibrates them when given darks, flats and biases), and its <a href="https://github.com/jperret21/star_var_script" target="_blank" rel="noopener">star_var_script</a> extension, which measures them. Both give the same light curve: here is RR Lyr on 2026-09-25, re-run by ARGOS 0.5.0 and reduced by star_var_script with the same two comparison stars.</p>
       <div class="plot-split">
         <figure class="result-figure">
           <!-- Data: the RR2 batch re-run of web/spec/decisions-s73-s80-independent-checks.md part D
@@ -191,19 +192,18 @@
           <figcaption>RR Lyr, 195 frames of 10&nbsp;s on one Seestar S30 Pro. Dots: ARGOS 0.5.0 batch re-run on the raw frames. Line: star_var_script and Siril on the same raw frames, green channel, registered, without calibration frames. Below: their difference, frame by frame.</figcaption>
         </figure>
         <dl class="plot-facts">
-          <div><dt>ARGOS − Siril, median</dt><dd>+0.0021&nbsp;mag</dd></div>
-          <div><dt>Robust σ of the difference</dt><dd>0.0083&nbsp;mag</dd></div>
-          <div><dt>Check − VSP <i>V</i> (VSP ± 0.100)</dt><dd>+0.0166 ± 0.0015&nbsp;mag</dd></div>
-          <div><dt>Times − astropy</dt><dd>0.0000&nbsp;s</dd></div>
-          <div><dt>Pair scatter ÷ error bar, 6 pairs: median, robust</dt><dd>0.86, 0.75</dd></div>
+          <div><dt>ARGOS − Siril, median offset</dt><dd>+0.0021&nbsp;mag</dd></div>
+          <div><dt>Scatter of the difference (robust σ)</dt><dd>0.0083&nbsp;mag</dd></div>
+          <div><dt>Check star − its catalogue <i>V</i> (VSP ± 0.100)</dt><dd>+0.0166 ± 0.0015&nbsp;mag</dd></div>
+          <div><dt>Real scatter ÷ error bar, median of 6 star pairs</dt><dd>0.86</dd></div>
         </dl>
       </div>
       <div class="release-checklist">
-        <div><span>01 · ARGOS</span><strong>Records</strong><p>Timed raw FITS frames, a live differential curve as a quick-look, and Review's re-run on the same frames.</p></div>
-        <div><span>02 · Siril</span><strong>Registers</strong><p>Registers the untouched raw frames; given darks, flats and biases, it calibrates them first (none for this night).</p></div>
-        <div><span>03 · star_var_script</span><strong>Reduces</strong><p>The reference light curve the numbers above are measured against.</p></div>
+        <div><span>01 · Input</span><strong>The same raw frames</strong><p>195 frames of 10&nbsp;s and the same two comparison stars; neither side used darks or flats.</p></div>
+        <div><span>02 · Code</span><strong>A separate reduction</strong><p>Siril registers the frames and star_var_script measures them; ARGOS uses neither.</p></div>
+        <div><span>03 · Scope</span><strong>The measurement, not the calibration</strong><p>The shared noise cancels in the difference: it checks ARGOS's photometry, not the sky or the flat field. Calibration is planned for 0.6.</p></div>
       </div>
-      <p class="method-boundary">One night, one star, one instrument. Both reductions measure the same photons on the same uncalibrated frames, so their shared noise cancels in the difference: it tests the reduction, not the sky or the calibration. The check star's offset sits inside VSP's own ±0.100&nbsp;mag. For these bright stars the error bars are on the safe side: the scatter of star pairs is 0.86 (median) or 0.75 (robust) of their error bars. Two limits of the error bars are deferred to 0.5.x: they still carry the comparisons' constant catalogue disagreement into every frame (to be split into a random and a calibration part), and the scintillation constant stays at 1.5, a cautious value where the bright star pairs measured 1.1 to 1.4. Every figure, with its method and what was not checked: <a href="docs/validation.html">how the results were checked</a>.</p>
+      <p class="method-boundary">One night, one star, one instrument. The error bars are on the safe side for bright stars like these. Every figure, with its method and what was not checked: <a href="docs/validation.html">how the results were checked</a>.</p>
     </section>
 
     <section class="release-overview" aria-labelledby="needs-title">
