@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import ModuleType
 
 from argos.core.imaging import imx462, imx585, imx662
@@ -20,6 +21,17 @@ def for_sensor(sensor_name: str) -> ModuleType:
 
 def is_known(sensor_name: str) -> bool:
     return (sensor_name or "").upper() in _MODELS
+
+
+def calibration_path(sensor_name: str) -> Path | None:
+    """The observer's photon-transfer file of a known sensor (Settings > Photon-transfer
+    calibrations: ``camera_calibration.json`` for the IMX585, else
+    ``camera_calibration_<sensor>.json``), None for an unknown sensor (S73)."""
+    if not is_known(sensor_name):
+        return None
+    model = for_sensor(sensor_name)
+    reference = getattr(model, "REFERENCE", None)
+    return reference.calibration_path if reference is not None else model.calibration_path()
 
 
 def lookup_egain(sensor_name: str, gain_setting: int) -> float:

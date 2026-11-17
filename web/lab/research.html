@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en" data-theme="observatory">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="icon" href="data:," />
+    <title>ARGOS Lab: stack research</title>
+    <script>
+      // Theme and motion before the first paint (no graphite flash in Night Red).
+      // Lab only: ?theme=observatory|charcoal|night-red, ?motion=system|reduced|full.
+      // The lab never writes the app's argos.theme key.
+      try {
+        var q = new URLSearchParams(location.search);
+        var t = q.get('theme');
+        if (t === 'observatory' || t === 'charcoal' || t === 'night-red') {
+          document.documentElement.setAttribute('data-theme', t);
+        }
+        var m = q.get('motion');
+        if (m === 'reduced' || m === 'full') document.documentElement.setAttribute('data-motion', m);
+      } catch (e) {
+        /* keep the defaults */
+      }
+    </script>
+  </head>
+  <body>
+    <div id="lab"></div>
+    <script type="module" src="/src/lab/research/main.ts"></script>
+  </body>
+</html>

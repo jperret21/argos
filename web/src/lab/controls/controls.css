@@ -1,0 +1,205 @@
+/*
+  Lab: control system (controls.html). Tokens only (design/tokens.css), so the
+  three themes and the Night Red contract hold here as in the app.
+
+  New tokens are PROPOSALS, prefixed --lab-; each says why it exists. They
+  derive from existing tokens (no new hex), so Night Red stays red-only.
+*/
+
+:root {
+  /* Large hardware targets: hold-to-confirm buttons and the jog keys. Night
+     use (cold fingers, gloves, a trackpad in the dark) wants single large
+     targets (functional-spaces 4.11). 40 = --control-h-m + 6. */
+  --lab-control-h-l: 40px;
+  --lab-jog-key: 44px;
+
+  /* Hold-to-confirm: one duration for every hold (pointer path only; the
+     keyboard opens the inline confirmation). Read by HoldButton. */
+  --lab-hold: 700ms;
+  /* A released hold drains its ring this fast (orientation, not data). */
+  --lab-hold-drain: 150ms;
+
+  /* Auto-repeat of steppers and focuser taps held down. */
+  --lab-repeat-delay: 400ms;
+  --lab-repeat-interval: 80ms;
+
+  /* Ring = elapsed time of a timed operation (hold, exposure, sweep):
+     one vocabulary for every ring in the UI. 1.5 = the icon stroke. */
+  --lab-ring-w: 1.5px;
+
+  /* Sliders and gauges. */
+  --lab-track-h: 4px;
+  --lab-thumb: 14px;
+  --lab-tick-minor: 4px;
+  --lab-tick-major: 8px;
+
+  /* Key caps (tooltips, key hints, help lines): one size. */
+  --lab-cap-h: 16px;
+
+  /* Pressed buttons sink by a 1 px black inner edge: tactile without
+     colour (black emits no light, safe in Night Red). */
+  --lab-pressed-inset: inset 0 1px 0 rgba(0, 0, 0, 0.4);
+
+  /* The 14 % brass tint BRAND 8 already measures --toggled-fg against:
+     armed and active instrument areas (armed jog pad, hold in progress). */
+  --lab-accent-tint: color-mix(in srgb, var(--accent) 14%, var(--surface));
+}
+
+/* -- Page base -------------------------------------------------------------- */
+
+body {
+  overflow: hidden;
+}
+
+#lab {
+  height: 100%;
+}
+
+/* Lab-only motion override (html[data-motion="reduced"]): the same zeroing
+   tokens.css applies under prefers-reduced-motion. */
+html[data-motion='reduced'] {
+  --duration-instant: 0ms;
+  --duration-fast: 0ms;
+  --duration-base: 0ms;
+  --duration-slow: 0ms;
+  --lab-hold-drain: 0ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --lab-hold-drain: 0ms;
+  }
+}
+
+/* Older WebKit without scrollbar-color: token scrollbars (Night Red). */
+@supports not (scrollbar-color: red red) {
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+    background: var(--bg);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border: 2px solid var(--bg);
+    border-radius: 6px;
+  }
+  ::-webkit-scrollbar-corner {
+    background: var(--bg);
+  }
+}
+
+/* -- Specimen typography ------------------------------------------------------ */
+
+.lab-eyebrow {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  line-height: 1.2;
+}
+
+.lab-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+  text-wrap: pretty;
+}
+
+.lab-note b {
+  color: var(--fg);
+  font-weight: var(--weight-medium);
+}
+
+/* Key cap: tooltips, key hints, inline help. */
+kbd.cap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--lab-cap-h);
+  height: var(--lab-cap-h);
+  padding: 0 4px;
+  border: var(--border-w) solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-s);
+  background: var(--bg-2);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* -- Tooltip look (static specimen and the lab tip.ts) ----------------------- */
+
+.ctl-tip {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 300px;
+  padding: 5px var(--space-2) 6px;
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--bg-2);
+  box-shadow: var(--shadow-2);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-tight);
+}
+.ctl-tip .row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+.ctl-tip .reason {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--text-muted);
+  font-weight: var(--weight-regular);
+}
+/* The reason is marked by a hollow ring (unavailable), never by colour alone. */
+.ctl-tip .reason::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-round);
+  box-shadow: inset 0 0 0 1.5px var(--fg-muted);
+  transform: translateY(-1px);
+}
+.ctl-tip .reason.error::before {
+  box-shadow: none;
+  background: var(--danger);
+}
+.ctl-tip .reason.hint::before {
+  display: none;
+}
+.ctl-tip .keys {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.ctl-tip.floating {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: var(--z-tooltip);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity var(--duration-fast) var(--ease-out),
+    visibility 0s linear var(--duration-fast);
+}
+.ctl-tip.floating[data-open='true'] {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}

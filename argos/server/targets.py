@@ -1,0 +1,817 @@
+"""The photometry target set and its roles (rows A51-A53).
+
+A Qt-free port of the target-set half of ``AcquisitionEngine``:
+
+- the set is keyed by the observation's object name (D11) and stored as
+  ``<sessions_path>/targets/<object>.json`` by ``TargetSet.save`` — the Qt
+  file, byte for byte (``_target_path`` / ``target_set`` /
+  ``_save_target_set``, ``acquisition_engine.py:1242-1264``);
+- ``set_role`` / ``remove`` are ``set_target_role`` / ``remove_target``
+  (1295-1302, 1506-1511) with the card's "object name if empty" rule
+  (``imaging_page.py:2035-2044``);
+- a new target gets its comparisons from the field's VSP sequence through
+  ``_auto_select_comparisons`` and the pilot quality gate
+  (``_pilot_comparison_quality``), 1348-1491;
+- ``geometry`` is ``photometry_geometry`` (1493-1504).
+
+Locking: the set has its own lock, taken before the hub's and never while
+the hub's is held; events are published after the set lock is released.
+The newest record is cached for a new client's snapshots.
+"""
+
+from __future__ import annotations
+
+import copy
+import dataclasses
+import inspect
+import logging
+import math
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from argos.core.catalog.photometry import ComparisonQuality, auto_comparison_stars
+from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, ROLES, TargetSet, TargetStar
+from argos.core.hardware import active as hardware
+from argos.core.imaging import sensor_models
+from argos.core.imaging.platesolve import angular_separation_deg
+from argos.core.photometry.aperture import measure_aperture
+from argos.core.photometry.airmass import julian_date
+from argos.core.photometry.params import DEFAULT_FWHM, PhotometryParams
+from argos.server.errors import ApiError
+from argos.server.field_measure import FrameMeasurer
+from argos.server.observation import target_file
+
+try:  # GUARD: S73's chain (the profile's measured e-/ADU) is in the release core only
+    from argos.core.hardware import egain as _camera_egain
+except ImportError:  # pragma: no cover - the core before S73
+    _camera_egain = None
+
+#: GUARD: a core whose ``measure_aperture`` takes S72's black level and plane pixels.
+_APERTURE_TAKES_BLACK = "black_adu" in inspect.signature(measure_aperture).parameters
+
+if TYPE_CHECKING:  # pragma: no cover
+    from argos.server.hub import Hub
+
+logger = logging.getLogger(__name__)
+
+ROLE_WORDS = {"target": "Target", "comparison": "Comparison", "check": "Check"}
+
+
+def star_record(
+    star: TargetStar, xy: tuple[float, float] | None = None, crowded: dict | None = None
+) -> dict[str, Any]:
+    """A ``TargetStar`` on the wire (protocol.md "Target set"). S77: its proper motion
+    (None without one; GUARD: a core ``TargetStar`` before S77 has none); S79:
+    ``crowded``, why a comparison or check star is crowded (None: it is not)."""
+    motion = None
+    if getattr(star, "has_proper_motion", False):
+        motion = {
+            "pm_ra_mas_yr": star.pm_ra_mas_yr,
+            "pm_dec_mas_yr": star.pm_dec_mas_yr,
+            "epoch": star.pm_epoch,
+            "source": star.pm_source,
+        }
+    return {
+        "key": star.key(),
+        "role": star.role,
+        "name": star.name,
+        "display_name": star.display_name,
+        "ra_deg": star.ra_deg,
+        "dec_deg": star.dec_deg,
+        "ra_hours": star.ra_deg / 15.0,
+        "auid": star.auid,
+        "source": star.source,
+        "mags": dict(star.mags),
+        "chart_id": star.chart_id,
+        "note": star.note,
+        "x": round(xy[0], 2) if xy is not None else None,
+        "y": round(xy[1], 2) if xy is not None else None,
+        "proper_motion": motion,
+        "crowded": crowded,
+    }
+
+
+def pending_star(
+    ra_deg: float,
+    dec_deg: float,
+    *,
+    auid: str | None,
+    name: str | None,
+    source: str,
+    mags: dict | None = None,
+    chart_id: str | None = None,
+) -> dict[str, Any]:
+    """The Qt card's ``pending`` dict (``imaging_page.py:804-978``), with ``ra_hours``."""
+    return {
+        "ra_deg": float(ra_deg),
+        "dec_deg": float(dec_deg),
+        "ra_hours": float(ra_deg) / 15.0,
+        "auid": auid,
+        "name": name,
+        "source": source,
+        "mags": dict(mags or {}),
+        "chart_id": chart_id,
+    }
+
+
+def star_from_pending(pending: dict[str, Any], role: str) -> TargetStar:
+    """``TargetStar(role=role, **pending)`` (``imaging_page.py:2039``)."""
+    if pending.get("ra_deg") is not None:
+        ra_deg = float(pending["ra_deg"])
+    elif pending.get("ra_hours") is not None:
+        ra_deg = float(pending["ra_hours"]) * 15.0
+    else:
+        raise ApiError(400, "invalid_argument", "The star needs ra_deg or ra_hours")
+    if pending.get("dec_deg") is None:
+        raise ApiError(400, "invalid_argument", "The star needs dec_deg")
+    dec_deg = float(pending["dec_deg"])
+    if not (math.isfinite(ra_deg) and math.isfinite(dec_deg)) or not -90.0 <= dec_deg <= 90.0:
+        raise ApiError(400, "invalid_argument", "The star's coordinates are out of range")
+    mags = pending.get("mags") or {}
+    if not isinstance(mags, dict):
+        raise ApiError(400, "invalid_argument", "mags must be an object {band: magnitude}")
+    return TargetStar(
+        role=role,
+        ra_deg=ra_deg % 360.0,
+        dec_deg=dec_deg,
+        auid=pending.get("auid") or None,
+        name=pending.get("name") or None,
+        source=str(pending.get("source") or "manual"),
+        mags={str(k): float(v) for k, v in mags.items()},
+        chart_id=pending.get("chart_id") or None,
+    )
+
+
+def _driver_egain(camera: Any) -> float | None:
+    """The connected driver's e-/ADU (``fits_readings``), None when unavailable."""
+    reader = getattr(camera, "fits_readings", None) if camera is not None else None
+    if reader is None:
+        return None
+    try:
+        return reader().get("egain_driver")
+    except Exception as exc:  # a driver error must not block a role
+        logger.info("egain from the driver unavailable: %s", exc)
+        return None
+
+
+class TargetService:
+    """The target set of the current object (``targets`` event)."""
+
+    def __init__(self, hub: "Hub") -> None:
+        self._hub = hub
+        self._lock = threading.RLock()
+        self._set: TargetSet | None = None
+        self._path: Path | None = None
+        self._revision = 0
+        self._last_fwhm: float | None = None
+        #: (frame seq, mean FWHM) of the newest metered frame (Qt ``_last_fwhm``).
+        self._fwhm_seq: tuple[int, float | None] | None = None
+        self._last_aperture: float | None = None
+        self._record: dict[str, Any] | None = None
+
+    # -- the set ------------------------------------------------------------------
+
+    def _object_name(self) -> str:
+        """``_object_name`` (``acquisition_engine.py:1242-1245``)."""
+        with self._hub._lock:
+            name = self._hub.observation.object_name
+        return (name or "").strip() or "Unknown"
+
+    def _current(self) -> tuple[TargetSet, Path]:
+        """``target_set`` (1251-1257): reload when the object (or folder) changed. Lock held."""
+        obj = self._object_name()
+        path = target_file(self._hub._sessions_root(), obj)
+        if self._set is None or self._set.object_name != obj or self._path != path:
+            self._set = TargetSet.load(path)
+            self._set.object_name = obj
+            self._path = path
+        return self._set, path
+
+    def target_set(self) -> TargetSet:
+        with self._lock:
+            return self._current()[0]
+
+    def snapshot(self) -> TargetSet:
+        """A copy of the current set (the photometry thread measures it unlocked)."""
+        with self._lock:
+            tset = self._current()[0]
+            return TargetSet(
+                object_name=tset.object_name,
+                stars=[dataclasses.replace(s, mags=dict(s.mags)) for s in tset.stars],
+            )
+
+    def _save(self, tset: TargetSet, path: Path) -> None:
+        """``_save_target_set`` (1259-1264). Lock held."""
+        try:
+            tset.save(path)
+        except OSError as exc:
+            self._hub.log("error", f"Save targets: {exc}", source="photometry", topic="photometry")
+            raise ApiError(500, "io_error", f"Save targets: {exc}") from exc
+        sequence = getattr(self._hub, "sequence", None)
+        if sequence is not None:
+            # Wave 6a (_write_active_selection): an in-run edit is journalled in the run.
+            sequence.on_target_set_saved(tset)
+
+    # -- geometry -------------------------------------------------------------------
+
+    def egain(self, gain: int | None = None) -> float:
+        """``_egain``: config table → the observer's photon-transfer file → the profile's
+        photon transfer (S73) → driver → active sensor reference (``hardware.egain.live``,
+        the file's step on a core with ``from_calibration``; GUARD: a core without ``live``
+        keeps the 0.4.x order, table → driver → reference). At ``gain``, the frame's own
+        setting (S83: a sequence step's, a camera frame's), else the Camera form's."""
+        with self._hub._lock:
+            if gain is None:
+                gain = int(self._hub._capture_settings.gain)
+            camera = self._hub._slots["camera"].handle
+        table = self._hub.config.get("camera.egain_table", {}) or {}
+        if _camera_egain is not None:
+            return _camera_egain.live(gain, table=table, driver=lambda: _driver_egain(camera))
+        if isinstance(table, dict) and str(gain) in table:
+            try:
+                return float(table[str(gain)])
+            except (TypeError, ValueError):
+                pass
+        value = _driver_egain(camera)
+        if value:
+            return float(value)
+        return sensor_models.lookup_egain(hardware.profile().sensor, gain)
+
+    def params(self, egain: float | None = None) -> PhotometryParams:
+        return PhotometryParams.from_config(
+            self._hub.config.get, egain=egain if egain is not None else 1.0
+        )
+
+    def _series_fwhm(self) -> float | None:
+        """The live series FWHM (``_phot_fwhm``), else the newest frame's (Qt
+        ``self._phot_fwhm or self._last_fwhm``, 1445, 1501)."""
+        photometry = getattr(self._hub, "photometry", None)
+        series = photometry.series_fwhm() if photometry is not None else None
+        return series or self._last_fwhm
+
+    def fwhm_for(self, seq: int) -> tuple[float | None] | None:
+        """``(fwhm,)`` of metered frame *seq* when it is the newest metered one."""
+        known = self._fwhm_seq
+        if known is None or known[0] != seq:
+            return None
+        return (known[1],)
+
+    def geometry(self) -> dict[str, Any]:
+        """``photometry_geometry`` (1493-1504), green and frame px."""
+        params = self.params()
+        fwhm = self._series_fwhm()
+        aperture = params.aperture_px(fwhm)
+        inner = max(params.annulus_in_px, aperture + 1.0)
+        outer = max(params.annulus_out_px, inner + 2.0)
+        return {
+            "aperture_px": aperture,
+            "annulus_in_px": inner,
+            "annulus_out_px": outer,
+            "aperture_r_px": 2.0 * aperture,
+            "annulus_in_r_px": 2.0 * inner,
+            "annulus_out_r_px": 2.0 * outer,
+            "fwhm_px": fwhm,
+            "fwhm_source": "frame" if fwhm else "default",
+        }
+
+    def on_frame_fwhm(self, fwhm: float | None, seq: int | None = None) -> None:
+        """A metered frame's mean FWHM (green px): the aperture follows it."""
+        valid = fwhm is not None and math.isfinite(float(fwhm)) and fwhm > 0
+        if seq is not None:
+            self._fwhm_seq = (int(seq), float(fwhm) if valid else None)
+        if not valid:
+            return
+        self._last_fwhm = float(fwhm)
+        aperture = round(self.params().aperture_px(self._series_fwhm()), 1)
+        if aperture != self._last_aperture:
+            self._last_aperture = aperture
+            self.publish()
+
+    # -- record and events -------------------------------------------------------------
+
+    def record(self) -> dict[str, Any]:
+        with self._lock:
+            tset, path = self._current()
+            stars = list(tset.stars)
+            summary = tset.summary()
+            obj = tset.object_name
+            revision = self._revision
+        project = self._hub.field.project_reference
+        crowded, radius = self.crowding(TargetSet(object_name=obj, stars=stars))
+        # S77: a star with a proper motion is drawn where it is now (GUARD: at_jd).
+        now = julian_date(datetime.now(timezone.utc))
+
+        def placed(star: TargetStar) -> TargetStar:
+            at_jd = getattr(star, "at_jd", None)
+            return at_jd(now) if at_jd is not None else star
+
+        records = []
+        for star in stars:
+            why = crowded.get(star.key())
+            wire = None
+            if why is not None:
+                wire = {
+                    "neighbour": why.neighbour,
+                    "separation_arcsec": why.separation_arcsec,
+                    "delta_mag": None if why.delta_mag is None else round(why.delta_mag, 3),
+                    "band": why.band,
+                    "radius_arcsec": round(radius, 1),
+                    "text": why.text(star.display_name, radius),
+                }
+            here = placed(star)
+            records.append(star_record(star, project(here.ra_deg, here.dec_deg), wire))
+        return {
+            "object_name": obj,
+            "path": str(path),
+            "stars": records,
+            "summary": summary,
+            "geometry": self.geometry(),
+            "revision": revision,
+            # S79: one line per crowded comparison or check star (the Qt Comparison tab's).
+            "crowding": [r["crowded"]["text"] for r in records if r["crowded"] is not None],
+        }
+
+    def crowding(self, tset: TargetSet) -> tuple[dict, float]:
+        """S79 (release ``AcquisitionEngine.crowding``; GUARD: ``crowded_stars``): the
+        set's crowded comparison and check stars and the radius (arcsec), about 2
+        aperture radii of the series FWHM at the active profile's green-plane scale."""
+        from argos.core.catalog import targets as core_targets
+
+        crowded_stars = getattr(core_targets, "crowded_stars", None)
+        if crowded_stars is None:
+            return {}, 0.0
+        from argos.core.imaging.metrics import arcsec_per_green_px
+
+        radii = core_targets.CROWDING_APERTURE_RADII
+        radius = radii * self.params().aperture_px(self._series_fwhm()) * arcsec_per_green_px()
+        return crowded_stars(tset, radius), radius
+
+    def cached_record(self) -> dict[str, Any] | None:
+        return self._record
+
+    def publish(self) -> dict[str, Any]:
+        record = self.record()
+        with self._hub._lock:
+            self._record = record
+            self._hub._publish("targets", record)
+        self._warn_crowding(record)
+        return record
+
+    def _warn_crowding(self, record: dict[str, Any]) -> None:
+        """S79 (release ``ImagingPage._warn_crowding``): one WARN in the Activity log for
+        each newly crowded comparison or check star ("Comparison crowded — …")."""
+        crowded = {
+            r["key"]: r["crowded"]["text"] for r in record["stars"] if r.get("crowded") is not None
+        }
+        warned = getattr(self, "_crowding_warned", set())
+        for key, line in crowded.items():
+            if key not in warned:
+                self._hub.log(
+                    "warning",
+                    f"Comparison crowded — {line}",
+                    source="photometry",
+                    topic="photometry",
+                )
+        self._crowding_warned = set(crowded)
+
+    def _changed(self) -> dict[str, Any]:
+        """After a role change: revision, tracker reset, ``targets`` and ``field_layers``."""
+        with self._lock:
+            self._revision += 1
+        self._hub.field.on_targets_changed()
+        record = self.publish()
+        self._hub.photometry.on_targets_changed()  # _reset_tracker (1301)
+        return record
+
+    def on_object_changed(self) -> None:
+        """``on_object_changed`` (1281-1293): the set follows the object name,
+        and the live curves start afresh (``clear_lightcurves``)."""
+        with self._lock:
+            before = self._path
+            tset, _ = self._current()
+            moved = self._path != before
+            obj = tset.object_name
+            if moved:
+                self._revision += 1
+        if moved:
+            self._hub.field.on_targets_changed()
+        self.publish()
+        self._hub.photometry.on_object_changed(obj)
+
+    def reload(self) -> None:
+        """Re-read the file (another writer, a new sessions folder)."""
+        with self._lock:
+            self._set = None
+            self._revision += 1
+        self._hub.field.on_targets_changed()
+        self.publish()
+        self._hub.photometry.on_targets_changed()
+
+    # -- A52 / A53 ---------------------------------------------------------------------
+
+    def assign(self, star: TargetStar) -> dict[str, Any]:
+        """``POST /api/targets``: the card's role buttons (``imaging_page.py:2035-2044``)."""
+        if star.role not in ROLES:
+            raise ApiError(400, "invalid_argument", f"Unknown role {star.role!r}")
+        with self._hub._lock:
+            empty = not self._hub.observation.object_name.strip()
+        if empty:
+            # Before the save, whatever the role: the object name keys
+            # targets.json + FITS OBJECT (imaging_page.py:2040-2042).
+            self._hub.observation.set_name(star.display_name)
+        with self._lock:
+            tset, path = self._current()
+            before = {s.key() for s in tset.stars}
+            tset.set_role(star)
+            if star.role == ROLE_TARGET:
+                self._auto_select_comparisons(tset, star)
+            # Undo of a new target also takes these out (DELETE ?also=).
+            auto = [
+                s.key()
+                for s in tset.stars
+                if s.key() not in before and s.key() != star.key() and s.role == ROLE_COMPARISON
+            ]
+            self._save(tset, path)
+        self._hub.log(
+            "ok",
+            f"{ROLE_WORDS[star.role]}: {star.display_name}",
+            source="photometry",
+            topic="photometry",
+        )
+        return {**self._changed(), "auto_selected": auto}
+
+    def remove(self, key: str, also: list[str] | None = None) -> dict[str, Any]:
+        """``DELETE /api/targets/{key}`` (``remove_target``, 1506-1511).
+
+        *also*: the comparisons auto-selected with a new target (its Undo); each
+        is taken out only while it is still an automatic (``vsp_auto``) comparison.
+        """
+        with self._lock:
+            tset, path = self._current()
+            removed = next((s for s in tset.stars if s.key() == key), None)
+            if removed is None:
+                raise ApiError(404, "not_found", f"No star {key!r} in the target set")
+            tset.remove(key)
+            extra = [
+                s
+                for s in tset.stars
+                if s.key() in set(also or ())
+                and s.key() != key
+                and s.role == ROLE_COMPARISON
+                and s.source == "vsp_auto"
+            ]
+            for star in extra:
+                tset.remove(star.key())
+            self._save(tset, path)
+        suffix = f" (and {len(extra)} automatic comparison(s))" if extra else ""
+        self._hub.log(
+            "ok",
+            f"Removed from target set: {removed.display_name}{suffix}",
+            source="photometry",
+            topic="photometry",
+        )
+        record = self._changed()
+        return {
+            **record,
+            "removed": star_record(removed),
+            "removed_also": [star_record(s) for s in extra],
+        }
+
+    # -- A58 -------------------------------------------------------------------------
+
+    def recommend(self, mode: str, count: int | None = None) -> dict[str, Any]:
+        """``POST /api/photometry/comparisons/recommend``.
+
+        ``replace`` = ``reselect_comparison_stars`` (1324-1346, "Recommend from
+        pilot", ``imaging_page.py:2213-2224``); ``complete`` =
+        ``propose_comparison_stars`` (1304-1322); *count* = the "Automatically
+        propose" spin (``_on_auto_comparison_count_changed``, 2196-2211).
+        Unlike Qt 0.4.2 (S32, extended in the release branch), nothing is removed
+        when no comparison can be chosen: none known, or none passing the gate.
+        Allowed during a run (Q-P9, Qt S15: the comparison selection stays
+        available), journalled in the run folder.
+        """
+        if not self._hub.field.solved:
+            raise ApiError(
+                409,
+                "not_solved",
+                "Identify the field first: comparisons are chosen on the solved frame.",
+            )
+        with self._lock:
+            tset, _path = self._current()
+            if not tset.by_role(ROLE_TARGET):
+                raise ApiError(409, "no_target", "Choose a target star first.")
+        if not self._hub.field.comparisons():
+            raise ApiError(
+                409,
+                "no_comparison",
+                "No VSP comparison stars are known for this field — refresh the catalogue.",
+            )
+        if count is not None:
+            self._hub.config.patch({"photometry.auto_comparisons": int(count)})
+        with self._lock:
+            tset, path = self._current()
+            targets = tset.by_role(ROLE_TARGET)
+            if not targets:
+                raise ApiError(409, "no_target", "Choose a target star first.")
+            before = {s.key(): s for s in tset.by_role(ROLE_COMPARISON)}
+            # Chosen on a copy: the set changes only when a comparison was picked.
+            trial = copy.deepcopy(tset)
+            if mode == "replace":
+                trial.stars = [
+                    s
+                    for s in trial.stars
+                    if not (s.role == ROLE_COMPARISON and s.source in {"vsp", "vsp_auto"})
+                ]
+            added = self._auto_select_comparisons(trial, trial.by_role(ROLE_TARGET)[0])
+            changed = bool(added)
+            if changed:
+                tset.stars = trial.stars
+                self._save(tset, path)
+            after = {s.key(): s for s in tset.by_role(ROLE_COMPARISON)}
+            removed = [s for k, s in before.items() if k not in after]
+            selected = len(after)
+        log = self._hub.log
+        if mode == "replace" and count is None:
+            if added:
+                log(
+                    "ok",
+                    f"Photometry: replaced the VSP ensemble with {added} pilot-qualified star(s).",
+                    source="photometry",
+                    topic="photometry",
+                )
+            else:  # the field is solved: the gate (logged above) chose none
+                log(
+                    "warning",
+                    "Photometry: no pilot-qualified comparison found — the ensemble is unchanged.",
+                    source="photometry",
+                    topic="photometry",
+                )
+        elif added:
+            log(
+                "ok",
+                f"Photometry: selected {added} pilot-qualified comparison(s).",
+                source="photometry",
+                topic="photometry",
+            )
+        elif mode == "replace":
+            log(
+                "info",
+                f"Photometry: requested {count} comparison(s); {selected} pilot-qualified VSP "
+                "star(s) selected.",
+                source="photometry",
+                topic="photometry",
+            )
+        else:
+            log(
+                "info",
+                f"Photometry: no comparison added ({selected} in the ensemble).",
+                source="photometry",
+                topic="photometry",
+            )
+        record = self._changed() if changed else self.record()
+        return {
+            "added": int(added),
+            "removed": [star_record(s) for s in removed],
+            "comparisons": [s for s in record["stars"] if s["role"] == ROLE_COMPARISON],
+            "targets": record,
+        }
+
+    def write_role_for(self, object_name: str, star: TargetStar) -> Path:
+        """Set a role in another object's set (a catalogue target, ``observation.py``)."""
+        path = target_file(self._hub._sessions_root(), object_name)
+        with self._lock:
+            tset = TargetSet.load(path)
+            tset.object_name = object_name
+            tset.set_role(star)
+            if star.role == ROLE_TARGET:
+                self._auto_select_comparisons(tset, star)
+            tset.save(path)
+            if self._path == path:
+                self._set = None  # re-read on the next access
+        return path
+
+    def backfill_chart_ids(self, comparisons) -> int:
+        """S68 (``AcquisitionEngine._backfill_chart_ids``): comparisons kept from before
+        0.4.2 take the VSP chart of this answer, in the object's set and the running
+        run's ``targets.json``. GUARD: ``TargetSet.backfill_chart_ids``; returns how many
+        stars changed."""
+        return self._backfill("backfill_chart_ids", comparisons)
+
+    def backfill_proper_motions(self, field_stars) -> int:
+        """S77 (``AcquisitionEngine._backfill_proper_motions``): the set's VSX/VSP stars
+        take the proper motion of their Gaia DR3 source (``field_stars``), in the
+        object's set and the running run's ``targets.json``. GUARD:
+        ``TargetSet.backfill_proper_motions``; returns how many stars changed."""
+        changed = self._backfill("backfill_proper_motions", field_stars)
+        if changed:
+            self._hub.log(
+                "info",
+                f"Catalog: proper motion from Gaia DR3 for {changed} star(s) of the set;"
+                " their apertures are placed at each frame's date (S77).",
+                source="catalog",
+                topic="photometry",
+            )
+        return changed
+
+    def _backfill(self, method: str, answer) -> int:
+        """Apply ``TargetSet.<method>(answer)`` to the object's set (saved) and to the
+        running run's ``targets.json`` snapshot, then publish; 0 without the method."""
+        if not hasattr(TargetSet, method):
+            return 0
+        with self._lock:
+            tset, path = self._current()
+            changed = getattr(tset, method)(answer)
+            if changed:
+                try:
+                    self._save(tset, path)
+                except ApiError:
+                    return 0  # logged by _save
+        if not changed:
+            return 0
+        sequence = getattr(self._hub, "sequence", None)
+        root = sequence.run_root() if sequence is not None else None
+        snapshot = root / "targets.json" if root is not None else None
+        if snapshot is not None and snapshot.is_file():
+            try:
+                run_set = TargetSet.load(snapshot)
+                if getattr(run_set, method)(answer):
+                    run_set.save(snapshot)
+            except OSError as exc:
+                self._hub.log(
+                    "warning", f"Save run targets: {exc}", source="photometry", topic="photometry"
+                )
+        self.publish()
+        return changed
+
+    def backfill_comparisons(self) -> None:
+        """The VSP answer arrived after the target (``_on_catalog``, 1225-1240)."""
+        with self._lock:
+            tset, path = self._current()
+            targets = tset.by_role(ROLE_TARGET)
+            if not targets:
+                return
+            self._auto_select_comparisons(tset, targets[0])
+            if not tset.by_role(ROLE_COMPARISON):
+                return
+            self._save(tset, path)
+        self._changed()
+
+    # -- comparisons (acquisition_engine.py:1348-1491) ---------------------------------
+
+    def _auto_select_comparisons(self, tset: TargetSet, target: TargetStar) -> int:
+        """``_auto_select_comparisons`` (1348-1429). Lock held."""
+        comparisons = self._hub.field.comparisons()
+        if not comparisons:
+            return 0
+        cfg = self._hub.config.get
+        band = str(cfg("photometry.default_band", "TG") or "TG")
+        existing = tset.by_role(ROLE_COMPARISON)
+        # S46: the target and the check star are never offered as comparisons.
+        others = [s for s in tset.stars if s.role != ROLE_COMPARISON]
+        calibrated = [
+            s for s in existing if s.mags.get(band) is not None or s.mags.get("V") is not None
+        ]
+        wanted = max(0, int(cfg("photometry.auto_comparisons", 5)) - len(calibrated))
+        if wanted <= 0:
+            return 0
+        pilot = self._hub.field.pilot()
+        target_inst_mag, quality = self._pilot_quality(target, comparisons, pilot)
+        min_snr = float(cfg("photometry.comparison_min_snr", 10.0))
+        max_delta = float(cfg("photometry.comparison_max_delta_mag", 1.5))
+        max_separation = float(cfg("photometry.comparison_max_separation_arcmin", 25.0))
+        picks = auto_comparison_stars(
+            target.ra_deg,
+            target.dec_deg,
+            comparisons,
+            wcs=pilot.wcs if pilot is not None else None,
+            green_shape=pilot.green_shape if pilot is not None else None,
+            count=wanted + len(existing) + len(others),
+            candidate_quality=quality,
+            target_inst_mag=target_inst_mag,
+            min_snr=min_snr,
+            max_delta_inst_mag=max_delta,
+            max_separation_arcmin=max_separation,
+        )
+
+        def same_star(a: TargetStar, b: TargetStar) -> bool:
+            if a.auid and b.auid and a.auid == b.auid:
+                return True
+            sep = angular_separation_deg(a.ra_deg / 15.0, a.dec_deg, b.ra_deg / 15.0, b.dec_deg)
+            return sep < 1.0 / 3600.0
+
+        def already_present(candidate: TargetStar) -> bool:
+            # S46: set_role(candidate) replaced a check star of the same AUID.
+            if any(same_star(star, candidate) for star in others):
+                return True
+            for saved in tuple(existing):
+                if saved.auid and candidate.auid and saved.auid == candidate.auid:
+                    return True
+                if (
+                    angular_separation_deg(
+                        saved.ra_deg / 15.0,
+                        saved.dec_deg,
+                        candidate.ra_deg / 15.0,
+                        candidate.dec_deg,
+                    )
+                    < 1.0 / 3600.0
+                ):
+                    if not saved.mags:
+                        tset.remove(saved.key())
+                        existing.remove(saved)
+                        return False
+                    return True
+            return False
+
+        picks = [p for p in picks if not already_present(p)][:wanted]
+        for comp in picks:
+            tset.set_role(comp)
+        if picks:
+            self._hub.log(
+                "ok",
+                f"Photometry: {len(picks)} pilot-qualified comparison(s) selected "
+                f"for {target.display_name}",
+                source="photometry",
+                topic="photometry",
+            )
+        if quality is not None and len(picks) < wanted:
+            self._hub.log(
+                "warning",
+                f"Photometry: only {len(picks)} of {wanted} requested comparisons pass "
+                f"the pilot quality gate (SNR ≥ {min_snr:g}, Δmag ≤ {max_delta:g}, "
+                f"distance ≤ {max_separation:g}′).",
+                source="photometry",
+                topic="photometry",
+            )
+        return len(picks)
+
+    def _pilot_quality(
+        self, target: TargetStar, comparisons: list, pilot: Any
+    ) -> tuple[float | None, dict[str, ComparisonQuality] | None]:
+        """``_pilot_comparison_quality`` (1431-1491) on the newest frame of the solved
+        geometry, through the tracked solution (Qt used the reference solve)."""
+        if pilot is None:
+            return None, None
+        measure = self.pilot_measure(pilot)
+        target_phot = measure(target.ra_deg, target.dec_deg)
+        if target_phot is None or target_phot.inst_mag is None:
+            return None, None
+        quality: dict[str, ComparisonQuality] = {}
+        for star in comparisons:
+            phot = measure(star.ra_deg, star.dec_deg)
+            if phot is not None:
+                quality[star.auid] = ComparisonQuality(
+                    snr=phot.snr,
+                    inst_mag=phot.inst_mag,
+                    saturated=phot.saturated,
+                    suspect=phot.suspect,
+                )
+        return target_phot.inst_mag, quality
+
+    def pilot_measure(self, pilot: Any, egain: float | None = None):
+        """The ``measure(ra, dec)`` closure of ``_pilot_comparison_quality`` (1450-1478).
+
+        An opened frame keeps its own e-/ADU (``Pilot.egain``, S41).
+        """
+        if egain is None:
+            egain = getattr(pilot, "egain", None)
+        params = self.params(egain if egain is not None else self.egain())
+        fwhm = self._series_fwhm() or DEFAULT_FWHM  # 1445
+        r_ap = params.aperture_px(fwhm)
+        r_in = max(params.annulus_in_px, r_ap + 1.0)
+        r_out = max(params.annulus_out_px, r_in + 2.0)
+        # One green plane and sky for the whole ensemble (identical results).
+        measurer = FrameMeasurer(pilot.raw)
+        green = measurer.green
+        wcs = pilot.wcs
+
+        def measure(ra_deg: float, dec_deg: float):
+            x, y = wcs.world_to_pixel_deg(ra_deg, dec_deg)
+            centroid = measurer.measure_star_at(
+                float(x), float(y), radius=max(2, int(round(r_ap))), search=3
+            )
+            if centroid is None or math.hypot(centroid.x - float(x), centroid.y - float(y)) > 3.0:
+                return None
+            return measure_aperture(
+                green,
+                centroid.x,
+                centroid.y,
+                r_ap,
+                r_in,
+                r_out,
+                egain=params.egain,
+                read_noise_e=params.read_noise_e,
+                sat_adu=params.sat_adu,
+                # Qt passes the noise model's black level and plane pixels (S72): the
+                # pilot's comparison SNRs are those of the measurement (GUARD: a core
+                # whose measure_aperture takes neither).
+                **(
+                    {"black_adu": params.black_adu, "plane_pixels": params.plane_pixels}
+                    if _APERTURE_TAKES_BLACK
+                    else {}
+                ),
+            )
+
+        return measure

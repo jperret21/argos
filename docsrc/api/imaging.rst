@@ -60,15 +60,11 @@ Modules
 
 .. automodule:: argos.core.imaging.sequencer
    :members:
-   :undoc-members:
    :show-inheritance:
-   :no-index:
 
 .. automodule:: argos.core.imaging.session_log
    :members:
-   :undoc-members:
    :show-inheritance:
-   :no-index:
 
 .. automodule:: argos.core.imaging.platesolve
    :members:

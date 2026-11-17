@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterator
 
-from argos.core.imaging.fits_writer import IMAGE_TYPE_MAP
+from argos.core.imaging.fits_writer import IMAGE_TYPE_MAP, filter_token
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +175,35 @@ def total_frames(plan: SequencePlan) -> int:
     return per_pass * max(1, plan.repeat)
 
 
+def light_filters(plan: SequencePlan) -> list[str]:
+    """The filters the plan's enabled Light steps expose through, in step order.
+
+    Two names that give one filter token (``filter_token``) count once: they
+    land in one light curve.
+    """
+    seen: dict[str, str] = {}
+    for step in plan.steps:
+        if step.enabled and step.count > 0 and step.frame_type == "Light":
+            seen.setdefault(filter_token(step.filter_name), step.filter_name or "no filter")
+    return list(seen.values())
+
+
+def light_filters_warning(plan: SequencePlan) -> str | None:
+    """S49: the plan's Light steps use two filters or more, or None.
+
+    Each star then gets one light curve and one CSV per filter (the filter
+    in the file name), its comparisons vetted per filter.
+    """
+    names = light_filters(plan)
+    if len(names) < 2:
+        return None
+    listed = ", ".join(names[:-1]) + f" and {names[-1]}"
+    return (
+        f"Light steps use {len(names)} filters ({listed}): each star gets one light curve "
+        "and one CSV per filter."
+    )
+
+
 #: Per-frame overhead (download + save + bookkeeping) used by the estimate.
 _FRAME_OVERHEAD_S = 3.0
 
@@ -213,8 +242,24 @@ def plan_to_dict(plan: SequencePlan) -> dict:
 
 
 def plan_from_dict(data: dict) -> SequencePlan:
-    """Rebuild a plan from a dict produced by :func:`plan_to_dict`."""
-    steps = [SequenceStep(**s) for s in data.get("steps", [])]
+    """Rebuild a plan from a dict produced by :func:`plan_to_dict`.
+
+    Frame types are matched case-insensitively (a hand-edited ``"dark"`` is
+    ``"Dark"``); an unknown type raises ``ValueError`` rather than loading
+    as a Light step.
+    """
+    canonical = {name.casefold(): name for name in FRAME_TYPES}
+    steps = []
+    for number, raw in enumerate(data.get("steps", []), start=1):
+        step = SequenceStep(**raw)
+        frame_type = canonical.get(str(step.frame_type).casefold())
+        if frame_type is None:
+            raise ValueError(
+                f"step {number}: unknown frame type {step.frame_type!r} "
+                f"(expected one of {', '.join(FRAME_TYPES)})"
+            )
+        step.frame_type = frame_type
+        steps.append(step)
     base = data.get("base_dir")
     return SequencePlan(
         steps=steps,

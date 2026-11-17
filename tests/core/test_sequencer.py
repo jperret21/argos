@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from argos.core.imaging.sequencer import (
     SequencePlan,
     SequenceStep,
@@ -182,3 +184,12 @@ def test_cadence_is_used_instead_of_interval_and_overhead() -> None:
         steps=[SequenceStep(count=10, exposure_s=10.0, interval_s=99.0, cadence_s=13.0)]
     )
     assert estimated_duration_s(plan) == 130.0
+
+
+def test_plan_from_dict_normalises_and_rejects_frame_types() -> None:
+    """S7: a hand-edited 'dark' loaded as Light; an unknown type must not either."""
+    base = {"filter_name": "IR", "exposure_s": 10.0, "gain": 80, "count": 1}
+    plan = plan_from_dict({"steps": [{**base, "frame_type": "dark"}]})
+    assert plan.steps[0].frame_type == "Dark"
+    with pytest.raises(ValueError, match="frame type"):
+        plan_from_dict({"steps": [{**base, "frame_type": "Darks"}]})

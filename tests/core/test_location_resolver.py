@@ -42,3 +42,37 @@ def test_search_locations_requires_text() -> None:
         assert "Enter" in str(exc)
     else:
         raise AssertionError("empty query must be rejected")
+
+
+def test_search_requests_identify_this_release(monkeypatch) -> None:
+    """H17: Nominatim's usage policy asks for an identifying User-Agent. The
+    published 0.4.2 sent the hard-coded "Argos/0.4.1"; it must follow
+    argos.__version__ (the one place a release changes)."""
+    import argos
+
+    class Response:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self):
+            return self._payload
+
+    agents: dict[str, str] = {}
+
+    def fake_get(url, **kwargs):
+        agents[url] = kwargs["headers"]["User-Agent"]
+        if url == location_resolver._NOMINATIM_URL:
+            return Response([{"display_name": "Paris, France", "lat": "48.8589", "lon": "2.32"}])
+        return Response({"elevation": [35.0]})
+
+    monkeypatch.setattr(location_resolver.requests, "get", fake_get)
+    search_locations("Paris")
+
+    expected = f"Argos/{argos.__version__} (astronomical observing-site search)"
+    assert agents == {
+        location_resolver._NOMINATIM_URL: expected,
+        location_resolver._ELEVATION_URL: expected,
+    }

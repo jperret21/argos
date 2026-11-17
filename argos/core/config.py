@@ -139,7 +139,10 @@ _DEFAULTS: dict[str, Any] = {
         "aperture_min_px": 4,
         "annulus_in_px": 8,
         "annulus_out_px": 12,
-        "read_noise_e": 1.5,
+        "read_noise_e": 1.5,  # green_plane: the profile's measured value at its gain (S73)
+        # S72: "green_plane" (the (G1+G2)/2 plane's noise, S74 scintillation and S75
+        # sky-estimate terms) or "pixel" (the 0.4.x model).
+        "noise_model": "green_plane",
         "default_band": "TG",
         "min_comparisons": 2,
         "auto_comparisons": 5,  # comps auto-picked when a target is chosen
@@ -272,6 +275,29 @@ class Config:
     @sessions_path.setter
     def sessions_path(self, value: Path | str) -> None:
         self.set("sessions_path", str(value))
+
+
+def observing_site(config) -> tuple[float, float, float] | None:
+    """The observing site the observer set, as ``(lat, lon, elev)``, or ``None``.
+
+    The defaults are latitude and longitude 0/0, which must never be used as
+    a site: airmass, BJD_TDB, altitudes, the Moon and FITS SITELAT/SITELONG
+    would all be computed for a point in the Gulf of Guinea. A site counts as
+    set when it has a name (a search result, a favourite, a typed name), or
+    when its coordinates are not the 0/0 default (typed without a name, or
+    migrated from the pre-0.4 ``observer`` keys). Only ``config.get`` is used,
+    so any config-like object works.
+    """
+    try:
+        lat = float(config.get("site.latitude", 0.0) or 0.0)
+        lon = float(config.get("site.longitude", 0.0) or 0.0)
+        elev = float(config.get("site.elevation", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return None
+    named = bool(str(config.get("site.name", "") or "").strip())
+    if not named and lat == 0.0 and lon == 0.0:
+        return None
+    return lat, lon, elev
 
 
 # ------------------------------------------------------------------

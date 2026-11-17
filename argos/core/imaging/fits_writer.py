@@ -23,6 +23,7 @@ from astropy.io import fits
 from astropy.time import Time
 
 from argos.core.hardware import active as hardware
+from argos.core.hardware import egain as camera_egain
 from argos.core.imaging import sensor_models, sky_geometry
 
 # Optics and sensor geometry come from the active telescope profile — see
@@ -59,6 +60,8 @@ class FrameContext:
     # Dynamic camera state read just before/after exposure
     ccd_temp: float | None = None
     egain_driver: float | None = None  # e-/ADU from driver (None → active sensor reference)
+    #: ``camera.egain_table`` {gain setting: e-/ADU}; its entry for the frame's gain comes first.
+    egain_table: dict | None = None
     offset: int | None = None
     readout_mode: str | None = None
 
@@ -168,7 +171,8 @@ class FITSWriter:
         start, end = _ensure_utc(exposure_start), _ensure_utc(exposure_end)
         mid = start + (end - start) / 2
 
-        egain, egain_source = _resolve_egain(gain, ctx.egain_driver)
+        egain = _resolve_egain(gain, ctx.egain_driver, ctx.egain_table)
+        egain_source = egain.source
         airmass = sky_geometry.compute_airmass(ctx.altitude) if ctx.altitude is not None else None
         moon = sky_geometry.compute_moon_info(
             when_utc=start,
@@ -235,7 +239,7 @@ class FITSWriter:
         del exposure_start  # precise time belongs in DATE-OBS, not the basename
         obj = _sanitize(object_name) or "unknown"
         typ = _sanitize(image_type.replace(" Frame", "")).lower() or "light"
-        filt = _sanitize(FILTER_ABBREV.get(filter_name, filter_name)).lower() or "clear"
+        filt = filter_token(filter_name)
         exposure_ms = max(0, round(float(exposure_time) * 1000.0))
         gain_tag = f"_g{int(gain):03d}" if gain is not None else ""
         return f"{obj}_{filt}_{typ}_e{exposure_ms:06d}ms{gain_tag}_{frame_index:05d}.fit"
@@ -299,6 +303,16 @@ class FITSWriter:
 # --------------------------------------------------------------------------- #
 
 
+def filter_token(filter_name: str | None) -> str:
+    """The filter as frame and curve file names spell it (``ir``, ``lp``, ``v``…).
+
+    The abbreviation of :data:`FILTER_ABBREV`, sanitised, lower case; ``clear``
+    for no filter. One light curve per (star, filter token) (S49).
+    """
+    name = str(filter_name or "").strip()
+    return _sanitize(FILTER_ABBREV.get(name, name)).lower() or "clear"
+
+
 def _sanitize(s: str) -> str:
     """Return an ASCII-only token safe for files and Siril basenames."""
     normalized = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode("ascii")
@@ -329,16 +343,16 @@ def _ensure_utc(dt: datetime) -> datetime:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
-def _resolve_egain(gain_setting: int, driver_value: float | None) -> tuple[float, str]:
-    """Return (e-/ADU, source) — driver if available, else active sensor reference."""
-    if driver_value and driver_value > 0:
-        return float(driver_value), "driver"
-    sensor = hardware.profile().sensor
-    model = sensor_models.for_sensor(sensor)
-    source = f"{model.SENSOR_NAME} ref"
-    if not sensor_models.is_known(sensor):
-        source += " fallback"
-    return sensor_models.lookup_egain(sensor, gain_setting), source
+def _resolve_egain(
+    gain_setting: int, driver_value: float | None, table: dict | None = None
+) -> camera_egain.Egain:
+    """The e-/ADU in the order the photometry uses (S42, S73), with its ``source``.
+
+    ``hardware.egain.live``: the ``camera.egain_table`` entry for the gain
+    setting, the observer's photon-transfer file, the active profile's
+    photon-transfer measurement, the driver's value, the active sensor reference.
+    """
+    return camera_egain.live(gain_setting, table=table, driver=driver_value)
 
 
 # --------------------------------------------------------------------------- #
@@ -380,13 +394,20 @@ def _add_sensor_headers(
     sensor = hardware.profile().sensor
     model = sensor_models.for_sensor(sensor)
     rdnoise = sensor_models.lookup_read_noise(sensor, gain)
+    rdnoise_source = f"{model.SENSOR_NAME} reference"
+    measured_rn = getattr(egain, "read_noise_e", None)
+    calibrated_rn = camera_egain.calibration_read_noise(sensor, gain)
+    if measured_rn:  # S73: measured with the e-/ADU, at the profile's black level
+        rdnoise, rdnoise_source = float(measured_rn), egain_source
+    elif calibrated_rn is not None:  # S73: the observer's own file, not the reference
+        rdnoise, rdnoise_source = calibrated_rn
     full_well = sensor_models.full_well_capacity(sensor, gain)
     eg = round(egain, 4)
     hdr["GAIN"] = (gain, "camera gain setting")
     hdr["EGAIN"] = (eg, f"[e-/ADU] electron gain ({egain_source})")
     hdr["EPERDN"] = (eg, "[e-/ADU] electron gain (alias)")
     hdr["GAIN_E"] = (eg, "[e-/ADU] electron gain (AAVSO alias)")
-    hdr["RDNOISE"] = (round(rdnoise, 3), f"[e-] read noise ({model.SENSOR_NAME} reference)")
+    hdr["RDNOISE"] = (round(rdnoise, 3), f"[e-] read noise ({rdnoise_source})")
     hdr["FULLWELL"] = (int(full_well), f"[e-] full-well capacity ({model.SENSOR_NAME} reference)")
     hdr["XBINNING"] = (1, "binning factor X")
     hdr["YBINNING"] = (1, "binning factor Y")

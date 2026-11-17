@@ -30,7 +30,32 @@ _ENSEMBLE_HEADERS = ("Name", "AUID", "RA (J2000)", "Dec (J2000)", "Catalogue mag
 _QUALITY_HEADERS = ("Samples", "Scatter (mag)", "Formal error (mag)", "Live status")
 
 
-def _quality_values(entry: dict | None) -> tuple[str, str, str, str]:
+_SELECTION_VERDICTS = {
+    "insufficient_data": "insufficient data",
+    "not_ready": "not ready: fewer than 3 stable comparisons",
+    "live_preview_consistent": "consistent in live preview",
+}
+
+
+def _report_min_points(report: dict | None) -> int:
+    """The minimum valid points the report was computed with (default 10)."""
+    try:
+        return int(((report or {}).get("criteria") or {}).get("min_points", 10))
+    except (TypeError, ValueError):
+        return 10
+
+
+def _ensemble_verdict(report: dict | None) -> str:
+    """The report's ensemble verdict and its caveat; '' without a report."""
+    status = (report or {}).get("selection_status")
+    if not status:
+        return ""
+    words = _SELECTION_VERDICTS.get(str(status), str(status).replace("_", " "))
+    note = str((report or {}).get("scientific_note") or "").strip()
+    return f"Ensemble: {words}." + (f" {note}" if note else "")
+
+
+def _quality_values(entry: dict | None, min_points: int = 10) -> tuple[str, str, str, str]:
     """Format one persisted leave-one-out result for an observer-facing table."""
     if not entry:
         return ("—", "—", "—", "Waiting for data")
@@ -39,7 +64,7 @@ def _quality_values(entry: dict | None) -> tuple[str, str, str, str]:
         "stable": "Stable",
         "unstable": "Unstable",
         "noisy": "Noisy",
-        "insufficient_data": "Waiting for 10 points",
+        "insufficient_data": f"Waiting for {min_points} points",
     }
     scatter = entry.get("scatter_mag")
     formal = entry.get("median_formal_error_mag")
@@ -68,10 +93,11 @@ class ComparisonEnsembleTable(QWidget):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        self._hint = QLabel(
+        self._base_hint = (
             "Comparison ensemble — catalogue magnitudes enable differential magnitudes; "
             "relative-flux preview only needs stable, unsaturated comparison stars."
         )
+        self._hint = QLabel(self._base_hint)
         self._hint.setWordWrap(True)
         self._hint.setStyleSheet(f"color:{theme.FG_MUTED}; font-size:11px; padding:2px 0;")
         layout.addWidget(self._hint)
@@ -102,6 +128,13 @@ class ComparisonEnsembleTable(QWidget):
         )
         layout.addWidget(self._table, 1)
 
+        # S79: a comparison or check star with a brighter star of the set nearby.
+        self._crowding = QLabel("")
+        self._crowding.setWordWrap(True)
+        self._crowding.setStyleSheet(f"color:{theme.WARNING}; font-size:11px; padding:2px 0;")
+        self._crowding.hide()
+        layout.addWidget(self._crowding)
+
         row = QHBoxLayout()
         self._count = QLabel("")
         self._count.setStyleSheet(f"color:{theme.FG_MUTED};")
@@ -129,6 +162,7 @@ class ComparisonEnsembleTable(QWidget):
         self._keys: list[str] = []
         self._stars: list = []
         self._quality_by_key: dict[str, dict] = {}
+        self._min_points = 10
 
     def set_auto_count(self, count: int) -> None:
         """Synchronise the user preference without emitting a new request."""
@@ -155,7 +189,7 @@ class ComparisonEnsembleTable(QWidget):
                 s.source or "manual",
             )
             quality = self._quality_by_key.get(s.auid or s.display_name)
-            values += _quality_values(quality)
+            values += _quality_values(quality, self._min_points)
             for c, v in enumerate(values):
                 self._table.setItem(r, c, QTableWidgetItem(v))
         del blocker
@@ -172,6 +206,16 @@ class ComparisonEnsembleTable(QWidget):
         else:
             self._count.setText(f"{len(calibrated)} calibrated comparison star(s)")
 
+    def set_crowding(self, lines: list[str]) -> None:
+        """S79: one warning line per crowded comparison or check star (none: hidden)."""
+        self._crowding.setText("\n".join(f"⚠ {line}" for line in lines))
+        self._crowding.setVisible(bool(lines))
+
+    @property
+    def crowding_text(self) -> str:
+        """S79: the warning shown, or ''."""
+        return self._crowding.text() if not self._crowding.isHidden() else ""
+
     def set_quality_report(self, report: dict | None) -> None:
         """Show the latest non-destructive leave-one-out assessment."""
         entries = (report or {}).get("comparison_stars") or []
@@ -180,6 +224,9 @@ class ComparisonEnsembleTable(QWidget):
             for entry in entries
             if isinstance(entry, dict) and (entry.get("auid") or entry.get("name"))
         }
+        self._min_points = _report_min_points(report)
+        verdict = _ensemble_verdict(report)
+        self._hint.setText(f"{self._base_hint}\n{verdict}" if verdict else self._base_hint)
         self.set_targets(self._stars)
 
     def _on_remove(self) -> None:
@@ -235,14 +282,14 @@ class ComparisonQualityTable(QWidget):
 
     def set_quality_report(self, report: dict | None) -> None:
         entries = (report or {}).get("comparison_stars") or []
-        criteria = (report or {}).get("criteria") or {}
+        min_points = _report_min_points(report)
         if not entries:
             self._hint.setText("No comparison-quality report in this session.")
         else:
-            min_points = criteria.get("min_points", 10)
+            verdict = _ensemble_verdict(report)
             self._hint.setText(
                 f"Leave-one-out live-preview diagnostic · minimum {min_points} valid points. "
-                "Select a row to show its curve."
+                "Select a row to show its curve." + (f"\n{verdict}" if verdict else "")
             )
         blocker = QSignalBlocker(self._table)
         self._table.clearSelection()
@@ -251,7 +298,7 @@ class ComparisonQualityTable(QWidget):
         for row, entry in enumerate(entries):
             key = str(entry.get("auid") or entry.get("name") or "")
             self._keys.append(key)
-            values = (str(entry.get("name") or key), *_quality_values(entry))
+            values = (str(entry.get("name") or key), *_quality_values(entry, min_points))
             for column, value in enumerate(values):
                 self._table.setItem(row, column, QTableWidgetItem(value))
         del blocker

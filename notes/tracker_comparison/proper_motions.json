@@ -1,0 +1,11 @@
+{
+ "note": "Proper motions applied to the study's truth (common.at_epoch): the J2000.0 catalogue position moved to each frame's exposure midpoint. Stars not listed are not moved. truth_check.json checks the result against each frame's star centroid.",
+ "stars": {
+  "000-BCG-719": {
+   "name": "RR Lyr",
+   "pmra_cosdec_mas_yr": -109.6,
+   "pmdec_mas_yr": -195.8,
+   "source": "Gaia EDR3 as given by SIMBAD, value quoted by the wave 6a science review (2026-11-12); not re-fetched (SIMBAD is unreachable from this network). A 5 mas/yr error would move the truth by 0.02 green px over 26.7 years; truth_check.json confirms the moved position on the image."
+  }
+ }
+}

@@ -34,6 +34,29 @@ def compute_airmass(altitude_deg: float) -> Optional[float]:
     return round(1.0 / denom, 4)
 
 
+def precess_j2000_to_date(ra_hours: float, dec_deg: float, jd: float) -> tuple[float, float]:
+    """Mean J2000 coordinates precessed to the mean equator and equinox of ``jd`` (S51).
+
+    IAU 1976 precession (Lieske et al. 1977; Meeus, *Astronomical Algorithms*,
+    eq. 21.2-21.4): the angles ζ, z, θ in Julian centuries from J2000. The JD
+    is UTC (TT − UTC ≈ 69 s moves the angles by 1e-6″). Returns ``(RA hours,
+    Dec degrees)`` of the date, for the date's sidereal time.
+    """
+    t = (jd - 2451545.0) / 36525.0
+    arcsec = math.pi / (180.0 * 3600.0)
+    zeta = (2306.2181 * t + 0.30188 * t * t + 0.017998 * t**3) * arcsec
+    z = (2306.2181 * t + 1.09468 * t * t + 0.018203 * t**3) * arcsec
+    theta = (2004.3109 * t - 0.42665 * t * t - 0.041833 * t**3) * arcsec
+    ra0 = math.radians(ra_hours * 15.0)
+    dec0 = math.radians(dec_deg)
+    a = math.cos(dec0) * math.sin(ra0 + zeta)
+    b = math.cos(theta) * math.cos(dec0) * math.cos(ra0 + zeta) - math.sin(theta) * math.sin(dec0)
+    c = math.sin(theta) * math.cos(dec0) * math.cos(ra0 + zeta) + math.cos(theta) * math.sin(dec0)
+    ra = (math.degrees(math.atan2(a, b) + z) / 15.0) % 24.0
+    dec = math.degrees(math.asin(max(-1.0, min(1.0, c))))
+    return ra, dec
+
+
 def altitude_at(
     jd_utc: float,
     ra_hours: float,
@@ -43,11 +66,15 @@ def altitude_at(
 ) -> float:
     """Target altitude (degrees) at a JD — fast spherical trig, no astropy.
 
-    GMST from the JD (IAU 1982 linear term), LST from the site longitude,
-    then the standard HA→altitude formula. Accurate to ~0.1° (no nutation or
-    refraction), which is far below what airmass needs; exists so a batch of
-    hundreds of frames doesn't pay astropy's ~50 ms per transform.
+    The J2000 coordinates are precessed to the date (IAU 1976, S51), then
+    GMST from the JD (IAU 1982 linear term), LST from the site longitude and
+    the standard HA→altitude formula. No nutation, aberration or refraction:
+    within 0.02° of astropy over 2000-2035 (0.05° tested). Before S51 the
+    J2000 coordinates met the date's sidereal time unprecessed: up to 0.3° off
+    in 2026, an airmass about 0.002 low at 41° and 0.01-0.02 at 20-30°. Exists
+    so a batch of hundreds of frames doesn't pay astropy's ~50 ms per transform.
     """
+    ra_hours, dec_deg = precess_j2000_to_date(ra_hours, dec_deg, jd_utc)
     gmst_h = (18.697374558 + 24.06570982441908 * (jd_utc - 2451545.0)) % 24.0
     lst_h = (gmst_h + lon_deg / 15.0) % 24.0
     ha_rad = math.radians((lst_h - ra_hours) * 15.0)
@@ -55,6 +82,41 @@ def altitude_at(
     dec = math.radians(dec_deg)
     sin_alt = math.sin(lat) * math.sin(dec) + math.cos(lat) * math.cos(dec) * math.cos(ha_rad)
     return math.degrees(math.asin(max(-1.0, min(1.0, sin_alt))))
+
+
+def horizontal_at(
+    jd_utc: float,
+    ra_hours: float,
+    dec_deg: float,
+    lat_deg: float,
+    lon_deg: float,
+) -> tuple[float, float]:
+    """Altitude and azimuth (degrees, azimuth north through east) at a JD.
+
+    The same fast spherical trig as :func:`altitude_at` (precessed to the date,
+    S51; no nutation, aberration or refraction: within 0.02° of astropy), for
+    checks that need the whole direction.
+    """
+    ra_hours, dec_deg = precess_j2000_to_date(ra_hours, dec_deg, jd_utc)
+    gmst_h = (18.697374558 + 24.06570982441908 * (jd_utc - 2451545.0)) % 24.0
+    lst_h = (gmst_h + lon_deg / 15.0) % 24.0
+    ha = math.radians((lst_h - ra_hours) * 15.0)
+    lat = math.radians(lat_deg)
+    dec = math.radians(dec_deg)
+    sin_alt = math.sin(lat) * math.sin(dec) + math.cos(lat) * math.cos(dec) * math.cos(ha)
+    alt = math.asin(max(-1.0, min(1.0, sin_alt)))
+    az = math.atan2(
+        -math.cos(dec) * math.sin(ha),
+        math.sin(dec) * math.cos(lat) - math.cos(dec) * math.cos(ha) * math.sin(lat),
+    )
+    return math.degrees(alt), math.degrees(az) % 360.0
+
+
+def angle_between_directions(alt1: float, az1: float, alt2: float, az2: float) -> float:
+    """Angle (degrees) between two horizontal directions given in degrees."""
+    a1, z1, a2, z2 = (math.radians(v) for v in (alt1, az1, alt2, az2))
+    cos_d = math.sin(a1) * math.sin(a2) + math.cos(a1) * math.cos(a2) * math.cos(z1 - z2)
+    return math.degrees(math.acos(max(-1.0, min(1.0, cos_d))))
 
 
 def upcoming_night_altitudes(
@@ -260,3 +322,134 @@ def compute_target_geometry(
     if "moon_sep" in moon:
         out["moon_sep"] = moon["moon_sep"]
     return out
+
+
+# ---------------------------------------------------------------------------
+# S78: the site the mount computes its altitude and azimuth from
+# ---------------------------------------------------------------------------
+
+#: S78: a fitted site needs this many pointings spanning this long (seconds): with one
+#: direction the (latitude, hour angle) pair has two solutions; the field's motion over
+#: minutes tells them apart.
+SITE_FIT_MIN_SAMPLES = 3
+SITE_FIT_MIN_SPAN_S = 600.0
+#: S78: the fit is used only when the mount's directions agree with it this well (rms,
+#: degrees). The owner's runs: 0.0005-0.0055° median, 0.018° at most (astropy fits).
+SITE_FIT_MAX_RMS_DEG = 0.1
+#: S78: the fit uses at most this many pointings, spread over the run.
+SITE_FIT_MAX_SAMPLES = 60
+
+
+class SiteFit:
+    """S78: the observing site (latitude, longitude) fitted to the mount's pointings.
+
+    A pointing is the mount's RA/Dec (J2000) and the altitude and azimuth it reports
+    for them at a JD (a light's header ``RA``, ``DEC``, ``ALTITUDE``, ``AZIMUTH`` at
+    ``DATE-OBS``, or a live mount poll). The mount computes altitude and azimuth from
+    its own site and clock (the Seestar takes them from the phone), so the site that
+    reproduces them is the telescope's, whatever the Settings site says (X3, S66).
+    Gauss-Newton on (lat, lon) from a coarse grid, then from the last solution; the
+    same fast spherical trig as :func:`horizontal_at`.
+    """
+
+    def __init__(self) -> None:
+        self._samples: list[tuple[float, float, float, float, float]] = []
+        self._fitted: tuple[float, float, float] | None = None  # lat, lon, rms
+        self._fitted_n = 0
+
+    def add(self, jd: float, ra_hours: float, dec_deg: float, alt: float, az: float) -> None:
+        values = (jd, ra_hours, dec_deg, alt, az)
+        if all(v is not None and math.isfinite(float(v)) for v in values) and alt > 0:
+            self._samples.append(tuple(float(v) for v in values))
+
+    def __len__(self) -> int:
+        return len(self._samples)
+
+    @property
+    def last_jd(self) -> float | None:
+        """The JD of the newest pointing added, or None."""
+        return max((s[0] for s in self._samples), default=None)
+
+    def site(self) -> tuple[float, float] | None:
+        """(latitude, longitude) degrees, or None: too few pointings, too short a span,
+        or the pointings disagree with every site (``SITE_FIT_MAX_RMS_DEG``)."""
+        samples = self._samples
+        if len(samples) < SITE_FIT_MIN_SAMPLES:
+            return None
+        jds = [s[0] for s in samples]
+        if (max(jds) - min(jds)) * 86_400.0 < SITE_FIT_MIN_SPAN_S:
+            return None
+        if self._fitted is None or self._fitted_n != len(samples):
+            self._fitted = _fit_site(_spread(samples, SITE_FIT_MAX_SAMPLES), self._fitted)
+            self._fitted_n = len(samples)
+        if self._fitted is None or self._fitted[2] > SITE_FIT_MAX_RMS_DEG:
+            return None
+        return self._fitted[0], self._fitted[1]
+
+    @property
+    def rms_deg(self) -> float | None:
+        """The fit's rms (degrees) over the pointings it used, once fitted."""
+        return self._fitted[2] if self._fitted is not None else None
+
+
+def _spread(samples, n: int):
+    """At most ``n`` of ``samples`` (time-ordered), evenly spread, first and last kept."""
+    ordered = sorted(samples)
+    if len(ordered) <= n:
+        return ordered
+    step = (len(ordered) - 1) / (n - 1)
+    return [ordered[round(i * step)] for i in range(n)]
+
+
+def _site_residuals(samples, lat: float, lon: float) -> list[float]:
+    out = []
+    for jd, ra, dec, alt, az in samples:
+        a, z = horizontal_at(jd, ra, dec, lat, lon)
+        out.append(a - alt)
+        out.append(((z - az + 180.0) % 360.0 - 180.0) * math.cos(math.radians(alt)))
+    return out
+
+
+def _fit_site(samples, start: tuple[float, float, float] | None):
+    """Gauss-Newton on (lat, lon) -> (lat, lon, rms) or None. From ``start`` when given
+    (the last fit), else from the best of a 10° x 15° grid."""
+
+    def cost(p):
+        return sum(r * r for r in _site_residuals(samples, p[0], p[1]))
+
+    if start is not None:
+        p = [start[0], start[1]]
+    else:
+        coarse = samples[:: max(1, len(samples) // 8)]
+        best = None
+        for lat in range(-80, 81, 10):
+            for lon in range(-180, 180, 15):
+                c = sum(r * r for r in _site_residuals(coarse, lat, lon))
+                if best is None or c < best[0]:
+                    best = (c, [float(lat), float(lon)])
+        p = best[1]
+    step = 1e-4
+    for _ in range(30):
+        r0 = _site_residuals(samples, p[0], p[1])
+        cols = []
+        for k in range(2):
+            q = list(p)
+            q[k] += step
+            rk = _site_residuals(samples, q[0], q[1])
+            cols.append([(b - a) / step for a, b in zip(r0, rk)])
+        # 2x2 normal equations J^T J d = -J^T r
+        a11 = sum(x * x for x in cols[0])
+        a12 = sum(x * y for x, y in zip(cols[0], cols[1]))
+        a22 = sum(y * y for y in cols[1])
+        b1 = -sum(x * r for x, r in zip(cols[0], r0))
+        b2 = -sum(y * r for y, r in zip(cols[1], r0))
+        det = a11 * a22 - a12 * a12
+        if abs(det) < 1e-18:
+            return None
+        d0 = (b1 * a22 - b2 * a12) / det
+        d1 = (a11 * b2 - a12 * b1) / det
+        p = [max(-90.0, min(90.0, p[0] + d0)), (p[1] + d1 + 180.0) % 360.0 - 180.0]
+        if abs(d0) < 1e-7 and abs(d1) < 1e-7:
+            break
+    rms = math.sqrt(cost(p) / (2 * len(samples)))
+    return p[0], p[1], rms

@@ -221,3 +221,87 @@ def test_moon_info_when_site_and_target_provided(tmp_path: Path) -> None:
     assert "MOONALT" in hdr
     assert "MOONPHAS" in hdr
     assert 0.0 <= float(hdr["MOONPHAS"]) <= 1.0
+
+
+def test_egain_header_is_the_value_the_photometry_uses(tmp_path: Path) -> None:
+    """S42: the photometry's e-/ADU is the camera.egain_table entry for the gain,
+    else the driver's, else the sensor reference; EGAIN skipped the table, so a
+    calibrated table left a header EGAIN that the errors never used."""
+    ctx = FrameContext(egain_driver=0.42, egain_table={"300": 0.37, "80": 1.9})
+    hdr = _write_frame(tmp_path, context=ctx, gain=300)
+    assert hdr["EGAIN"] == pytest.approx(0.37)  # 0.42 (the driver) before the fix
+    assert "egain_table" in hdr.comments["EGAIN"]
+    (tmp_path / "b").mkdir()
+    ctx = FrameContext(egain_driver=0.42, egain_table={"80": 1.9, "300": "bad"})
+    assert _write_frame(tmp_path / "b", context=ctx, gain=300)["EGAIN"] == pytest.approx(0.42)
+
+
+def test_egain_header_is_the_measured_one_at_gain_80_s73(tmp_path: Path) -> None:
+    """S73: an S30 Pro frame at gain 80 carried the driver's 0.8 (or, without one, the
+    IMX585 reference's 1.723) e-/ADU, 3.5x and 7.6x the camera's photon transfer
+    (0.228); RDNOISE the reference's 2.8 e-. Both now come from the profile's
+    measurement, named in their comments; the observer's table still comes first."""
+    ctx = FrameContext(egain_driver=0.8)
+    hdr = _write_frame(tmp_path, context=ctx, gain=80)
+    assert hdr["EGAIN"] == pytest.approx(0.228)  # 0.8 (the driver) before the fix
+    assert "S30 Pro PTC" in hdr.comments["EGAIN"]
+    assert hdr["RDNOISE"] == pytest.approx(2.6)
+    assert "S30 Pro PTC" in hdr.comments["RDNOISE"]
+    (tmp_path / "b").mkdir()
+    assert _write_frame(tmp_path / "b", gain=80)["EGAIN"] == pytest.approx(0.228)  # not 1.723
+    (tmp_path / "c").mkdir()
+    scaled = _write_frame(tmp_path / "c", context=FrameContext(egain_driver=0.8), gain=100)
+    assert scaled["EGAIN"] == pytest.approx(0.1811, abs=1e-4)
+    assert "S30 Pro PTC scaled" in scaled.comments["EGAIN"]
+    # the read noise measured at gain 80, used at a scaled gain (owner's call, S73)
+    assert scaled["RDNOISE"] == pytest.approx(2.6)
+    assert "S30 Pro PTC scaled" in scaled.comments["RDNOISE"]
+    (tmp_path / "d").mkdir()
+    table = FrameContext(egain_driver=0.8, egain_table={"80": 0.25})
+    assert _write_frame(tmp_path / "d", context=table, gain=80)["EGAIN"] == pytest.approx(0.25)
+
+
+def test_egain_header_takes_the_observers_photon_transfer_file_first_s73(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """S73 amended (the owner's call of 2026-11-16): the observer's own photon-transfer
+    file at the frame's gain comes before the profile's measurement (another unit) and
+    the driver; ``EGAIN`` and ``RDNOISE`` name it. Before the fix the profile's 0.228
+    and 2.6 e- were written whatever the file said."""
+    import json
+
+    from argos.core.imaging import imx585
+
+    calib = tmp_path / "calib"
+    calib.mkdir()
+    (calib / "camera_calibration.json").write_text(
+        json.dumps({"80": {"egain": 0.25, "rdnoise": 2.0}})
+    )
+    monkeypatch.setattr(imx585, "_USER_CALIB_PATH", calib / "camera_calibration.json")
+    hdr = _write_frame(tmp_path, context=FrameContext(egain_driver=0.8), gain=80)
+    assert hdr["EGAIN"] == pytest.approx(0.25)  # 0.228 (S30 Pro PTC) before the fix
+    assert hdr.comments["EGAIN"] == "[e-/ADU] electron gain (IMX585 PTC file)"
+    assert hdr["RDNOISE"] == pytest.approx(2.0)
+    assert "IMX585 PTC file" in hdr.comments["RDNOISE"]
+
+
+def test_rdnoise_names_the_observers_photon_transfer_file_s73(tmp_path: Path, monkeypatch) -> None:
+    """S73 amended (validation F2, review): with an e-/ADU that carries no read noise of
+    its own (the gain table's here), ``RDNOISE`` is the observer's photon-transfer file's
+    ``rdnoise`` at that gain and says so. Before the fix the file's 3.0 e- was written
+    as the "IMX585 reference"."""
+    import json
+
+    from argos.core.imaging import imx585
+
+    calib = tmp_path / "calib"
+    calib.mkdir()
+    (calib / "camera_calibration.json").write_text(
+        json.dumps({"80": {"egain": 0.25, "rdnoise": 3.0}})
+    )
+    monkeypatch.setattr(imx585, "_USER_CALIB_PATH", calib / "camera_calibration.json")
+    hdr = _write_frame(tmp_path, context=FrameContext(egain_table={"80": 0.3}), gain=80)
+    assert hdr["EGAIN"] == pytest.approx(0.3)
+    assert hdr.comments["EGAIN"] == "[e-/ADU] electron gain (egain_table)"
+    assert hdr["RDNOISE"] == pytest.approx(3.0)
+    assert hdr.comments["RDNOISE"] == "[e-] read noise (IMX585 PTC file)"

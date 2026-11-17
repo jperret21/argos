@@ -1,0 +1,23 @@
+{
+ "title": "Wave 8 groundwork: the desktop app",
+ "date": "2026-11-15",
+ "summary": "The first ARGOS desktop build: a Tauri v2 window (macOS, release build, ad-hoc signed, not notarised) around the web UI, with the headless server frozen by PyInstaller as its sidecar (no PyQt6, no pyqtgraph). The window opens at once on the shell's own start-up page, the shell reads ARGOS_PORT and ARGOS_TOKEN from the server's stdout, then loads the bundled UI with the address and the token; a server that does not start leaves the failure page. These two shell pages are interim: W8 proper moves the start-up stage into the UI's own themed start-up screen. Window captures with the native title bar, at device scale 2 (2880 x 1714 pixels for a 1440 x 857 point window, the height fitted to the display's work area), Observatory only; test runs with temporary HOME, TMPDIR, configuration and log folders, so the UI shows fresh defaults.",
+ "scale": 2,
+ "shots": [
+  {
+   "file": "desktop-observatory-1440x857-01-starting.png",
+   "caption": "Start-up: the window opens at once on the shell's page (the generator's mark in brass, ARGOS, the version, an indeterminate bar, 'Starting the ARGOS server... 6 s') while the one-file sidecar unpacks and starts, about 16 s on this Mac.",
+   "tags": ["desktop", "tauri", "start-up", "observatory", "1440x857"]
+  },
+  {
+   "file": "desktop-observatory-1440x857-02-start-failure.png",
+   "caption": "Start-up failure: the server stopped during start-up (here an invalid --port given on purpose); the page names the cause with the exit status, shows the server's last stderr lines in full, the log folder as ~/Library/Logs/Argos, Copy details, Open log folder and Retry (focused).",
+   "tags": ["desktop", "tauri", "start-up", "failure", "observatory", "1440x857"]
+  },
+  {
+   "file": "desktop-observatory-1440x857-03-ui-connection.png",
+   "caption": "The web UI in the desktop window, 1.2 s after the server's ready line: the Connection screen linked to the sidecar ('127.0.0.1:<port> · ARGOS 0.4.2 · API 2 · link open'), the dark native title bar above it.",
+   "tags": ["desktop", "tauri", "connection", "observatory", "1440x857"]
+  }
+ ]
+}

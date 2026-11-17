@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import QApplication, QLabel, QToolBox  # noqa: E402
 from argos.core.config import Config  # noqa: E402
 
 
-def test_shell_three_mode_walkthrough() -> None:
+def test_shell_three_mode_walkthrough(monkeypatch) -> None:
     """Build the Shell, switch the 3 modes, exercise the key pages/docks."""
     # Strong reference to the QApplication so it isn't GC'd before the Shell.
     app = QApplication.instance() or QApplication(["test"])
@@ -30,6 +30,7 @@ def test_shell_three_mode_walkthrough() -> None:
     from argos.ui.widgets.mount_dock import MountDock
 
     shell = Shell(Config({}))
+    closed = False
     try:
         # ── Shell skeleton: 5 modes (NINA-style), default = connect ───────
         assert set(shell._pages.keys()) == {
@@ -88,6 +89,11 @@ def test_shell_three_mode_walkthrough() -> None:
         assert settings._scope_combo.currentData() == "s30pro"
         connection.set_device_state("camera", "disconnected")
         assert not connection._start_disconnect_btn.isEnabled()
+        # H13: the Shell locks the Settings picker while a device is up.
+        shell._on_device_state_changed("camera", "connected", "")
+        assert not settings._scope_combo.isEnabled()
+        shell._on_device_state_changed("camera", "disconnected", "")
+        assert settings._scope_combo.isEnabled()
         # Connection intentionally has one physical endpoint, not opaque
         # network modes. Discovery fills the same IP/port fields.
         assert not hasattr(connection, "_profile_combo")
@@ -323,8 +329,23 @@ def test_shell_three_mode_walkthrough() -> None:
         assert plan.steps[0].count > 0
         shell._engine.sequence_running.emit(True)
         assert shell._sequence_active is True and shell.status._seq_running is True
+        # S84: the photon-transfer folder gives every frame's e-/ADU (S73): locked during
+        # the run, and a change that still arrives keeps the folder in use (it was
+        # applied from the next frame before the fix).
+        from argos.core.imaging import imx585
+
+        settings = shell._configuration
+        assert not settings._calibration_row.isEnabled()
+        assert "one error model" in settings._calibration_row.toolTip()
+        in_use = imx585.calibration_path()
+        configured = shell._config.get("data_paths.camera_calibration_directory", None)
+        settings._calibration_dir_edit.setText(str(in_use.parent / "elsewhere"))
+        settings._save_local_data_paths()
+        assert imx585.calibration_path() == in_use
+        assert shell._config.get("data_paths.camera_calibration_directory", None) == configured
         shell._engine.sequence_running.emit(False)
         assert shell._sequence_active is False and shell.status._seq_running is False
+        assert settings._calibration_row.isEnabled()
         # Starting without a camera is refused and the button snaps back.
         seq_page.panel.set_running(True)
         seq_page._on_start(plan)
@@ -683,7 +704,63 @@ def test_shell_three_mode_walkthrough() -> None:
         conn._port_spin.setValue(32323)
         conn._cards["mount"]._connect_btn.click()
         assert intents == [("mount", "127.0.0.1", 32323)]
+
+        # ── H7: a disconnect during a run asks first (default No) ────────
+        from unittest.mock import MagicMock
+
+        from PyQt6.QtWidgets import QMessageBox
+
+        asked: list[str] = []
+        answer = [QMessageBox.StandardButton.No]
+
+        def _question(_parent, title, text, *_args, **_kwargs):
+            asked.append(text)
+            return answer[0]
+
+        monkeypatch.setattr(QMessageBox, "question", staticmethod(_question))
+        camera = MagicMock()
+        shell._session._camera = camera
+        shell._sequence_active = True
+        conn._start_disconnect_btn.setEnabled(True)
+        conn._start_disconnect_btn.click()  # "Disconnect equipment"
+        conn.disconnect_requested.emit("camera")  # a device card's Disconnect
+        assert len(asked) == 2 and "sequence is running" in asked[0].lower()
+        camera.disconnect.assert_not_called()
+        assert shell._session.camera is camera
+        answer[0] = QMessageBox.StandardButton.Yes
+        conn.disconnect_all_requested.emit()
+        camera.disconnect.assert_called_once()
+        assert shell._session.camera is None
+        shell._sequence_active = False
+        asked.clear()
+        shell._session._camera = camera
+        conn.disconnect_requested.emit("camera")  # idle: no question
+        assert asked == [] and camera.disconnect.call_count == 2
+
+        # ── H8: quitting during a run asks first (default No) ────────────
+        shut: list[str] = []
+        for name, owner in (
+            ("settings", shell._configuration),
+            ("plan", shell._sequencer),
+            ("capture", shell._acquisition),
+            ("session", shell._session),
+        ):
+            real = owner.shutdown
+            monkeypatch.setattr(
+                owner, "shutdown", lambda name=name, real=real: (shut.append(name), real())[1]
+            )
+        answer[0] = QMessageBox.StandardButton.No
+        shell._sequence_active = True
+        assert shell.close() is False  # the window stays, the run goes on
+        assert len(asked) == 1 and "quit" in asked[0].lower()
+        assert shut == []
+        answer[0] = QMessageBox.StandardButton.Yes
+        closed = shell.close()
+        assert closed is True
+        assert shut == ["settings", "plan", "capture", "session"]
     finally:
-        shell.close()
+        if not closed:
+            shell._sequence_active = shell._autofocus_active = False
+            shell.close()
         shell.deleteLater()
         app.processEvents()

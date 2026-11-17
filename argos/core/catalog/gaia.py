@@ -29,6 +29,8 @@ _TAP_SYNC_URL = "https://gea.esac.esa.int/tap-server/tap/sync"
 _CACHE_DIR = Path.home() / ".argos" / "cache" / "gaia"
 _CACHE_FRESH_S = 30 * 86400.0
 _DEFAULT_TIMEOUT_S = 20.0
+#: S77: the reference epoch (Julian year) of Gaia DR3 positions and proper motions.
+GAIA_DR3_EPOCH = 2016.0
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,11 @@ class GaiaStar:
     g_mag: float | None = None
     bp_mag: float | None = None
     rp_mag: float | None = None
+    #: S77: proper motion (mas/yr; ``pmra`` is µα·cos δ), None for a two-parameter
+    #: solution or a response cached before 0.5.0 (no such columns).
+    pmra_mas_yr: float | None = None
+    pmdec_mas_yr: float | None = None
+    epoch: float = GAIA_DR3_EPOCH
 
     @property
     def display_name(self) -> str:
@@ -83,17 +90,16 @@ def _parse_csv(body: str) -> list[GaiaStar]:
             if not source_id:
                 continue
             try:
-                g_mag_raw = row.get("phot_g_mean_mag")
-                bp_mag_raw = row.get("phot_bp_mean_mag")
-                rp_mag_raw = row.get("phot_rp_mean_mag")
                 stars.append(
                     GaiaStar(
                         source_id=source_id,
                         ra_deg=float(row["ra"]),
                         dec_deg=float(row["dec"]),
-                        g_mag=float(g_mag_raw) if g_mag_raw not in (None, "") else None,
-                        bp_mag=float(bp_mag_raw) if bp_mag_raw not in (None, "") else None,
-                        rp_mag=float(rp_mag_raw) if rp_mag_raw not in (None, "") else None,
+                        g_mag=_optional(row.get("phot_g_mean_mag")),
+                        bp_mag=_optional(row.get("phot_bp_mean_mag")),
+                        rp_mag=_optional(row.get("phot_rp_mean_mag")),
+                        pmra_mas_yr=_optional(row.get("pmra")),
+                        pmdec_mas_yr=_optional(row.get("pmdec")),
                     )
                 )
             except (KeyError, TypeError, ValueError):
@@ -101,6 +107,10 @@ def _parse_csv(body: str) -> list[GaiaStar]:
     except csv.Error as exc:
         raise CatalogError(f"Gaia returned invalid CSV: {exc}") from exc
     return stars
+
+
+def _optional(value) -> float | None:
+    return float(value) if value not in (None, "") else None
 
 
 def gaia_cone_search(
@@ -132,20 +142,28 @@ def gaia_cone_search(
     radius = min(5.0, float(radius_deg))
     if not math.isfinite(radius):
         raise CatalogError("invalid Gaia field radius")
-    query = (
-        f"SELECT TOP {limit} source_id, ra, dec, phot_g_mean_mag, "
-        "phot_bp_mean_mag, phot_rp_mean_mag "
+    where = (
         "FROM gaiadr3.gaia_source "
         "WHERE CONTAINS(POINT('ICRS', ra, dec), "
         f"CIRCLE('ICRS', {ra:.8f}, {float(dec_deg):.8f}, {radius:.8f})) = 1 "
         f"AND phot_g_mean_mag <= {magnitude:.3f} "
         "ORDER BY phot_g_mean_mag ASC"
     )
+    columns = "source_id, ra, dec, phot_g_mean_mag, phot_bp_mean_mag, phot_rp_mean_mag"
+    # S77: the proper motions too (pmra is µα·cos δ, at the DR3 epoch 2016.0).
+    query = f"SELECT TOP {limit} {columns}, pmra, pmdec {where}"
     params = {"REQUEST": "doQuery", "LANG": "ADQL", "FORMAT": "csv", "QUERY": query}
     path = _cache_path(params)
     cached = _load_cache(path)
     if cached is not None and (cached[1] < _CACHE_FRESH_S or not allow_network):
         return _parse_csv(cached[0])
+    if cached is None:
+        # A response cached before 0.5.0 (no proper motions) still identifies the
+        # field offline: its stars carry none.
+        legacy = dict(params, QUERY=f"SELECT TOP {limit} {columns} {where}")
+        cached = _load_cache(_cache_path(legacy))
+        if cached is not None and not allow_network:
+            return _parse_csv(cached[0])
     if not allow_network:
         return []
     sender = session.post if session is not None else requests.post
@@ -160,3 +178,57 @@ def gaia_cone_search(
     stars = _parse_csv(body)
     _store_cache(path, body)
     return stars
+
+
+#: S77: the cone (arcsec) searched around each set star for its Gaia DR3 source: a
+#: star's 2016.0 position lies its proper motion × 16 years from its J2000.0 one (RR
+#: Lyr: 3.6"); 30" covers proper motions up to 1.8"/yr.
+PROPER_MOTION_CONE_ARCSEC = 30.0
+
+
+#: S77: a re-run's proper-motion cone gives up after this (s): the re-run waits on it.
+PROPER_MOTION_TIMEOUT_S = 5.0
+
+
+def gaia_sources_for_set(
+    tset,
+    *,
+    allow_network: bool = True,
+    timeout_s: float = PROPER_MOTION_TIMEOUT_S,
+    cancel=None,
+) -> list[GaiaStar]:
+    """S77: the Gaia DR3 sources (with proper motions) within
+    :data:`PROPER_MOTION_CONE_ARCSEC` of each VSX/VSP star of ``tset`` that has no
+    proper motion: what ``TargetSet.backfill_proper_motions`` matches them with (the
+    batch re-run's ``proper_motions`` lookup). One small cached cone per star; raises
+    :class:`CatalogError` when every query failed.
+
+    The re-run waits on it: after the first failed query the other stars are looked
+    up in the cache only (an archive that does not answer cost 20 s per star, 140 s
+    for RR Lyr's set, on a laptop on the Seestar's own Wi-Fi), and ``cancel`` (a
+    callable, true to stop) is checked before each query."""
+    from argos.core.catalog.targets import CATALOGUE_POSITION_SOURCES
+
+    wanted = [
+        s for s in tset.stars if s.source in CATALOGUE_POSITION_SOURCES and not s.has_proper_motion
+    ]
+    found: list[GaiaStar] = []
+    errors: list[str] = []
+    for star in wanted:
+        if cancel is not None and cancel():
+            break
+        try:
+            found += gaia_cone_search(
+                star.ra_deg,
+                star.dec_deg,
+                PROPER_MOTION_CONE_ARCSEC / 3600.0,
+                mag_limit=21.0,
+                max_results=50,
+                allow_network=allow_network and not errors,
+                timeout_s=timeout_s,
+            )
+        except CatalogError as exc:
+            errors.append(str(exc))
+    if wanted and errors and len(errors) == len(wanted):
+        raise CatalogError(errors[0])
+    return found

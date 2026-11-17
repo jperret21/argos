@@ -1,0 +1,55 @@
+// The pieces of ARGOS 0.5.0 and how they talk (docsrc/ARCHITECTURE.md, "The pieces").
+// Style shared by every diagram here: IBM Plex (served from _static by
+// diagrams.css), ink on paper, brass (#c49a3c) only for the one highlighted
+// path and never for text (2.35:1 on paper); at most 7.9 in wide, so that no
+// diagram overflows the documentation's text column.
+digraph architecture {
+  rankdir=TB;
+  graph [fontname="IBM Plex Sans, Helvetica, Arial, sans-serif", fontsize=11, fontcolor="#1a2120",
+         bgcolor="#f3f3ee", pad=0.25, nodesep=0.25, ranksep=0.45, newrank=true, size="7.9,40",
+         stylesheet="../_static/diagrams.css"];
+  node  [fontname="IBM Plex Sans, Helvetica, Arial, sans-serif", fontsize=10, fontcolor="#1a2120",
+         shape=box, style="rounded,filled", fillcolor="#ffffff", color="#1a2120", penwidth=1];
+  edge  [fontname="IBM Plex Mono, Menlo, Consolas, monospace", fontsize=8.5, fontcolor="#1a2120",
+         color="#65706d", arrowsize=0.7];
+
+  subgraph cluster_app {
+    label="Desktop app (ARGOS.app, argos .deb)";
+    labeljust=l; style="rounded"; color="#b9c1ba"; margin=10;
+    shell   [label="Tauri v2 shell\nweb/src-tauri (Rust)"];
+    ui      [label="Web UI\nweb/src (Svelte 5, TS)\nin the system webview"];
+    server  [label="argos-server\nargos/server (FastAPI),\nfrozen by PyInstaller"];
+  }
+
+  browser [label="Browser + Vite\n(development,\nrun_web.py)", style="rounded,dashed,filled"];
+  stell   [label="Stellarium", fillcolor="#e5e8e1"];
+
+  core    [label="argos/core\nshared science, catalogues,\nAlpaca clients, FITS writer"];
+  sim     [label="Built-in simulator\nsynthetic sky or replay"];
+  astap   [label="ASTAP\n(installed separately)", fillcolor="#e5e8e1"];
+
+  seestar [label="Seestar\nAlpaca HTTP :32323", shape=box3d, style="filled", fillcolor="#e5e8e1"];
+  web     [label="Catalogues, HTTPS\nAAVSO, Gaia, CDS, NASA\n(on request)", fillcolor="#e5e8e1"];
+  disk    [label="Session folders,\nconfig.json", shape=note, fillcolor="#e5e8e1"];
+  qt      [label="Qt app, retired\nmain.py, argos/ui,\nargos/workers\n(parity tests)", style="rounded,dashed,filled"];
+
+  shell  -> server [label="spawns\n(stdin pipe)"];
+  server -> shell  [label="stdout:\nARGOS_PORT,\nARGOS_TOKEN", style=dashed];
+  shell  -> ui     [label="argos://\nevents", dir=both];
+  ui     -> server [label="REST /api,\nWS /ws/events,\n/ws/frames", dir=both, color="#c49a3c", penwidth=2.2];
+  browser -> server [label="same API 2", dir=both, style=dashed];
+  stell  -> server [label="TCP\n:10001"];
+
+  server -> core   [label="imports"];
+  server -> sim    [label="in-process"];
+  server -> astap  [label="subprocess"];
+  core   -> seestar [label="alpyca"];
+  core   -> web    [label="HTTPS"];
+  core   -> disk   [label="writes"];
+  qt     -> core   [label="imports", style=dashed];
+
+  { rank=same; shell; browser; }
+  { rank=same; server; stell; }
+  { rank=same; core; sim; astap; }
+  { rank=same; seestar; web; disk; qt; }
+}

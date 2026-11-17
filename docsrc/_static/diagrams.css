@@ -1,0 +1,51 @@
+/* IBM Plex for the Graphviz diagrams of this documentation.
+
+   Every docsrc/diagrams/*.dot sets stylesheet="../_static/diagrams.css", which
+   Graphviz writes into the SVG as an xml-stylesheet instruction: the SVG is
+   embedded as an <object> (a separate document that cannot see the page's own
+   fonts), so it loads these faces itself. The woff2 files are the showcase's
+   (docs/fonts, SIL OFL 1.1), copied into _static by html_static_path in
+   docsrc/conf.py. Without them, the diagrams fall back to the next family named
+   in each .dot file (Helvetica, Arial, sans-serif; Menlo, Consolas, monospace). */
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  src: url("IBMPlexSans-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("IBMPlexMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+}
+
+/* Dark pages: the same diagram in ARGOS's Observatory colours
+   (web/src/design/tokens.css), so it is not a paper slab on a dark page.
+   Graphviz writes each colour of the .dot files as an SVG presentation
+   attribute; these rules override them. _static/diagrams.js puts
+   "diagram-dark" or "diagram-light" on the SVG's root from the page's theme
+   (Furo's toggle included); without it, the system's colour scheme decides.
+   Paper #f3f3ee -> --bg; node fill #ffffff -> --surface; soft fill #e5e8e1 ->
+   --bg-2; ink #1a2120 -> --fg (text) and --border (lines); edges #65706d ->
+   --fg-muted; cluster lines #b9c1ba -> --border-soft; brass stays. */
+:root.diagram-dark [fill="#f3f3ee"] { fill: #191b1f; }
+:root.diagram-dark [fill="#ffffff"] { fill: #22262c; }
+:root.diagram-dark [fill="#e5e8e1"] { fill: #121417; }
+:root.diagram-dark text[fill="#1a2120"] { fill: #e8e5df; }
+:root.diagram-dark [stroke="#1a2120"] { stroke: #47515c; }
+:root.diagram-dark [fill="#65706d"] { fill: #aaa8a2; }
+:root.diagram-dark [stroke="#65706d"] { stroke: #aaa8a2; }
+:root.diagram-dark [stroke="#b9c1ba"] { stroke: #343c45; }
+@media (prefers-color-scheme: dark) {
+  :root:not(.diagram-light) [fill="#f3f3ee"] { fill: #191b1f; }
+  :root:not(.diagram-light) [fill="#ffffff"] { fill: #22262c; }
+  :root:not(.diagram-light) [fill="#e5e8e1"] { fill: #121417; }
+  :root:not(.diagram-light) text[fill="#1a2120"] { fill: #e8e5df; }
+  :root:not(.diagram-light) [stroke="#1a2120"] { stroke: #47515c; }
+  :root:not(.diagram-light) [fill="#65706d"] { fill: #aaa8a2; }
+  :root:not(.diagram-light) [stroke="#65706d"] { stroke: #aaa8a2; }
+  :root:not(.diagram-light) [stroke="#b9c1ba"] { stroke: #343c45; }
+}

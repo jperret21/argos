@@ -55,9 +55,13 @@ def measure_targets(
     egain: float = 1.0,
     read_noise_e: float = 1.5,
     sat_adu: float = 60000.0,
+    black_adu: float = 0.0,
+    plane_pixels: int = 1,
     band: str = "V",
     min_comps: int = 2,
     on_star: Callable[[TargetStar, AperturePhot | None, float, float], None] | None = None,
+    exclude: frozenset[str] = frozenset(),
+    scint_frac: Callable[[TargetStar], float] | None = None,
 ) -> list[TargetResult]:
     """Aperture-measure every saved star, then calibrate targets vs comparisons.
 
@@ -79,6 +83,13 @@ def measure_targets(
     an ensemble member: a comp whose leave-one-out curve wanders is variable
     or blended and should be pruned. Purely a display/vetting aid; the target
     ensemble is untouched.
+
+    ``exclude``: keys (``star.key()``) of comparisons left out of this frame's
+    ensembles, measured and reported all the same (S69: a star whose centroid is
+    more than 1 px from its aperture centre, ``tracking.centring_offsets``).
+
+    ``scint_frac``: each star's scintillation, relative flux sigma (S74), in its
+    ``inst_mag_err`` and hence in the zero point's weights and the targets' errors.
     """
     measured: list[tuple[TargetStar, AperturePhot | None]] = []
     for s in target_set.stars:
@@ -93,6 +104,9 @@ def measure_targets(
             egain=egain,
             read_noise_e=read_noise_e,
             sat_adu=sat_adu,
+            black_adu=black_adu,
+            plane_pixels=plane_pixels,
+            scint_frac=scint_frac(s) if scint_frac is not None else 0.0,
         )
         if on_star is not None:
             on_star(s, phot, float(x), float(y))
@@ -100,15 +114,17 @@ def measure_targets(
 
     # Usable ensemble members, keyed so a comp can be excluded from its own
     # calibration (leave-one-out) without re-filtering per star.  The relative
-    # flux path intentionally has no catalogue-magnitude requirement.
-    comp_pairs: list[tuple[str, tuple[float, float]]] = [
-        (s.key(), (phot.inst_mag, _cat_mag(s, band)))
+    # flux path intentionally has no catalogue-magnitude requirement.  Each
+    # carries its photon error: the zero point weighs it (S71).
+    comp_pairs: list[tuple[str, tuple[float, float, float | None]]] = [
+        (s.key(), (phot.inst_mag, _cat_mag(s, band), phot.inst_mag_err))
         for s, phot in measured
         if s.role == ROLE_COMPARISON
         and phot is not None
         and phot.inst_mag is not None
         and _cat_mag(s, band) is not None
         and not phot.saturated
+        and s.key() not in exclude
     ]
     comps = [pair for _key, pair in comp_pairs]
     comp_fluxes: list[tuple[str, tuple[float, float]]] = [
@@ -120,6 +136,7 @@ def measure_targets(
         and phot.snr > 0
         and not phot.saturated
         and not phot.suspect
+        and s.key() not in exclude
     ]
 
     out: list[TargetResult] = []
@@ -133,8 +150,8 @@ def measure_targets(
 def _calibrate_star(
     s: TargetStar,
     phot: AperturePhot | None,
-    comp_pairs: list[tuple[str, tuple[float, float]]],
-    comps: list[tuple[float, float]],
+    comp_pairs: list[tuple[str, tuple[float, float, float | None]]],
+    comps: list[tuple[float, float, float | None]],
     comp_fluxes: list[tuple[str, tuple[float, float]]],
     min_comps: int,
 ) -> TargetResult | None:

@@ -1,52 +1,62 @@
+// The core's data classes and the files they become (docsrc/ARCHITECTURE.md, "Data model").
+// Sources: the classes in argos/core (paths in the ARCHITECTURE.md table) and the
+// run folder of argos/server/protocol.md "Run folder (as Qt)".
 digraph data_model {
-  rankdir=LR;
-  graph [fontname="Helvetica", fontsize=11, splines=spline, nodesep=0.4, ranksep=0.8];
-  node  [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", fillcolor="#eef3f8", color="#2b3e50"];
-  edge  [fontname="Helvetica", fontsize=9, color="#5a6b7b"];
+  rankdir=TB;
+  graph [fontname="IBM Plex Sans, Helvetica, Arial, sans-serif", fontsize=11, fontcolor="#1a2120",
+         bgcolor="#f3f3ee", pad=0.3, splines=spline, nodesep=0.25, ranksep=0.4, size="7.9,40",
+         stylesheet="../_static/diagrams.css"];
+  node  [fontname="IBM Plex Mono, Menlo, Consolas, monospace", fontsize=9.5, fontcolor="#1a2120",
+         shape=box, style="rounded,filled", fillcolor="#ffffff", color="#1a2120", penwidth=1];
+  edge  [fontname="IBM Plex Sans, Helvetica, Arial, sans-serif", fontsize=8.5, fontcolor="#1a2120",
+         color="#65706d", arrowsize=0.7];
 
   subgraph cluster_acq {
-    label="Acquisition"; style="rounded"; color="#9fb3c8";
+    label="Acquisition"; labeljust=l; style="rounded"; color="#b9c1ba";
     Config; SequencePlan; FrameSpec;
   }
   subgraph cluster_astro {
-    label="Astrometry"; style="rounded"; color="#9fb3c8";
-    SolveResult; FrameWCS;
+    label="Astrometry"; labeljust=l; style="rounded"; color="#b9c1ba";
+    SolveResult; FrameWCS; TrackedWCS;
   }
   subgraph cluster_cat {
-    label="Catalog"; style="rounded"; color="#9fb3c8";
+    label="Catalogue"; labeljust=l; style="rounded"; color="#b9c1ba";
     TargetSet; TargetStar;
   }
   subgraph cluster_phot {
-    label="Photometry"; style="rounded"; color="#9fb3c8";
+    label="Photometry"; labeljust=l; style="rounded"; color="#b9c1ba";
     AperturePhot; DiffResult; LightCurve; LcPoint;
   }
   subgraph cluster_log {
-    label="Logging"; style="rounded"; color="#9fb3c8";
+    label="Session record"; labeljust=l; style="rounded"; color="#b9c1ba";
     SessionLog; FrameRecord;
   }
 
-  SequencePlan -> FrameSpec  [label="expand_plan (many)"];
-  TargetSet    -> TargetStar [label="has many"];
-  LightCurve   -> LcPoint    [label="has many"];
-  SessionLog   -> FrameRecord[label="has many"];
-  SolveResult  -> FrameWCS   [label="yields"];
-  FrameWCS     -> AperturePhot [label="project"];
-  TargetStar   -> AperturePhot [label="position"];
-  AperturePhot -> DiffResult [label="calibrate"];
-  DiffResult   -> LcPoint    [label="append"];
+  SequencePlan -> FrameSpec    [label="expand_plan (many)"];
+  FrameSpec    -> SessionLog   [style=invis];
+  TargetSet    -> TargetStar   [label="has many"];
+  LightCurve   -> LcPoint      [label="has many"];
+  SessionLog   -> FrameRecord  [label="has many"];
+  SolveResult  -> FrameWCS     [label="yields"];
+  FrameWCS     -> TrackedWCS   [label="followed by the\naperture tracker"];
+  TrackedWCS   -> AperturePhot [label="positions", color="#c49a3c", penwidth=2.2];
+  TargetStar   -> AperturePhot [label="RA, Dec"];
+  AperturePhot -> DiffResult   [label="ensemble", color="#c49a3c", penwidth=2.2];
+  DiffResult   -> LcPoint      [label="append", color="#c49a3c", penwidth=2.2];
 
-  node [shape=note, fillcolor="#fff6e6", color="#b8893b"];
+  node [fontname="IBM Plex Mono, Menlo, Consolas, monospace", shape=note, fillcolor="#e5e8e1"];
   config_json    [label="config.json"];
   session_json   [label="session.json"];
   targets_json   [label="targets.json"];
-  fits           [label="*.fits"];
-  photometry_csv [label="photometry.csv"];
-  aavso_txt      [label="aavso.txt"];
+  fits           [label="lights/*.fit"];
+  photometry_csv [label="photometry/*.csv\none per star"];
+  aavso_txt      [label="AAVSO report"];
 
   Config      -> config_json    [style=dashed, label="persists"];
   SessionLog  -> session_json   [style=dashed];
   TargetSet   -> targets_json   [style=dashed];
-  FrameRecord -> fits           [style=dashed];
-  LcPoint     -> photometry_csv [style=dashed];
-  LightCurve  -> aavso_txt      [style=dashed, label="AAVSO export"];
+  FrameRecord -> fits           [style=dashed, label="describes"];
+  LightCurve  -> photometry_csv [style=dashed];
+  LightCurve  -> aavso_txt      [style=dashed, label="Review export"];
+  photometry_csv -> aavso_txt   [style=invis];
 }

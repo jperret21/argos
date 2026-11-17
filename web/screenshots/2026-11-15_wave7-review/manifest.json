@@ -1,0 +1,517 @@
+{
+ "title": "Wave 7: Review (sessions, frames, exports, re-run)",
+ "date": "2026-11-15",
+ "summary": "Review integrated end to end: R0 sessions landing, R1 a session or the live run (plot wall with linked time axis, health strip, rail cards, drawer Frames / Ensemble / Log), R2 frame inspector (previous / next, FITS header, measure star, Identify field, catalogue layers), the Re-run, Export AAVSO and Export CSV dialogs and the job strip. Captured through the real server on APFS clones of the owner's sessions (XX Cyg 2026-08-29 and 2026-09-07, RR Lyr 2026-09-25), temporary HOME, TMPDIR, configuration and log folders, a fake observer code (XYZ), the Settings site copied but never shown; Gaia DR3, SIMBAD and NASA were unreachable, VSX and VSP came from the cache. The live run is a simulator replay of 14 RR Lyr frame clones. Observatory 1440 x 900 (every scene), Charcoal and Night Red 1440 x 900 and Observatory 1280 x 800 (the main scenes); Night Red audit: 6 of 6 pass. Fixer pass (same day): every scene re-captured after the W7 review fixes (science, technical and design findings: robust cell ranges, flagged frames hollow, Conditions beside the target, whole cell buttons, hatched HFD lane, compact rail with the AAVSO card in view, R0 issues and vetting verdict, R2 band strip and 75 % image, HUD reset, short catalogue errors, Peak/sigma label, job strip beside the identity).",
+ "shots": [
+  {
+   "file": "01-r0-sessions-charcoal-1440x900.png",
+   "caption": "R0, the Review landing: the sessions under the sessions folder (three APFS clones of the owner's runs), newest first, with start (UTC), object, lights, filters, curves (T target, C comparisons), the vetting verdict (6/6 stable, 3/8, 0/5, with its dot) and the issues, which now agree with R1's badge (the site check on the first light's header and the flight recorder's flagged or unverified frames). Toolbar: Open folder..., Import CSV..., Open FITS (Mod+O), the sessions folder, refresh, Settings > Storage.",
+   "tags": [
+    "review",
+    "r0",
+    "sessions",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "01-r0-sessions-night-red-1440x900.png",
+   "caption": "R0, the Review landing: the sessions under the sessions folder (three APFS clones of the owner's runs), newest first, with start (UTC), object, lights, filters, curves (T target, C comparisons), the vetting verdict (6/6 stable, 3/8, 0/5, with its dot) and the issues, which now agree with R1's badge (the site check on the first light's header and the flight recorder's flagged or unverified frames). Toolbar: Open folder..., Import CSV..., Open FITS (Mod+O), the sessions folder, refresh, Settings > Storage.",
+   "tags": [
+    "review",
+    "r0",
+    "sessions",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "01-r0-sessions-observatory-1280x800.png",
+   "caption": "R0, the Review landing: the sessions under the sessions folder (three APFS clones of the owner's runs), newest first, with start (UTC), object, lights, filters, curves (T target, C comparisons), the vetting verdict (6/6 stable, 3/8, 0/5, with its dot) and the issues, which now agree with R1's badge (the site check on the first light's header and the flight recorder's flagged or unverified frames). Toolbar: Open folder..., Import CSV..., Open FITS (Mod+O), the sessions folder, refresh, Settings > Storage.",
+   "tags": [
+    "review",
+    "r0",
+    "sessions",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "01-r0-sessions-observatory-1440x900.png",
+   "caption": "R0, the Review landing: the sessions under the sessions folder (three APFS clones of the owner's runs), newest first, with start (UTC), object, lights, filters, curves (T target, C comparisons), the vetting verdict (6/6 stable, 3/8, 0/5, with its dot) and the issues, which now agree with R1's badge (the site check on the first light's header and the flight recorder's flagged or unverified frames). Toolbar: Open folder..., Import CSV..., Open FITS (Mod+O), the sessions folder, refresh, Settings > Storage.",
+   "tags": [
+    "review",
+    "r0",
+    "sessions",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "02-r1-rrlyr-wall-charcoal-1440x900.png",
+   "caption": "R1 on RR Lyr 2026-09-25 (195 lights, IR), after the fixer pass: identity and readiness badge (2 issues); the health strip with its HFD episodes hatched and its lanes named at 10 px; the wall with Conditions (HFD (px), hollow diamonds, median and 1.5x lines labelled) beside the target; each cell ranges on its good points, the two blank-sky frames drawn hollow (an off-scale one as a chevron on the edge), comparison cells showing their real scatter; every cell's Expand and menu buttons whole; the selection ring only (no 'newest' ring on a finished session). Rail: a compact Selected point (6 comparisons folded), then the AAVSO export card in the first screen (AMASS wrong site, 2 flagged points written).",
+   "tags": [
+    "review",
+    "r1",
+    "plot-wall",
+    "rr-lyr",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "02-r1-rrlyr-wall-night-red-1440x900.png",
+   "caption": "R1 on RR Lyr 2026-09-25 (195 lights, IR), after the fixer pass: identity and readiness badge (2 issues); the health strip with its HFD episodes hatched and its lanes named at 10 px; the wall with Conditions (HFD (px), hollow diamonds, median and 1.5x lines labelled) beside the target; each cell ranges on its good points, the two blank-sky frames drawn hollow (an off-scale one as a chevron on the edge), comparison cells showing their real scatter; every cell's Expand and menu buttons whole; the selection ring only (no 'newest' ring on a finished session). Rail: a compact Selected point (6 comparisons folded), then the AAVSO export card in the first screen (AMASS wrong site, 2 flagged points written).",
+   "tags": [
+    "review",
+    "r1",
+    "plot-wall",
+    "rr-lyr",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "02-r1-rrlyr-wall-observatory-1280x800.png",
+   "caption": "R1 on RR Lyr 2026-09-25 (195 lights, IR), after the fixer pass: identity and readiness badge (2 issues); the health strip with its HFD episodes hatched and its lanes named at 10 px; the wall with Conditions (HFD (px), hollow diamonds, median and 1.5x lines labelled) beside the target; each cell ranges on its good points, the two blank-sky frames drawn hollow (an off-scale one as a chevron on the edge), comparison cells showing their real scatter; every cell's Expand and menu buttons whole; the selection ring only (no 'newest' ring on a finished session). Rail: a compact Selected point (6 comparisons folded), then the AAVSO export card in the first screen (AMASS wrong site, 2 flagged points written).",
+   "tags": [
+    "review",
+    "r1",
+    "plot-wall",
+    "rr-lyr",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "02-r1-rrlyr-wall-observatory-1440x900.png",
+   "caption": "R1 on RR Lyr 2026-09-25 (195 lights, IR), after the fixer pass: identity and readiness badge (2 issues); the health strip with its HFD episodes hatched and its lanes named at 10 px; the wall with Conditions (HFD (px), hollow diamonds, median and 1.5x lines labelled) beside the target; each cell ranges on its good points, the two blank-sky frames drawn hollow (an off-scale one as a chevron on the edge), comparison cells showing their real scatter; every cell's Expand and menu buttons whole; the selection ring only (no 'newest' ring on a finished session). Rail: a compact Selected point (6 comparisons folded), then the AAVSO export card in the first screen (AMASS wrong site, 2 flagged points written).",
+   "tags": [
+    "review",
+    "r1",
+    "plot-wall",
+    "rr-lyr",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "03-r1-rrlyr-issues-observatory-1440x900.png",
+   "caption": "R1, the readiness badge opened: the Settings site was not where the telescope was during this run (the mount's direction is 86 degrees from the one computed for that site), so the curves' airmass is wrong and the FITS header AIRMASS is right; 2 target points measured with an SNR below 3 or a zero point more than 1 mag off (blank-sky frames _00053 and _00176) are flagged.",
+   "tags": [
+    "review",
+    "r1",
+    "readiness",
+    "rr-lyr",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "04-r1-cell-menu-observatory-1440x900.png",
+   "caption": "R1, a cell's menu: copy its data as TSV (UTC, JD, BJD, plotted value, magnitude, errors, flags), save it as PNG, expand it, move it earlier or later, hide it, reset the layout.",
+   "tags": [
+    "review",
+    "r1",
+    "plot-wall",
+    "menu",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "05-r1-expanded-observatory-1440x900.png",
+   "caption": "R1, the target cell expanded over the wall (expand-pane): the same linked axis and selection; the axis ranges on the good points, the blank-sky point hollow with a faint error bar, the off-scale one a chevron on the edge.",
+   "tags": [
+    "review",
+    "r1",
+    "plot-wall",
+    "expand",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "06-r1-frames-tab-observatory-1440x900.png",
+   "caption": "R1, drawer Frames tab (virtual table, read-only): a leading flag column (the target's point: filled bar = flight-recorder flag, hollow = suspect or unverified lock, x = saturated; sortable), UTC, type, filter, exposure, gain, FWHM, HFD, stars, sky, eccentricity, airmass, temperature, comparisons used, file; a Flagged quick filter beside the search.",
+   "tags": [
+    "review",
+    "r1",
+    "frames",
+    "drawer",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "07-r1-ensemble-tab-observatory-1440x900.png",
+   "caption": "R1, drawer Ensemble tab: every comparison with its vetting status, catalogue magnitude, points, valid points, scatter and median formal error at the cells' 3 decimals; the AUID column only when it differs from the name and the scatter's source said once in its column title.",
+   "tags": [
+    "review",
+    "r1",
+    "ensemble",
+    "drawer",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "08-r1-log-tab-observatory-1440x900.png",
+   "caption": "R1, the Log tab of the same drawer (L): the activity log with level filter, search, copy and save; the export and the re-run of this session are logged.",
+   "tags": [
+    "review",
+    "r1",
+    "log",
+    "drawer",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "10-aavso-preview-charcoal-1440x900.png",
+   "caption": "Export AAVSO dialog on RR Lyr: filter IR, the target RR Lyr with 195 rows of 195, no check star (KNAME / KMAG na), OBSCODE from Settings (a test code), FILT TG; the science warnings with their glyph (AMASS computed for a wrong Settings site; 2 points the flight recorder marks as no detection, named by time and value), the file path showing its file name; the head of the file as written.",
+   "tags": [
+    "review",
+    "export",
+    "aavso",
+    "dialog",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "10-aavso-preview-night-red-1440x900.png",
+   "caption": "Export AAVSO dialog on RR Lyr: filter IR, the target RR Lyr with 195 rows of 195, no check star (KNAME / KMAG na), OBSCODE from Settings (a test code), FILT TG; the science warnings with their glyph (AMASS computed for a wrong Settings site; 2 points the flight recorder marks as no detection, named by time and value), the file path showing its file name; the head of the file as written.",
+   "tags": [
+    "review",
+    "export",
+    "aavso",
+    "dialog",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "10-aavso-preview-observatory-1280x800.png",
+   "caption": "Export AAVSO dialog on RR Lyr: filter IR, the target RR Lyr with 195 rows of 195, no check star (KNAME / KMAG na), OBSCODE from Settings (a test code), FILT TG; the science warnings with their glyph (AMASS computed for a wrong Settings site; 2 points the flight recorder marks as no detection, named by time and value), the file path showing its file name; the head of the file as written.",
+   "tags": [
+    "review",
+    "export",
+    "aavso",
+    "dialog",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "10-aavso-preview-observatory-1440x900.png",
+   "caption": "Export AAVSO dialog on RR Lyr: filter IR, the target RR Lyr with 195 rows of 195, no check star (KNAME / KMAG na), OBSCODE from Settings (a test code), FILT TG; the science warnings with their glyph (AMASS computed for a wrong Settings site; 2 points the flight recorder marks as no detection, named by time and value), the file path showing its file name; the head of the file as written.",
+   "tags": [
+    "review",
+    "export",
+    "aavso",
+    "dialog",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "11-aavso-replace-observatory-1440x900.png",
+   "caption": "Export AAVSO, the file exists: 'Replace it?' inline, never overwritten silently (D29).",
+   "tags": [
+    "review",
+    "export",
+    "aavso",
+    "dialog",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "12-export-done-strip-observatory-1440x900.png",
+   "caption": "After the export: the job strip takes the spacer's room in R1's toolbar ('Export Done, 195 rows -> RR_Lyr_ir_aavso.txt', Dismiss) while the identity and the 2-issues badge stay; Re-run and Export CSV give up their words meanwhile; no toast while the observer is in Review.",
+   "tags": [
+    "review",
+    "export",
+    "job-strip",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "13-aavso-refusal-obscode-observatory-1440x900.png",
+   "caption": "Export AAVSO refused: the observer code is unset in Settings, so the dialog says so in the server's words with Open Settings, and Export is disabled (Q-R2).",
+   "tags": [
+    "review",
+    "export",
+    "aavso",
+    "refusal",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "14-r1-aavso-card-unset-observatory-1440x900.png",
+   "caption": "R1, the AAVSO export rail card with the observer code unset, now second in the rail and in view: the pre-checks in the exporter's order, each with its mark, including AMASS (wrong site) and the flagged points.",
+   "tags": [
+    "review",
+    "r1",
+    "aavso",
+    "rail",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "15-csv-dialog-observatory-1440x900.png",
+   "caption": "Export CSV dialog: the 7 curves of the session in filter IR, the column list of write_curves_csv, the file in the session folder (the field scrolled to show the file name) or a download; an export never replaces the session's own files (409 protected_path).",
+   "tags": [
+    "review",
+    "export",
+    "csv",
+    "dialog",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "20-rerun-dialog-charcoal-1440x900.png",
+   "caption": "Re-run photometry dialog (M50, A76) on RR Lyr: 195 light frames, 390 files left out outside lights/ (S63); the target set (1 target, 6 comparisons); the reference solve; the aperture rule and the run's parameters as a key / value grid; the warning that the Settings site was not this run's; the new photometry_rerun_<UTC> folder inside the session.",
+   "tags": [
+    "review",
+    "rerun",
+    "dialog",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "20-rerun-dialog-night-red-1440x900.png",
+   "caption": "Re-run photometry dialog (M50, A76) on RR Lyr: 195 light frames, 390 files left out outside lights/ (S63); the target set (1 target, 6 comparisons); the reference solve; the aperture rule and the run's parameters as a key / value grid; the warning that the Settings site was not this run's; the new photometry_rerun_<UTC> folder inside the session.",
+   "tags": [
+    "review",
+    "rerun",
+    "dialog",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "20-rerun-dialog-observatory-1280x800.png",
+   "caption": "Re-run photometry dialog (M50, A76) on RR Lyr: 195 light frames, 390 files left out outside lights/ (S63); the target set (1 target, 6 comparisons); the reference solve; the aperture rule and the run's parameters as a key / value grid; the warning that the Settings site was not this run's; the new photometry_rerun_<UTC> folder inside the session.",
+   "tags": [
+    "review",
+    "rerun",
+    "dialog",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "20-rerun-dialog-observatory-1440x900.png",
+   "caption": "Re-run photometry dialog (M50, A76) on RR Lyr: 195 light frames, 390 files left out outside lights/ (S63); the target set (1 target, 6 comparisons); the reference solve; the aperture rule and the run's parameters as a key / value grid; the warning that the Settings site was not this run's; the new photometry_rerun_<UTC> folder inside the session.",
+   "tags": [
+    "review",
+    "rerun",
+    "dialog",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "21-rerun-progress-observatory-1440x900.png",
+   "caption": "The re-run running: the job strip ('Re-run', frames done of 195, ETA, Cancel) beside R1's identity and badge; R1 stays usable.",
+   "tags": [
+    "review",
+    "rerun",
+    "job-strip",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "22-rerun-done-observatory-1440x900.png",
+   "caption": "The re-run done: 195 of 195 frames, 7 curves, the new folder; Open the new run and Dismiss in the strip; the identity stays.",
+   "tags": [
+    "review",
+    "rerun",
+    "job-strip",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "30-r2-header-observatory-1440x900.png",
+   "caption": "R2, the frame inspector on light 10 of 195 (from the Frames tab): the image fitted to the width with no black band (the rail takes 25 % at most), the session strip under it (the target's light curve, this frame marked, a click opens a frame); previous / next (PageUp / PageDown) with the counter on one line, the file name cut in its middle, the FITS header card (64 cards) with its filter.",
+   "tags": [
+    "review",
+    "r2",
+    "header",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "31-r2-measure-charcoal-1440x900.png",
+   "caption": "R2 after Identify field (S, ASTAP in about 0.1 s): the target set marked, the VSX variables, the grid; RR Lyr clicked and measured (FWHM, HFD, Peak/sigma, the detection measure, not the curves' SNR; coordinates grouped); the catalogue failures in one line each (Gaia DR3 unreachable (timeout)...), the exception in the tooltip; the session strip under the image.",
+   "tags": [
+    "review",
+    "r2",
+    "measure",
+    "solve",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "31-r2-measure-night-red-1440x900.png",
+   "caption": "R2 after Identify field (S, ASTAP in about 0.1 s): the target set marked, the VSX variables, the grid; RR Lyr clicked and measured (FWHM, HFD, Peak/sigma, the detection measure, not the curves' SNR; coordinates grouped); the catalogue failures in one line each (Gaia DR3 unreachable (timeout)...), the exception in the tooltip; the session strip under the image.",
+   "tags": [
+    "review",
+    "r2",
+    "measure",
+    "solve",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "31-r2-measure-observatory-1280x800.png",
+   "caption": "R2 after Identify field (S, ASTAP in about 0.1 s): the target set marked, the VSX variables, the grid; RR Lyr clicked and measured (FWHM, HFD, Peak/sigma, the detection measure, not the curves' SNR; coordinates grouped); the catalogue failures in one line each (Gaia DR3 unreachable (timeout)...), the exception in the tooltip; the session strip under the image.",
+   "tags": [
+    "review",
+    "r2",
+    "measure",
+    "solve",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "31-r2-measure-observatory-1440x900.png",
+   "caption": "R2 after Identify field (S, ASTAP in about 0.1 s): the target set marked, the VSX variables, the grid; RR Lyr clicked and measured (FWHM, HFD, Peak/sigma, the detection measure, not the curves' SNR; coordinates grouped); the catalogue failures in one line each (Gaia DR3 unreachable (timeout)...), the exception in the tooltip; the session strip under the image.",
+   "tags": [
+    "review",
+    "r2",
+    "measure",
+    "solve",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "32-r2-catalogue-layers-observatory-1440x900.png",
+   "caption": "R2, the catalogue layers popover (O): the unreachable catalogues in one line each (Gaia DR3, SIMBAD, NASA from this test machine), VSX and VSP layers with their counts.",
+   "tags": [
+    "review",
+    "r2",
+    "catalogue",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "33-r2-next-frame-observatory-1440x900.png",
+   "caption": "R2 on the next light (11 / 195): the measure cleared, the HUD back to its placeholder (no pixel of the previous frame), the field identified again automatically since the observer asked for it (S) on the previous frame; the strip's marker moved.",
+   "tags": [
+    "review",
+    "r2",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "40-r1-xxcyg-0907-charcoal-1440x900.png",
+   "caption": "R1 on XX Cyg 2026-09-07 (24 lights, IR): 1 issue (a low-SNR target point, hollow), 3 of 8 comparisons stable in the vetting report; Conditions beside the target; point 12 selected.",
+   "tags": [
+    "review",
+    "r1",
+    "plot-wall",
+    "xx-cyg",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "40-r1-xxcyg-0907-night-red-1440x900.png",
+   "caption": "R1 on XX Cyg 2026-09-07 (24 lights, IR): 1 issue (a low-SNR target point, hollow), 3 of 8 comparisons stable in the vetting report; Conditions beside the target; point 12 selected.",
+   "tags": [
+    "review",
+    "r1",
+    "plot-wall",
+    "xx-cyg",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "40-r1-xxcyg-0907-observatory-1280x800.png",
+   "caption": "R1 on XX Cyg 2026-09-07 (24 lights, IR): 1 issue (a low-SNR target point, hollow), 3 of 8 comparisons stable in the vetting report; Conditions beside the target; point 12 selected.",
+   "tags": [
+    "review",
+    "r1",
+    "plot-wall",
+    "xx-cyg",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "40-r1-xxcyg-0907-observatory-1440x900.png",
+   "caption": "R1 on XX Cyg 2026-09-07 (24 lights, IR): 1 issue (a low-SNR target point, hollow), 3 of 8 comparisons stable in the vetting report; Conditions beside the target; point 12 selected.",
+   "tags": [
+    "review",
+    "r1",
+    "plot-wall",
+    "xx-cyg",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "41-r1-xxcyg-0829-observatory-1440x900.png",
+   "caption": "R1 on XX Cyg 2026-08-29 (22 lights): 1 issue, the S56 old-file rule (all 22 points measured while fewer than 3 comparison or check stars reached SNR 10: lock not verified, conservative), the 5 comparisons noisy in the vetting report (0/5 stable).",
+   "tags": [
+    "review",
+    "r1",
+    "plot-wall",
+    "xx-cyg",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "50-palette-rerun-observatory-1440x900.png",
+   "caption": "The command palette (Mod+K) typed 're-run': Re-run photometry... (Qt's Photometry > Re-run subs..., M8) with the session it acts on.",
+   "tags": [
+    "review",
+    "palette",
+    "rerun",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "60-r0-live-run-observatory-1440x900.png",
+   "caption": "R0 during a run (simulator replay of 14 clones of RR Lyr frames): the Live run row above the list, read-only, with Review the live run.",
+   "tags": [
+    "review",
+    "r0",
+    "live",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "61-r1-live-run-observatory-1440x900.png",
+   "caption": "R1 on the live run (D3): the Preview chip, the live points arriving on the wall with the newest point's ring (live only), the Selected point card; the Ensemble with the target set's catalogue magnitudes.",
+   "tags": [
+    "review",
+    "r1",
+    "live",
+    "observatory",
+    "1440x900"
+   ]
+  }
+ ]
+}

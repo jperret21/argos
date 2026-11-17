@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timezone
 
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal, pyqtSlot
 
@@ -32,14 +33,27 @@ from argos.core.alpaca.client import AlpacaError
 from argos.core.alpaca.filterwheel import FilterWheel, position_names
 from argos.core.alpaca.focuser import Focuser
 from argos.core.alpaca.telescope import MountPosition, Telescope
-from argos.core.config import Config
+from argos.core.config import Config, observing_site
 from argos.core.hardware import active as hardware, detect
+from argos.core.imaging.sky_geometry import angle_between_directions, horizontal_at
+from argos.core.photometry.airmass import julian_date
 from argos.core.session.types import CameraCapabilities, FilterWheelState, FocuserState
 from argos.workers.discovery_worker import DiscoveryWorker
 from argos.workers.polling_worker import MountPollingWorker, TemperaturePollingWorker
 from argos.workers.stellarium_worker import StellariumWorker
 
 logger = logging.getLogger(__name__)
+
+# Settings site against the mount: more than this between the direction the
+# mount reports (altitude, azimuth) and the one computed from the Settings
+# site means the site is not where the telescope is. The owner's sessions
+# with the right site agree within 1.9-3.1°; the 2026-09-25 run with a stale
+# site was 83.6-88.5° off (its altitudes alone came within 6.2° at the end).
+SITE_CHECK_TOLERANCE_DEG = 5.0
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class _JogRunnable(QRunnable):
@@ -72,26 +86,44 @@ class _FilterMoveRunnable(QRunnable):
 
     The move is async (the wheel reports position -1 while turning). Running it
     off the UI thread keeps the UI responsive; the result is reported back via
-    the ``done`` signal as ``(position, name)``.
+    the ``done`` signal as ``(position, name)``. ``position=None`` only reads
+    where the wheel is (after something else moved it).
+
+    A move that fails is reported on ``failed_signal`` with the slot the wheel
+    is really on, read back, or ``(-1, "")`` when it cannot be read: whoever
+    marked the wheel busy must always hear back.
     """
 
-    def __init__(self, filterwheel, position: int, done_signal, log_signal) -> None:
+    def __init__(
+        self, filterwheel, position: int | None, done_signal, log_signal, failed_signal=None
+    ) -> None:
         super().__init__()
         self._fw = filterwheel
         self._position = position
         self._done = done_signal
         self._log = log_signal
+        self._failed = failed_signal
 
     def run(self) -> None:
         try:
-            self._fw.set_position(self._position)
-            deadline = time.monotonic() + 20.0
-            while self._fw.get_position() == -1 and time.monotonic() < deadline:
-                time.sleep(0.15)
-            pos = self._fw.get_position()
-            self._done.emit(pos, self._fw.position_name())
+            if self._position is not None:
+                self._fw.set_position(self._position)
+            pos, name = self._settle()
+            self._done.emit(pos, name)
         except AlpacaError as exc:
             self._log.emit("ERROR", f"Filter move: {exc}")
+            if self._failed is not None:
+                try:
+                    pos, name = self._settle()
+                except AlpacaError:
+                    pos, name = -1, ""
+                self._failed.emit(pos, name)
+
+    def _settle(self) -> tuple[int, str]:
+        deadline = time.monotonic() + 20.0
+        while self._fw.get_position() == -1 and time.monotonic() < deadline:
+            time.sleep(0.15)
+        return self._fw.get_position(), self._fw.position_name()
 
 
 class DeviceSession(QObject):
@@ -131,6 +163,8 @@ class DeviceSession(QObject):
     stellarium_error = pyqtSignal(str)
 
     _filter_settled = pyqtSignal(int, str)  # internal: from the pool runnable
+    _filter_failed = pyqtSignal(int, str)  # internal: a refused move, slot read back
+    _filter_read = pyqtSignal(int, str)  # internal: refresh_filter's read-back
 
     def __init__(self, config: Config, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -148,6 +182,17 @@ class DeviceSession(QObject):
         self._stellarium: StellariumWorker | None = None
 
         self._last_position: MountPosition | None = None
+        # The Settings site is compared with the mount once per connection,
+        # on the first poll that is not a slew.
+        self._site_checked = False
+        # Filter wheel, as far as this session knows: the slot it last
+        # reported settled on (None while unknown), whether a move_filter is
+        # in flight, and when the last move ended (UTC). Take shots read
+        # these: a dark needs the Dark slot, and a frame exposed while the
+        # wheel turned is not saved.
+        self._filter_slot: str | None = None
+        self._filter_moving = False
+        self._filter_settled_at: datetime | None = None
         # Pointing intent — one tuple so worker-thread readers (the sequence
         # frame-context provider) see an atomic reference swap.
         self._target_radec: tuple[float, float] | None = None
@@ -160,6 +205,8 @@ class DeviceSession(QObject):
         self._mount_retry.timeout.connect(self._retry_mount)
 
         self._filter_settled.connect(self._on_filter_settled)
+        self._filter_failed.connect(self._on_filter_failed)
+        self._filter_read.connect(self._on_filter_read)
 
     # ------------------------------------------------------------------
     # Handles + cached state
@@ -184,8 +231,27 @@ class DeviceSession(QObject):
     @property
     def last_position(self) -> MountPosition | None:
         """Latest polled mount position (an atomic reference swap — safe to
-        read from worker threads as a single snapshot)."""
+        read from worker threads as a single snapshot); ``None`` before the
+        first poll and once the mount is disconnected or lost."""
         return self._last_position
+
+    @property
+    def filter_slot(self) -> str | None:
+        """Name of the slot the wheel last reported it settled on; ``None``
+        while a move or a read is in flight, when the read-back failed, or
+        with no wheel."""
+        return self._filter_slot
+
+    @property
+    def filter_moving(self) -> bool:
+        """A :meth:`move_filter` has not reported back yet."""
+        return self._filter_moving
+
+    @property
+    def filter_settled_at(self) -> datetime | None:
+        """UTC time the last :meth:`move_filter` reported back (settled or
+        failed), or ``None`` if the wheel was never moved from here."""
+        return self._filter_settled_at
 
     @property
     def target_radec(self) -> tuple[float, float] | None:
@@ -250,10 +316,21 @@ class DeviceSession(QObject):
             handler()
 
     def connect_all(self, host: str, port: int) -> None:
-        self.connect_mount(host, port)
-        self.connect_camera(host, port)
-        self.connect_filterwheel(host, port)
-        self.connect_focuser(host, port)
+        """Connect every device that has no handle yet.
+
+        "Connect equipment" stays enabled until all four are up, so a second
+        press retries the ones that failed. A connected device is left alone:
+        reconnecting it would leak its poller and drop a camera a sequence
+        may be using. A stale handle is recovered with Disconnect, Connect.
+        """
+        if self._telescope is None:
+            self.connect_mount(host, port)
+        if self._camera is None:
+            self.connect_camera(host, port)
+        if self._filterwheel is None:
+            self.connect_filterwheel(host, port)
+        if self._focuser is None:
+            self.connect_focuser(host, port)
 
     def disconnect_all(self) -> None:
         self.disconnect_camera()
@@ -283,18 +360,26 @@ class DeviceSession(QObject):
                     "WARN",
                     "Mount coordinate system unavailable; assuming the driver accepts J2000.",
                 )
-            if scope.clock_error_seconds is not None and scope.clock_error_seconds > 60.0:
-                self.log_message.emit(
-                    "ERROR",
-                    "Mount clock is %.1f h off — correct date/time in the Seestar app; GoTo and Sync are disabled."
-                    % (scope.clock_error_seconds / 3600.0),
-                )
+            self._log_clock_error(scope)
             self.device_state_changed.emit("mount", "connected", name)
             self.mount_mode.emit(scope.alignment_mode)
+            self._site_checked = False
             self._start_polling()
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Mount: {exc}")
-            self.device_state_changed.emit("mount", "error", str(exc)[:48])
+            self.device_state_changed.emit("mount", "error", str(exc))
+
+    def _log_clock_error(self, scope: Telescope) -> None:
+        """Say what a stale mount clock does: the Telescope refuses GoTo, Sync
+        and Center on use (``_assert_clock_synchronized``); no button is
+        disabled."""
+        if scope.clock_error_seconds is not None and scope.clock_error_seconds > 60.0:
+            self.log_message.emit(
+                "ERROR",
+                "Mount clock is %.1f h off — correct the date/time in the Seestar app, then "
+                "reconnect. GoTo, Sync and Center will be refused until then."
+                % (scope.clock_error_seconds / 3600.0),
+            )
 
     @pyqtSlot()
     def _retry_mount(self) -> None:
@@ -322,14 +407,10 @@ class DeviceSession(QObject):
                 "WARN",
                 "Mount coordinate system unavailable; assuming the driver accepts J2000.",
             )
-        if scope.clock_error_seconds is not None and scope.clock_error_seconds > 60.0:
-            self.log_message.emit(
-                "ERROR",
-                "Mount clock is %.1f h off — correct date/time in the Seestar app; GoTo and Sync are disabled."
-                % (scope.clock_error_seconds / 3600.0),
-            )
+        self._log_clock_error(scope)
         self.device_state_changed.emit("mount", "connected", name)
         self.mount_mode.emit(scope.alignment_mode)
+        self._site_checked = False
         self._start_polling()
 
     def disconnect_mount(self) -> None:
@@ -343,6 +424,10 @@ class DeviceSession(QObject):
             except AlpacaError:
                 pass
             self._telescope = None
+        # The last polled pointing is not where the telescope is any more:
+        # FITS RA/DEC/ALTITUDE/AZIMUTH/AIRMASS and the photometry airmass
+        # read it, and every reader handles "no position".
+        self._last_position = None
         self.device_state_changed.emit("mount", "disconnected", "")
         self.tracking_changed.emit(None)
         self.mount_mode.emit(None)
@@ -363,7 +448,7 @@ class DeviceSession(QObject):
             self.device_state_changed.emit("camera", "connected", name)
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Camera: {exc}")
-            self.device_state_changed.emit("camera", "error", str(exc)[:48])
+            self.device_state_changed.emit("camera", "error", str(exc))
 
     def _check_profile_against(self, cam: Camera, camera_name: str) -> None:
         """Warn when the connected camera contradicts the active profile.
@@ -438,6 +523,9 @@ class DeviceSession(QObject):
             slots = position_names()
             names = tuple(slots[i] for i in sorted(slots))
             pos = fw.get_position()
+            self._filter_slot = fw.position_name() if pos >= 0 else None
+            self._filter_moving = False
+            self._filter_settled_at = None
             self.filterwheel_state.emit(
                 FilterWheelState(names=names, position=pos, position_name=fw.position_name())
             )
@@ -445,7 +533,7 @@ class DeviceSession(QObject):
             self.device_state_changed.emit("filterwheel", "connected", fw.position_name())
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Filter wheel: {exc}")
-            self.device_state_changed.emit("filterwheel", "error", str(exc)[:48])
+            self.device_state_changed.emit("filterwheel", "error", str(exc))
 
     def disconnect_filterwheel(self) -> None:
         if self._filterwheel:
@@ -454,6 +542,8 @@ class DeviceSession(QObject):
             except AlpacaError:
                 pass
             self._filterwheel = None
+        self._filter_slot = None
+        self._filter_moving = False
         self.device_state_changed.emit("filterwheel", "disconnected", "")
         self.log_message.emit("INFO", "Filter wheel disconnected.")
 
@@ -485,7 +575,7 @@ class DeviceSession(QObject):
             self.device_state_changed.emit("focuser", "connected", name)
         except AlpacaError as exc:
             self.log_message.emit("ERROR", f"Focuser: {exc}")
-            self.device_state_changed.emit("focuser", "error", str(exc)[:48])
+            self.device_state_changed.emit("focuser", "error", str(exc))
 
     def disconnect_focuser(self) -> None:
         # Synchronous hook: the engine stops a running autofocus sweep first.
@@ -525,6 +615,7 @@ class DeviceSession(QObject):
     def _start_polling(self) -> None:
         if not self._telescope:
             return
+        self._stop_polling()  # a second poller would outlive any disconnect
         self._polling = MountPollingWorker(self._telescope, parent=self)
         self._polling.position_updated.connect(self._on_position)
         self._polling.error_occurred.connect(self._on_poll_error)
@@ -542,7 +633,15 @@ class DeviceSession(QObject):
 
     @pyqtSlot(object)
     def _on_position(self, pos: MountPosition) -> None:
+        if self._telescope is None:
+            # Queued by a poller that was stopped when the mount went away
+            # (a poll in flight during disconnect_mount): it must not bring
+            # back a position, or a "connected" state, for a gone mount.
+            return
         self._last_position = pos
+        if not self._site_checked and not pos.slewing:
+            self._site_checked = True
+            self._check_site_against_mount(pos)
         self.mount_position.emit(pos)
         self.tracking_changed.emit(pos.tracking)
         # Feed the Stellarium server directly so its on-screen reticle keeps
@@ -554,15 +653,55 @@ class DeviceSession(QObject):
         else:
             self.device_state_changed.emit("mount", "connected", "")
 
+    def _check_site_against_mount(self, pos: MountPosition) -> None:
+        """Say when the Settings site cannot be where the telescope is.
+
+        The mount reports where it points (altitude, azimuth) from its own
+        site and clock (the Seestar takes them from the phone). The same
+        RA/Dec seen from the Settings site at the computer's clock must point
+        the same way. Both angles are compared: altitudes alone can cross
+        (on 2026-09-25 they were 61.5° apart at the start of the run and 6.2°
+        at its end, the directions 88.5° and 83.6°). Airmass, BJD_TDB and
+        FITS SITELAT/SITELONG use the Settings site.
+        """
+        site = observing_site(self._config)
+        if site is None:
+            return  # no site set: nothing is computed from one
+        lat, lon, _elev = site
+        alt, az = horizontal_at(julian_date(_utcnow()), pos.ra, pos.dec, lat, lon)
+        delta = angle_between_directions(alt, az, pos.altitude, pos.azimuth)
+        if delta > SITE_CHECK_TOLERANCE_DEG:
+            self.log_message.emit(
+                "WARN",
+                f"Site check: the mount points at altitude {pos.altitude:.1f}°, azimuth "
+                f"{pos.azimuth:.1f}°; from the Settings site ({lat:.3f}°, {lon:.3f}°) the same "
+                f"RA/Dec is at altitude {alt:.1f}°, azimuth {az:.1f}°, {delta:.1f}° apart. "
+                "Airmass, BJD and the FITS site use the Settings site: correct Settings › "
+                "Observer & site if the telescope is elsewhere.",
+            )
+        else:
+            self.log_message.emit(
+                "INFO",
+                f"Site check: the Settings site agrees with the mount ({delta:.1f}° apart).",
+            )
+
     def _on_mount_lost(self) -> None:
         self.log_message.emit("ERROR", "Mount connection lost.")
         self._stop_polling()
         self._telescope = None
+        # Frames saved while the mount is retried must not carry its last
+        # polled pointing and airmass (see disconnect_mount).
+        self._last_position = None
         self.mount_lost.emit()
         self.mount_mode.emit(None)
-        self.device_state_changed.emit("mount", "error", "")
+        retrying = self._mount_endpoint is not None
+        self.device_state_changed.emit(
+            "mount",
+            "error",
+            "connection lost — retrying every 10 s" if retrying else "connection lost",
+        )
         self.tracking_changed.emit(None)
-        if self._mount_endpoint is not None:
+        if retrying:
             self.log_message.emit("INFO", "Retrying the mount every 10s — disconnect to stop.")
             self._mount_retry.start()
 
@@ -681,9 +820,31 @@ class DeviceSession(QObject):
     def move_filter(self, position: int) -> None:
         if not self._filterwheel:
             return
+        self._filter_slot = None
+        self._filter_moving = True
         self.device_state_changed.emit("filterwheel", "busy", "moving")
         QThreadPool.globalInstance().start(
-            _FilterMoveRunnable(self._filterwheel, position, self._filter_settled, self.log_message)
+            _FilterMoveRunnable(
+                self._filterwheel,
+                position,
+                self._filter_settled,
+                self.log_message,
+                failed_signal=self._filter_failed,
+            )
+        )
+
+    def refresh_filter(self) -> None:
+        """Re-read the wheel off the UI thread and emit ``filter_moved``.
+
+        For moves made outside :meth:`move_filter` (a sequence drives the
+        wheel directly): the Camera form resyncs on ``filter_moved``. A read,
+        never a move.
+        """
+        if not self._filterwheel:
+            return
+        self._filter_slot = None  # unknown until the read reports back
+        QThreadPool.globalInstance().start(
+            _FilterMoveRunnable(self._filterwheel, None, self._filter_read, self.log_message)
         )
 
     @staticmethod
@@ -692,11 +853,39 @@ class DeviceSession(QObject):
         slots = position_names()
         return next((i for i, n in slots.items() if str(n).lower() == name.lower()), None)
 
+    def _note_filter_move_ended(self, position: int, name: str) -> None:
+        # -1: still turning after the 20 s settle budget, or not readable.
+        self._filter_slot = name if position >= 0 else None
+        self._filter_moving = False
+        self._filter_settled_at = datetime.now(timezone.utc)
+
     @pyqtSlot(int, str)
     def _on_filter_settled(self, position: int, name: str) -> None:
+        self._note_filter_move_ended(position, name)
         self.filter_moved.emit(position, name)
         self.device_state_changed.emit("filterwheel", "connected", name)
         self.log_message.emit("CMD", f"Filter → {name}")
+
+    @pyqtSlot(int, str)
+    def _on_filter_failed(self, position: int, name: str) -> None:
+        """A refused move (error already logged): end "busy" and resync the
+        Camera form to the slot the wheel is really on, so the form (Take-shot
+        filter, Dark/Bias guard) never shows the slot that was not reached."""
+        self._note_filter_move_ended(position, name)
+        self.filter_moved.emit(position, name)
+        if position >= 0:
+            self.device_state_changed.emit("filterwheel", "connected", name)
+        else:
+            self.device_state_changed.emit("filterwheel", "error", "position unknown")
+
+    @pyqtSlot(int, str)
+    def _on_filter_read(self, position: int, name: str) -> None:
+        if not self._filter_moving:  # a move started since: its own report decides
+            self._filter_slot = name if position >= 0 else None
+        if position < 0:
+            return  # still turning after the 20 s settle budget — nothing to resync to
+        self.filter_moved.emit(position, name)
+        self.device_state_changed.emit("filterwheel", "connected", name)
 
     # ------------------------------------------------------------------
     # Focuser commands

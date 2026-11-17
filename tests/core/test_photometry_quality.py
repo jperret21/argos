@@ -43,3 +43,16 @@ def test_quality_report_never_calls_short_or_noisy_curve_stable() -> None:
     report = comparison_quality_report(target_set, {"C1": short})
     assert report["selection_status"] == "insufficient_data"
     assert report["comparison_stars"][0]["status"] == "insufficient_data"
+
+
+def test_the_vetting_file_names_its_filter_and_is_otherwise_unchanged_s57(tmp_path) -> None:
+    """S57: an additive ``filter`` key (the S49 token); the rest of the file as before."""
+    target_set = TargetSet(stars=[TargetStar(ROLE_COMPARISON, 1.0, 1.0, auid="C1")])
+    report = comparison_quality_report(target_set, {"C1": _curve("C1", [10.0, 10.2, 9.8])})
+    plain, named = tmp_path / "plain.json", tmp_path / "named.json"
+    save_comparison_quality_report(plain, report)
+    save_comparison_quality_report(named, report, filter_token="ir")
+    before, after = json.loads(plain.read_text()), json.loads(named.read_text())
+    assert "filter" not in before and after.pop("filter") == "ir"
+    assert after == before
+    assert "filter" not in report  # the in-memory report is not changed

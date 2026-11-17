@@ -140,7 +140,7 @@ The camera-dock filter combo must PHYSICALLY move the wheel (WS1 fix).
         assign roles: 1 target (a variable) + 2-3 comparisons.
 7.4 [ ] Open the Light curve dock (panel strip). Take a few shots or run a
         short sequence: one point per solve/saved sub appears on the curve.
-7.5 [ ] `~/Argos/sessions/targets/<object>_<star>.csv` exists with the
+7.5 [ ] `~/Argos/sessions/targets/<object>_<UTC start>_<star>.csv` exists with the
         9-column header
         `jd_utc,bjd_tdb,mag,mag_err,airmass,fwhm,sky_adu,comps_used,saturated`.
 7.6 [ ] Toolbar **Re-run subs** over the just-captured folder: progress

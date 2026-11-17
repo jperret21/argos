@@ -25,6 +25,53 @@ class SystematicErrorFloor:
     points_used: int
 
 
+#: Osborn et al. (2015, MNRAS 452, 1707) correction of Young's (1967) scintillation
+#: formula, ``C_Y``: the median of their sites is about 1.5 (S74).
+OSBORN_CY = 1.5
+#: Scale height of the atmosphere in Young's formula (m).
+SCINTILLATION_SCALE_HEIGHT_M = 8000.0
+
+
+def scintillation_sigma(
+    aperture_mm: float,
+    exposure_s: float | None,
+    airmass: float | None,
+    height_m: float | None = 0.0,
+    c_y: float = OSBORN_CY,
+) -> float:
+    """Relative flux sigma of scintillation for one star (S74), 0 when unknown.
+
+    Young's formula with Osborn et al.'s coefficient,
+    ``sigma^2 = 1e-5 C_Y^2 D^(-4/3) t^(-1) X^3 exp(-2 h / 8000 m)`` (D in m, t in
+    s): the long-exposure regime, independent between stars more than a few
+    arcseconds apart. Through 30 mm in 10 s at airmass 1 and sea level it is
+    0.0155 (0.017 mag). A 30 mm aperture is near the Fresnel scale, where the
+    formula's D^(-4/3) is least certain: the RR Lyr star pairs' excess scatter over
+    their photon errors measures 0.014-0.020 mag per star (notes S74).
+    """
+    try:
+        d_m = float(aperture_mm) / 1000.0
+        t = float(exposure_s) if exposure_s is not None else math.nan
+        x = float(airmass) if airmass is not None else math.nan
+        h = float(height_m or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if not (d_m > 0 and math.isfinite(t) and t > 0 and math.isfinite(x) and x >= 1.0):
+        return 0.0
+    if not math.isfinite(h):
+        h = 0.0
+    var = (
+        1e-5
+        * c_y
+        * c_y
+        * d_m ** (-4.0 / 3.0)
+        / t
+        * x**3
+        * math.exp(-2.0 * h / SCINTILLATION_SCALE_HEIGHT_M)
+    )
+    return math.sqrt(var)
+
+
 def robust_sigma(values: Iterable[float]) -> float:
     """Return the MAD-based robust standard deviation of finite values."""
     valid = [float(value) for value in values if math.isfinite(value)]

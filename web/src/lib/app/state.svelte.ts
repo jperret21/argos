@@ -1,0 +1,2777 @@
+/**
+ * Application state of the ARGOS web UI, shared through Svelte context.
+ *
+ * One instance per page (App.svelte creates it, components call useApp()).
+ * It owns the server link (REST client, /ws/events, /ws/frames), the
+ * observer's settings (exposure, gain, connection form), the display state
+ * (stretch, crosshair, theme) and the user-facing feedback (toasts, log).
+ *
+ * Every hardware action goes through run(): it marks the action busy, applies
+ * the REST answer immediately (the WebSocket echo follows), and turns any
+ * failure into a toast plus a log line, so no error is silent and none is
+ * modal.
+ *
+ * Wave 1 shell infrastructure lives here too: the one activity log store
+ * (`log`, D17: log v2 lines from /ws/events, older lines and gaps from
+ * GET /api/logs), the jobs (`jobs`, README 4.2: `job` events, GET /api/jobs
+ * on every (re)connection), the shortcut registry (`shortcuts`, README 3.10)
+ * with its global bindings (F1-F5, ?, L, Mod+, and Escape = abort motion,
+ * D21), and the API 2 records the shell and the Connection screen show:
+ * devices, telescope profiles, network reachability, the activity text, the
+ * configuration values and the application info (start-up screen, Help).
+ *
+ * Equipment (API 2, per device): connectAll / disconnectAll / connectDevice /
+ * disconnectDevice use the link chosen on the Connection screen (Simulator,
+ * or a Seestar address saved to the config on commit). The server answers
+ * each request once the device is connected or failed, never blocking its
+ * other routes, so the UI stays live while an address times out.
+ *
+ * Exposure and gain: the fields follow the server's camera record whenever
+ * it changes (first status, a live update taking effect, another client), so
+ * the number on screen is the one in use. While live, a committed change is
+ * sent at once (PATCH /api/camera/live) and applies from the next frame;
+ * until the server's record matches, the change is "pending" and shown so.
+ */
+
+import { getContext, setContext, untrack } from 'svelte';
+import { ApiError, ArgosClient, type RequestOptions } from '../api/client';
+import { ArgosEvents } from '../api/events.svelte';
+import { type DecodedFrame, FrameStream } from '../api/frames';
+import type { LinkState } from '../api/socket';
+import type {
+  AppInfo,
+  AstapState,
+  AutofocusBody,
+  CameraState,
+  CaptureSettings,
+  CaptureSettingsBody,
+  FilterWheelState,
+  FocuserCommand,
+  FocuserState,
+  FrameSaved,
+  FrameType,
+  Observation,
+  ObservationTargetBody,
+  Resolved,
+  TargetSuggestions,
+  TrackingRate,
+  ConfigEvent,
+  ConfigPatchResult,
+  OmittedKey,
+  ConfigValue,
+  ConnectionState,
+  DeviceConnectBody,
+  DeviceId,
+  DevicesState,
+  KeyMeta,
+  LogEvent,
+  MountState,
+  NetworkState,
+  ProfilesState,
+  SiteCheck,
+} from '../api/types';
+import { type ArgosConfig, loadConfig, toWsBase } from '../config';
+import { ConditionsStore } from '../charts/conditions.svelte';
+import { overdueAfter, type ConditionsPage, type TimelinePeriod } from '../charts/conditions';
+import { clockUtc } from '../format/time';
+import { ConditionsView } from '../charts/conditionsView.svelte';
+import type { AutofocusRecord } from '../charts/vcurve';
+import type { FrameMetricsRecord } from '../imaging/modes/exposure';
+import { ObserveWorkspace, viewTransition } from '../imaging/modes/workspace.svelte';
+import type { JogTransport } from '../imaging/instruments/jog';
+import { autofocusWheelGuard, darkGuard } from '../imaging/capture';
+import { separationDeg } from '../format/astro';
+import { FrameStatsWorker } from '../viewer/framestats.svelte';
+import {
+  currentLink,
+  DEVICE_IDS,
+  DEVICE_LABELS,
+  deviceAddress,
+  devicesSummary,
+  type DevicesSummary,
+  parseDiscoveryResult,
+  type RunningState,
+} from '../connection/model';
+import { isRotationMode, type RotationMode } from '../viewer/rotation';
+import type { StretchMode, StretchParams } from '../viewer/stretch';
+import type { DisplayInfo, PointerInfo } from '../viewer/types';
+import { type FitMode, isFitMode } from '../viewer/view';
+import { ViewerTools } from '../viewer/tools/tools.svelte';
+import { FieldStore } from '../imaging/field/field.svelte';
+import { PhotometryStore } from '../imaging/photometry/photometry.svelte';
+import { isRunActive } from '../api/sequence';
+import { MountInterlock } from '../run/interlock.svelte';
+import { isActive, isEngaged, pauseRunTimeoutMs, startBlock, stopDialog } from '../run/run';
+import { SequenceStore } from '../run/sequence.svelte';
+import { WrapUpStore } from '../run/wrapup/store.svelte';
+import type { AttentionTarget } from '../api/attention';
+import { AttentionStore } from '../shell/attention/attention.svelte';
+import { ALERT_KEYS, prefsFrom, type SoundLevel } from '../shell/attention/model';
+import { checkKeepAwake } from '../shell/watch';
+import type { MenuCommand } from '../shell/desktop/bridge';
+import { DesktopShell } from '../shell/desktop/desktop.svelte';
+import type { LocalActivity } from '../shell/desktop/words';
+import type { DesktopCommands, FieldCommands, NightCommands, PhotometryCommands, ReviewCommands, SequenceCommands } from '../shell/commandIndex';
+import { openLayers, setReservedKeys, topModalIndex } from '../components/layers';
+import type { FsLister } from '../components/filepicker';
+import type { BundleRequest, BundleResult } from '../components/supportbundle';
+import { UndoQueue } from '../components/undo.svelte';
+import { isSettingsCategory, type SettingsCategoryId } from '../settings/categories';
+import type { JobEntry } from './jobs';
+import { JobStore } from './jobs.svelte';
+import { KEYMAP } from './keymap';
+import { LogStore } from './log.svelte';
+import { type FrameMetrics, FrameRateMeter } from './metrics';
+import { clearAllLayouts } from './panels';
+import { isBoolean, loadPref, removePrefsWithPrefix, savePref } from './prefs';
+import { matchesShortcut, ShortcutRegistry } from './shortcuts';
+import { type StartupFailure, startupView, type StartupView } from './startup';
+import { deviceUsable } from './status';
+import { loadTheme, nativeMenuGuard, nextTheme, parseCssColor, saveTheme, THEME_STORAGE_KEY, type Theme } from './theme';
+import { applyDensity, type Density, loadDensity, saveDensity, seedFromQt } from './viewerprefs';
+import { LiveCurveStore } from '../charts/lightcurve/store';
+import { ReviewExportApi } from '../review/dialogs/api';
+import { binaryFetch, InspectorApi } from '../review/inspector/api';
+import { InspectorStore, r2ViewerTools } from '../review/inspector/inspector.svelte';
+import { LandingStore } from '../review/landing/landing.svelte';
+import { WallLayoutState } from '../review/layout.svelte';
+import { ReviewSource as ReviewR1, type ReviewLoader } from '../review/session.svelte';
+
+export const SECTIONS = ['connection', 'imaging', 'sequencer', 'analyze', 'configuration'] as const;
+export type Section = (typeof SECTIONS)[number];
+const isSection = (v: unknown): v is Section => typeof v === 'string' && (SECTIONS as readonly string[]).includes(v);
+
+export type ConnectMode = 'simulator' | 'alpaca';
+const isConnectMode = (v: unknown): v is ConnectMode => v === 'simulator' || v === 'alpaca';
+
+export type ActionKey =
+  | 'connectAll'
+  | 'disconnectAll'
+  | `device.${DeviceId}`
+  | `release.${DeviceId}`
+  | 'discover'
+  | 'profile'
+  | 'address'
+  | 'network'
+  | 'stellarium'
+  | 'capture'
+  | 'live'
+  | 'liveSettings'
+  | 'cameraStop'
+  | 'goto'
+  | 'mountStop'
+  | 'park'
+  | 'unpark'
+  | 'tracking'
+  | 'trackingRate'
+  | 'siteCheck'
+  | 'settings'
+  | 'filter'
+  | 'autofocus'
+  | 'openFits'
+  | 'target'
+  | 'fieldSolve'
+  | 'fieldCancel'
+  | 'fieldAuto'
+  | 'center'
+  | 'sync';
+
+/** Outcome of a config commit: the server's per-key messages when it refused. */
+export interface CommitResult {
+  ok: boolean;
+  message?: string;
+  fields?: Record<string, string>;
+  warnings?: { key: string; message: string }[];
+}
+
+/** Server health as the start-up screen sees it. */
+export type HealthState = 'pending' | 'ok' | 'failed';
+
+/** Consecutive failed health checks before the start-up screen reports a failure. */
+const HEALTH_FAILURES_BEFORE_REPORT = 3;
+const HEALTH_RETRY_MS = 1500;
+/** Health answered but /ws/events sent no status: report after this long. */
+const FIRST_STATUS_TIMEOUT_MS = 10_000;
+
+export type ToastLevel = 'info' | 'warning' | 'error';
+
+export interface Toast {
+  id: number;
+  level: ToastLevel;
+  title: string;
+  message: string;
+  /** Identical toasts are merged; this counts the repeats. */
+  count: number;
+  /** One action on the toast (W8: Reveal in Finder, desktop app only). */
+  action?: { label: string; run: () => void };
+  /** The message is a file name (one line, shortened in the middle, never broken). */
+  file?: boolean;
+}
+
+/** Observer-facing titles for the server's error codes (protocol.md). */
+const ERROR_TITLES: Record<string, string> = {
+  not_connected: 'No equipment connected',
+  not_live: 'Live view is not running',
+  busy: 'Device busy',
+  parked: 'Mount is parked',
+  invalid_argument: 'Value refused',
+  invalid_fits: 'Not a raw camera frame',
+  clock_error: 'Mount clock is wrong',
+  lookup_failed: 'Catalogue unavailable',
+  unsupported: 'Not supported',
+  not_found: 'Not found',
+  unauthorized: 'Token rejected',
+  connection_failed: 'Connection failed',
+  device_error: 'Device error',
+  network_error: 'Server unreachable',
+  timeout: 'No answer from the server',
+  bad_response: 'Unexpected server answer',
+  internal_error: 'Server error',
+  forbidden_origin: 'Refused by the server',
+  forbidden_host: 'Refused by the server',
+  run_active: 'A sequence is running',
+  preflight_blocked: 'Sequence not started',
+  not_running: 'No sequence running',
+};
+
+const TOAST_MS: Record<ToastLevel, number> = { info: 4000, warning: 6000, error: 8000 };
+const MAX_TOASTS = 3;
+
+export const EXPOSURE_LIMITS = { min: 0.001, max: 3600 } as const;
+export const GAIN_LIMITS = { min: 0, max: 1000 } as const;
+
+
+/** A33/A32: an opened file's solution says nothing about where the mount points. */
+const FILE_SOLUTION_REASON = 'this solution is for an opened file, not where the mount points: identify a camera frame';
+
+export class ArgosApp {
+  readonly config: ArgosConfig;
+  readonly client: ArgosClient;
+  readonly events: ArgosEvents;
+  private readonly frames: FrameStream;
+  private readonly meter = new FrameRateMeter();
+
+  // -- Server link ------------------------------------------------------------
+  framesLink: LinkState = $state('idle');
+  serverVersion: string | null = $state(null);
+  /** API level reported by GET /api/health (1, or 2 once wave 1 ships). */
+  serverApi: number | null = $state(null);
+  /** Last frame received from /ws/frames (the viewer may coalesce several). */
+  frame: DecodedFrame | null = $state.raw(null);
+  /** performance.now() of the last frame received, for the live progress bar. */
+  lastFrameAt: number | null = $state(null);
+  /** Wall clock (epoch ms), ticked once a second: frame age and staleness. */
+  clock = $state(Date.now());
+
+  // -- Navigation and actions -------------------------------------------------
+  /**
+   * Q-G19 (Qt rule): the last section, except Observe, which opens as
+   * Connection until a device is connected or a frame is shown.
+   */
+  section: Section = $state(initialSection());
+  private readonly savedSection: Section = loadPref('argos.section', isSection, 'connection');
+  private navigated = false;
+  busy: Partial<Record<ActionKey, boolean>> = $state({});
+
+  // -- API 2 records (Connection screen, shell) --------------------------------
+  appInfo: AppInfo | null = $state.raw(null);
+  profiles: ProfilesState | null = $state.raw(null);
+  /** Values of GET /api/config, kept current by `config` events. */
+  configValues: Record<string, ConfigValue> | null = $state.raw(null);
+  configMeta: Record<string, KeyMeta> | null = $state.raw(null);
+  /** Wave 2: keys of 02 appendix A left out of `meta` on purpose, with the reason. */
+  configOmitted: OmittedKey[] = $state.raw([]);
+  /** Id of the discovery job this page shows (started here, or found running). */
+  discoveryJobId: string | null = $state(null);
+  /** Discovery finished with several devices: the choice popover lists them. */
+  discoveryChoices: { host: string; port: number; name: string | null }[] = $state.raw([]);
+  /** One-line outcome under Discover ("Found 192.168.1.42:32323", "No Alpaca devices found…"). */
+  discoveryNote: { tone: 'info' | 'warning' | 'error'; text: string } | null = $state.raw(null);
+
+  // -- Start-up screen (01 2.3.8) ----------------------------------------------
+  health: HealthState = $state('pending');
+  private healthError: string | null = $state(null);
+  private healthFailures = 0;
+  private firstStatusTimedOut = $state(false);
+  /** The start-up screen has finished once; it never comes back (link losses show in the status bar). */
+  started = $state(false);
+
+  // -- Observer settings ------------------------------------------------------
+  exposure = $state(2);
+  gain = $state(80);
+  /** The Camera card fields hold text that is not a valid value. */
+  exposureInvalid = $state(false);
+  gainInvalid = $state(false);
+  /** Link chosen on the Connection screen (web only); follows the devices' link while one is held. */
+  connectMode: ConnectMode = $state(loadPref('argos.connection.mode', isConnectMode, 'simulator'));
+  /** `alpaca.host` / `alpaca.port` of the server config (written on commit, never per keystroke). */
+  alpacaHost = $state('');
+  alpacaPort = $state(32323);
+  /** The port field holds text that is not a valid port (alpacaPort keeps the last valid one). */
+  alpacaPortInvalid = $state(false);
+
+  // -- Display ----------------------------------------------------------------
+  theme: Theme = $state(loadTheme());
+  viewerTint: [number, number, number] = $state.raw([1, 1, 1]);
+  /** --viewer-saturated (clipped pixels; black in Night Red). */
+  viewerSaturated: [number, number, number] = $state.raw([1, 0.2, 0.33]);
+  /** The viewer tools of this browser (W4: preview, palette, loupe, region, saturation…). */
+  readonly viewTools = new ViewerTools();
+  /**
+   * Field identification (W4, imaging/field): field, catalogue, layers, tracking, selection
+   * and target set, fed by /ws/events (each record is replayed after `status`). The viewer
+   * reads its WCS (compass, scale bar, cursor RA / Dec); the Field band its candidates.
+   */
+  readonly field = new FieldStore();
+  /** Live photometry (W5, imaging/photometry): curves, leave-one-out report, status, variables. */
+  readonly photometry = new PhotometryStore();
+  /**
+   * The run (W6a, lib/run): the server's `sequence` snapshot, this run's saved subs and the
+   * preflight; one store read by Plan, the Run card in Observe, the status bar and the palette.
+   */
+  readonly sequence = new SequenceStore();
+  /**
+   * The mount-motion interlock (W6a, D2): every mount control goes through it; a `409
+   * run_active` becomes the one question "Pause the run and slew" (InterlockDialog in App).
+   */
+  readonly interlock = new MountInterlock();
+  /**
+   * The desktop app (W8, lib/shell/desktop): the shell's server state (start-up stage,
+   * crash notice), the quit flow (A7), Reveal (A12), the title bar, the app menu. Inert
+   * in a browser tab (`available` false).
+   */
+  readonly desktop: DesktopShell;
+  /** Wave 6b (D3): the server's attention items, the shared acknowledgement and the tones. */
+  readonly attention = new AttentionStore({ by: 'web' });
+  /** Wave 6b (D2): the last run's end-of-night wrap-up (`sequence.wrapup`). */
+  readonly wrapup = new WrapUpStore();
+  /** Wave 6b (D3): the Watch view is shown (W, the palette, an item's "Watch"). */
+  watchOpen = $state(false);
+  /** Wave 6b: the status bar's attention list is open (the chip, the Run card's "n more"). */
+  attentionListOpen = $state(false);
+  /** Wave 6b: the server's keep-awake record (status.keep_awake); null from an older server. */
+  keepAwake: ReturnType<typeof checkKeepAwake> = $state.raw(null);
+  /** The palette asked Plan to open one of its popovers (Plan clears it once shown). */
+  planRequest: 'presets' | 'preflight' | null = $state(null);
+
+  // -- Wave 7: Review (R0 sessions, R1 a session or the live run, R2 a frame) ---------------
+  /** The screen of the Review section. */
+  reviewScreen: 'r0' | 'r1' | 'r2' = $state('r0');
+  /** R1: the source under review (A68 + A69, A70, or the live run) and the wall's layout. */
+  readonly review = new ReviewR1();
+  readonly reviewLayout = new WallLayoutState();
+  /** R0's list and recent items (per viewer). */
+  readonly landing: LandingStore;
+  /** R2: the file, its header, solve (A74), catalogue (A75), measure (A73); its own viewer tools. */
+  readonly r2: InspectorStore;
+  readonly r2Tools = r2ViewerTools();
+  /** A76-A79: re-run plan / start, AAVSO preview / export, CSV export. */
+  readonly reviewExports: ReviewExportApi;
+  /** Mod+O in Review bumps it: R0's FITS picker opens (07 R0, WF-D). */
+  reviewPickFits = $state(0);
+  /** The palette asked R1 for a dialog (ReviewScreen hands it to R1 once shown). */
+  reviewAsk: { kind: 'rerun' | 'export-aavso' | 'export-csv'; n: number } | null = $state.raw(null);
+  /** Jobs this page started from Review: their outcome stays in the job strip until dismissed. */
+  reviewJobIds: string[] = $state.raw([]);
+  /** R1 shows the log in its own drawer (Frames · Ensemble · Log): set by ReviewScreen while R1 is shown. */
+  reviewLog: { shown(): boolean; set(open: boolean): void } | null = $state.raw(null);
+  private reviewLiveOff: (() => void) | null = null;
+  autoStretch = $state(true);
+  /** Manual levels; used while autoStretch is off. */
+  manual: StretchParams | null = $state.raw(null);
+  crosshair = $state(false);
+  /** Levels strip under the image (H); remembered per viewer. */
+  stripOpen: boolean = $state(loadPref('argos.levels-strip', isBoolean, true));
+  /** How "fit" frames the image: whole frame, or filling the viewer (cropped). */
+  fitMode: FitMode = $state(loadPref('argos.fit-mode', isFitMode, 'fit'));
+  /** The viewer currently shows the fitted view (not a zoom or pan of the observer's). */
+  fitted = $state(true);
+  /** Display rotation of the viewer (BRAND 11.1: auto turns portrait frames landscape). */
+  rotation: RotationMode = $state(loadPref('argos.rotation', isRotationMode, 'auto'));
+  /** Right rail of cards shown (P); remembered per viewer. */
+  railOpen: boolean = $state(loadPref('argos.rail-open', isBoolean, true));
+  /** Where the image sits in the viewer, CSS px (frame chips anchor to it). */
+  imageRect: { left: number; top: number; width: number; height: number } | null = $state.raw(null);
+  zoom = $state(1);
+  pointer: PointerInfo | null = $state.raw(null);
+  shown: DisplayInfo | null = $state.raw(null);
+  metrics: FrameMetrics = $state.raw({ fps: null, latencyMs: null, frames: 0 });
+
+  // -- Feedback -----------------------------------------------------------------
+  toasts: Toast[] = $state([]);
+  logOpen = $state(false);
+  /**
+   * The Connection screen's log shows every topic (L there): the Connection
+   * screen has its own log region, so L widens it in place instead of
+   * stacking the drawer's copy of the same lines under it.
+   */
+  connectionLogAll = $state(false);
+  /** The one activity log of the UI (server lines + client failures), 5 000 lines. */
+  readonly log = new LogStore();
+  /** Long-running jobs (discovery, …): progress, cancel, outcome. */
+  readonly jobs: JobStore;
+  /** The one shortcut registry: keymap, conflict check, dispatch, the "?" sheet. */
+  readonly shortcuts = new ShortcutRegistry(KEYMAP, { blocked: () => topModalIndex(openLayers()) >= 0 });
+  /** Keyboard shortcuts sheet ("?", Help menu). */
+  shortcutSheetOpen = $state(false);
+
+  // -- Wave 2: Settings, Help, command palette ---------------------------------
+  /** Density of the readouts and rows (Settings › Appearance, owner D7); per viewer. */
+  density: Density = $state(loadDensity());
+  /** Undo after an immediate change (remove a saved site, reset a setting): one queue, bottom right. */
+  readonly undo = new UndoQueue();
+  /**
+   * Where Observe wants the toast column (CSS px from the window's left and bottom): the
+   * bottom left of the viewer stage, above the scale bar, so a toast never covers the rail's
+   * controls (Slew, Sync) right after a role change. Null elsewhere.
+   */
+  toastAnchor: { left: number; bottom: number } | null = $state(null);
+  /** Support bundle dialog (Help menu, Settings › Privacy & diagnostics; D14). */
+  supportBundleOpen = $state(false);
+  /** Command palette (Mod+K). */
+  paletteOpen = $state(false);
+  /** Settings: the category shown (per viewer) and a key to bring into view (palette, links). */
+  settingsCategory: SettingsCategoryId = $state(loadPref('argos.settings.category', isSettingsCategory, 'observer_site'));
+  settingsFocus: { key: string; n: number } | null = $state.raw(null);
+  /** Bumped by "Reset all layouts": screens holding their own layout state re-read it. */
+  layoutGeneration = $state(0);
+
+  // -- Wave 3: the Observe workspace and its data feeds ----------------------------
+  /** Observe task modes and the layout each remembers (D1, imaging/modes). */
+  readonly observe: ObserveWorkspace;
+  /** Conditions rows of the session (A37), typed-array columns. */
+  readonly conditions: ConditionsStore;
+  /** What the Conditions timeline shows (metrics, kept zoom), per viewer. */
+  readonly conditionsView = new ConditionsView();
+  /** The newest `frame_metrics` (A26); compare its `seq` with the frame on screen. */
+  frameMetrics: FrameMetricsRecord | null = $state.raw(null);
+  /** The newest `frame_saved` (A24): its frame_seq marks the frame on screen as saved. */
+  lastSaved: { seq: number; frame_seq: number; name: string; path: string } | null = $state.raw(null);
+  /** Take shots saved since this page opened, newest last (A24; gaps re-read from GET /api/camera/saved). */
+  savedCount = $state(0);
+  /** Keyboard jogging armed (J, D23): arrow keys jog while the Observe screen is shown. */
+  jogArmed = $state(false);
+  /** The Jog section of the Mount card is open (per viewer). */
+  jogOpen: boolean = $state(loadPref('argos.mount.jog-open', isBoolean, false));
+  /** The Open FITS image dialog (Mod+O, M49). */
+  openFitsOpen = $state(false);
+  /** Folder the Open FITS dialog starts in (the last one used, else the sessions). */
+  openFitsStart: string | null = $state(loadPref('argos.open-fits.dir', (v): v is string => typeof v === 'string', null));
+  /** A target-name suggestion the observer dismissed (its time): not shown again. */
+  suggestionDismissed: string | null = $state(null);
+  /** Star peaks of the exposure check, off the main thread (created by start()). */
+  frameStats: FrameStatsWorker | null = null;
+  /** A GET /api/logs is running (fills a gap or the history after a (re)connection). */
+  private logFetch: Promise<void> | null = null;
+  private nextToastId = 1;
+  private toastTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+  constructor(initial: ArgosConfig = loadConfig()) {
+    // Reactive: the desktop app's waiting UI adopts its server's address and token in
+    // place (W8), and what shows the address (Connection, the status bar) follows.
+    const config = $state(initial);
+    this.config = config;
+    this.client = new ArgosClient(config);
+    this.desktop = new DesktopShell({
+      client: this.client,
+      config,
+      activity: () => this.quitActivity(),
+      adopt: (api, token) => this.adoptServer(api, token),
+      onmenu: (id) => this.runMenu(id),
+      // The webview has no download bar: the shell saved the file in Downloads; say where.
+      ondownload: (d) =>
+        d.saved
+          ? this.toast('info', 'Saved in Downloads', d.name ?? d.path ?? '', this.revealAction(d.path), { file: true })
+          : this.toast('error', 'Download failed', 'The file could not be saved in the Downloads folder.'),
+    });
+    this.events = new ArgosEvents(config, {
+      onLog: (msg) => this.onLogLine(msg),
+      onJob: (msg) => this.onJobEvent(msg.job),
+      onConfig: (msg) => this.applyConfigEvent(msg),
+      onFirstStatus: ({ restarted }) => this.onLinkUp(restarted),
+    });
+    this.frames = new FrameStream(config, {
+      onFrame: (f) => {
+        this.frame = f;
+        this.lastFrameAt = performance.now();
+      },
+      onState: (s) => (this.framesLink = s),
+      onError: (err) => this.log.push('warning', `Frame dropped: ${err.message}`, { source: 'web', topic: 'camera' }),
+    });
+    this.jobs = new JobStore({ cancel: (id) => this.client.cancelJob(id) });
+    this.landing = new LandingStore((q, o) => this.client.sessions(q, o));
+    this.r2 = new InspectorStore(new InspectorApi(this.client, binaryFetch(this.config)), this.jobs);
+    this.reviewExports = new ReviewExportApi(this.client);
+    this.observe = new ObserveWorkspace({
+      onreset: (what, undo) => this.undo.push({ title: what, detail: 'Its panels, band and drawer are back to the preset', undo }),
+      transition: viewTransition,
+    });
+    this.conditions = new ConditionsStore((since) =>
+      this.client.request<ConditionsPage>(
+        'GET',
+        `/api/session/conditions?limit=20000${since !== null ? `&since_seq=${since}` : ''}`,
+      ),
+    );
+    this.events.on('conditions', (m) => this.conditions.ingest(m));
+    this.field.attach(this.events);
+    // A star picked before a reload does not come back with the page (W4 leftover).
+    this.field.pageLoaded();
+    this.photometry.attach(this.events, this.client);
+    this.sequence.attach(this.events, this.client);
+    this.wrapup.attach(this.events, this.client);
+    this.events.on('status', (m) => {
+      if ('keep_awake' in m) this.keepAwake = checkKeepAwake(m.keep_awake);
+    });
+    this.events.on('stellarium', (m) => this.onStellariumGoto(m));
+    this.events.on('frame_metrics', (m) => {
+      if (typeof m.seq === 'number') this.frameMetrics = m as unknown as FrameMetricsRecord;
+    });
+    this.events.on('frame_saved', (m) => {
+      if (typeof m.frame_seq === 'number' && typeof m.name === 'string' && typeof m.seq === 'number') {
+        this.onFrameSaved(m as unknown as FrameSaved);
+      }
+    });
+    this.events.on('autofocus', (m) => {
+      this.noteAfPeriod(m as { started_utc?: string | null; ended_utc?: string | null });
+      this.onAutofocusEvent(m.state as string | undefined, typeof m.message === 'string' ? m.message : null);
+    });
+    this.events.on('status', (m) => {
+      if (m.autofocus && typeof m.autofocus === 'object') this.noteAfPeriod(m.autofocus as { started_utc?: string | null; ended_utc?: string | null });
+    });
+  }
+
+  /** The server's autofocus record (A36: `autofocus` events and status.autofocus). */
+  get autofocus(): AutofocusRecord | null {
+    return this.events.autofocus as AutofocusRecord | null;
+  }
+
+  /** Filter wheel (A28), focuser (A34), observation identity (A38), Stellarium names (A20). */
+  get filterwheel(): FilterWheelState | null {
+    return this.events.filterwheel;
+  }
+
+  get focuser(): FocuserState | null {
+    return this.events.focuser;
+  }
+
+  get observation(): Observation | null {
+    return this.events.observation;
+  }
+
+  /**
+   * The newest target-name suggestion after a Stellarium GoTo, unless dismissed,
+   * and only while the mount's target is still that GoTo (within 0.5°): once the
+   * observer has sent the mount elsewhere the names no longer describe the field.
+   */
+  get suggestions(): TargetSuggestions | null {
+    const s = this.events.suggestions;
+    if (!s || s.t === this.suggestionDismissed) return null;
+    const t = this.mountReady ? this.mount?.target : null;
+    if (t && separationDeg(t.ra_hours, t.dec_deg, s.ra_hours, s.dec_deg) > 0.5) return null;
+    return s;
+  }
+
+  /** What the NEXT frame uses (server state shared by every client, Q-O13). */
+  get settings(): CaptureSettings | null {
+    return this.events.camera?.settings ?? null;
+  }
+
+  /** Who drives the camera ("idle" for an API 1 record). */
+  get cameraOwner(): string {
+    return this.events.camera?.owner ?? 'idle';
+  }
+
+  get autofocusRunning(): boolean {
+    const s = this.events.autofocus?.state;
+    return s === 'running' || s === 'stopping';
+  }
+
+  // -- Derived views of the server state --------------------------------------
+
+  get connection(): ConnectionState | null {
+    return this.events.connection;
+  }
+
+  get camera(): CameraState | null {
+    return this.events.camera;
+  }
+
+  get mount(): MountState | null {
+    return this.events.mount;
+  }
+
+  get linkOpen(): boolean {
+    return this.events.link === 'open';
+  }
+
+  /** At least one of the camera and the mount is connected (v1 record): "some equipment". */
+  get connected(): boolean {
+    return this.events.connection?.state === 'connected';
+  }
+
+  /** The mount itself is connected (its own device record): its readouts are real. */
+  get mountReady(): boolean {
+    return deviceUsable(this.events.devices, 'mount', this.events.connection);
+  }
+
+  /** The camera itself is connected (its own device record). */
+  get cameraReady(): boolean {
+    return deviceUsable(this.events.devices, 'camera', this.events.connection);
+  }
+
+  get devices(): DevicesState | null {
+    return this.events.devices;
+  }
+
+  get network(): NetworkState | null {
+    return this.events.network;
+  }
+
+  /** The Settings site against the mount's pointing (wave 2; protocol.md "Site check"). */
+  get siteCheck(): SiteCheck | null {
+    return this.events.siteCheck;
+  }
+
+  /** "n of 4 devices ready", and whether a link is held (profile and link locked). */
+  get equipment(): DevicesSummary {
+    return devicesSummary(this.events.devices);
+  }
+
+  /** What runs on the equipment now (a disconnection would stop it). */
+  get running(): RunningState {
+    const cam = this.events.camera?.state;
+    return {
+      live: cam === 'live',
+      exposing: cam === 'exposing' || cam === 'downloading',
+      slewing: this.slewing,
+      sequence: isActive(this.sequence.state),
+      autofocus: this.autofocusRunning,
+    };
+  }
+
+  /** The start-up screen's stages and outcome (01 2.3.8). */
+  get startup(): StartupView {
+    return startupView({
+      desktop: this.desktop.available,
+      sidecar: this.desktop.sidecar,
+      health: this.health,
+      firstStatus: this.events.everStatus,
+      failure: this.desktop.startupFailure ?? this.startupFailure(),
+    });
+  }
+
+  private startupFailure(): StartupFailure | null {
+    const logPath = this.appInfo?.paths.log_file ?? null;
+    const link = this.events.link;
+    if (link === 'unauthorized') {
+      return {
+        title: 'The server rejected the token',
+        message: 'Open the UI with ?token=… as printed by the server (ARGOS_TOKEN=…).',
+        detail: `WebSocket closed with code 4401 by ${this.config.apiBase}`,
+        logPath,
+      };
+    }
+    if (link === 'forbidden') {
+      return {
+        title: 'The server refused this page',
+        message: 'Open the UI from localhost or 127.0.0.1: the server only answers local pages.',
+        detail: `WebSocket closed with code 4403 by ${this.config.apiBase}`,
+        logPath,
+      };
+    }
+    if (this.health === 'failed') {
+      return {
+        title: 'ARGOS could not reach its server',
+        message: `No answer from ${this.config.apiBase}. Start it with "python -m argos.server"; this page keeps trying.`,
+        detail: this.healthError,
+        logPath,
+      };
+    }
+    if (this.firstStatusTimedOut && !this.events.everStatus) {
+      return {
+        title: 'The server sends no state',
+        message: 'GET /api/health answers, but /ws/events sent no status within 10 s.',
+        detail: `Event link: ${link}`,
+        logPath,
+      };
+    }
+    return null;
+  }
+
+  /**
+   * The server link is down: every record on screen is the last one received,
+   * not the current state. Readouts grey out and hardware actions are refused.
+   */
+  get stale(): boolean {
+    return this.events.link !== 'open';
+  }
+
+  /** Camera commands can be sent (link up and the camera connected). */
+  get canCamera(): boolean {
+    return !this.stale && this.cameraReady;
+  }
+
+  /** Mount commands can be sent (link up and the mount connected). */
+  get canMount(): boolean {
+    return !this.stale && this.mountReady;
+  }
+
+  get live(): boolean {
+    return this.events.camera?.state === 'live';
+  }
+
+  get cameraBusy(): boolean {
+    const s = this.events.camera?.state;
+    return s === 'exposing' || s === 'downloading' || s === 'live';
+  }
+
+  get slewing(): boolean {
+    return this.mountReady && this.events.mount?.state === 'slewing';
+  }
+
+  /**
+   * The frame on screen is not a current camera frame: equipment
+   * disconnected, server link down, or no new frame for max(5 s, three
+   * exposures). Files are files, never "stale".
+   */
+  get frameStale(): boolean {
+    const h = this.shown?.frame.header;
+    if (!h || h.source === 'file') return false;
+    if (!this.canCamera) return true;
+    const t = Date.parse(h.timestamp);
+    if (!Number.isFinite(t)) return false;
+    // A run's sub is held against the run's limit, max(2 × cadence, cadence + 60 s): the Run
+    // card, the band's AgeMeter, Watch and the "No new frame" rule agree. With an interval
+    // (1 s subs every 10 s) the live-view limit called a healthy run "Last frame" half the
+    // time (wave 6b design review).
+    if (isActive(this.sequence.state)) {
+      return this.clock - t > 1000 * overdueAfter(this.sequence.cadence);
+    }
+    const exposure = Math.max(h.exposure_s, this.cameraBusy ? (this.camera?.exposure_s ?? 0) : 0);
+    return this.clock - t > Math.max(5000, 3000 * exposure);
+  }
+
+  /** Rate and latency, only while they describe a running stream. */
+  get liveMetrics(): FrameMetrics {
+    if (this.frameStale || !this.canCamera) return { ...this.metrics, fps: null, latencyMs: null };
+    return this.metrics;
+  }
+
+  /**
+   * Live view runs with other settings than the fields: the change applies
+   * from the next frame (or was refused).
+   */
+  get livePending(): boolean {
+    const cam = this.camera;
+    if (!this.live || !cam) return false;
+    const now = cam.current ?? cam;
+    return Math.abs(now.exposure_s - this.exposure) > 1e-9 || now.gain !== Math.round(this.gain);
+  }
+
+  /** Levels currently drawn (auto levels of the shown frame, or the manual ones). */
+  get levels(): StretchParams | null {
+    if (!this.autoStretch && this.manual) return this.manual;
+    return this.shown?.auto ?? null;
+  }
+
+  /** Warnings and errors logged since the log was last seen. */
+  get unseenProblems(): number {
+    return this.log.unseenProblems;
+  }
+
+  // -- Lifecycle ------------------------------------------------------------------
+
+  start(): () => void {
+    this.applyTheme(this.theme);
+    applyDensity(this.density);
+    // M20: no light-grey native context menu in Night Red (browser and desktop app).
+    const stopMenuGuard = typeof window === 'undefined' ? () => {} : nativeMenuGuard(window, () => this.theme);
+    const stopDesktop = this.desktop.start(this.events);
+    // W8: the desktop app opened before its server is ready: only the shell's server state
+    // (start-up stage, failure) until the server is ready; then it runs on it in place
+    // (adoptServer), no reload.
+    if (this.desktop.waiting) {
+      // Mod+Q while the server starts or after it failed (no keymap yet; Linux has no
+      // native menu to catch it): the shell quits at once, there is nothing to stop.
+      const onKey = (e: KeyboardEvent) => {
+        if (e.repeat || !matchesShortcut(e, 'Mod+Q')) return;
+        e.preventDefault();
+        this.desktop.quit.exitNow();
+      };
+      window.addEventListener('keydown', onKey);
+      let stopLive: (() => void) | null = null;
+      this.goLive = () => {
+        window.removeEventListener('keydown', onKey);
+        stopLive ??= this.runOnServer();
+      };
+      return () => {
+        this.goLive = null;
+        window.removeEventListener('keydown', onKey);
+        stopLive?.();
+        stopDesktop();
+        stopMenuGuard();
+      };
+    }
+    const stopLive = this.runOnServer();
+    return () => {
+      stopLive();
+      stopDesktop();
+      stopMenuGuard();
+    };
+  }
+
+  /** W8: start the live UI later (a waiting desktop UI whose server became ready). */
+  private goLive: (() => void) | null = null;
+
+  /**
+   * W8: the shell's server is ready and this page waited for it: take its address and
+   * token (the URL too, so a reload finds them) and start the live UI in place.
+   */
+  private adoptServer(api: string, token: string): void {
+    this.config.apiBase = api;
+    this.config.wsBase = toWsBase(api);
+    this.config.token = token;
+    this.config.source = { api: 'query', token: 'query' };
+    try {
+      const url = new URL(location.href);
+      url.searchParams.set('api', api);
+      url.searchParams.set('token', token);
+      history.replaceState(history.state, '', url.toString());
+    } catch {
+      /* no history (tests): a reload would wait for the shell again */
+    }
+    this.goLive?.();
+  }
+
+  /** Everything that runs on a server: the links, health, attention, effects, keys. */
+  private runOnServer(): () => void {
+    this.events.start();
+    this.frames.start();
+    this.frameStats ??= new FrameStatsWorker();
+    this.readHealth();
+    // Wave 6b: listening before the link opens (the server sends the attention snapshot on
+    // connect); the first press or key arms the sound, a 5 s timer repeats open Critical tones.
+    const stopAttention = this.attention.attach(this.events, this.client, typeof window === 'undefined' ? null : window);
+    const tick = setInterval(() => (this.clock = Date.now()), 1000);
+    const statusTimer = setTimeout(() => (this.firstStatusTimedOut = true), FIRST_STATUS_TIMEOUT_MS);
+    const stopEffects = $effect.root(() => {
+      $effect(() => {
+        const cam = this.events.camera;
+        untrack(() => this.followCamera(cam));
+      });
+      $effect(() => {
+        // Review's screens have their own keys (keymap scopes analyze.r0 / .r1 / .r2).
+        this.shortcuts.setScopes(this.section === 'analyze' ? ['analyze', `analyze.${this.reviewScreen}`] : [this.section]);
+      });
+      // The link held by connected devices decides the mode shown.
+      $effect(() => {
+        const link = currentLink(this.events.devices);
+        if (link) untrack(() => this.setConnectMode(link.mode));
+      });
+      // Q-G19: back to Observe once the equipment or a frame is there.
+      $effect(() => {
+        const ready = this.connected || !!this.frame;
+        untrack(() => {
+          if (ready && !this.navigated && this.savedSection === 'imaging' && this.section === 'connection') {
+            this.section = 'imaging';
+          }
+        });
+      });
+      $effect(() => {
+        if (this.startup.ready) untrack(() => (this.started = true));
+      });
+      // Wave 6b: the alert sound follows Settings › Alerts (alerts.sound, sound_info, repeat_critical_s).
+      $effect(() => {
+        const v = this.configValues;
+        if (v) untrack(() => this.attention.setPrefs(prefsFrom(v)));
+      });
+    });
+    const stopKeys = this.bindShortcuts();
+    return () => {
+      clearInterval(tick);
+      stopAttention();
+      clearTimeout(statusTimer);
+      clearTimeout(this.healthTimer);
+      stopEffects();
+      stopKeys();
+      this.events.stop();
+      this.frames.stop();
+      this.landing.dispose();
+      this.r2.dispose();
+      this.reviewLiveOff?.();
+      this.review.destroy();
+      this.frameStats?.dispose();
+      this.frameStats = null;
+      for (const t of this.toastTimers.values()) clearTimeout(t);
+      this.toastTimers.clear();
+    };
+  }
+
+  /** Change section (rail, F-keys, links): the observer chose, so Q-G19 no longer overrides it. */
+  go(section: Section): void {
+    this.navigated = true;
+    this.section = section;
+    savePref('argos.section', section);
+  }
+
+  /**
+   * After the first `status` of every (re)connection: re-read what the
+   * socket does not replay (README 3.7 "Reconnect"): jobs, the log history
+   * beyond the 200 replayed lines, the configuration, profiles, network and
+   * application info.
+   */
+  private onLinkUp(restarted = false): void {
+    this.health = 'ok';
+    this.healthFailures = 0;
+    // A new server process (boot_id changed): its log seq starts again at 1.
+    // Mark it before its replayed lines arrive, then read its whole ring.
+    if (restarted) this.log.restart();
+    // Its selection ids start at 1 again: forget the old process's superseded clicks.
+    if (restarted) this.field.restart();
+    if (restarted) this.photometry.restart();
+    const quiet = (what: string) => (err: unknown) => {
+      // An API 1 server has none of these routes: keep the v1 behaviour.
+      if (err instanceof ApiError && err.status === 404) return;
+      this.log.push('warning', `${what}: ${err instanceof Error ? err.message : String(err)}`, {
+        source: 'web',
+        topic: 'app',
+      });
+    };
+    void this.client
+      .appInfo()
+      .then((info) => (this.appInfo = info))
+      .catch(quiet('Application info'));
+    const jobMarks = this.jobs.marks();
+    void this.client
+      .jobs()
+      .then((answer) => {
+        this.jobs.snapshot(answer.jobs, jobMarks);
+        // A job awaited across the reconnection may have finished, or be lost.
+        for (const id of [...this.jobWaiters.keys()]) this.settleWaiters(id);
+        this.adoptRunningDiscovery();
+      })
+      .catch(quiet('Jobs'));
+    // A (re)connection may reach a restarted server, whose revision starts at 0 again.
+    this.configRevision = null;
+    void this.reloadConfig().catch(quiet('Configuration'));
+    this.refreshAstap();
+    void this.reloadProfiles().catch(quiet('Telescope profiles'));
+    void this.client
+      .network()
+      .then((n) => this.events.applyNetwork(n))
+      .catch(quiet('Network'));
+    void this.fillLog(restarted ? 0 : (this.log.lastSeq ?? 0), restarted);
+    // Conditions rows missed while the link was down (or all of a restarted server's).
+    if (restarted) this.conditions.clear();
+    void this.conditions.sync().catch(() => undefined);
+    // Live photometry and the field's variables (W5): the stream's snapshot.
+    void this.photometry.refresh();
+    // The run (W6a): its state, the subs saved while the link was down, the preflight.
+    void this.sequence.refresh();
+    void this.sequence.loadPreflight();
+    // Wave 6b: the attention list and history (a client joining mid-run reads them quietly).
+    // A new server process numbers its items again. The wrap-up rides on the `sequence`
+    // record the server sends on connect (no GET: a 404 before the first end).
+    if (restarted) this.attention.clear();
+    void this.attention.refresh();
+  }
+
+  // -- Wave 6b: attention, Watch, wrap-up ------------------------------------------------
+
+  /** An attention item's suggested next step (the list, the Run card, Watch). */
+  attentionAction(to: AttentionTarget): void {
+    if (to === 'watch') {
+      this.watchOpen = true;
+      return;
+    }
+    this.watchOpen = false;
+    if (to === 'devices') this.go('connection');
+    else if (to === 'plan') this.go('sequencer');
+    else if (to === 'settings') this.openSettings('alerts');
+    else {
+      this.go('imaging');
+      this.observe.setMode(to);
+    }
+  }
+
+  /** The chip's Off / Soft / Normal (config key alerts.sound, shared with Settings › Alerts). */
+  setAlertSound(level: SoundLevel): void {
+    void this.commitConfig({ [ALERT_KEYS.sound]: level });
+  }
+
+  /** The wrap-up's "Prepare in Plan" (D2): the draft takes tonight's darks and biases; Undo puts the old draft back. */
+  async prepareCalibration(): Promise<void> {
+    const { replaced } = await this.wrapup.prepare();
+    this.go('sequencer');
+    if (replaced) {
+      this.undo.push({
+        title: 'Plan draft replaced by tonight\'s calibration',
+        detail: 'Darks and biases for the last run; nothing starts until you press Start',
+        undo: () => this.client.request('PUT', '/api/sequence/plan', replaced),
+      });
+    }
+  }
+
+  // -- Log v2 ---------------------------------------------------------------------
+
+  private onLogLine(msg: LogEvent): void {
+    const r = this.log.ingest(msg);
+    // A restarted server numbers its lines from 1 again: read its whole ring.
+    if (r.restarted) void this.fillLog(0, true);
+    else if (r.gap && r.gapAfter !== null) void this.fillLog(r.gapAfter);
+  }
+
+  /** GET /api/logs?after= and merge (the store orders by seq and drops duplicates). */
+  private fillLog(after: number, force = false): Promise<void> {
+    if (this.logFetch && !force) return this.logFetch;
+    this.logFetch = this.client
+      .logs({ after, limit: 5000 })
+      .then((page) => {
+        this.log.ingestPage(page);
+      })
+      .catch(() => {
+        /* an API 1 server, or the link dropped: the replay still brought the last lines */
+      })
+      .finally(() => (this.logFetch = null));
+    return this.logFetch;
+  }
+
+  // -- Configuration -------------------------------------------------------------------
+
+  /** Revision of the values held (config events and answers of this connection). */
+  private configRevision: number | null = null;
+
+  private async reloadConfig(): Promise<void> {
+    const snap = await this.client.getConfig();
+    this.configMeta = snap.meta;
+    this.configOmitted = snap.omitted ?? [];
+    this.seedViewerPrefs(snap.values);
+    // A config event may have arrived while the GET was in flight: never go back.
+    this.adoptConfigValues(snap.values, snap.revision);
+  }
+
+  /** Revisions of this page's own commits: a `config` event with another one came from elsewhere. */
+  private readonly ownRevisions = new Set<number>();
+  /** The last change made by another window, client or program (the Settings header says so). */
+  lastRemoteConfig: { keys: string[]; t: number; source: 'api' | 'file' } | null = $state.raw(null);
+
+  private applyConfigEvent(msg: ConfigEvent): void {
+    const keys = Object.keys(msg.changed);
+    // Our own commit's event can arrive before its PATCH answer: keys still in flight are ours.
+    const inFlight = keys.every((k) => this.patching.has(k));
+    if (keys.length && !this.ownRevisions.has(msg.revision) && !inFlight) {
+      this.lastRemoteConfig = { keys, t: Date.now(), source: msg.source };
+    }
+    this.adoptConfigValues(msg.values, msg.revision);
+    if ('hardware.profile' in msg.changed || Object.keys(msg.changed).some((k) => k.startsWith('hardware.'))) {
+      void this.reloadProfiles().catch(() => {});
+    }
+    if (Object.keys(msg.changed).some((k) => k.startsWith('astrometry.astap') || k.startsWith('astrometry.database'))) {
+      this.refreshAstap();
+    }
+    if ('astrometry.astap_path' in msg.changed) {
+      void this.client
+        .appInfo()
+        .then((info) => (this.appInfo = info))
+        .catch(() => {});
+    }
+  }
+
+  private adoptConfigValues(values: Record<string, ConfigValue>, revision?: number): void {
+    if (typeof revision === 'number') {
+      if (this.configRevision !== null && revision < this.configRevision) return;
+      this.configRevision = revision;
+    }
+    this.configValues = values;
+    if (typeof values['alpaca.host'] === 'string') this.alpacaHost = values['alpaca.host'];
+    if (typeof values['alpaca.port'] === 'number') {
+      this.alpacaPort = values['alpaca.port'];
+      this.alpacaPortInvalid = false;
+    }
+  }
+
+  /**
+   * Q-G6: theme and rotation are per viewer, seeded once from the Qt app's
+   * keys when this browser has no choice of its own.
+   */
+  private seedViewerPrefs(values: Record<string, ConfigValue>): void {
+    let stored = { theme: true, rotation: true };
+    try {
+      stored = {
+        theme: globalThis.localStorage?.getItem(THEME_STORAGE_KEY) != null,
+        rotation: globalThis.localStorage?.getItem('argos.rotation') != null,
+      };
+    } catch {
+      /* blocked storage: nothing to seed into either */
+    }
+    const seed = seedFromQt(values, stored);
+    if (seed.theme && seed.theme !== this.theme) this.setTheme(seed.theme);
+    if (seed.rotation && seed.rotation !== this.rotation) this.setRotation(seed.rotation);
+  }
+
+  /**
+   * One Settings commit: PATCH /api/config, values adopted at once; rejects
+   * with the ApiError (its `fields` carry each refused key's words), so the
+   * field that sent it shows the refusal under itself (SettingsForm).
+   */
+  /** Keys of this page's PATCHes in flight (with a count: two fields may send the same key). */
+  private readonly patching = new Map<string, number>();
+
+  async patchConfig(changes: Record<string, ConfigValue>): Promise<ConfigPatchResult> {
+    const keys = Object.keys(changes);
+    for (const k of keys) this.patching.set(k, (this.patching.get(k) ?? 0) + 1);
+    let r: ConfigPatchResult;
+    try {
+      r = await this.client.patchConfig(changes);
+    } finally {
+      for (const k of keys) {
+        const n = (this.patching.get(k) ?? 1) - 1;
+        if (n > 0) this.patching.set(k, n);
+        else this.patching.delete(k);
+      }
+    }
+    this.ownRevisions.add(r.revision);
+    if (this.ownRevisions.size > 200) this.ownRevisions.delete(this.ownRevisions.values().next().value!);
+    this.adoptConfigValues(r.values, r.revision);
+    this.lastConfigSave = { keys: Object.keys(changes), t: Date.now() };
+    return r;
+  }
+
+  /** What ASTAP would run (A81): a set path, or one found on PATH (the Setup line, Q-G11). */
+  astap: AstapState | null = $state.raw(null);
+
+  private refreshAstap(): void {
+    void this.client
+      .astap()
+      .then((a) => (this.astap = a))
+      .catch(() => {});
+  }
+
+  /** The last Settings commit of this page (the "Saved" line of the Settings header). */
+  lastConfigSave: { keys: string[]; t: number } | null = $state.raw(null);
+
+  /** One config commit (PATCH /api/config): the server validates every key or none. */
+  async commitConfig(changes: Record<string, ConfigValue>): Promise<CommitResult> {
+    try {
+      const r = await this.client.patchConfig(changes);
+      this.ownRevisions.add(r.revision);
+      this.adoptConfigValues(r.values, r.revision);
+      for (const w of r.warnings) this.toast('warning', w.key, w.message);
+      return { ok: true, warnings: r.warnings };
+    } catch (err) {
+      const api = err instanceof ApiError ? err : null;
+      if (api?.fields) return { ok: false, message: api.message, fields: api.fields };
+      this.reportError('Save setting', err);
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Save the Seestar address (Link card fields, on commit). */
+  async saveAddress(host: string, port: number): Promise<CommitResult> {
+    const changes: Record<string, ConfigValue> = {};
+    if (host.trim() !== this.alpacaHost) changes['alpaca.host'] = host.trim();
+    if (port !== this.alpacaPort) changes['alpaca.port'] = port;
+    if (!Object.keys(changes).length) return { ok: true };
+    this.busy.address = true;
+    try {
+      return await this.commitConfig(changes);
+    } finally {
+      this.busy.address = false;
+    }
+  }
+
+  // -- Profiles (A17) -----------------------------------------------------------------
+
+  private async reloadProfiles(): Promise<void> {
+    this.profiles = await this.client.profiles();
+  }
+
+  /** The telescope profile; refused by the server while equipment is connected. */
+  setProfile(key: string): Promise<unknown> {
+    return this.run('profile', 'Telescope profile', async () => {
+      this.profiles = await this.client.setProfile(key);
+    });
+  }
+
+  // -- Stellarium bridge (A19) --------------------------------------------------------
+
+  /** Start the bridge on the configured host and port (the server saves them). */
+  startStellarium(): Promise<unknown> {
+    return this.run('stellarium', 'Stellarium bridge', async () => {
+      try {
+        this.events.applyStellarium(await this.client.startStellarium());
+      } catch (err) {
+        // A bind error is also in the bridge's record (shown on the card): refresh it.
+        void this.client
+          .stellarium()
+          .then((st) => this.events.applyStellarium(st))
+          .catch(() => {});
+        throw err;
+      }
+    });
+  }
+
+  stopStellarium(): Promise<unknown> {
+    return this.run('stellarium', 'Stellarium bridge', async () => {
+      this.events.applyStellarium(await this.client.stopStellarium());
+    });
+  }
+
+  // -- Network (A18) ------------------------------------------------------------------
+
+  /** Re-probe the Seestar, and check the internet: on request only (Q-G13). */
+  checkNetwork(internet: boolean): Promise<unknown> {
+    return this.run('network', internet ? 'Internet check' : 'Seestar check', async () => {
+      this.events.applyNetwork(await this.client.checkNetwork(internet));
+    });
+  }
+
+  private seenSettings: string | null = null;
+
+  /** Adopt the server's exposure and gain whenever they change there. */
+  private followCamera(cam: CameraState | null): void {
+    if (!cam) return;
+    // Wave 3: the fields show what the NEXT frame uses (settings); v1: the request.
+    const exposure = cam.settings?.exposure_s ?? cam.exposure_s;
+    const gain = cam.settings?.gain ?? cam.gain;
+    const key = `${exposure}|${gain}`;
+    if (key === this.seenSettings) return;
+    this.seenSettings = key;
+    this.exposure = exposure;
+    this.gain = gain;
+    this.exposureInvalid = false;
+    this.gainInvalid = false;
+  }
+
+  /** Retry both sockets now (e.g. after the server was restarted). */
+  reconnect(): void {
+    this.events.restart();
+    this.frames.restart();
+    this.readHealth();
+  }
+
+  private healthTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /**
+   * GET /api/health (open route: tells "server down" from "bad token"). Until
+   * it answers, it is retried; after three failures the start-up screen says
+   * so, and the retries go on (the page connects as soon as the server is up).
+   */
+  private readHealth(): void {
+    clearTimeout(this.healthTimer);
+    this.client
+      .health({ timeoutMs: 4000 })
+      .then((h) => {
+        this.serverVersion = h.version;
+        this.serverApi = h.api;
+        this.health = 'ok';
+        this.healthError = null;
+        this.healthFailures = 0;
+      })
+      .catch((err) => {
+        this.serverVersion = null;
+        this.serverApi = null;
+        this.healthFailures += 1;
+        this.healthError = err instanceof Error ? err.message : String(err);
+        if (this.healthFailures >= HEALTH_FAILURES_BEFORE_REPORT) this.health = 'failed';
+        this.healthTimer = setTimeout(() => this.readHealth(), HEALTH_RETRY_MS);
+      });
+  }
+
+  /** Start-up screen "Retry": reconnect at once. */
+  retryStartup(): void {
+    this.healthFailures = 0;
+    this.health = 'pending';
+    this.firstStatusTimedOut = false;
+    this.reconnect();
+  }
+
+  /**
+   * Global bindings of the registry, dispatched from one window listener:
+   * F1-F5 (Mod+1…5 in the desktop app), ?, L, Mod+, and Escape. Section
+   * keys are bound by their screen (ImagingScreen binds the Observe keys)
+   * while it is mounted.
+   */
+  private bindShortcuts(): () => void {
+    const nav: [string, Section][] = [
+      ['nav.connection', 'connection'],
+      ['nav.observe', 'imaging'],
+      ['nav.plan', 'sequencer'],
+      ['nav.review', 'analyze'],
+      ['nav.settings', 'configuration'],
+      ['nav.connection.desktop', 'connection'],
+      ['nav.observe.desktop', 'imaging'],
+      ['nav.plan.desktop', 'sequencer'],
+      ['nav.review.desktop', 'analyze'],
+      ['nav.settings.desktop', 'configuration'],
+    ];
+    const off = [
+      ...nav.map(([id, section]) => this.shortcuts.handle(id, () => this.go(section))),
+      this.shortcuts.handle('help.shortcuts', () => (this.shortcutSheetOpen = true)),
+      this.shortcuts.handle('log.toggle', () => this.toggleLog()),
+      this.shortcuts.handle('nav.settings.mod', () => this.go('configuration')),
+      this.shortcuts.handle('palette.open', () => (this.paletteOpen = !this.paletteOpen)),
+      // Wave 6b (D3): W opens Watch; inside it, Watch's own keys close it (only W, Esc, ?, Mod+K act).
+      this.shortcuts.handle('observe.watch', () => (this.watchOpen = !this.watchOpen)),
+      this.shortcuts.handle('motion.abort', () => this.abortMotion()),
+      // D19: Open FITS image opens into Observe, except in Review where it opens R2 (07 R0, WF-D).
+      this.shortcuts.handle('file.open-fits', () => {
+        if (this.stale) return;
+        if (this.section === 'analyze') this.reviewPickFits++;
+        else this.openFitsOpen = true;
+      }),
+      // M103: Mod+Shift+O shows the Review sessions (R0) from anywhere.
+      this.shortcuts.handle('review.sessions', () => this.showReviewSessions()),
+      // W8 (M18): Quit, desktop app only (the registry skips desktopOnly keys in a browser).
+      this.shortcuts.handle('app.quit', () => void this.desktop.quit.request()),
+    ];
+    const detach = typeof window === 'undefined' ? () => {} : this.shortcuts.attach(window);
+    setReservedKeys((e) => this.shortcuts.reserves(e));
+    return () => {
+      setReservedKeys(null);
+      detach();
+      for (const f of off) f();
+    };
+  }
+
+  // -- W8: the desktop app ----------------------------------------------------------------
+
+  /** What runs, for the Quit dialog (M18): A7's 409 names it, the UI adds the object and frames. */
+  private quitActivity(): LocalActivity {
+    const s = this.sequence.state;
+    return {
+      sequence: s && isEngaged(s) ? { state: s.state, object: s.object_name, done: s.frames_done, total: s.frames_total } : null,
+      camera: this.events.camera?.state ?? null,
+      exposureS: this.cameraBusy ? (this.camera?.exposure_s ?? null) : null,
+      autofocus: this.autofocusRunning,
+      slewing: this.slewing,
+      solving: this.field.solving,
+      jobs: this.jobs.active,
+    };
+  }
+
+  /** A native app menu item (Q-G10): the in-window command of the same id. */
+  private runMenu(id: MenuCommand): void {
+    switch (id) {
+      case 'app.quit':
+        void this.desktop.quit.request();
+        return;
+      case 'help.about':
+        this.openSettings('about');
+        return;
+      case 'help.bundle':
+        this.supportBundleOpen = true;
+        return;
+      case 'help.docs':
+        window.open(this.appInfo?.docs_url ?? 'https://perretjules.com/argos/', '_blank', 'noopener,noreferrer');
+        return;
+      case 'theme.cycle':
+        this.setTheme(nextTheme(this.theme));
+        return;
+      case 'layout.reset-all':
+        this.resetAllLayouts();
+        return;
+      case 'palette.open':
+        // Opens (a menu item is no toggle: a key the page also saw must not close it again).
+        this.paletteOpen = true;
+        return;
+      default:
+        // nav.*, nav.settings.mod, file.open-fits, review.sessions, log.toggle, palette.open, help.shortcuts
+        this.shortcuts.trigger(id);
+    }
+  }
+
+  /** The toast action "Reveal in Finder" for a file the server wrote (desktop app only). */
+  revealAction(path: string | null | undefined): Toast['action'] {
+    if (!this.desktop.available || !path) return undefined;
+    return {
+      label: this.desktop.revealLabel,
+      run: () => void this.desktop.reveal(path).catch((err: unknown) => this.toast('error', this.desktop.revealLabel, err instanceof Error ? err.message : String(err))),
+    };
+  }
+
+  // -- Wave 2: Settings, files, jobs, support bundle, site check -----------------------
+
+  /** Open Settings at a category (and bring one key into view: palette, links). */
+  openSettings(category: SettingsCategoryId, key?: string): void {
+    this.setSettingsCategory(category);
+    if (key) this.settingsFocus = { key, n: (this.settingsFocus?.n ?? 0) + 1 };
+    this.go('configuration');
+  }
+
+  setSettingsCategory(category: SettingsCategoryId): void {
+    this.settingsCategory = category;
+    savePref('argos.settings.category', category);
+  }
+
+  /** The in-app FilePicker's listing (A11): read-only, home and the ARGOS data folders. */
+  readonly listFiles: FsLister = (req, signal) => this.client.fsList(req, { signal });
+
+  private readonly jobWaiters = new Map<string, ((job: JobEntry) => void)[]>();
+
+  private static finished(job: { state: string } | null): boolean {
+    return !!job && job.state !== 'queued' && job.state !== 'running';
+  }
+
+  /**
+   * Resolve with a job's final record (done, failed or cancelled), from the
+   * `job` events, with a slow GET as a fallback in case an event was lost.
+   */
+  waitJob(id: string): Promise<JobEntry> {
+    const held = this.jobs.get(id);
+    if (ArgosApp.finished(held)) return Promise.resolve(held!);
+    return new Promise((resolve) => {
+      const list = this.jobWaiters.get(id) ?? [];
+      let poll: ReturnType<typeof setInterval> | undefined;
+      const done = (job: JobEntry) => {
+        clearInterval(poll);
+        resolve(job);
+      };
+      list.push(done);
+      this.jobWaiters.set(id, list);
+      poll = setInterval(() => {
+        void this.client
+          .job(id)
+          .then((job) => {
+            this.jobs.ingest(job);
+            this.settleWaiters(id);
+          })
+          .catch((err) => {
+            // A restarted server (or an expired job) answers 404: the job is lost, and
+            // its waiters settle on that rather than polling for ever.
+            if (!(err instanceof ApiError) || err.status !== 404) return;
+            const held = this.jobs.get(id);
+            if (held) this.jobs.snapshot([], { [id]: held.seq });
+            this.settleWaiters(id);
+          });
+      }, 3000);
+    });
+  }
+
+  private settleWaiters(id: string): void {
+    const job = this.jobs.get(id);
+    if (!ArgosApp.finished(job)) return;
+    const list = this.jobWaiters.get(id);
+    if (!list) return;
+    this.jobWaiters.delete(id);
+    for (const fn of list) fn(job!);
+  }
+
+  /**
+   * Create a support bundle (A5): start the job, wait for it, and in the
+   * browser build fetch the ZIP it kept (destination null). Rejects with the
+   * server's ApiError (409 file_exists lets the dialog ask "Replace?").
+   */
+  async createSupportBundle(req: BundleRequest): Promise<BundleResult> {
+    const answer = await this.client.startSupportBundle(req);
+    this.jobs.ingest(answer.job);
+    const job = await this.waitJob(answer.job_id);
+    if (job.state !== 'done') {
+      throw new ApiError(500, job.error?.code ?? 'bundle_failed', job.error?.message ?? 'The bundle was not created');
+    }
+    const result = job.result as BundleResult;
+    if (result?.download) {
+      const { blob, name } = await this.client.jobDownload(answer.job_id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name ?? result.name ?? 'argos-support.zip';
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    }
+    return result;
+  }
+
+  /** Check the Settings site against the mount now (POST /api/site/check). */
+  checkSite(): Promise<unknown> {
+    return this.run('siteCheck', 'Site check', async () => {
+      this.events.applySiteCheck(await this.client.checkSiteNow());
+    });
+  }
+
+  /** The Settings site disagrees with the mount (Q-G11 rail mark, Instrument card, status bar). */
+  get siteMismatch(): boolean {
+    return this.events.siteCheck?.state === 'mismatch';
+  }
+
+  // -- Density, layouts (Settings › Appearance) ---------------------------------------
+
+  setDensity(density: Density): void {
+    this.density = density;
+    saveDensity(density);
+    applyDensity(density);
+  }
+
+  /**
+   * "Reset all layouts" (D16, README 3.11): every section's panels, drawer
+   * and rail width, the rail open state, card folds and the levels strip;
+   * theme, density, rotation and science settings stay. Undo puts back what
+   * was removed.
+   */
+  resetAllLayouts(): void {
+    let store: Storage | null = null;
+    try {
+      store = globalThis.localStorage ?? null;
+    } catch {
+      store = null;
+    }
+    const saved: [string, string][] = [];
+    try {
+      if (store) {
+        for (let i = 0; i < store.length; i++) {
+          const k = store.key(i);
+          if (k && /^argos\.(layout\.|drawer\.|rail-width\.|rail-open|card\.|levels-strip)/.test(k)) {
+            const v = store.getItem(k);
+            if (v !== null) saved.push([k, v]);
+          }
+        }
+      }
+    } catch {
+      /* blocked storage */
+    }
+    clearAllLayouts(store);
+    // W8: the desktop window's size and place too (the shell forgets its saved state; not undone).
+    this.desktop.resetWindowState();
+    removePrefsWithPrefix('argos.card.');
+    removePrefsWithPrefix('argos.levels-strip');
+    const rail = this.railOpen;
+    const strip = this.stripOpen;
+    this.railOpen = true;
+    this.stripOpen = true;
+    this.layoutGeneration++;
+    this.observe.reload();
+    this.undo.push({
+      title: 'Layouts reset',
+      detail:
+        (saved.length ? `${saved.length} remembered panel ${saved.length === 1 ? 'state' : 'states'} cleared` : 'Every section is back to its default panels') +
+        (this.desktop.available ? '; the window is back to its default size (not undone)' : ''),
+      undo: () => {
+        try {
+          for (const [k, v] of saved) store?.setItem(k, v);
+        } catch {
+          throw new Error('The browser storage refused to restore them');
+        }
+        this.railOpen = rail;
+        this.stripOpen = strip;
+        this.layoutGeneration++;
+        this.observe.reload();
+      },
+    });
+  }
+
+  // -- Theme ------------------------------------------------------------------------
+
+  setTheme(theme: Theme): void {
+    this.theme = theme;
+    saveTheme(theme);
+    this.applyTheme(theme);
+  }
+
+  cycleTheme(): void {
+    this.setTheme(nextTheme(this.theme));
+  }
+
+  private applyTheme(theme: Theme): void {
+    const root = globalThis.document?.documentElement;
+    if (!root) return;
+    root.dataset.theme = theme;
+    const token = getComputedStyle(root).getPropertyValue('--viewer-tint');
+    this.viewerTint = parseCssColor(token) ?? [1, 1, 1];
+    this.viewerSaturated = parseCssColor(getComputedStyle(root).getPropertyValue('--viewer-saturated')) ?? (theme === 'night-red' ? [0, 0, 0] : [1, 0.2, 0.33]);
+    // W8: the shell paints the window behind the page in this theme's --bg (BRAND 4.3).
+    this.desktop.themeChanged(theme);
+  }
+
+  // -- Display ------------------------------------------------------------------------
+
+  onDisplay(info: DisplayInfo): void {
+    this.shown = info;
+    // The same frame with the levels of another CFA preview: nothing new to measure.
+    if (info.redisplay) return;
+    const ws = this.observe;
+    if (this.section === 'imaging' && ws.mode === 'framing' && ws.layout.bandOpen) {
+      const h = info.frame.header as { bayer?: string | null };
+      const bayer = h.bayer !== undefined ? h.bayer : (this.camera?.sensor?.bayer ?? null);
+      this.frameStats?.measure(info.frame, bayer);
+    }
+    // The server replays its latest frame to every new socket: an old frame
+    // shown again is not a measure of the live rate or latency.
+    const h = info.frame.header;
+    const age = Date.now() - Date.parse(h.timestamp);
+    if (Number.isFinite(age) && age > Math.max(5000, 3000 * h.exposure_s)) return;
+    this.metrics = this.meter.record(Date.now(), h.timestamp, h.seq);
+  }
+
+  setAutoStretch(on: boolean): void {
+    if (on) {
+      this.autoStretch = true;
+      return;
+    }
+    // Freeze the levels on screen, then let the observer adjust them.
+    this.manual = this.levels ? { ...this.levels } : this.manual;
+    this.autoStretch = false;
+  }
+
+  /** Change one level; leaves auto-stretch, starting from the levels on screen. */
+  setLevel(patch: Partial<Omit<StretchParams, 'mode'>> & { mode?: StretchMode }): void {
+    const base = this.levels;
+    if (!base) return;
+    const next = { ...base, ...patch };
+    if (next.white <= next.black) {
+      if (patch.black !== undefined) next.black = next.white - 1;
+      else next.white = next.black + 1;
+    }
+    this.manual = next;
+    this.autoStretch = false;
+  }
+
+  /** "Reset stretch (linear)": full data range, neutral midtones. */
+  resetStretch(): void {
+    const h = this.shown?.histogram;
+    this.manual = {
+      black: h ? h.min : 0,
+      white: h ? Math.max(h.max, h.min + 1) : 65535,
+      midtones: 0.5,
+      mode: 'linear',
+    };
+    this.autoStretch = false;
+  }
+
+  setRotation(mode: RotationMode): void {
+    this.rotation = mode;
+    savePref('argos.rotation', mode);
+  }
+
+  toggleRail(): void {
+    this.railOpen = !this.railOpen;
+    savePref('argos.rail-open', this.railOpen);
+  }
+
+  toggleStrip(): void {
+    this.stripOpen = !this.stripOpen;
+    savePref('argos.levels-strip', this.stripOpen);
+  }
+
+  setFitMode(mode: FitMode): void {
+    this.fitMode = mode;
+    savePref('argos.fit-mode', mode);
+  }
+
+  // -- Feedback -------------------------------------------------------------------------
+
+  toast(level: ToastLevel, title: string, message = '', action?: Toast['action'], opts: { file?: boolean } = {}): void {
+    const same = this.toasts.find((t) => t.title === title && t.message === message);
+    if (same) {
+      same.count += 1;
+      this.armToast(same.id, level);
+      return;
+    }
+    const toast: Toast = { id: this.nextToastId++, level, title, message, count: 1, action, file: opts.file };
+    this.toasts = [...this.toasts, toast].slice(-MAX_TOASTS);
+    this.armToast(toast.id, level);
+  }
+
+  dismissToast(id: number): void {
+    this.toasts = this.toasts.filter((t) => t.id !== id);
+    const timer = this.toastTimers.get(id);
+    if (timer) clearTimeout(timer);
+    this.toastTimers.delete(id);
+  }
+
+  private armToast(id: number, level: ToastLevel): void {
+    const old = this.toastTimers.get(id);
+    if (old) clearTimeout(old);
+    this.toastTimers.set(
+      id,
+      setTimeout(() => this.dismissToast(id), TOAST_MS[level]),
+    );
+  }
+
+  setLogOpen(open: boolean): void {
+    // Observe: the drawer belongs to the current task mode (D1).
+    if (this.section === 'imaging') this.observe.setDrawer(open ? { drawerOpen: true, drawerTab: 'log' } : { drawerOpen: false });
+    // Review R1: the Log tab of its drawer (Frames · Ensemble · Log).
+    else if (this.section === 'analyze' && this.reviewLog) this.reviewLog.set(open);
+    else this.logOpen = open;
+    this.log.markSeen();
+  }
+
+  /** The full activity log is on screen: the drawer, or on Connection its log region widened to every topic. */
+  get logShown(): boolean {
+    if (this.section === 'imaging') return this.observe.layout.drawerOpen && this.observe.layout.drawerTab === 'log';
+    if (this.section === 'analyze' && this.reviewLog) return this.reviewLog.shown();
+    return this.section === 'connection' ? this.connectionLogAll : this.logOpen;
+  }
+
+  /** L and the status-bar Log button: the whole log, wherever the observer is. */
+  toggleLog(): void {
+    if (this.section === 'connection') {
+      this.connectionLogAll = !this.connectionLogAll;
+      this.log.markSeen();
+    } else if (this.section === 'imaging') {
+      this.observe.toggleDrawer('log');
+      this.log.markSeen();
+    } else {
+      this.setLogOpen(!this.logShown);
+    }
+  }
+
+  /**
+   * Report an API failure: one toast, one log line. Device failures (5xx) are
+   * already logged by the server on /ws/events, so they are not logged twice.
+   */
+  reportError(what: string, err: unknown): void {
+    const api = err instanceof ApiError ? err : null;
+    const title = api ? (ERROR_TITLES[api.code] ?? `${what} failed`) : `${what} failed`;
+    const message = api ? api.message : err instanceof Error ? err.message : String(err);
+    this.toast('error', title, message);
+    if (!api || api.status < 500) this.log.push('error', `${what}: ${message}`, { source: 'web' });
+  }
+
+  // -- Actions ------------------------------------------------------------------------------
+
+  private async run<T>(key: ActionKey, what: string, fn: () => Promise<T>): Promise<T | undefined> {
+    if (this.busy[key]) return undefined;
+    this.busy[key] = true;
+    try {
+      return await fn();
+    } catch (err) {
+      this.reportError(what, err);
+      return undefined;
+    } finally {
+      this.busy[key] = false;
+    }
+  }
+
+  // -- Equipment (API 2: A13-A16) -------------------------------------------------------
+
+  setConnectMode(mode: ConnectMode): void {
+    if (this.connectMode === mode) return;
+    this.connectMode = mode;
+    savePref('argos.connection.mode', mode);
+  }
+
+  /** Why a device cannot be connected with the Connection screen's choices, or null. */
+  connectProblem(): string | null {
+    if (!this.linkOpen) return 'the ARGOS server is not reachable';
+    if (this.connectMode === 'alpaca' && !this.alpacaHost.trim()) return 'enter the Seestar address';
+    if (this.connectMode === 'alpaca' && this.alpacaPortInvalid) return 'fix the Alpaca port';
+    return null;
+  }
+
+  /** Body of the connect routes for the chosen link. */
+  private linkBody(): DeviceConnectBody {
+    return this.connectMode === 'alpaca'
+      ? { mode: 'alpaca', host: this.alpacaHost.trim(), port: Math.round(this.alpacaPort) }
+      : { mode: 'simulator' };
+  }
+
+  /** "Connecting mount…" is in flight from this page, or the server says so. */
+  deviceBusy(id: DeviceId): boolean {
+    return !!this.busy[`device.${id}`] || this.events.devices?.[id]?.state === 'connecting';
+  }
+
+  /** Connect all: the four devices, skipping those already connected (A15). */
+  connectAll(): Promise<unknown> {
+    if (this.connectProblem()) return Promise.resolve(undefined);
+    return this.run('connectAll', 'Connect all', async () => {
+      const devices = await this.client.connectAll(this.linkBody());
+      this.events.applyDevices(devices);
+      this.reportDeviceFailures(devices);
+    });
+  }
+
+  disconnectAll(): Promise<unknown> {
+    for (const id of DEVICE_IDS) if (this.busy[`device.${id}`]) this.released.add(id);
+    return this.run('disconnectAll', 'Disconnect all', async () => {
+      this.events.applyDevices(await this.client.disconnectAll());
+    });
+  }
+
+  connectDevice(id: DeviceId): Promise<unknown> {
+    if (this.connectProblem()) return Promise.resolve(undefined);
+    this.released.delete(id);
+    return this.run(`device.${id}`, `Connect ${DEVICE_LABELS[id].toLowerCase()}`, async () => {
+      try {
+        this.events.applyDevices(await this.client.connectDevice(id, this.linkBody()));
+      } catch (err) {
+        // The observer cancelled this attempt (row "Cancel", Disconnect all):
+        // the server answers 409 "… was disconnected while connecting", which
+        // is the outcome asked for, not a failure to report.
+        if (err instanceof ApiError && err.code === 'not_connected' && this.released.has(id)) return;
+        throw err;
+      }
+    });
+  }
+
+  /** Devices released by the observer while a connect of theirs was in flight. */
+  private readonly released = new Set<DeviceId>();
+
+  /**
+   * Disconnect one device; for a mount in auto-retry it is "Stop retrying",
+   * for a device still connecting it cancels the attempt (its own action
+   * key, so it is never blocked by the connect request it cancels).
+   */
+  disconnectDevice(id: DeviceId): Promise<unknown> {
+    if (this.busy[`device.${id}`]) this.released.add(id);
+    return this.run(`release.${id}`, `Disconnect ${DEVICE_LABELS[id].toLowerCase()}`, async () => {
+      this.events.applyDevices(await this.client.disconnectDevice(id));
+    });
+  }
+
+  /**
+   * Connect-all answers 200 with every state: failures are in the rows and
+   * the log (server ERROR lines); a toast says it from any section.
+   */
+  private reportDeviceFailures(devices: DevicesState): void {
+    const failed = DEVICE_IDS.filter((id) => devices[id]?.state === 'error');
+    if (!failed.length) return;
+    const names = failed.map((id) => DEVICE_LABELS[id]).join(', ');
+    const first = devices[failed[0]];
+    const title = failed.length === 1 ? `${names} did not connect` : `${failed.length} devices did not connect`;
+    this.toast('error', title, `${failed.length > 1 ? `${names}: ` : ''}${first?.error ?? 'see the Connection log'}`);
+  }
+
+  /** v1 names used by the Observe screen: the toolbar equipment button and the viewer prompt (D10). */
+  connect(): Promise<unknown> {
+    return this.connectAll();
+  }
+
+  disconnect(): Promise<unknown> {
+    return this.disconnectAll();
+  }
+
+  // -- Discovery (A16, job) ------------------------------------------------------------
+
+  /** The discovery job shown under Discover (latest of this page, or one found running). */
+  get discoveryJob() {
+    return this.discoveryJobId ? this.jobs.get(this.discoveryJobId) : null;
+  }
+
+  get discovering(): boolean {
+    const job = this.discoveryJob;
+    return !!job && (job.state === 'queued' || job.state === 'running');
+  }
+
+  startDiscovery(): Promise<unknown> {
+    this.discoveryNote = null;
+    this.discoveryChoices = [];
+    return this.run('discover', 'Discovery', async () => {
+      try {
+        const answer = await this.client.startDiscovery();
+        this.jobs.ingest(answer.job);
+        this.discoveryJobId = answer.job_id;
+        this.ownDiscovery.add(answer.job_id);
+        // The WS may have delivered the end before this answer: settle it as ours.
+        if (this.settledJobs.delete(answer.job_id)) this.settleDiscovery(answer.job_id);
+      } catch (err) {
+        // Already running (another page started it): show that one.
+        if (err instanceof ApiError && err.code === 'busy' && err.owner) {
+          this.discoveryJobId = err.owner;
+          const job = await this.client.job(err.owner).catch(() => null);
+          if (job) this.jobs.ingest(job);
+          return;
+        }
+        throw err;
+      }
+    });
+  }
+
+  cancelDiscovery(): void {
+    if (this.discoveryJobId) void this.jobs.cancel(this.discoveryJobId);
+  }
+
+  /** Jobs this page started: only these fill the address when they finish. */
+  private readonly ownDiscovery = new Set<string>();
+  private readonly settledJobs = new Set<string>();
+
+  private onJobEvent(raw: unknown): void {
+    const job = this.jobs.ingest(raw);
+    if (!job) return;
+    this.settleWaiters(job.id);
+    if (job.kind === 'discovery') {
+      if (job.state === 'queued' || job.state === 'running') {
+        // Started elsewhere (another page): show it here too.
+        if (!this.discovering) this.discoveryJobId = job.id;
+      } else {
+        this.settleDiscovery(job.id);
+      }
+    }
+  }
+
+  /** After a reconnection, show a discovery that is still running. */
+  private adoptRunningDiscovery(): void {
+    const running = this.jobs.active.find((j) => j.kind === 'discovery');
+    if (running) this.discoveryJobId = running.id;
+    if (this.discoveryJobId) this.settleDiscovery(this.discoveryJobId);
+  }
+
+  /**
+   * A discovery ended: one device fills the address (as Qt did), several
+   * open the choice, none says so under the button (02 W2).
+   */
+  private settleDiscovery(id: string): void {
+    const job = this.jobs.get(id);
+    if (!job || job.state === 'queued' || job.state === 'running' || this.settledJobs.has(id)) return;
+    this.settledJobs.add(id);
+    if (id !== this.discoveryJobId) return;
+    if (job.state === 'cancelled') {
+      this.discoveryNote = { tone: 'info', text: 'Discovery cancelled.' };
+      return;
+    }
+    if (job.state === 'failed') {
+      this.discoveryNote = { tone: 'error', text: `Discovery: ${job.error?.message ?? 'failed'}` };
+      return;
+    }
+    const result = parseDiscoveryResult(job.result);
+    const found = result?.devices ?? [];
+    if (!found.length) {
+      this.discoveryNote = { tone: 'warning', text: 'No Alpaca devices found (broadcast, direct probes and subnet scan).' };
+      return;
+    }
+    if (found.length === 1) {
+      const d = found[0];
+      this.discoveryNote = { tone: 'info', text: `Found ${deviceAddress(d)}${d.name ? ` (${d.name})` : ''}` };
+      if (this.ownDiscovery.has(id)) void this.useDiscovered(d.host, d.port);
+      return;
+    }
+    this.discoveryNote = { tone: 'info', text: `Found ${found.length} devices: choose one.` };
+    if (this.ownDiscovery.has(id)) this.discoveryChoices = found;
+  }
+
+  /** Take a discovered address: Seestar mode, saved to the config (the server never fills it). */
+  async useDiscovered(host: string, port: number): Promise<CommitResult> {
+    const several = this.discoveryChoices.length;
+    this.discoveryChoices = [];
+    if (this.equipment.anyLinked) {
+      return { ok: false, message: 'Disconnect the equipment before changing the address.' };
+    }
+    this.setConnectMode('alpaca');
+    const r = await this.saveAddress(host, port);
+    if (r.ok && several > 1) {
+      this.discoveryNote = { tone: 'info', text: `Found ${several} devices · using ${host}:${port}` };
+    }
+    return r;
+  }
+
+  /** The choice popover was closed without a choice: say so where it stood. */
+  dismissDiscoveryChoice(): void {
+    const several = this.discoveryChoices.length;
+    this.discoveryChoices = [];
+    if (several > 1) {
+      this.discoveryNote = { tone: 'info', text: `Found ${several} devices · none chosen (Discover again to choose)` };
+    }
+  }
+
+  /** Forget the last discovery's outcome (its line under Discover). */
+  dismissDiscovery(): void {
+    this.discoveryChoices = [];
+    this.discoveryNote = null;
+    if (this.discoveryJobId && !this.discovering) {
+      this.jobs.dismiss(this.discoveryJobId);
+      this.discoveryJobId = null;
+    }
+  }
+
+  private exposureRequest(): { exposure_s: number; gain: number } {
+    return { exposure_s: this.exposure, gain: Math.round(this.gain) };
+  }
+
+  /**
+   * A committed Exposure field value: one PUT /api/camera/settings (wave 3,
+   * A22), applied from the next frame in any mode, live view included.
+   * Rejects with the server's words (the field shows them, never clamped).
+   */
+  setExposure(v: number): Promise<unknown> {
+    this.exposure = v;
+    return this.putSettings({ exposure_s: v });
+  }
+
+  setGain(v: number): Promise<unknown> {
+    this.gain = v;
+    return this.putSettings({ gain: Math.round(v) });
+  }
+
+  /** Drop a pending change: back to the settings of the frame being taken. */
+  revertLiveSettings(): void {
+    const cam = this.camera;
+    if (!cam) return;
+    const now = cam.current ?? cam;
+    this.exposure = now.exposure_s;
+    this.gain = now.gain;
+    this.exposureInvalid = false;
+    this.gainInvalid = false;
+    void this.run('liveSettings', 'Live settings', () => this.putSettings({ exposure_s: now.exposure_s, gain: now.gain }));
+  }
+
+  /** Why an exposure cannot start, or null. */
+  exposureProblem(): string | null {
+    if (this.exposureInvalid) return 'fix the exposure time';
+    if (this.gainInvalid) return 'fix the gain';
+    const lim = this.captureLimits;
+    if (!Number.isFinite(this.exposure) || this.exposure < lim.exposureMin || this.exposure > lim.exposureMax) {
+      return `Exposure must be between ${lim.exposureMin} and ${lim.exposureMax} s`;
+    }
+    if (!Number.isFinite(this.gain) || this.gain < lim.gainMin || this.gain > lim.gainMax) {
+      return `Gain must be between ${lim.gainMin} and ${lim.gainMax}`;
+    }
+    return null;
+  }
+
+  /** The driver's limits once connected (A21), else the server's own bounds. */
+  get captureLimits(): { exposureMin: number; exposureMax: number; gainMin: number; gainMax: number; driver: boolean } {
+    const l = this.cameraReady ? this.camera?.limits : null;
+    return l
+      ? { exposureMin: l.exposure_min_s, exposureMax: l.exposure_max_s, gainMin: l.gain_min, gainMax: l.gain_max, driver: true }
+      : { exposureMin: EXPOSURE_LIMITS.min, exposureMax: EXPOSURE_LIMITS.max, gainMin: GAIN_LIMITS.min, gainMax: GAIN_LIMITS.max, driver: false };
+  }
+
+  /** E, the toolbar and the palette: Take shot (saved as FITS, A23). */
+  capture(): Promise<unknown> {
+    return this.takeShot();
+  }
+
+  startLive(): Promise<unknown> {
+    return this.run('live', 'Live view', async () => {
+      await this.flushSettings();
+      const camera = await this.client.startLive(this.exposureRequest());
+      this.events.applyStatus({ camera });
+    });
+  }
+
+  stopCamera(): Promise<unknown> {
+    return this.run('cameraStop', 'Stop camera', async () => {
+      const camera = await this.client.stopCamera();
+      this.events.applyStatus({ camera });
+    });
+  }
+
+  toggleLive(): Promise<unknown> {
+    return this.live ? this.stopCamera() : this.startLive();
+  }
+
+  /**
+   * A mount motion through the run interlock (W6a, D2; protocol.md "Mount-motion
+   * interlock"): refused with `409 run_active` while a run is active, it becomes the dialog's
+   * question; "Pause the run and <verb>" sends it again with `pause_run`, waiting as long as
+   * the server may hold it (`pauseRunTimeoutMs`).
+   */
+  private moveMount(action: string, verb: string, call: (pauseRun: boolean, options?: RequestOptions) => Promise<unknown>): Promise<unknown> {
+    return this.interlock.run({ action, verb }, async (pauseRun) => {
+      const mount = await call(pauseRun, pauseRun ? { timeoutMs: pauseRunTimeoutMs(this.sequence.state) } : undefined);
+      if (mount && typeof mount === 'object' && 'state' in mount) this.events.applyStatus({ mount: mount as MountState });
+      return mount;
+    });
+  }
+
+  goto(raHours: number, decDeg: number): Promise<unknown> {
+    return this.run('goto', 'Slew', () =>
+      this.moveMount('GoTo', 'slew', (p, o) => this.client.goto({ ra_hours: raHours, dec_deg: decDeg, ...(p ? { pause_run: true } : {}) }, o)),
+    );
+  }
+
+  stopMount(): Promise<unknown> {
+    return this.run('mountStop', 'Stop slew', async () => {
+      const mount = await this.client.stopMount();
+      this.events.applyStatus({ mount });
+    });
+  }
+
+  park(): Promise<unknown> {
+    return this.run('park', 'Park', () => this.moveMount('Park', 'park', (p, o) => this.client.park(o, p)));
+  }
+
+  unpark(): Promise<unknown> {
+    return this.run('unpark', 'Unpark', () => this.moveMount('Unpark', 'unpark', (p, o) => this.client.unpark(o, p)));
+  }
+
+  setTracking(enabled: boolean): Promise<unknown> {
+    return this.run('tracking', 'Tracking', () =>
+      this.moveMount(enabled ? 'Start tracking' : 'Stop tracking', 'stop tracking', (p, o) => this.client.setTracking(enabled, o, p)),
+    );
+  }
+
+  // -- Wave 4: field identification, Centre target, Sync (A32, A33, A43, A44) ---------------
+
+  /** Why Identify field cannot run now (03 2.4), or null; a running solve is busy, not a reason. */
+  identifyProblem(): string | null {
+    if (this.stale) return 'the ARGOS server is not reachable';
+    if (!this.shown) return 'no frame yet: take a frame or open a FITS image first';
+    return null;
+  }
+
+  /** A43: identify the frame on screen; the outcome arrives as `field` events (and a job). */
+  identifyField(): Promise<unknown> {
+    if (this.field.solving || this.identifyProblem()) return Promise.resolve(undefined);
+    return this.run('fieldSolve', 'Identify field', () => this.field.solve(this.client));
+  }
+
+  /** A43: cancel the running solve, manual or automatic; the previous solution stays. */
+  cancelIdentify(): Promise<unknown> {
+    return this.run('fieldCancel', 'Cancel field identification', () => this.field.cancelSolve(this.client));
+  }
+
+  /** A44: keep the field identified automatically (no single key: 03 2.4). */
+  setFieldAuto(enabled: boolean): Promise<unknown> {
+    return this.run('fieldAuto', 'Automatic field identification', () => this.field.setAuto(this.client, enabled));
+  }
+
+  /** The star Centre target aims at, in words: the set's target, else the observation's. */
+  centerTargetName(): string | null {
+    const t = this.field.targets?.stars.find((s) => s.role === 'target');
+    return t?.display_name || t?.name || this.observation?.target?.name || null;
+  }
+
+  private mountMoveProblem(): string | null {
+    if (this.stale) return 'the ARGOS server is not reachable';
+    if (!this.canMount) return 'connect the mount first';
+    const m = this.mount;
+    if (m?.state === 'parked') return 'unpark the mount first';
+    if (this.slewing) return 'the mount is slewing (Esc aborts)';
+    if (m?.goto_blocked) return m.goto_blocked.message;
+    return null;
+  }
+
+  /** Why Centre target cannot run now (A32: a solution, a mount and a target), or null. */
+  centerProblem(): string | null {
+    const p = this.mountMoveProblem();
+    if (p) return p;
+    if (!this.field.solved) return 'identify the field first (S)';
+    if (this.field.fileSolution) return FILE_SOLUTION_REASON;
+    const available = this.mount?.center_available ?? this.field.field?.center_available;
+    if (available === false) return 'no target: give a star the Target role, or set the observation target';
+    return null;
+  }
+
+  /** Why Sync to the plate solution cannot run now (A33, Q-O3), or null. */
+  syncProblem(): string | null {
+    const p = this.mountMoveProblem();
+    if (p) return p;
+    if (!this.field.solved) return 'identify the field first (S)';
+    if (this.field.fileSolution) return FILE_SOLUTION_REASON;
+    if (this.mount && !this.mount.tracking) return 'start tracking first: the mount refuses a sync while tracking is off';
+    return null;
+  }
+
+  /** A32: sync on the tracked solution, then slew to the target; the field is invalidated. */
+  centerTarget(): Promise<unknown> {
+    return this.run('center', 'Centre target', () => this.moveMount('Centre target', 'centre', (p, o) => this.field.center(this.client, undefined, p, o)));
+  }
+
+  /** A33 (Q-O3): sync the mount to the current frame's solved centre, without slewing. */
+  syncToSolution(): Promise<unknown> {
+    return this.run('sync', 'Sync', async () => {
+      const mount = await this.moveMount('Sync', 'sync', (p, o) => this.field.sync(this.client, p, o));
+      // undefined: refused by the run interlock, the dialog asks (its retry syncs).
+      if (mount !== undefined) this.toast('info', 'Mount synced', 'The mount now reads the identified centre of the frame on screen');
+    });
+  }
+
+  /** The command palette's field entries (shell/commandIndex.ts). */
+  fieldCommands(): FieldCommands {
+    return {
+      solving: this.field.solving,
+      auto: !!this.field.field?.auto,
+      centerReason: this.centerProblem(),
+      centerTarget: this.centerTargetName(),
+      syncReason: this.syncProblem(),
+      cancelSolve: () => this.cancelIdentify(),
+      setAuto: (on) => this.setFieldAuto(on),
+      center: () => this.centerTarget(),
+      sync: () => this.syncToSolution(),
+    };
+  }
+
+  // -- Wave 5: live photometry (A58 and the palette) ---------------------------------------
+
+  /** Why Recommend comparisons cannot run (null: it can): the server answers 409 otherwise. */
+  recommendProblem(): string | null {
+    if (!this.field.solved) return 'identify the field first (S)';
+    if (!(this.field.targets?.stars ?? []).some((s) => s.role === 'target')) return 'choose a target star first';
+    return null;
+  }
+
+  /** photometry.auto_comparisons: the size Complete fills the ensemble up to (Qt default 5). */
+  autoComparisons(): number {
+    const v = this.configValues?.['photometry.auto_comparisons'];
+    return typeof v === 'number' && Number.isFinite(v) ? v : 5;
+  }
+
+  /**
+   * A58: complete the ensemble or replace the VSP picks (manual choices stay); the set comes
+   * back with the answer, the toast says what changed, the server logs it in Qt's words.
+   */
+  async recommendComparisons(mode: 'complete' | 'replace', count?: number | null): Promise<void> {
+    try {
+      const r = await this.photometry.recommend(mode, count ?? null, this.client);
+      if (r.targets) this.field.ingest('targets', r.targets);
+      const removed = r.removed?.length ?? 0;
+      const n = r.comparisons?.length ?? 0;
+      const title =
+        mode === 'replace'
+          ? `Replaced the VSP ensemble: ${r.added} added, ${removed} removed`
+          : r.added
+            ? `Added ${r.added} comparison star${r.added === 1 ? '' : 's'}`
+            : 'No comparison added';
+      this.toast('info', title, `${n} comparison${n === 1 ? '' : 's'} in the ensemble`);
+    } catch (err) {
+      this.reportError('Recommend comparisons', err);
+    }
+  }
+
+  /** The command palette's live photometry entries (shell/commandIndex.ts). */
+  photometryCommands(): PhotometryCommands {
+    return {
+      recommendReason: this.recommendProblem(),
+      running: this.photometry.running,
+      count: this.autoComparisons(),
+      openTab: (tab) => {
+        if (this.section !== 'imaging') this.go('imaging');
+        this.observe.setDrawer({ drawerOpen: true, drawerTab: tab });
+      },
+      recommend: (mode) => this.recommendComparisons(mode),
+    };
+  }
+
+  // -- Wave 6a: the run (A62-A64) from anywhere -----------------------------------------------
+
+  /** Open Plan, and one of its popovers (Presets, the Preflight list). */
+  openPlan(what: 'presets' | 'preflight' | null = null): void {
+    if (this.section !== 'sequencer') this.go('sequencer');
+    this.planRequest = what;
+  }
+
+  /** The command palette's run entries (shell/commandIndex.ts): no key starts, pauses or stops a run. */
+  sequenceCommands(): SequenceCommands {
+    const seq = this.sequence;
+    const s = seq.state;
+    const stop = s && isEngaged(s) ? stopDialog(s) : null;
+    const report = (what: string) => (err: unknown) => this.reportError(what, err);
+    return {
+      state: s?.state ?? null,
+      active: isActive(s),
+      engaged: isEngaged(s),
+      startReason: this.stale ? 'the ARGOS server is not reachable' : startBlock(s, seq.preflight?.checks ?? null),
+      frames: seq.preflight?.frames_total ?? s?.frames_total ?? null,
+      stop: stop ? { question: stop.title, consequence: stop.message, confirm: stop.confirm } : null,
+      start: () => seq.start(null, this.client).catch(report('Start sequence')),
+      pause: () => seq.pause(this.client).catch(report('Pause sequence')),
+      resume: () => seq.resume(this.client).catch(report('Resume sequence')),
+      stopRun: () => seq.stop(this.client).catch(report('Stop sequence')),
+      openPlan: (what) => this.openPlan(what),
+    };
+  }
+
+  /** The palette's night entries (W6b, D3): Watch, acknowledge all, the alert sound. */
+  nightCommands(): NightCommands {
+    const att = this.attention;
+    return {
+      watchOpen: this.watchOpen,
+      toggleWatch: () => (this.watchOpen = !this.watchOpen),
+      unacked: att.open.length,
+      ackAll: () => att.ackAll().catch((err) => this.reportError('Acknowledge all alerts', err)),
+      sound: att.prefs.level,
+      setSound: (level) => this.setAlertSound(level),
+    };
+  }
+
+  // -- Wave 7: Review ------------------------------------------------------------------------
+
+  /** M103: Mod+Shift+O, the palette and R1's Sessions button: R0, its list read again. */
+  showReviewSessions(): void {
+    this.go('analyze');
+    this.reviewScreen = 'r0';
+    void this.landing.load();
+  }
+
+  /** A job this page started from Review (the job strip keeps its outcome until dismissed). */
+  noteReviewJob(start: { job_id: string; job: unknown }): void {
+    this.jobs.ingest(start.job);
+    if (!this.reviewJobIds.includes(start.job_id)) this.reviewJobIds = [...this.reviewJobIds.slice(-19), start.job_id];
+  }
+
+  /**
+   * A68 as its job (`session_open`, progress in the job strip, cancellable), then A69 once the
+   * session is read (the curves come from the same cache). Rejects with the server's words.
+   */
+  private reviewLoader(): ReviewLoader {
+    let opened: Promise<unknown> = Promise.resolve(null);
+    const q = (path: string) => `path=${encodeURIComponent(path)}`;
+    return {
+      session: (path, signal) =>
+        (opened = (async () => {
+          const start = await this.client.request<{ job_id: string; job: unknown }>('POST', '/api/review/session', { path }, { signal });
+          this.noteReviewJob(start);
+          const cancel = () => void this.jobs.cancel(start.job_id).catch(() => undefined);
+          signal?.addEventListener('abort', cancel, { once: true });
+          try {
+            const job = await this.waitJob(start.job_id);
+            // The job's result names the open; the record comes from the cache it filled.
+            if (job.state === 'done') return this.client.request('GET', `/api/review/session?${q(path)}`, undefined, { signal, timeoutMs: 60_000 });
+            throw new Error(job.state === 'cancelled' ? 'Opening cancelled' : (job.error?.message ?? job.message ?? 'The session could not be read'));
+          } finally {
+            signal?.removeEventListener('abort', cancel);
+          }
+        })()),
+      curves: async (path, signal) => {
+        await opened;
+        return this.client.request('GET', `/api/review/session/curves?${q(path)}`, undefined, { signal, timeoutMs: 60_000 });
+      },
+    };
+  }
+
+  /** R0 → R1: a session folder (atomic: the previous source stays on failure, which rejects). */
+  async openReviewSession(path: string): Promise<void> {
+    await this.review.open(this.reviewLoader(), path);
+    this.stopReviewLive();
+  }
+
+  /** R0 → R1: one curve CSV (A70; a 422 says why it is not a curve file). */
+  async openReviewCsv(path: string): Promise<void> {
+    const raw = await this.client.request<unknown>('POST', '/api/review/import-csv', { path });
+    this.stopReviewLive();
+    this.review.openImport(raw, path);
+  }
+
+  /** R0 → R1: the live run (D3), read-only; its own curve store fed by the live stream. */
+  openReviewLive(): void {
+    const store = new LiveCurveStore();
+    this.stopReviewLive();
+    this.reviewLiveOff = this.photometry.feed({ load: (s) => store.load(s), apply: (ev) => store.apply(ev), reset: (ev) => store.reset(ev) });
+    store.applyTargets(this.field.targets?.stars ?? [], this.photometry.live?.band ?? null);
+    const live = this.photometry.live;
+    // The target set gives the Ensemble its catalogue magnitudes (the live run has no targets.json yet).
+    this.review.openLive(store, {
+      object: live?.object_name ?? this.sequence.state?.object_name ?? '',
+      targets: [...(this.field.targets?.stars ?? [])],
+      chartId: live?.chart_id ?? null,
+      obscode: live?.obscode ?? null,
+    });
+  }
+
+  private stopReviewLive(): void {
+    this.reviewLiveOff?.();
+    this.reviewLiveOff = null;
+  }
+
+  /** The palette's desktop entries (W8): full screen, the sections' keys on macOS. */
+  desktopCommands(): DesktopCommands | null {
+    const d = this.desktop;
+    if (!d.available) return null;
+    return { mac: d.platform === 'macos', fullscreen: d.fullscreen, toggleFullscreen: () => d.toggleFullscreen() };
+  }
+
+  /** The palette's Review entries (W7, M8 "Re-run subs…", M92): R1's dialogs. */
+  reviewCommands(): ReviewCommands {
+    const r = this.review;
+    const none = r.kind === null ? 'open a session or the live run first (Review, F4)' : null;
+    let curves = false;
+    for (const s of r.store.stars.values()) if (s.n) curves = true;
+    const ask = (kind: 'rerun' | 'export-aavso' | 'export-csv') => {
+      this.go('analyze');
+      this.reviewScreen = 'r1';
+      this.reviewAsk = { kind, n: (this.reviewAsk?.n ?? 0) + 1 };
+    };
+    return {
+      source: r.info ? (r.kind === 'live' ? `${r.info.object || 'Live run'} · live run` : r.info.folder) : null,
+      rerunReason: none ?? (r.kind === 'import' ? 'an imported file has no frames to measure' : null),
+      exportReason: none ?? (curves ? null : 'no curve in this source'),
+      rerun: () => ask('rerun'),
+      exportAavso: () => ask('export-aavso'),
+      exportCsv: () => ask('export-csv'),
+      sessions: () => this.showReviewSessions(),
+    };
+  }
+
+  /**
+   * A Stellarium GoTo refused by the run interlock (W6a): the bridge has no answer channel
+   * (the server logs a WARN), so the observer sees it here too, once per GoTo.
+   */
+  private lastStellariumGoto: string | null = null;
+  private onStellariumGoto(m: Record<string, unknown>): void {
+    const g = m.last_goto as { t?: string; outcome?: string } | null | undefined;
+    if (!g || typeof g.t !== 'string' || g.t === this.lastStellariumGoto) return;
+    const first = this.lastStellariumGoto === null;
+    this.lastStellariumGoto = g.t;
+    // The snapshot replayed at (re)connection is history, not news.
+    if (first && Date.now() - Date.parse(g.t) > 10_000) return;
+    if (typeof g.outcome === 'string' && /sequence is running/.test(g.outcome)) {
+      this.toast('warning', 'Stellarium GoTo refused', 'A sequence is running: pause it (Run card or Plan), then send the GoTo again from Stellarium.');
+    }
+  }
+
+  /** Toolbar Stop: stop whatever is running (exposure or live view, and a slew). */
+  stopAll(): void {
+    // Autofocus has its own Stop AF (return to the start): plain Stop never ends it half-way.
+    // A sequence is never stopped here (Escape included): Stop on the Run card or in Plan asks first.
+    if (this.cameraBusy && this.cameraOwner !== 'autofocus' && this.cameraOwner !== 'sequence') void this.stopCamera();
+    if (this.slewing) void this.stopMount();
+  }
+
+  /**
+   * Escape = abort motion (BRAND 7, inventory "abort"). It never cancels an
+   * exposure: Escape is also how a tooltip or a field is dismissed, and a
+   * stray key press must not lose a frame.
+   */
+  abortMotion(): void {
+    if (this.slewing) void this.stopMount();
+    // D21: a manual focuser move too (never the autofocus: Q-O8, Stop AF is its own button).
+    const f = this.focuser;
+    if (f?.state === 'moving' && !this.autofocusRunning && this.canFocuser) void this.focuserHalt().catch(() => undefined);
+    // The jog pad stops its own axes on Escape; without a mounted pad, stop what the server still moves.
+    const jog = this.mount?.jog;
+    if (jog && (jog.primary !== 0 || jog.secondary !== 0) && this.canMount) {
+      void this.client.jogStop({ client: this.events.clientId }).then((mount) => this.events.applyStatus({ mount }), () => undefined);
+    }
+  }
+
+  // -- Wave 3: capture settings, Take shot, filter wheel (A21-A24, A28) -------------------
+
+  /** Writes of the capture settings still in flight: a Take shot waits for them (H11). */
+  private settingsWrites = new Set<Promise<unknown>>();
+
+  /**
+   * One commit of the capture settings (PUT /api/camera/settings): applies
+   * from the next frame in any mode, never clamped. Rejects with the
+   * server's words (the field shows them); the record answered is applied.
+   */
+  putSettings(body: CaptureSettingsBody): Promise<CameraState> {
+    const p = this.client.putCameraSettings(body).then((camera) => {
+      this.events.applyStatus({ camera });
+      return camera;
+    });
+    this.settingsWrites.add(p);
+    void p.finally(() => this.settingsWrites.delete(p)).catch(() => undefined);
+    return p;
+  }
+
+  /**
+   * A value still being typed is applied before an exposure starts (H11: a
+   * click does not move the focus on macOS): blur the field, then wait for
+   * its commit to be answered.
+   */
+  async flushSettings(): Promise<void> {
+    const el = typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null;
+    if (el && el.tagName === 'INPUT' && el.closest('[data-capture-settings]')) {
+      el.blur();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    if (this.settingsWrites.size) await Promise.allSettled([...this.settingsWrites]);
+  }
+
+  setFrameType(frameType: FrameType): Promise<unknown> {
+    return this.run('settings', 'Frame type', () => this.putSettings({ frame_type: frameType }));
+  }
+
+  /** The filter control: the wheel moves (A28), or without a wheel it is FITS metadata only (Q-O5). Rejects with the server's words. */
+  async chooseFilter(name: string): Promise<unknown> {
+    const wheel = this.filterwheel;
+    if (wheel && wheel.state !== 'disconnected') {
+      const state = await this.client.selectFilter(name);
+      this.events.filterwheel = state;
+      return state;
+    }
+    return this.putSettings({ filter: name });
+  }
+
+  /** Why a Take shot of this frame type cannot be taken now (mirrors the server's 409, S1), or null. */
+  darkGuard(frameType: FrameType | undefined = this.settings?.frame_type): string | null {
+    return darkGuard(frameType, this.filterwheel);
+  }
+
+  /**
+   * Take shot (A23): one exposure saved as FITS with the settings in use; during
+   * live view the next live frame of that type is saved. Dark / Bias: the
+   * server turns the wheel to Dark first (S1).
+   */
+  takeShot(frameType?: FrameType): Promise<unknown> {
+    return this.run('capture', 'Take shot', async () => {
+      await this.flushSettings();
+      const body: { save: true; frame_type?: FrameType } = { save: true };
+      if (frameType) body.frame_type = frameType;
+      const camera = await this.client.capture(body);
+      this.events.applyStatus({ camera });
+    });
+  }
+
+  private lastSavedSeq: number | null = null;
+
+  private onFrameSaved(m: FrameSaved): void {
+    const gap = this.lastSavedSeq !== null && m.seq > this.lastSavedSeq + 1;
+    const after = this.lastSavedSeq;
+    if (this.lastSavedSeq !== null && m.seq <= this.lastSavedSeq) return; // replayed
+    this.lastSavedSeq = m.seq;
+    this.lastSaved = { seq: m.seq, frame_seq: m.frame_seq, name: m.name, path: m.path };
+    this.savedCount += 1;
+    // The server logs OK "Saved <name>" (topic camera); the toast says it from any section.
+    // A sequence's subs are not toasted one by one: the run strip, the Run card and the status
+    // bar show the newest (W6a).
+    if (m.source !== 'sequence') this.toast('info', 'Frame saved', m.name);
+    if (gap) {
+      // Saves missed while the socket was busy: count them, keep the newest (protocol "Backpressure").
+      void this.client.savedFrames(after).then(
+        (page) => {
+          const missed = page.saves.filter((x) => x.seq < m.seq).length;
+          if (missed) this.toast('info', `${missed} more frame${missed > 1 ? 's' : ''} saved`, 'See the log for their names');
+        },
+        () => undefined,
+      );
+    }
+  }
+
+  // -- Wave 3: focuser and autofocus (A34-A36) ---------------------------------------------
+
+  get canFocuser(): boolean {
+    return !this.stale && deviceUsable(this.events.devices, 'focuser', this.events.connection) && !!this.focuser && this.focuser.state !== 'disconnected';
+  }
+
+  private applyFocuser(cmd: FocuserCommand): FocuserCommand {
+    this.events.focuser = cmd.focuser;
+    return cmd;
+  }
+
+  /** Out / In (a step from the queued or current target, clamped and reported, D9). Rejects with the server's words. */
+  focuserStep(delta: number): Promise<FocuserCommand> {
+    return this.client.focuserStep(delta).then((c) => this.applyFocuser(c));
+  }
+
+  /** Go to (bounded by MaxStep, refused, never clamped, H10). */
+  focuserMove(position: number): Promise<FocuserCommand> {
+    return this.client.focuserMove(position).then((c) => this.applyFocuser(c));
+  }
+
+  /** Halt where it is (also ends a running autofocus there, Q-O6). */
+  focuserHalt(): Promise<FocuserCommand> {
+    return this.client.focuserHalt().then((c) => this.applyFocuser(c));
+  }
+
+  /** Autofocus sweep options of this viewer (sent with the start; the server's defaults otherwise). */
+  afOptions: { half_range: number | null; num_steps: number | null } = $state(
+    loadPref(
+      'argos.autofocus.options',
+      (v): v is { half_range: number | null; num_steps: number | null } => typeof v === 'object' && v !== null && 'half_range' in v,
+      { half_range: null, num_steps: null },
+    ),
+  );
+
+  setAfOptions(patch: Partial<{ half_range: number | null; num_steps: number | null }>): void {
+    this.afOptions = { ...this.afOptions, ...patch };
+    savePref('argos.autofocus.options', this.afOptions);
+  }
+
+  /** Why autofocus cannot start beyond the focuser itself, or null. */
+  autofocusProblem(): string | null {
+    if (this.stale) return 'the ARGOS server is not reachable';
+    if (!this.cameraReady) return 'connect the camera first';
+    if (!this.canFocuser) return 'connect the focuser first';
+    if (this.cameraOwner === 'sequence') return 'the sequence owns the camera';
+    if (this.cameraOwner === 'single') return 'wait for the exposure in progress';
+    return autofocusWheelGuard(this.filterwheel);
+  }
+
+  /** Start autofocus (A36): the server applies the AF gain (S22); live view stops first. Rejects with the server's words. */
+  async startAutofocus(): Promise<unknown> {
+    await this.flushSettings();
+    const wasLive = this.live;
+    const body: AutofocusBody = {};
+    if (this.afOptions.half_range) body.half_range = this.afOptions.half_range;
+    if (this.afOptions.num_steps) body.num_steps = this.afOptions.num_steps;
+    const af = await this.client.startAutofocus(body);
+    this.events.autofocus = af;
+    if (wasLive) this.toast('info', 'Live view stopped', 'Autofocus owns the camera until it ends.');
+    // The Focuser card unfolds while autofocus runs (05 2.1).
+    if (this.observe.layout.cards.focuser === 'folded') this.observe.setCardOpen('focuser', true);
+    return af;
+  }
+
+  /** Stop AF = cancel and return to the start position (S23). */
+  async stopAutofocus(): Promise<unknown> {
+    const af = await this.client.stopAutofocus();
+    this.events.autofocus = af;
+    return af;
+  }
+
+  /** The toolbar and palette paths: a failure is a toast + log line. */
+  runAutofocus(): Promise<unknown> {
+    return this.run('autofocus', this.autofocusRunning ? 'Stop autofocus' : 'Autofocus', () =>
+      this.autofocusRunning ? this.stopAutofocus() : this.startAutofocus(),
+    );
+  }
+
+  private afState: string | undefined;
+
+  /** The autofocus runs of the session (they explain a gap in the conditions timeline). */
+  afPeriods: TimelinePeriod[] = $state([]);
+
+  private noteAfPeriod(af: { started_utc?: string | null; ended_utc?: string | null }): void {
+    if (!af.started_utc || !af.ended_utc) return;
+    const from = Date.parse(af.started_utc) / 1000;
+    const to = Date.parse(af.ended_utc) / 1000;
+    if (!Number.isFinite(from) || !Number.isFinite(to) || this.afPeriods.some((p) => p.from === from)) return;
+    const hm = (t: number) => clockUtc(t, false);
+    this.afPeriods = [...this.afPeriods, { from, to, label: `autofocus ${hm(from)}–${hm(to)}` }];
+  }
+
+  private onAutofocusEvent(state: string | undefined, message: string | null): void {
+    const before = this.afState;
+    this.afState = state;
+    if (!before || before === state || (before !== 'running' && before !== 'stopping')) return;
+    // The listener runs before the typed record is stored: the message comes with the event.
+    if (state === 'done') this.toast('info', 'Autofocus complete', message ?? '');
+    else if (state === 'rejected') this.toast('warning', 'Autofocus rejected', message ?? 'focus unchanged');
+    else if (state === 'failed') this.toast('error', 'Autofocus failed', message ?? '');
+    else if (state === 'cancelled') this.toast('info', 'Autofocus cancelled', message ?? '');
+  }
+
+  // -- Wave 3: mount geometry, tracking rate, jog (A29-A31) ----------------------------------
+
+  setTrackingRate(rate: TrackingRate): Promise<unknown> {
+    return this.run('trackingRate', 'Tracking rate', () => this.moveMount('Tracking rate', 'change the rate', (p, o) => this.client.setTrackingRate(rate, o, p)));
+  }
+
+  /** The jog pad's calls (A30): this page's client id rides on every command for the dead-man. */
+  private jogSeq = 0;
+  readonly jogTransport: JogTransport = {
+    // One counter per page (the client id is per page): a remounted pad never starts again below
+    // the numbers the server already saw (it ignores an older one).
+    nextSeq: () => ++this.jogSeq,
+    start: async (axis, rate, seq, renew) => {
+      const body = { axis, rate_deg_s: rate, client: this.events.clientId, seq, ...(renew ? { renew: true } : {}) };
+      try {
+        const mount = await this.client.jog(body);
+        this.events.applyStatus({ mount });
+        return mount;
+      } catch (err) {
+        // W6a interlock: a jog refused during a run asks once; its way through only pauses the
+        // run (a dead-man jog resent after the dialog would move with no hand on the key). The
+        // pad still shows its own "Jog refused" line.
+        if (!renew && isRunActive(err) && !this.interlock.pending) {
+          this.interlock.ask({ action: 'Jog', verb: 'jog', through: () => this.sequence.pause(this.client) }, err.message, () => Promise.resolve());
+        }
+        throw err;
+      }
+    },
+    stop: async (axis, seq) => {
+      const mount = await this.client.jogStop(axis ? { axis, client: this.events.clientId, seq } : { client: this.events.clientId, seq });
+      this.events.applyStatus({ mount });
+      return mount;
+    },
+    socketStop: () => {
+      this.events.send({ type: 'jog_stop' });
+    },
+  };
+
+  setJogOpen(open: boolean): void {
+    this.jogOpen = open;
+    savePref('argos.mount.jog-open', open);
+    if (!open) this.jogArmed = false;
+  }
+
+  /** J (D23): arm or disarm keyboard jogging; arming shows the pad (Mount card unfolded, Jog open). */
+  toggleJogArmed(): void {
+    if (this.jogArmed) {
+      this.jogArmed = false;
+      return;
+    }
+    if (this.observe.layout.cards.mount !== 'open') this.observe.setCardOpen('mount', true);
+    if (!this.jogOpen) this.setJogOpen(true);
+    this.jogArmed = true;
+  }
+
+  /** Why jogging is refused now, in the button's words, or null. */
+  jogProblem(): string | null {
+    if (this.stale) return 'the ARGOS server is not reachable';
+    if (!this.mountReady) return 'connect the mount first';
+    if (this.mount?.state === 'parked') return 'unpark the mount first';
+    if (this.slewing) return 'abort the slew before jogging (Esc)';
+    return null;
+  }
+
+  // -- Wave 3: observation identity and catalogue lookup (A20, A38-A41) ---------------------
+
+  /** The Object field (D11): the FITS OBJECT and its folder. Rejects with the server's words. */
+  async setObjectName(name: string): Promise<Observation> {
+    const obs = await this.client.setObjectName(name);
+    this.events.observation = obs;
+    return obs;
+  }
+
+  /** A catalogue result becomes the target (name, coordinates; photometry target for a variable star, Q-P8). */
+  async setTarget(body: ObservationTargetBody): Promise<Observation> {
+    const obs = await this.client.setObservationTarget(body);
+    this.events.observation = obs;
+    return obs;
+  }
+
+  resolveName(q: string, signal?: AbortSignal): Promise<Resolved> {
+    return this.client.resolve(q, { signal });
+  }
+
+  suggestNames(q: string, signal?: AbortSignal): Promise<string[]> {
+    return this.client.suggest(q, 8, { signal }).then((r) => r.names);
+  }
+
+  /** Accept a Stellarium name suggestion: it becomes the observation target (A20 -> A39). */
+  useSuggestion(c: { name: string; ra_hours: number; dec_deg: number; object_type: string; source: string; is_variable?: boolean }): Promise<unknown> {
+    return this.run('target', 'Target name', async () => {
+      await this.setTarget({ name: c.name, ra_hours: c.ra_hours, dec_deg: c.dec_deg, object_type: c.object_type, source: c.source });
+      this.dismissSuggestion();
+      this.log.push('info', `Target name from the Stellarium GoTo: ${c.name}`, { source: 'web', topic: 'planetarium' });
+    });
+  }
+
+  dismissSuggestion(): void {
+    this.suggestionDismissed = this.events.suggestions?.t ?? null;
+  }
+
+  // -- Wave 3: Open FITS (A25, A27; M4, M49) ------------------------------------------------
+
+  /**
+   * Open a FITS file into Observe (raw 16-bit counts only, live view stopped
+   * first, Q-O11). Resolves to the server's refusal in its words (the dialog
+   * keeps it on screen), or null once opened.
+   */
+  async openFits(path: string): Promise<string | null> {
+    if (this.busy.openFits) return 'Opening another file…';
+    this.busy.openFits = true;
+    const wasLive = this.live;
+    try {
+      const camera = await this.client.openFits(path);
+      this.events.applyStatus({ camera });
+      const dir = path.replace(/[\\/][^\\/]*$/, '');
+      if (dir) {
+        this.openFitsStart = dir;
+        savePref('argos.open-fits.dir', dir);
+      }
+      if (this.section !== 'imaging') this.go('imaging');
+      if (wasLive) this.toast('info', 'Live view stopped', 'To show the file you opened.');
+      return null;
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err);
+      this.log.push('warning', `Open FITS: ${msg}`, { source: 'web', topic: 'camera' });
+      return msg;
+    } finally {
+      this.busy.openFits = false;
+    }
+  }
+}
+
+/** Q-G19: the last section, except Observe, which opens as Connection (restored when the equipment is there). */
+function initialSection(): Section {
+  const saved = loadPref('argos.section', isSection, 'connection');
+  return saved === 'imaging' ? 'connection' : saved;
+}
+
+const KEY = Symbol('argos-app');
+
+export function provideApp(app: ArgosApp): ArgosApp {
+  return setContext(KEY, app);
+}
+
+export function useApp(): ArgosApp {
+  const app = getContext<ArgosApp | undefined>(KEY);
+  if (!app) throw new Error('useApp() called outside the ARGOS app context');
+  return app;
+}

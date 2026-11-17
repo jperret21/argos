@@ -1,0 +1,36 @@
+/*
+ * uPlot host of the wave-3 charts (VCurvePlot, ConditionsTimeline): the plot is
+ * absolutely positioned in its host, so it can never grow its own container
+ * (uplot/host.ts); uPlot's own stylesheet draws a grey dashed cursor and a grey
+ * selection: tokens only (Night Red). Promoted from src/lab/charts/lab.css.
+ */
+.plot-host {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.plot-host > .uplot {
+  position: absolute;
+  inset: 0;
+  font-family: var(--font-mono);
+  line-height: 1;
+}
+.plot-host .u-cursor-x {
+  border-right: 1px solid var(--chart-highlight) !important;
+  opacity: 0.7;
+}
+.plot-host .u-cursor-y {
+  display: none;
+}
+.plot-host .u-select {
+  background: color-mix(in srgb, var(--fg-muted) 14%, transparent);
+  border-left: 1px solid var(--fg-muted);
+  border-right: 1px solid var(--fg-muted);
+}
+.plot-host .u-cursor-pt {
+  border-width: 1.5px !important;
+}
+.plot-host .u-over {
+  cursor: crosshair;
+}

@@ -6,9 +6,11 @@ written to ``photometry.csv`` (the hand-off to post-processing). Qt-free.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import csv
 from dataclasses import dataclass, field
 import math
+import os
 from pathlib import Path
 
 _COLUMNS = (
@@ -60,6 +62,10 @@ class LcPoint:
     #: ``comps_used`` (the ratio path also rejects *suspect* stars), so the two
     #: legitimately differ on the same row.
     relative_comps_used: int = 0
+    #: S67: ``suspect`` because the run's flight recorder shows no detection on this
+    #: frame (the field moved, or cloud: S35's rule on an old file). Not a CSV column:
+    #: the reason only names the point in the AAVSO export's count.
+    no_detection: bool = False
 
 
 @dataclass
@@ -75,15 +81,21 @@ class LightCurve:
     name: str = ""
     points: list[LcPoint] = field(default_factory=list)
     role: str = "target"
+    #: The filter token of every point (``fits_writer.filter_token``, S49); ""
+    #: for a curve read from a file that does not say.
+    filter_name: str = ""
 
     def append(self, point: LcPoint) -> None:
         self.points.append(point)
 
     def to_csv(self, path) -> None:
-        """Write the curve to ``path`` (parent dirs created)."""
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", newline="", encoding="utf-8") as f:
+        """Write the curve to ``path`` (parent dirs created), atomically.
+
+        The live engine rewrites the whole file after every point: a reader
+        (Review, a spreadsheet, star_var_script) or a crash mid-write must only
+        ever see the previous file or the new one, never a truncated one (S38).
+        """
+        with _atomic_text(path) as f:
             writer = csv.writer(f)
             writer.writerow(_COLUMNS)
             for p in self.points:
@@ -112,6 +124,44 @@ class LightCurve:
         return lc
 
 
+def star_curve_key(star) -> str:
+    """The star part of a curve key: its AUID, else its display name."""
+    return star.auid or star.display_name
+
+
+def curve_key(star, token: str) -> str:
+    """One curve per (star, filter) (S49): ``<AUID or name>@<filter token>``.
+
+    Before S49 a star had one curve whatever the filter: a run alternating V
+    and B mixed both bands in one curve, its systematic floor, its leave-one-out
+    vetting and its CSV.
+    """
+    return f"{star_curve_key(star)}@{token}"
+
+
+def curves_of_filter(curves: dict, token: str) -> dict:
+    """The curves of one filter, keyed by star (``star_curve_key``), for the S17 vetting."""
+    return {(lc.auid or lc.name): lc for lc in curves.values() if lc.filter_name == token}
+
+
+def series_label(curve: "LightCurve", multi_filter: bool) -> str:
+    """A curve's plot label: the star, and its filter when the store holds several (S49)."""
+    label = curve.name or curve.auid or "TARGET"
+    return f"{label} [{curve.filter_name}]" if multi_filter and curve.filter_name else label
+
+
+def run_curve_csv_name(role: str, object_name: str, token: str, tag: str) -> str:
+    """A run's per-curve CSV: ``{role}_{object}_{filter}_{star}.csv`` (S49).
+
+    The filter token sits between object and star (as S40's start time does
+    for preview curves): Review still reads the role from the prefix and the
+    star from the AUID or name suffix. One filter, one file per star, the
+    contents unchanged; before S49 the name had no filter.
+    """
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in f"{object_name}_{token}_{tag}")
+    return f"{role or 'target'}_{safe or 'photometry'}.csv"
+
+
 def _row(p: LcPoint) -> list:
     """One CSV row, in ``_COLUMNS`` order, for a light-curve point."""
     return [
@@ -133,11 +183,24 @@ def _row(p: LcPoint) -> list:
     ]
 
 
-def write_curves_csv(path, curves) -> None:
-    """Write several curves to one lossless, session-scoped CSV export."""
+@contextmanager
+def _atomic_text(path):
+    """A text file written beside ``path`` and renamed over it once complete."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as f:
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with tmp.open("w", newline="", encoding="utf-8") as f:
+            yield f
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def write_curves_csv(path, curves) -> None:
+    """Write several curves to one lossless, session-scoped CSV export (atomically)."""
+    with _atomic_text(path) as f:
         writer = csv.writer(f)
         writer.writerow(_MULTI_COLUMNS)
         for index, lc in enumerate(curves, start=1):
@@ -201,6 +264,29 @@ def _opt_float(value) -> float | None:
         return None
 
 
+#: S60: a point dated before this Julian Date is undated, never an AAVSO row. Before
+#: S13 a batch re-run dated a frame without ``DATE-OBS`` at JD 0; no CCD observation
+#: is older than JD 2 400 000 (1858).
+MIN_AAVSO_JD = 2_400_000.0
+
+
+@dataclass(frozen=True)
+class AavsoExportSummary:
+    """What :func:`write_aavso` wrote: data rows, and target points left out.
+
+    A point both saturated and suspect is counted as saturated; an undated point
+    (S60) as undated, whatever its flags. ``no_detection_excluded`` counts the suspect
+    points of a frame on which the flight recorder shows no detection (S67), apart
+    from the other suspect points.
+    """
+
+    rows: int = 0
+    saturated_excluded: int = 0
+    suspect_excluded: int = 0
+    undated_excluded: int = 0
+    no_detection_excluded: int = 0
+
+
 def write_aavso(
     path,
     curves,
@@ -208,8 +294,9 @@ def write_aavso(
     obscode: str = "XXX",
     filt: str = "TG",
     chart: str | None = None,
-    software: str = "Argos",
-) -> None:
+    software: str | None = None,
+    include_flagged: bool = False,
+) -> AavsoExportSummary:
     """Write one or more :class:`LightCurve` to an AAVSO Extended File.
 
     A *preview* export — DATE is the JD_UTC midpoint, MTYPE=STD, comparison is the
@@ -219,11 +306,32 @@ def write_aavso(
     its ensemble magnitude on the same frame — the check star the spec asks for
     with ensemble photometry. ``chart`` is the VSP chart of the comparison
     sequence (CHART).
+
+    Target points flagged *saturated* (clipped) or *suspect* (cosmic ray, hot
+    pixel, no verified lock, or no detection on the frame: S67) are left out
+    unless ``include_flagged``; when included, NOTES says
+    which flag they carry. A flagged check point never provides KMAG. An undated
+    point (``jd_utc`` not finite, or before :data:`MIN_AAVSO_JD`) is always left
+    out (S60). ``software`` defaults to ``argos.SOFTWARE_ID``, the name and
+    version the format asks for (S64).
     """
+    if software is None:
+        from argos import SOFTWARE_ID
+
+        software = SOFTWARE_ID
     check = next((lc for lc in curves if lc.role == "check" and lc.points), None)
     kname = _aavso_field(check.auid or check.name) if check is not None else None
     # Target and check points of one frame share its JD.
-    kmags = {p.jd_utc: p.mag for p in check.points if math.isfinite(p.mag)} if kname else {}
+    kmags = (
+        {
+            p.jd_utc: p.mag
+            for p in check.points
+            if math.isfinite(p.mag) and not p.saturated and not p.suspect
+        }
+        if kname
+        else {}
+    )
+    rows = saturated_excluded = suspect_excluded = undated_excluded = no_detection = 0
     chart_field = _aavso_field(chart) or "na"
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -231,6 +339,7 @@ def write_aavso(
         f.write("#TYPE=EXTENDED\n")
         f.write(f"#OBSCODE={obscode}\n")
         f.write(f"#SOFTWARE={software}\n")
+        # OBSTYPE CCD: the format reports a CMOS camera as CCD (S68).
         f.write("#DELIM=,\n#DATE=JD\n#OBSTYPE=CCD\n")
         f.write(
             "#NAME,DATE,MAG,MERR,FILT,TRANS,MTYPE,CNAME,CMAG,KNAME,KMAG,"
@@ -243,15 +352,36 @@ def write_aavso(
                 continue
             name = (lc.name or lc.auid or "TARGET").upper()
             for p in lc.points:
+                if not (math.isfinite(p.jd_utc) and p.jd_utc >= MIN_AAVSO_JD):
+                    undated_excluded += 1  # S60: a JD 0 row is no observation
+                    continue
                 if not (math.isfinite(p.mag) and math.isfinite(p.mag_err)):
                     continue
+                flags = [
+                    label
+                    for label, on in (("saturated", p.saturated), ("suspect", p.suspect))
+                    if on
+                ]
+                if flags and not include_flagged:
+                    if p.saturated:
+                        saturated_excluded += 1
+                    elif p.no_detection:
+                        no_detection += 1  # S67: no star on that frame
+                    else:
+                        suspect_excluded += 1
+                    continue
+                notes = " ".join(flags) or "na"
                 amass = "na" if p.airmass is None else f"{p.airmass:.3f}"
                 kmag = kmags.get(p.jd_utc)
                 check_fields = "na,na" if kmag is None else f"{kname},{kmag:.4f}"
                 f.write(
                     f"{name},{p.jd_utc:.6f},{p.mag:.4f},{p.mag_err:.4f},{filt},NO,STD,"
-                    f"ENSEMBLE,na,{check_fields},{amass},na,{chart_field},na\n"
+                    f"ENSEMBLE,na,{check_fields},{amass},na,{chart_field},{notes}\n"
                 )
+                rows += 1
+    return AavsoExportSummary(
+        rows, saturated_excluded, suspect_excluded, undated_excluded, no_detection
+    )
 
 
 def _aavso_field(value, limit: int = 20) -> str | None:

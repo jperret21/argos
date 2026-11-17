@@ -133,3 +133,29 @@ def test_overlay_for_applies_spacing() -> None:
 
 def test_overlay_for_none_without_wcs() -> None:
     assert overlay_for(None, _SHAPE, _cfg({})) is None
+
+
+def test_database_folder_keeps_the_database_set(tmp_path, monkeypatch) -> None:
+    """S24: a star-database folder in Settings replaced the chosen set, so
+    ASTAP got "-d <folder>" without "-D D50" and picked a set on its own."""
+    from pathlib import Path
+
+    from argos.core.imaging import platesolve
+
+    monkeypatch.setattr(platesolve, "find_astap_db", lambda _astap: "/auto/detected")
+    folder = str(tmp_path)
+
+    def command(cfg: dict) -> list[str]:
+        settings = build_solve_settings(_cfg(cfg), (600, 800), live=False)
+        return platesolve._build_command("astap", Path("/tmp/x.fits"), settings)
+
+    def flag(cmd: list[str], name: str) -> str | None:
+        return cmd[cmd.index(name) + 1] if name in cmd else None
+
+    both = command({"astrometry.database_path": folder, "astrometry.database": "D50"})
+    assert flag(both, "-D") == "D50"  # missing on 0.4.2
+    assert flag(both, "-d") == folder
+    folder_only = command({"astrometry.database_path": folder})
+    assert flag(folder_only, "-d") == folder and "-D" not in folder_only
+    set_only = command({"astrometry.database": "D50"})
+    assert flag(set_only, "-D") == "D50" and flag(set_only, "-d") == "/auto/detected"

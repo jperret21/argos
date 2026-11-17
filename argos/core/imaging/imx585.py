@@ -58,6 +58,11 @@ def configure_calibration_directory(path: Path | str) -> None:
     _USER_CALIB_PATH = Path(path).expanduser() / "camera_calibration.json"
 
 
+def calibration_path() -> Path:
+    """The observer's photon-transfer file for the IMX585 (``camera_calibration.json``)."""
+    return _USER_CALIB_PATH
+
+
 def lookup_egain(gain_setting: int) -> float:
     """Return e-/ADU for the given gain setting (0–600).
 

@@ -1,0 +1,743 @@
+{
+ "title": "Wave 6a: Plan and sequences",
+ "date": "2026-11-12",
+ "summary": "Wave 6a of web/spec/README.md section 7 at integration: the Plan screen (Steps table editors, issues never clamped, Source with exoplanet transits, Run options, Presets and Save, Target set, VisibilityTimeline), the run (transport with Start at a time, readiness chip and Preflight, run strip, Run card in Observe, the status bar's one progress item), the mount-motion interlock and the palette's run entries, against the headless server in simulator replay mode on copies of real RR Lyr raw frames (2026-09-25; Settings site replaced by public Paris coordinates; check star 000-BJW-666 assigned on the copies). A run started, paused, resumed and stopped through the UI gave 19 subs whose 133 points (2 527 values) equal the fixed Qt sequence path's with no difference; observation.json of a transit plan written through the UI is byte-identical to Qt's (progress.md, Wave 6a). Captured at device scale 2: 15 scenes in the three themes at 1 440 x 900 and in Observatory at 1 280 x 800, plus the palette; scenes 01-12 were re-captured and 14-16 added by the wave 6a fixer after the design, technical and science reviews (the palette is the integrator's). The 15 Night Red originals pass the audit (rules A and B, 0 px each).",
+ "scale": 2,
+ "shots": [
+  {
+   "file": "observatory-1440x900-01-plan-empty.png",
+   "caption": "Plan screen with nothing planned (fixer re-capture): the empty Steps region offers real buttons, 'Add a step' and 'Open a preset…'; the issue list says what Start needs (1 to fix, Add an enabled step; 1 warning, no object name), the warning drawn with the attention mark (a bar over a dot), never the check star's triangle (BRAND 2.6). Readiness 'Blocked · plan', Start disabled with that reason; the Visibility region asks for a source; the Target set card no longer says 'Set of Unknown'. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "empty",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-01-plan-empty.png",
+   "caption": "Plan screen with nothing planned (fixer re-capture): the empty Steps region offers real buttons, 'Add a step' and 'Open a preset…'; the issue list says what Start needs (1 to fix, Add an enabled step; 1 warning, no object name), the warning drawn with the attention mark (a bar over a dot), never the check star's triangle (BRAND 2.6). Readiness 'Blocked · plan', Start disabled with that reason; the Visibility region asks for a source; the Target set card no longer says 'Set of Unknown'. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "empty",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-01-plan-empty.png",
+   "caption": "Plan screen with nothing planned (fixer re-capture): the empty Steps region offers real buttons, 'Add a step' and 'Open a preset…'; the issue list says what Start needs (1 to fix, Add an enabled step; 1 warning, no object name), the warning drawn with the attention mark (a bar over a dot), never the check star's triangle (BRAND 2.6). Readiness 'Blocked · plan', Start disabled with that reason; the Visibility region asks for a source; the Target set card no longer says 'Set of Unknown'. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "empty",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-01-plan-empty.png",
+   "caption": "Plan screen with nothing planned (fixer re-capture): the empty Steps region offers real buttons, 'Add a step' and 'Open a preset…'; the issue list says what Start needs (1 to fix, Add an enabled step; 1 warning, no object name), the warning drawn with the attention mark (a bar over a dot), never the check star's triangle (BRAND 2.6). Readiness 'Blocked · plan', Start disabled with that reason; the Visibility region asks for a source; the Target set card no longer says 'Set of Unknown'. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "empty",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-02-plan-variable.png",
+   "caption": "A variable-star plan (fixer re-capture): RR Lyr found in the Source card; Steps sized to their content, so the Visibility timeline takes the rest of the column. The timeline header has two rows: the facts (site, night, 'highest at night 65.9° at 18:03 (dusk)': RR Lyr culminates before dusk, so it is not called a peak) and, on its own row, the run check, never cut. The 'planned run', 'now' and night-high labels carry a thin halo instead of a filled box, so the altitude curve stays visible under them. Totals end time in UTC ('ends ≈ … UTC', local time in the tooltip). Gain grouped like every number. Target set with the check star 000-BJW-666 assigned on the copies; Start is the one brass action. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "variable",
+    "visibility",
+    "target-set",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-02-plan-variable.png",
+   "caption": "A variable-star plan (fixer re-capture): RR Lyr found in the Source card; Steps sized to their content, so the Visibility timeline takes the rest of the column. The timeline header has two rows: the facts (site, night, 'highest at night 65.9° at 18:03 (dusk)': RR Lyr culminates before dusk, so it is not called a peak) and, on its own row, the run check, never cut. The 'planned run', 'now' and night-high labels carry a thin halo instead of a filled box, so the altitude curve stays visible under them. Totals end time in UTC ('ends ≈ … UTC', local time in the tooltip). Gain grouped like every number. Target set with the check star 000-BJW-666 assigned on the copies; Start is the one brass action. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "variable",
+    "visibility",
+    "target-set",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-02-plan-variable.png",
+   "caption": "A variable-star plan (fixer re-capture): RR Lyr found in the Source card; Steps sized to their content, so the Visibility timeline takes the rest of the column. The timeline header has two rows: the facts (site, night, 'highest at night 65.9° at 18:03 (dusk)': RR Lyr culminates before dusk, so it is not called a peak) and, on its own row, the run check, never cut. The 'planned run', 'now' and night-high labels carry a thin halo instead of a filled box, so the altitude curve stays visible under them. Totals end time in UTC ('ends ≈ … UTC', local time in the tooltip). Gain grouped like every number. Target set with the check star 000-BJW-666 assigned on the copies; Start is the one brass action. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "variable",
+    "visibility",
+    "target-set",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-02-plan-variable.png",
+   "caption": "A variable-star plan (fixer re-capture): RR Lyr found in the Source card; Steps sized to their content, so the Visibility timeline takes the rest of the column. The timeline header has two rows: the facts (site, night, 'highest at night 65.9° at 18:03 (dusk)': RR Lyr culminates before dusk, so it is not called a peak) and, on its own row, the run check, never cut. The 'planned run', 'now' and night-high labels carry a thin halo instead of a filled box, so the altitude curve stays visible under them. Totals end time in UTC ('ends ≈ … UTC', local time in the tooltip). Gain grouped like every number. Target set with the check star 000-BJW-666 assigned on the copies; Start is the one brass action. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "variable",
+    "visibility",
+    "target-set",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-03-plan-transit.png",
+   "caption": "An exoplanet transit written through the UI (fixer re-capture; the earlier Observatory 1440 shot had a stale coverage): HD 189733 b, night 2027-07-31, baseline 45 min each side. The card puts UTC first ('21:52 → 01:11 UTC · 3.32 h', local below), names the altitudes ('start 59° · mid 64° · end 55°') and separates the title ('HD 189733 b · host HD 189733'). The plan notes read 'Transit sequence prepared: 921 light frames at a 13.0 s cadence.' and 'Starts at the coverage start, 2027-07-31 21:52 UTC.' (no raw ISO time). The timeline's run verdict is on its own row ('starts 5m 54s before astronomical dusk'); the coverage band and the planned run come from the same prediction; the transit label has a halo over the hatch. The chip reads 'Blocked · start time and 1 more' (more than 24 h ahead; the disk). (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "exoplanet",
+    "transit",
+    "visibility",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-03-plan-transit.png",
+   "caption": "An exoplanet transit written through the UI (fixer re-capture; the earlier Observatory 1440 shot had a stale coverage): HD 189733 b, night 2027-07-31, baseline 45 min each side. The card puts UTC first ('21:52 → 01:11 UTC · 3.32 h', local below), names the altitudes ('start 59° · mid 64° · end 55°') and separates the title ('HD 189733 b · host HD 189733'). The plan notes read 'Transit sequence prepared: 921 light frames at a 13.0 s cadence.' and 'Starts at the coverage start, 2027-07-31 21:52 UTC.' (no raw ISO time). The timeline's run verdict is on its own row ('starts 5m 54s before astronomical dusk'); the coverage band and the planned run come from the same prediction; the transit label has a halo over the hatch. The chip reads 'Blocked · start time and 1 more' (more than 24 h ahead; the disk). (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "exoplanet",
+    "transit",
+    "visibility",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-03-plan-transit.png",
+   "caption": "An exoplanet transit written through the UI (fixer re-capture; the earlier Observatory 1440 shot had a stale coverage): HD 189733 b, night 2027-07-31, baseline 45 min each side. The card puts UTC first ('21:52 → 01:11 UTC · 3.32 h', local below), names the altitudes ('start 59° · mid 64° · end 55°') and separates the title ('HD 189733 b · host HD 189733'). The plan notes read 'Transit sequence prepared: 921 light frames at a 13.0 s cadence.' and 'Starts at the coverage start, 2027-07-31 21:52 UTC.' (no raw ISO time). The timeline's run verdict is on its own row ('starts 5m 54s before astronomical dusk'); the coverage band and the planned run come from the same prediction; the transit label has a halo over the hatch. The chip reads 'Blocked · start time and 1 more' (more than 24 h ahead; the disk). (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "exoplanet",
+    "transit",
+    "visibility",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-03-plan-transit.png",
+   "caption": "An exoplanet transit written through the UI (fixer re-capture; the earlier Observatory 1440 shot had a stale coverage): HD 189733 b, night 2027-07-31, baseline 45 min each side. The card puts UTC first ('21:52 → 01:11 UTC · 3.32 h', local below), names the altitudes ('start 59° · mid 64° · end 55°') and separates the title ('HD 189733 b · host HD 189733'). The plan notes read 'Transit sequence prepared: 921 light frames at a 13.0 s cadence.' and 'Starts at the coverage start, 2027-07-31 21:52 UTC.' (no raw ISO time). The timeline's run verdict is on its own row ('starts 5m 54s before astronomical dusk'); the coverage band and the planned run come from the same prediction; the transit label has a halo over the hatch. The chip reads 'Blocked · start time and 1 more' (more than 24 h ahead; the disk). (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "exoplanet",
+    "transit",
+    "visibility",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-04-plan-issues.png",
+   "caption": "No silent clamp (fixer re-capture): the out-of-range values kept exactly as typed and stored so by the server. The server's words now use the true minus sign and grouped thousands ('Interval −5 s is outside 0–3 600 s', 'Gain 5 000 is outside 0–600', 'Exposure 5 000 s'). With a cadence set, step 2's out-of-range interval stays visible and editable where its issue points (−5.0, outlined), instead of a read-only dash; clicking a Dither issue (a hidden column, Q-P5) now shows the column first. Warnings use the attention mark. '9 to fix before Start'; the list scrolls past its height. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "issues",
+    "no-clamp",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-04-plan-issues.png",
+   "caption": "No silent clamp (fixer re-capture): the out-of-range values kept exactly as typed and stored so by the server. The server's words now use the true minus sign and grouped thousands ('Interval −5 s is outside 0–3 600 s', 'Gain 5 000 is outside 0–600', 'Exposure 5 000 s'). With a cadence set, step 2's out-of-range interval stays visible and editable where its issue points (−5.0, outlined), instead of a read-only dash; clicking a Dither issue (a hidden column, Q-P5) now shows the column first. Warnings use the attention mark. '9 to fix before Start'; the list scrolls past its height. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "issues",
+    "no-clamp",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-04-plan-issues.png",
+   "caption": "No silent clamp (fixer re-capture): the out-of-range values kept exactly as typed and stored so by the server. The server's words now use the true minus sign and grouped thousands ('Interval −5 s is outside 0–3 600 s', 'Gain 5 000 is outside 0–600', 'Exposure 5 000 s'). With a cadence set, step 2's out-of-range interval stays visible and editable where its issue points (−5.0, outlined), instead of a read-only dash; clicking a Dither issue (a hidden column, Q-P5) now shows the column first. Warnings use the attention mark. '9 to fix before Start'; the list scrolls past its height. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "issues",
+    "no-clamp",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-04-plan-issues.png",
+   "caption": "No silent clamp (fixer re-capture): the out-of-range values kept exactly as typed and stored so by the server. The server's words now use the true minus sign and grouped thousands ('Interval −5 s is outside 0–3 600 s', 'Gain 5 000 is outside 0–600', 'Exposure 5 000 s'). With a cadence set, step 2's out-of-range interval stays visible and editable where its issue points (−5.0, outlined), instead of a read-only dash; clicking a Dither issue (a hidden column, Q-P5) now shows the column first. Warnings use the attention mark. '9 to fix before Start'; the list scrolls past its height. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "issues",
+    "no-clamp",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-05-plan-presets.png",
+   "caption": "Presets popover (M75/M77, fixer re-capture after the Plan layout change): the server's presets folder (three presets: name, object, frames, estimate, date), a filter field, delete with Undo, and 'Open file…'. Behind it the draft 'RR Lyr nightly' just opened ('Loaded RR Lyr nightly.') with the timeline taking the space under the short table. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "presets",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-05-plan-presets.png",
+   "caption": "Presets popover (M75/M77, fixer re-capture after the Plan layout change): the server's presets folder (three presets: name, object, frames, estimate, date), a filter field, delete with Undo, and 'Open file…'. Behind it the draft 'RR Lyr nightly' just opened ('Loaded RR Lyr nightly.') with the timeline taking the space under the short table. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "presets",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-05-plan-presets.png",
+   "caption": "Presets popover (M75/M77, fixer re-capture after the Plan layout change): the server's presets folder (three presets: name, object, frames, estimate, date), a filter field, delete with Undo, and 'Open file…'. Behind it the draft 'RR Lyr nightly' just opened ('Loaded RR Lyr nightly.') with the timeline taking the space under the short table. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "presets",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-05-plan-presets.png",
+   "caption": "Presets popover (M75/M77, fixer re-capture after the Plan layout change): the server's presets folder (three presets: name, object, frames, estimate, date), a filter field, delete with Undo, and 'Open file…'. Behind it the draft 'RR Lyr nightly' just opened ('Loaded RR Lyr nightly.') with the timeline taking the space under the short table. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "presets",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-06-plan-preflight.png",
+   "caption": "Preflight popover (A64, fixer re-capture), worst first: Note · Observing site (the replayed mount points elsewhere than the public test site, X3), Note · Calibration ('Missing tonight: step 1 (10 s, gain 80, IR): darks, flats and biases.'), then OK for run, camera (sensor '2 160 × 3 840', grouped), plan ('120 frames', plural), start time, object, mount, filter wheel, focuser, altitude (lowest 39°), output folder (the path elided in the middle, '…/shots/sessions', full path in the tooltip), disk space, and the new 'Computer sleep' row (PROPOSAL 7: closing the laptop's lid sleeps the computer and stops the run). The telescope-lid check, when the plan has dark or bias steps, is now named 'Dark frames'. Each check has a unique id. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "preflight",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-06-plan-preflight.png",
+   "caption": "Preflight popover (A64, fixer re-capture), worst first: Note · Observing site (the replayed mount points elsewhere than the public test site, X3), Note · Calibration ('Missing tonight: step 1 (10 s, gain 80, IR): darks, flats and biases.'), then OK for run, camera (sensor '2 160 × 3 840', grouped), plan ('120 frames', plural), start time, object, mount, filter wheel, focuser, altitude (lowest 39°), output folder (the path elided in the middle, '…/shots/sessions', full path in the tooltip), disk space, and the new 'Computer sleep' row (PROPOSAL 7: closing the laptop's lid sleeps the computer and stops the run). The telescope-lid check, when the plan has dark or bias steps, is now named 'Dark frames'. Each check has a unique id. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "preflight",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-06-plan-preflight.png",
+   "caption": "Preflight popover (A64, fixer re-capture), worst first: Note · Observing site (the replayed mount points elsewhere than the public test site, X3), Note · Calibration ('Missing tonight: step 1 (10 s, gain 80, IR): darks, flats and biases.'), then OK for run, camera (sensor '2 160 × 3 840', grouped), plan ('120 frames', plural), start time, object, mount, filter wheel, focuser, altitude (lowest 39°), output folder (the path elided in the middle, '…/shots/sessions', full path in the tooltip), disk space, and the new 'Computer sleep' row (PROPOSAL 7: closing the laptop's lid sleeps the computer and stops the run). The telescope-lid check, when the plan has dark or bias steps, is now named 'Dark frames'. Each check has a unique id. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "preflight",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-06-plan-preflight.png",
+   "caption": "Preflight popover (A64, fixer re-capture), worst first: Note · Observing site (the replayed mount points elsewhere than the public test site, X3), Note · Calibration ('Missing tonight: step 1 (10 s, gain 80, IR): darks, flats and biases.'), then OK for run, camera (sensor '2 160 × 3 840', grouped), plan ('120 frames', plural), start time, object, mount, filter wheel, focuser, altitude (lowest 39°), output folder (the path elided in the middle, '…/shots/sessions', full path in the tooltip), disk space, and the new 'Computer sleep' row (PROPOSAL 7: closing the laptop's lid sleeps the computer and stops the run). The telescope-lid check, when the plan has dark or bias steps, is now named 'Dark frames'. Each check has a unique id. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "preflight",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-07-plan-running.png",
+   "caption": "A run in progress (fixer re-capture): the run strip (Running · Step 1/2 · 40 × 10.0 s IR · frame n/40 · ETA · ends ≈ … UTC; LAST with the newest sub's file, 'HFD 8.30 px · FWHM 2.12 px · 2 865 stars': two decimals and grouped, as in Observe). The plan is locked with one wording, 'Locked while a run is scheduled or running'; while locked the columns narrow and Duration gives way to the Run column (● n/40, skipped), which is no longer clipped at 1 280 px. The readiness chip says the run's state, 'Running · 2 notes'. The Plan rail entry carries its state dot (active). (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "run",
+    "running",
+    "locked",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-07-plan-running.png",
+   "caption": "A run in progress (fixer re-capture): the run strip (Running · Step 1/2 · 40 × 10.0 s IR · frame n/40 · ETA · ends ≈ … UTC; LAST with the newest sub's file, 'HFD 8.30 px · FWHM 2.12 px · 2 865 stars': two decimals and grouped, as in Observe). The plan is locked with one wording, 'Locked while a run is scheduled or running'; while locked the columns narrow and Duration gives way to the Run column (● n/40, skipped), which is no longer clipped at 1 280 px. The readiness chip says the run's state, 'Running · 2 notes'. The Plan rail entry carries its state dot (active). (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "run",
+    "running",
+    "locked",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-07-plan-running.png",
+   "caption": "A run in progress (fixer re-capture): the run strip (Running · Step 1/2 · 40 × 10.0 s IR · frame n/40 · ETA · ends ≈ … UTC; LAST with the newest sub's file, 'HFD 8.30 px · FWHM 2.12 px · 2 865 stars': two decimals and grouped, as in Observe). The plan is locked with one wording, 'Locked while a run is scheduled or running'; while locked the columns narrow and Duration gives way to the Run column (● n/40, skipped), which is no longer clipped at 1 280 px. The readiness chip says the run's state, 'Running · 2 notes'. The Plan rail entry carries its state dot (active). (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "run",
+    "running",
+    "locked",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-07-plan-running.png",
+   "caption": "A run in progress (fixer re-capture): the run strip (Running · Step 1/2 · 40 × 10.0 s IR · frame n/40 · ETA · ends ≈ … UTC; LAST with the newest sub's file, 'HFD 8.30 px · FWHM 2.12 px · 2 865 stars': two decimals and grouped, as in Observe). The plan is locked with one wording, 'Locked while a run is scheduled or running'; while locked the columns narrow and Duration gives way to the Run column (● n/40, skipped), which is no longer clipped at 1 280 px. The readiness chip says the run's state, 'Running · 2 notes'. The Plan rail entry carries its state dot (active). (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "run",
+    "running",
+    "locked",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-08-observe-run-running.png",
+   "caption": "Observe during the run (fixer re-capture): the Run card counts enabled steps ('step 1 of 1'), writes the exposure as the HUD does ('10.0 s'), labels the liveness 'Last sub started' (measured from DATE-OBS), and sets word values ('off', 'nothing') in the UI font, muted. At 1 280 px the status bar keeps the Log button and the star count: with a run chip the frame's file name folds into the Frame tooltip and the frame number reads '#n'. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "run-card",
+    "running",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-08-observe-run-running.png",
+   "caption": "Observe during the run (fixer re-capture): the Run card counts enabled steps ('step 1 of 1'), writes the exposure as the HUD does ('10.0 s'), labels the liveness 'Last sub started' (measured from DATE-OBS), and sets word values ('off', 'nothing') in the UI font, muted. At 1 280 px the status bar keeps the Log button and the star count: with a run chip the frame's file name folds into the Frame tooltip and the frame number reads '#n'. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "run-card",
+    "running",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-08-observe-run-running.png",
+   "caption": "Observe during the run (fixer re-capture): the Run card counts enabled steps ('step 1 of 1'), writes the exposure as the HUD does ('10.0 s'), labels the liveness 'Last sub started' (measured from DATE-OBS), and sets word values ('off', 'nothing') in the UI font, muted. At 1 280 px the status bar keeps the Log button and the star count: with a run chip the frame's file name folds into the Frame tooltip and the frame number reads '#n'. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "run-card",
+    "running",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-08-observe-run-running.png",
+   "caption": "Observe during the run (fixer re-capture): the Run card counts enabled steps ('step 1 of 1'), writes the exposure as the HUD does ('10.0 s'), labels the liveness 'Last sub started' (measured from DATE-OBS), and sets word values ('off', 'nothing') in the UI font, muted. At 1 280 px the status bar keeps the Log button and the star count: with a run chip the frame's file name folds into the Frame tooltip and the frame number reads '#n'. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "run-card",
+    "running",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-09-observe-run-paused.png",
+   "caption": "Pause from the Run card (fixer re-capture): while paused the end time moves with the clock ('Ends … UTC, if resumed now · n left') instead of a frozen countdown; 'paused: no frame expected' under the last-sub age; Resume and Stop… remain. Status bar 'Paused n/40'. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "run-card",
+    "paused",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-09-observe-run-paused.png",
+   "caption": "Pause from the Run card (fixer re-capture): while paused the end time moves with the clock ('Ends … UTC, if resumed now · n left') instead of a frozen countdown; 'paused: no frame expected' under the last-sub age; Resume and Stop… remain. Status bar 'Paused n/40'. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "run-card",
+    "paused",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-09-observe-run-paused.png",
+   "caption": "Pause from the Run card (fixer re-capture): while paused the end time moves with the clock ('Ends … UTC, if resumed now · n left') instead of a frozen countdown; 'paused: no frame expected' under the last-sub age; Resume and Stop… remain. Status bar 'Paused n/40'. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "run-card",
+    "paused",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-09-observe-run-paused.png",
+   "caption": "Pause from the Run card (fixer re-capture): while paused the end time moves with the clock ('Ends … UTC, if resumed now · n left') instead of a frozen countdown; 'paused: no frame expected' under the last-sub age; Resume and Stop… remain. Status bar 'Paused n/40'. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "run-card",
+    "paused",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-10-observe-run-ended.png",
+   "caption": "After Stop… (fixer re-capture): the Run card keeps the outcome until dismissed, 'Stopped by the observer after 37 frames', with the session folder, Open Plan and Dismiss. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "run-card",
+    "outcome",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-10-observe-run-ended.png",
+   "caption": "After Stop… (fixer re-capture): the Run card keeps the outcome until dismissed, 'Stopped by the observer after 37 frames', with the session folder, Open Plan and Dismiss. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "run-card",
+    "outcome",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-10-observe-run-ended.png",
+   "caption": "After Stop… (fixer re-capture): the Run card keeps the outcome until dismissed, 'Stopped by the observer after 37 frames', with the session folder, Open Plan and Dismiss. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "run-card",
+    "outcome",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-10-observe-run-ended.png",
+   "caption": "After Stop… (fixer re-capture): the Run card keeps the outcome until dismissed, 'Stopped by the observer after 37 frames', with the session folder, Open Plan and Dismiss. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "run-card",
+    "outcome",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-11-observe-interlock.png",
+   "caption": "The mount-motion interlock (fixer re-capture, design review high finding): GoTo from the Mount card during a run. The dialog says what the command would do ('GoTo would move the field under the run. Pausing lets the 10 s sub in progress finish and be saved; the mount then moves, and the run stays paused until you resume it.'), the safe answer is 'Keep running' (as in the Stop dialog, focused), and the way through is a hold-to-confirm control (BRAND 7: icon and label at 40 px, secondary, no brass fill; 'Hold 0.7 s to pause the run and slew · Enter to confirm'). The client now waits as long as the server may hold the request (sub in progress + 75 s, 400 s in autofocus). (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "interlock",
+    "dialog",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-11-observe-interlock.png",
+   "caption": "The mount-motion interlock (fixer re-capture, design review high finding): GoTo from the Mount card during a run. The dialog says what the command would do ('GoTo would move the field under the run. Pausing lets the 10 s sub in progress finish and be saved; the mount then moves, and the run stays paused until you resume it.'), the safe answer is 'Keep running' (as in the Stop dialog, focused), and the way through is a hold-to-confirm control (BRAND 7: icon and label at 40 px, secondary, no brass fill; 'Hold 0.7 s to pause the run and slew · Enter to confirm'). The client now waits as long as the server may hold the request (sub in progress + 75 s, 400 s in autofocus). (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "interlock",
+    "dialog",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-11-observe-interlock.png",
+   "caption": "The mount-motion interlock (fixer re-capture, design review high finding): GoTo from the Mount card during a run. The dialog says what the command would do ('GoTo would move the field under the run. Pausing lets the 10 s sub in progress finish and be saved; the mount then moves, and the run stays paused until you resume it.'), the safe answer is 'Keep running' (as in the Stop dialog, focused), and the way through is a hold-to-confirm control (BRAND 7: icon and label at 40 px, secondary, no brass fill; 'Hold 0.7 s to pause the run and slew · Enter to confirm'). The client now waits as long as the server may hold the request (sub in progress + 75 s, 400 s in autofocus). (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "interlock",
+    "dialog",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-11-observe-interlock.png",
+   "caption": "The mount-motion interlock (fixer re-capture, design review high finding): GoTo from the Mount card during a run. The dialog says what the command would do ('GoTo would move the field under the run. Pausing lets the 10 s sub in progress finish and be saved; the mount then moves, and the run stays paused until you resume it.'), the safe answer is 'Keep running' (as in the Stop dialog, focused), and the way through is a hold-to-confirm control (BRAND 7: icon and label at 40 px, secondary, no brass fill; 'Hold 0.7 s to pause the run and slew · Enter to confirm'). The client now waits as long as the server may hold the request (sub in progress + 75 s, 400 s in autofocus). (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "interlock",
+    "dialog",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-12-plan-scheduled.png",
+   "caption": "A start scheduled for a time (Q-P2, fixer re-capture): the chip says 'Scheduled' and the strip once 'Starts at … UTC, in 3m 26s · 40 frames planned' (it repeated itself before); 'Locked while a run is scheduled or running'; Cancel start…; the planned run band at the scheduled time; 'Run at …' in the status bar. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "scheduled",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-12-plan-scheduled.png",
+   "caption": "A start scheduled for a time (Q-P2, fixer re-capture): the chip says 'Scheduled' and the strip once 'Starts at … UTC, in 3m 26s · 40 frames planned' (it repeated itself before); 'Locked while a run is scheduled or running'; Cancel start…; the planned run band at the scheduled time; 'Run at …' in the status bar. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "scheduled",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-12-plan-scheduled.png",
+   "caption": "A start scheduled for a time (Q-P2, fixer re-capture): the chip says 'Scheduled' and the strip once 'Starts at … UTC, in 3m 26s · 40 frames planned' (it repeated itself before); 'Locked while a run is scheduled or running'; Cancel start…; the planned run band at the scheduled time; 'Run at …' in the status bar. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "scheduled",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-12-plan-scheduled.png",
+   "caption": "A start scheduled for a time (Q-P2, fixer re-capture): the chip says 'Scheduled' and the strip once 'Starts at … UTC, in 3m 26s · 40 frames planned' (it repeated itself before); 'Locked while a run is scheduled or running'; Cancel start…; the planned run band at the scheduled time; 'Run at …' in the status bar. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "scheduled",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-14-plan-paused.png",
+   "caption": "Plan with the run paused (new state, fixer): the readiness chip 'Paused · 2 notes', the strip 'Paused after frame n', Resume and Stop… in the transport, the per-row progress; at 1 280 px every column fits. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "run",
+    "paused",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-14-plan-paused.png",
+   "caption": "Plan with the run paused (new state, fixer): the readiness chip 'Paused · 2 notes', the strip 'Paused after frame n', Resume and Stop… in the transport, the per-row progress; at 1 280 px every column fits. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "run",
+    "paused",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-14-plan-paused.png",
+   "caption": "Plan with the run paused (new state, fixer): the readiness chip 'Paused · 2 notes', the strip 'Paused after frame n', Resume and Stop… in the transport, the per-row progress; at 1 280 px every column fits. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "run",
+    "paused",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-14-plan-paused.png",
+   "caption": "Plan with the run paused (new state, fixer): the readiness chip 'Paused · 2 notes', the strip 'Paused after frame n', Resume and Stop… in the transport, the per-row progress; at 1 280 px every column fits. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "plan",
+    "run",
+    "paused",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-15-observe-stop-dialog.png",
+   "caption": "The Stop confirmation from the Run card (new state, fixer; spec 2.3.6, Q-P7): 'The current 10.0 s exposure is discarded. n of 40 frames are saved in <run folder>.', [Keep running] [Stop]. With nothing saved yet it says 'No frame is saved yet; the run folder … stays.' (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "run-card",
+    "stop",
+    "dialog",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-15-observe-stop-dialog.png",
+   "caption": "The Stop confirmation from the Run card (new state, fixer; spec 2.3.6, Q-P7): 'The current 10.0 s exposure is discarded. n of 40 frames are saved in <run folder>.', [Keep running] [Stop]. With nothing saved yet it says 'No frame is saved yet; the run folder … stays.' (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "run-card",
+    "stop",
+    "dialog",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-15-observe-stop-dialog.png",
+   "caption": "The Stop confirmation from the Run card (new state, fixer; spec 2.3.6, Q-P7): 'The current 10.0 s exposure is discarded. n of 40 frames are saved in <run folder>.', [Keep running] [Stop]. With nothing saved yet it says 'No frame is saved yet; the run folder … stays.' (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "run-card",
+    "stop",
+    "dialog",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-15-observe-stop-dialog.png",
+   "caption": "The Stop confirmation from the Run card (new state, fixer; spec 2.3.6, Q-P7): 'The current 10.0 s exposure is discarded. n of 40 frames are saved in <run folder>.', [Keep running] [Stop]. With nothing saved yet it says 'No frame is saved yet; the run folder … stays.' (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "run-card",
+    "stop",
+    "dialog",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-16-observe-run-failed.png",
+   "caption": "A failed outcome (new state, fixer): the camera disconnected during a run. The Run card says 'Failed' and the server's sentence ('Stopped: The camera was disconnected. · 2 frames saved'), with the session folder; the Plan rail entry carries the attention mark until the outcome is dismissed (01 2.4.4). (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "run-card",
+    "outcome",
+    "failed",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-16-observe-run-failed.png",
+   "caption": "A failed outcome (new state, fixer): the camera disconnected during a run. The Run card says 'Failed' and the server's sentence ('Stopped: The camera was disconnected. · 2 frames saved'), with the session folder; the Plan rail entry carries the attention mark until the outcome is dismissed (01 2.4.4). (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "run-card",
+    "outcome",
+    "failed",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-16-observe-run-failed.png",
+   "caption": "A failed outcome (new state, fixer): the camera disconnected during a run. The Run card says 'Failed' and the server's sentence ('Stopped: The camera was disconnected. · 2 frames saved'), with the session folder; the Plan rail entry carries the attention mark until the outcome is dismissed (01 2.4.4). (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "run-card",
+    "outcome",
+    "failed",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-16-observe-run-failed.png",
+   "caption": "A failed outcome (new state, fixer): the camera disconnected during a run. The Run card says 'Failed' and the server's sentence ('Stopped: The camera was disconnected. · 2 frames saved'), with the session folder; the Plan rail entry carries the attention mark until the outcome is dismissed (01 2.4.4). (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "observe",
+    "run-card",
+    "outcome",
+    "failed",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-13-palette.png",
+   "caption": "Command palette (Mod+K) with 'sequence': 'Open a sequence preset…' (opens Plan and its Presets popover) and 'Start the sequence', marked CONFIRM (Enter asks first; no single key starts, pauses or stops a run, 06 2.4). While a run is engaged the palette also offers Pause, Resume, Stop (confirmed) and 'Check the run before starting (preflight)'. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave6a",
+    "palette",
+    "plan",
+    "observatory",
+    "1440x900"
+   ]
+  }
+ ]
+}

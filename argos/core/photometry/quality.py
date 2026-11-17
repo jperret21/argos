@@ -98,10 +98,18 @@ def comparison_quality_report(
     }
 
 
-def save_comparison_quality_report(path, report: dict) -> None:
-    """Atomically persist the live assessment beside the observing session."""
+def save_comparison_quality_report(path, report: dict, *, filter_token: str | None = None) -> None:
+    """Atomically persist the live assessment beside the observing session.
+
+    ``filter_token``: the filter whose comparisons the report vets (the S49
+    token, ``ir``, ``lp``, ``clear``), written as an additive ``filter`` key
+    (S57): ``photometry_quality.json`` vets a run's first filter and did not
+    say which. Readers ignore unknown keys.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    if filter_token is not None:
+        report = {**report, "filter": filter_token}
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(report, indent=2), encoding="utf-8")
     os.replace(tmp, path)

@@ -53,6 +53,12 @@ _ASTAP_DATABASES = ("Auto", "D05", "D20", "D50", "D80", "G17", "H17", "H18", "V1
 #: Downsample options (label → ASTAP -z value; 0 = auto).
 _DOWNSAMPLE = (("Auto", 0), ("1×", 1), ("2×", 2), ("3×", 3), ("4×", 4))
 
+#: Why the photon-transfer folder is unavailable during a run (S84).
+CALIBRATION_LOCK_REASON = (
+    "Locked while a sequence runs: the photon-transfer folder gives every frame's e-/ADU, "
+    "hence the SNR the gates read and the formal errors (one curve, one error model)."
+)
+
 
 class ConfigurationPage(QWidget):
     """Settings page. Each field writes straight back into ``Config``."""
@@ -61,6 +67,7 @@ class ConfigurationPage(QWidget):
         super().__init__(parent)
         self._config = config
         self._loading = False  # guards _save_* while populating fields
+        self._sequence_active = False  # the photon-transfer folder is locked meanwhile (S84)
         self._telescope_profile_applier = None
         self._location_worker: LocationResolverWorker | None = None
         self._build_ui()
@@ -179,6 +186,7 @@ class ConfigurationPage(QWidget):
         self._elev_spin.setRange(-500.0, 9000.0)
         self._elev_spin.setDecimals(1)
         self._elev_spin.setSuffix(" m")
+        self._elev_spin.setKeyboardTracking(False)
         self._elev_spin.valueChanged.connect(self._save_site)
         grid.addWidget(design.MutedLabel("Elevation"), 3, 0)
         grid.addWidget(self._elev_spin, 3, 1)
@@ -270,6 +278,7 @@ class ConfigurationPage(QWidget):
         spin.setRange(low, high)
         spin.setDecimals(5)
         spin.setSuffix(" °")
+        spin.setKeyboardTracking(False)  # save the typed value, not each keystroke
         return spin
 
     @staticmethod
@@ -367,21 +376,22 @@ class ConfigurationPage(QWidget):
         )
         self._calibration_dir_edit.editingFinished.connect(self._save_local_data_paths)
         layout.addWidget(design.MutedLabel("Camera photon-transfer calibrations"))
-        layout.addWidget(
-            self._catalogue_path_row(
+        # S84: the folder gives the e-/ADU of every frame; disabled while a sequence runs.
+        self._calibration_row = self._catalogue_path_row(
+            self._calibration_dir_edit,
+            browse=lambda: self._browse_catalogue_directory(
                 self._calibration_dir_edit,
-                browse=lambda: self._browse_catalogue_directory(
-                    self._calibration_dir_edit,
-                    "Choose camera calibration folder",
-                    on_chosen=self._save_local_data_paths,
-                ),
-            )
+                "Choose camera calibration folder",
+                on_chosen=self._save_local_data_paths,
+            ),
         )
+        layout.addWidget(self._calibration_row)
         layout.addWidget(
             design.MutedLabel(
                 "Contains optional camera_calibration.json (IMX585) and "
-                "camera_calibration_imx*.json files. Argos uses them only when a driver does not "
-                "provide electron gain."
+                "camera_calibration_imx*.json files. An entry at a frame's gain comes after "
+                "the electron gain table and before the telescope profile's measured value "
+                "and the driver's."
             )
         )
         layout.addWidget(design.horizontal_divider())
@@ -525,7 +535,7 @@ class ConfigurationPage(QWidget):
         self._scope_combo = QComboBox()
         for key in catalog.keys():
             entry = catalog.PROFILES[key]
-            label = entry.name if entry.validated else f"{entry.name}  (unvalidated)"
+            label = entry.name if entry.validated else f"{entry.name}{catalog.UNVALIDATED_SUFFIX}"
             self._scope_combo.addItem(label, key)
         self._scope_combo.currentIndexChanged.connect(self._save_telescope)
 
@@ -577,7 +587,7 @@ class ConfigurationPage(QWidget):
         else:
             self._scope_warning.setVisible(True)
             self._scope_warning.setText(
-                "Unvalidated profile — never run on this hardware. " + " · ".join(scope.caveats)
+                f"{catalog.UNVALIDATED_WARNING} " + " · ".join(scope.caveats)
             )
 
     def _save_telescope(self) -> None:
@@ -604,6 +614,12 @@ class ConfigurationPage(QWidget):
     def sync_telescope_profile(self) -> None:
         """Reflect the shared active instrument after a Connection/Settings change."""
         self._refresh_telescope_card()
+
+    def set_profile_locked(self, locked: bool) -> None:
+        """Lock the model while equipment is connected, as the Connection page
+        does: a change is refused then, so the picker must not offer it."""
+        self._scope_combo.setEnabled(not locked)
+        self._scope_combo.setToolTip(catalog.PROFILE_LOCKED_HINT if locked else "")
 
     def _build_camera_card(self) -> "design.Card":
         card = design.Card("Camera")
@@ -952,6 +968,8 @@ class ConfigurationPage(QWidget):
         if not name:
             self._site_search_status.setText("Name the site before saving it as a favourite.")
             return
+        for spin in (self._lat_spin, self._lon_spin, self._elev_spin):
+            spin.interpretText()  # a value typed without Enter (focus stays on macOS)
         favorite = {
             "name": name,
             "latitude": float(self._lat_spin.value()),
@@ -1073,15 +1091,34 @@ class ConfigurationPage(QWidget):
 
     def _apply_local_data_paths(self, *, save: bool) -> None:
         """Apply reusable local-file locations without touching their contents."""
+        if self._sequence_active:
+            # S84: the photon-transfer folder gives every frame's e-/ADU (S73), so the
+            # SNR the gates read and the formal errors: one curve, one error model. The
+            # field is disabled; anything that still arrives keeps the folder in use.
+            self._calibration_dir_edit.setText(
+                str(
+                    self._config.get(
+                        "data_paths.camera_calibration_directory", Path.home() / ".argos"
+                    )
+                )
+            )
         presets = Path(self._presets_dir_edit.text().strip()).expanduser()
         calibrations = Path(self._calibration_dir_edit.text().strip()).expanduser()
         if not presets.name or not calibrations.name:
             return
-        sensor_reference.configure_calibration_directory(calibrations)
-        imx585.configure_calibration_directory(calibrations)
+        if not self._sequence_active:
+            sensor_reference.configure_calibration_directory(calibrations)
+            imx585.configure_calibration_directory(calibrations)
         if save:
             self._config.set("data_paths.sequence_presets_directory", str(presets))
-            self._config.set("data_paths.camera_calibration_directory", str(calibrations))
+            if not self._sequence_active:
+                self._config.set("data_paths.camera_calibration_directory", str(calibrations))
+
+    def set_sequence_running(self, running: bool) -> None:
+        """S84: the photon-transfer folder is unavailable while a sequence runs."""
+        self._sequence_active = bool(running)
+        self._calibration_row.setEnabled(not running)
+        self._calibration_row.setToolTip(CALIBRATION_LOCK_REASON if running else "")
 
     def _save_local_data_paths(self) -> None:
         if self._loading:

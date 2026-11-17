@@ -7,6 +7,7 @@ engine wiring; frames, the log and live light curve stay on Capture.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 
 from PyQt6.QtCore import pyqtSignal, pyqtSlot
@@ -15,10 +16,14 @@ from PyQt6.QtWidgets import QVBoxLayout, QWidget
 from argos.ui import design
 from argos.ui.widgets.sequence_panel import SequencePanel
 from argos.core.catalog.object_resolver import ResolvedObject
+from argos.core.config import observing_site
 from argos.core.exoplanet.transit import make_transit_sequence, predict_next_transit
 from argos.core.photometry.airmass import bjd_tdb, julian_date, utc_from_bjd_tdb
 from argos.workers.exoplanet_worker import ExoplanetLookupWorker
 from argos.workers.object_resolver_worker import ObjectResolverWorker
+
+#: The most frames one step holds (the editor's Count range).
+MAX_STEP_COUNT = 9999
 
 
 class SequencerPage(QWidget):
@@ -78,13 +83,16 @@ class SequencerPage(QWidget):
 
     def set_target_coordinates(self, name: str, ra_hours: float, dec_degrees: float) -> None:
         """Receive the shared Telescope target for the Plan visibility preview."""
-        self.panel.set_target_coordinates(
-            name,
-            ra_hours,
-            dec_degrees,
-            float(self._config.get("site.latitude", 0.0) or 0.0),
-            float(self._config.get("site.longitude", 0.0) or 0.0),
-        )
+        site = self._site_coordinates()
+        if site is None:
+            # Never plot altitudes for latitude/longitude 0/0: a target that
+            # never rises at the observer's site would look observable.
+            self.panel.set_object_name(name)
+            self.panel.show_visibility_message(
+                "Set and save the observing site in Settings to compute altitudes."
+            )
+            return
+        self.panel.set_target_coordinates(name, ra_hours, dec_degrees, site[0], site[1])
 
     def _lookup_object(self, query: str) -> None:
         if self._object_resolver_worker is not None:
@@ -145,17 +153,9 @@ class SequencerPage(QWidget):
         )
 
     def _site_coordinates(self) -> tuple[float, float, float] | None:
-        """Return the explicitly saved observing site, never the 0/0 default."""
-        if not str(self._config.get("site.name", "") or "").strip():
-            return None
-        try:
-            return (
-                float(self._config.get("site.latitude")),
-                float(self._config.get("site.longitude")),
-                float(self._config.get("site.elevation", 0.0) or 0.0),
-            )
-        except (TypeError, ValueError):
-            return None
+        """Return the observing site the observer set, never the 0/0 default
+        (the rule photometry and FITS use too: :func:`observing_site`)."""
+        return observing_site(self._config)
 
     def _local_transit_window(self, target, window):
         """Return topocentric local coverage instants, or ``None`` if unavailable."""
@@ -208,15 +208,26 @@ class SequencerPage(QWidget):
     def _on_exoplanet_resolved(self, target) -> None:
         self._exoplanet_target = target
         now_bjd = self._current_bjd_tdb(target)
+        reason = None
         try:
             self._transit_window = (
-                predict_next_transit(target, now_bjd) if now_bjd is not None else None
+                predict_next_transit(
+                    target,
+                    now_bjd,
+                    baseline_minutes=float(self.panel.transit_settings()["baseline_minutes"]),
+                )
+                if now_bjd is not None
+                else None
             )
-        except ValueError:
+        except ValueError as exc:
             self._transit_window = None
+            reason = f"Coverage unavailable: {exc}"
         local_window = self._local_transit_window(target, self._transit_window)
         self.panel.set_exoplanet_result(
-            target, self._transit_window, local_mid=local_window[1] if local_window else None
+            target,
+            self._transit_window,
+            local_mid=local_window[1] if local_window else None,
+            reason=reason,
         )
 
         # The telescope slews to the star, never the planet.  This retains the
@@ -273,16 +284,29 @@ class SequencerPage(QWidget):
         except ValueError as exc:
             self.panel.set_exoplanet_error(str(exc))
             return
+        frames = plan.steps[0].count
+        if frames > MAX_STEP_COUNT:
+            # S47: the editor holds at most 9999 frames per step; cutting the series
+            # there silently dropped the end of the coverage observation.json declared.
+            coverage_s = (window.coverage_end_bjd_tdb - window.coverage_start_bjd_tdb) * 86400.0
+            self.panel.set_status(  # the table is left as it was; Prepare stays available
+                f"Transit sequence not prepared: this coverage needs {frames} frames, more "
+                f"than the {MAX_STEP_COUNT} a step holds. Use a cadence of at least "
+                f"{math.ceil(coverage_s / MAX_STEP_COUNT)} s or a shorter baseline."
+            )
+            return
         self._transit_window = window
         local_window = self._local_transit_window(target, window)
         self.panel.set_exoplanet_result(
             target, window, local_mid=local_window[1] if local_window else None
         )
         self._show_transit_visibility(target, window, local_window)
-        self.panel.load_plan(plan)
+        notes = self.panel.load_plan(plan)
+        adjusted = f" Adjusted: {'; '.join(notes)}." if notes else ""
         self.panel.set_status(
-            f"Transit sequence prepared: {plan.steps[0].count} light frames at "
-            f"{settings['cadence_s']:.1f}s cadence. Review the start time before running."
+            f"Transit sequence prepared: {self.panel.to_plan().steps[0].count} light frames "
+            f"at {settings['cadence_s']:.1f}s cadence. Review the start time before running."
+            + adjusted
         )
 
     def save_layout(self) -> None:
@@ -318,6 +342,7 @@ class SequencerPage(QWidget):
 
     @pyqtSlot(str, str, str)
     def _on_device_state(self, device: str, state: str, _info: str) -> None:
+        # The spin-box ranges are not reset on a camera disconnect: resetting
+        # to the defaults clamped the plan (900 s became 600 s). The next
+        # camera's capabilities_ready retargets them.
         self.panel.set_device_state(device, state)
-        if device == "camera" and state == "disconnected":
-            self.panel.set_camera_limits()  # back to defaults

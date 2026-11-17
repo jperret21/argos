@@ -5,11 +5,11 @@ Runs in a QThread. Loop:
   2. Start exposure
   3. Poll imageready every 100 ms
   4. Download imagearray
-  5. Emit frame_ready(arr, start_dt, end_dt)
+  5. Emit frame_ready(preview, full, start_dt, end_dt, FrameSettings)
   6. Repeat until stopped
 
 Signals:
-  frame_ready(np.ndarray, datetime, datetime)  — (array, exposure_start_utc, exposure_end_utc)
+  frame_ready(preview, full, start, end, FrameSettings)  — arrays, UTC times, settings used
   status_updated(str)      — human-readable state string
   error_occurred(str)      — fatal error, worker stops
   finished()               — loop ended cleanly
@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -30,6 +31,25 @@ from argos.core.alpaca.client import AlpacaError
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class FrameSettings:
+    """The settings one frame was actually exposed with, emitted with it.
+
+    ``update_settings`` arrives from the UI thread at any time, so whoever
+    saves the frame must not re-read the form: the form may already hold the
+    next frame's values (wrong EXPTIME/GAIN/IMAGETYP in the header).
+    """
+
+    #: Exposure (s) passed to ``start_exposure``.
+    exposure_s: float
+    #: Gain passed to ``set_gain``.
+    gain: int
+    #: Shutter semantics passed to ``start_exposure``.
+    light: bool
+    #: Opaque caller data applied with these settings (the engine's form snapshot).
+    tag: object = None
+
+
 class LivePreviewWorker(QThread):
     """Continuous live-preview acquisition loop.
 
@@ -39,11 +59,13 @@ class LivePreviewWorker(QThread):
         gain: Camera gain value.
         light: True exposes light frames (shutter open); False exposes
             dark/bias frames — so single-shot darks are honest.
+        tag: Opaque caller data emitted back with every frame exposed with
+            these settings (see :class:`FrameSettings`).
     """
 
     frame_ready = pyqtSignal(
-        object, object, object, object
-    )  # (preview_arr, full_arr, start_dt, end_dt)
+        object, object, object, object, object
+    )  # (preview_arr, full_arr, start_dt, end_dt, FrameSettings)
     status_updated = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
     finished = pyqtSignal()
@@ -55,17 +77,24 @@ class LivePreviewWorker(QThread):
         gain: int = 80,
         preview_scale: int = 4,
         light: bool = True,
+        tag: object = None,
     ) -> None:
         super().__init__()
         self._camera = camera
-        self._exposure = exposure
-        self._gain = gain
+        # (exposure, gain, light, tag) for the next frame. Replaced as one
+        # tuple so the loop never mixes the old and the new settings, and
+        # taken once per frame so the emitted FrameSettings are the ones used.
+        self._settings: tuple[float, int, bool, object] = (exposure, gain, bool(light), tag)
         self._preview_scale = max(1, preview_scale)
-        self._light = light
         self._running = False
 
     def update_settings(
-        self, exposure: float, gain: int, scale: int = 0, light: bool | None = None
+        self,
+        exposure: float,
+        gain: int,
+        scale: int = 0,
+        light: bool | None = None,
+        tag: object = None,
     ) -> None:
         """Update exposure/gain/preview-scale for the next frame (thread-safe).
 
@@ -75,20 +104,24 @@ class LivePreviewWorker(QThread):
             scale:    Preview decimation factor (1, 2, 4, 8). 0 = keep current.
             light:    Shutter semantics for the next frame (True = light,
                       False = dark/bias). None = keep current.
+            tag:      Caller data emitted with the next frames. None = keep.
         """
+        cur_exposure, _gain, cur_light, cur_tag = self._settings
         if exposure < 0.001:
             logger.warning(
                 "Ignoring suspiciously low exposure value: %.4f s — keeping %.4f s",
                 exposure,
-                self._exposure,
+                cur_exposure,
             )
-        else:
-            self._exposure = exposure
-        self._gain = gain
+            exposure = cur_exposure
         if scale > 0:
             self._preview_scale = max(1, scale)
-        if light is not None:
-            self._light = bool(light)
+        self._settings = (
+            exposure,
+            gain,
+            cur_light if light is None else bool(light),
+            cur_tag if tag is None else tag,
+        )
 
     def stop(self) -> None:
         """Request the loop to stop after the current frame."""
@@ -100,23 +133,28 @@ class LivePreviewWorker(QThread):
 
     def run(self) -> None:
         self._running = True
-        logger.info("LivePreviewWorker started (%.2fs, gain=%d)", self._exposure, self._gain)
+        exposure, gain, light, tag = self._settings
+        logger.info("LivePreviewWorker started (%.2fs, gain=%d)", exposure, gain)
 
         while self._running:
             try:
+                # One snapshot per frame: these exact values are applied to
+                # the camera and emitted with the frame.
+                exposure, gain, light, tag = self._settings
+
                 # --- Set gain ------------------------------------------------
                 try:
-                    self._camera.set_gain(self._gain)
+                    self._camera.set_gain(gain)
                 except AlpacaError as exc:
                     logger.warning("Could not set gain: %s", exc)
 
                 # --- Start exposure ------------------------------------------
-                self.status_updated.emit(f"Exposing  {self._exposure:.1f}s…")
+                self.status_updated.emit(f"Exposing  {exposure:.1f}s…")
                 exposure_start = datetime.now(timezone.utc)
-                self._camera.start_exposure(self._exposure, light=self._light)
+                self._camera.start_exposure(exposure, light=light)
 
                 # --- Wait for image ready ------------------------------------
-                deadline = time.time() + self._exposure + 20.0
+                deadline = time.time() + exposure + 20.0
                 while not self._camera.is_image_ready():
                     if not self._running:
                         return
@@ -145,9 +183,15 @@ class LivePreviewWorker(QThread):
                     preview_arr.shape,
                 )
 
-                self.frame_ready.emit(preview_arr, full_arr, exposure_start, exposure_end)
+                self.frame_ready.emit(
+                    preview_arr,
+                    full_arr,
+                    exposure_start,
+                    exposure_end,
+                    FrameSettings(exposure, gain, light, tag),
+                )
                 self.status_updated.emit(
-                    f"Live  {self._exposure:.1f}s  gain {self._gain}  "
+                    f"Live  {exposure:.1f}s  gain {gain}  "
                     f"preview {preview_arr.shape[1]}×{preview_arr.shape[0]}"
                     + (f"  (1/{s}²)" if s > 1 else "")
                 )

@@ -12,7 +12,11 @@ into a bundle people download over a field hotspot.
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules, get_module_file_attribute
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_submodules,
+    get_module_file_attribute,
+)
 
 #: astropy reads its own configuration and data tables at runtime.
 datas = collect_data_files("astropy")

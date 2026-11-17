@@ -1,0 +1,68 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ARGOS",
+  "identifier": "org.argos.argos",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [],
+    "withGlobalTauri": false,
+    "security": {
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' data: blob: http://127.0.0.1:*",
+        "media-src": "'self' data: blob:",
+        "font-src": "'self' data:",
+        "connect-src": "'self' ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:*",
+        "worker-src": "'self' blob:",
+        "object-src": "'none'",
+        "base-uri": "'none'",
+        "form-action": "'none'",
+        "frame-ancestors": "'none'"
+      },
+      "devCsp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "deb"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.icns"
+    ],
+    "copyright": "Copyright © 2026 ARGOS contributors · GNU GPL v3 or later",
+    "license": "GPL-3.0-or-later",
+    "shortDescription": "Scientific acquisition and differential photometry for ZWO Seestar telescopes",
+    "longDescription": "ARGOS controls ZWO Seestar telescopes over ASCOM Alpaca and measures variable stars by differential photometry. The web interface runs in this window; the ARGOS server runs alongside it on this computer only.",
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "-",
+      "hardenedRuntime": false,
+      "files": {
+        "Resources/argos-server": "binaries/argos-server"
+      }
+    },
+    "linux": {
+      "deb": {
+        "section": "science",
+        "desktopTemplate": "../../packaging/argos.desktop.hbs",
+        "files": {
+          "/usr/lib/argos/argos-server": "binaries/argos-server",
+          "/usr/share/doc/argos/copyright": "../../LICENSE"
+        }
+      }
+    }
+  }
+}

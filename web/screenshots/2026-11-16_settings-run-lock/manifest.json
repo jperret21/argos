@@ -1,0 +1,152 @@
+{
+  "title": "Settings during a run: the noise model and the camera's e-/ADU locked (S84)",
+  "date": "2026-11-16",
+  "summary": "The web Settings pages while a sequence runs on the simulator, then after the stop, from the release core overlay (the fixer pass of S76, S73's order and S84). S15's aperture geometry and S84's noise model, read noise, electron gain table and photon-transfer folder are shown unavailable with the server's own sentence (settings/runlock.ts), the same words PATCH /api/config answers 409 run_active with. Headless Chrome (puppeteer-core, system Chrome) at 1440x1000, device scale 1, on a scratch vite preview build; temporary HOME, TMPDIR, configuration, log and sessions folders, a temporary photon-transfer file. Night Red: 3 of 3 pass (rule A 0 px, rule B 0 px).",
+  "scale": 1,
+  "shots": [
+    {
+      "file": "settings-photometry-running-charcoal.png",
+      "caption": "Settings › Photometry while a sequence runs (simulator): the aperture geometry (S15) and, under Advanced, the noise model and the read noise (S84) are unavailable, each with the server's own sentence; the comparison selection stays editable.",
+      "tags": [
+        "settings",
+        "photometry",
+        "run-lock",
+        "S84",
+        "charcoal",
+        "running"
+      ]
+    },
+    {
+      "file": "settings-photometry-running-night-red.png",
+      "caption": "Settings › Photometry while a sequence runs (simulator): the aperture geometry (S15) and, under Advanced, the noise model and the read noise (S84) are unavailable, each with the server's own sentence; the comparison selection stays editable.",
+      "tags": [
+        "settings",
+        "photometry",
+        "run-lock",
+        "S84",
+        "night-red",
+        "running"
+      ]
+    },
+    {
+      "file": "settings-photometry-running-observatory.png",
+      "caption": "Settings › Photometry while a sequence runs (simulator): the aperture geometry (S15) and, under Advanced, the noise model and the read noise (S84) are unavailable, each with the server's own sentence; the comparison selection stays editable.",
+      "tags": [
+        "settings",
+        "photometry",
+        "run-lock",
+        "S84",
+        "observatory",
+        "running"
+      ]
+    },
+    {
+      "file": "settings-instrument-running-charcoal.png",
+      "caption": "Settings › Instrument while a sequence runs: the photon-transfer folder and, under Advanced, the electron gain table (the camera's e-/ADU, S73's chain) are unavailable with \"The noise model and the camera's e-/ADU are locked while a sequence runs (one curve, one error model).\" (S84 extended, validation F1). The sensor limits stay editable.",
+      "tags": [
+        "settings",
+        "instrument",
+        "run-lock",
+        "S84",
+        "charcoal",
+        "running"
+      ]
+    },
+    {
+      "file": "settings-instrument-running-night-red.png",
+      "caption": "Settings › Instrument while a sequence runs: the photon-transfer folder and, under Advanced, the electron gain table (the camera's e-/ADU, S73's chain) are unavailable with \"The noise model and the camera's e-/ADU are locked while a sequence runs (one curve, one error model).\" (S84 extended, validation F1). The sensor limits stay editable.",
+      "tags": [
+        "settings",
+        "instrument",
+        "run-lock",
+        "S84",
+        "night-red",
+        "running"
+      ]
+    },
+    {
+      "file": "settings-instrument-running-observatory.png",
+      "caption": "Settings › Instrument while a sequence runs: the photon-transfer folder and, under Advanced, the electron gain table (the camera's e-/ADU, S73's chain) are unavailable with \"The noise model and the camera's e-/ADU are locked while a sequence runs (one curve, one error model).\" (S84 extended, validation F1). The sensor limits stay editable.",
+      "tags": [
+        "settings",
+        "instrument",
+        "run-lock",
+        "S84",
+        "observatory",
+        "running"
+      ]
+    },
+    {
+      "file": "settings-egain-rows-running-charcoal.png",
+      "caption": "The two e-/ADU rows during the run, close up: the folder field and its browse button muted, the gain table's row kept as a fact with its remove, Gain, e-/ADU and Add controls unavailable (aria-disabled, still focusable), the reason under it.",
+      "tags": [
+        "settings",
+        "instrument",
+        "run-lock",
+        "S84",
+        "charcoal",
+        "running"
+      ]
+    },
+    {
+      "file": "settings-egain-rows-running-night-red.png",
+      "caption": "The two e-/ADU rows during the run, close up: the folder field and its browse button muted, the gain table's row kept as a fact with its remove, Gain, e-/ADU and Add controls unavailable (aria-disabled, still focusable), the reason under it.",
+      "tags": [
+        "settings",
+        "instrument",
+        "run-lock",
+        "S84",
+        "night-red",
+        "running"
+      ]
+    },
+    {
+      "file": "settings-egain-rows-running-observatory.png",
+      "caption": "The two e-/ADU rows during the run, close up: the folder field and its browse button muted, the gain table's row kept as a fact with its remove, Gain, e-/ADU and Add controls unavailable (aria-disabled, still focusable), the reason under it.",
+      "tags": [
+        "settings",
+        "instrument",
+        "run-lock",
+        "S84",
+        "observatory",
+        "running"
+      ]
+    },
+    {
+      "file": "settings-photometry-idle-observatory.png",
+      "caption": "The same page after the stop: every key editable again.",
+      "tags": [
+        "settings",
+        "photometry",
+        "run-lock",
+        "S84",
+        "observatory",
+        "idle"
+      ]
+    },
+    {
+      "file": "settings-instrument-idle-observatory.png",
+      "caption": "The Instrument page after the stop: the folder and the gain table editable again.",
+      "tags": [
+        "settings",
+        "instrument",
+        "run-lock",
+        "S84",
+        "observatory",
+        "idle"
+      ]
+    },
+    {
+      "file": "settings-egain-rows-idle-observatory.png",
+      "caption": "The two e-/ADU rows after the stop.",
+      "tags": [
+        "settings",
+        "instrument",
+        "run-lock",
+        "S84",
+        "observatory",
+        "idle"
+      ]
+    }
+  ]
+}

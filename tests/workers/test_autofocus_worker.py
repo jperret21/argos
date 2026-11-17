@@ -106,3 +106,115 @@ def test_clean_v_curve_moves_to_the_vertex() -> None:
     assert hfd is not None
     assert abs(pos - 25_000) < 300  # vertex near the true best
     assert foc.get_position() == pos
+
+
+class _GainCamera(_FakeCamera):
+    """Records the order of gain and exposure commands."""
+
+    def __init__(self, focuser, **kwargs):
+        super().__init__(focuser, **kwargs)
+        self.calls: list[tuple] = []
+
+    def set_gain(self, gain):
+        self.calls.append(("gain", gain))
+
+    def start_exposure(self, exposure, light=True):
+        self.calls.append(("expose", exposure))
+
+
+def test_sweep_frames_use_the_requested_gain() -> None:
+    """S22: the gain was stored and never applied — AF frames used whatever
+    gain the camera last had (a preview, a sequence step)."""
+    foc = _FakeFocuser(pos=24_500)
+    cam = _GainCamera(foc, best=25_000, coupled=True)
+    worker = AutofocusWorker(foc, cam, exposure_s=0.0, gain=200, half_range=2000, num_steps=7)
+    _run(worker)
+
+    assert cam.calls[0] == ("gain", 200)  # before the first sample
+    assert ("expose", 0.0) in cam.calls
+
+
+class _MotorFocuser(_FakeFocuser):
+    """Moves ``speed`` steps per is_moving() poll, like a real motor."""
+
+    def __init__(self, pos=25_000, speed=200):
+        super().__init__(pos)
+        self.target = pos
+        self.speed = speed
+
+    def move_to(self, pos):
+        self.target = int(pos)
+        self.moves.append(int(pos))
+
+    def is_moving(self):
+        if self._pos != self.target:
+            self._pos += max(-self.speed, min(self.speed, self.target - self._pos))
+        return self._pos != self.target
+
+    def halt(self):
+        self.target = self._pos
+
+
+def test_stop_returns_the_focuser_to_its_start_before_the_worker_ends() -> None:
+    """S23: on Stop AF the worker commanded the return to the start and ended
+    at once; the page's trailing Halt then froze the focuser mid-sweep."""
+    foc = _MotorFocuser(pos=25_000, speed=200)
+    worker = None
+
+    class _StopOnThirdFrame(_FakeCamera):
+        frames = 0
+
+        def get_image_array(self):
+            self.frames += 1
+            if self.frames == 3:  # the observer presses Stop AF
+                worker.stop()
+            return super().get_image_array()
+
+    worker = AutofocusWorker(foc, _StopOnThirdFrame(foc), exposure_s=0.0, num_steps=9)
+    _errors, best = _run(worker)
+
+    assert foc.is_moving() is False  # the return move is over when run() ends
+    assert foc.get_position() == 25_000
+    assert best == [(25_000, None)]
+    foc.halt()  # a Halt after the worker ended can no longer strand it
+    assert foc.get_position() == 25_000
+
+
+def test_stop_halts_the_sweep_before_the_worker_can_start_the_return() -> None:
+    """S23 follow-up: stop() runs on the UI thread. It raised the stop flag
+    and only then halted the focuser, so a worker that woke in between could
+    command the return to the start, and that halt then froze it midway."""
+    foc = _MotorFocuser(pos=25_000)
+    worker = AutofocusWorker(foc, _FakeCamera(foc), exposure_s=0.0)
+    flag_at_halt: list[bool] = []
+    foc.halt = lambda: flag_at_halt.append(worker._stop_flag)
+
+    worker.stop()
+
+    assert flag_at_halt == [False]  # [True] before: the worker could already see the stop
+    assert worker._stop_flag is True
+
+
+def test_stop_during_the_move_to_best_focus_returns_to_the_start() -> None:
+    """S23 follow-up: a Stop during the final move to the fitted best focus
+    halted that move, and the worker still reported the fitted position and
+    HFD, so the page logged "Autofocus complete" at a position never reached."""
+    foc = _MotorFocuser(pos=24_500, speed=200)
+    worker = AutofocusWorker(foc, _FakeCamera(foc, best=25_000), exposure_s=0.0, num_steps=9)
+    armed = {"verify_move": False}
+    worker.step_done.connect(
+        lambda step, total, _pos, _hfd: armed.update(verify_move=step == total - 1)
+    )
+    move_to = foc.move_to
+
+    def move_then_stop(pos):
+        move_to(pos)
+        if armed["verify_move"]:  # the observer presses Stop AF on the way
+            armed["verify_move"] = False
+            worker.stop()
+
+    foc.move_to = move_then_stop
+    _errors, best = _run(worker)
+
+    assert best == [(24_500, None)]  # (fitted best, fitted HFD) before
+    assert foc.get_position() == 24_500 and foc.is_moving() is False

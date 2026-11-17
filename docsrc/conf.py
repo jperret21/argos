@@ -1,30 +1,36 @@
 """Sphinx configuration for Argos documentation.
 
-The Sphinx sources live in ``docsrc/``; ``docs/`` is the published website
-(GitHub Pages serves it from the ``main`` branch) and is not part of this build.
+The Sphinx sources live in ``docsrc/``; ``docs/`` is the hand-written showcase
+and is not part of this build. ``.github/workflows/pages.yml`` builds this tree
+with ``-W`` and publishes both halves together on a push to ``main``: the
+showcase at ``/argos/``, this documentation at ``/argos/docs/``.
 
-Build with::
+Build it from the project root as the Pages job does (warnings are errors)::
 
-    cd docsrc
-    sphinx-build -M html . _build
-
-Or from the project root::
-
-    uv run sphinx-build -b html docsrc docsrc/_build
+    uv run --extra docs sphinx-build -W -b html docsrc /tmp/argos-docs
 """
 
 from __future__ import annotations
 
 import os
+import re
 import sys
 from datetime import datetime
+from pathlib import Path
 
 # -- Project info -----------------------------------------------------------
 
 project = "ARGOS"
 author = "J. Perret"
 copyright = f"{datetime.now().year}, {author}"
-release = "0.4.2"
+# The one version: argos/__init__.py's __version__, read as text (importing
+# argos here would run the package before autodoc's mocks are in place).
+release = re.search(
+    r'^__version__ = "([^"]+)"',
+    (Path(__file__).resolve().parent.parent / "argos" / "__init__.py").read_text("utf-8"),
+    re.M,
+).group(1)
+version = release
 
 # -- General configuration -------------------------------------------------
 
@@ -66,9 +72,20 @@ class _PyqtSignal:
     def __new__(cls, *types, **kwargs):
         return _PyqtSignalInstance()
 
-_PYQT = _mock.MagicMock()
+class _NamedMock(_mock.MagicMock):
+    """A MagicMock shown by its dotted name (``PyQt6.QtWidgets.QPushButton``).
+
+    autodoc renders a mocked annotation with repr(); MagicMock's own repr carries
+    the object's memory address, which changes on every build.
+    """
+
+    def __repr__(self) -> str:
+        return self._extract_mock_name()
+
+
+_PYQT = _NamedMock(name="PyQt6")
 for _sub in ("QtCore", "QtWidgets", "QtGui", "QtSvg", "QtNetwork"):
-    setattr(_PYQT, _sub, _mock.MagicMock())
+    setattr(_PYQT, _sub, _NamedMock())
     sys.modules[f"PyQt6.{_sub}"] = getattr(_PYQT, _sub)
 _PYQT.QtCore.pyqtSignal = _PyqtSignal
 sys.modules["PyQt6"] = _PYQT
@@ -85,6 +102,14 @@ autodoc_mock_imports = [
     "astropy.coordinates",
     "astropy.time",
     "alpyca",
+    # argos.server (the 0.5.0 runtime): the `server` extra. The Pages job installs
+    # only the docs extra (.github/workflows/pages.yml), so without these mocks an
+    # argos.server page builds on a developer's machine and fails the deploy.
+    "fastapi",
+    "starlette",
+    "pydantic",
+    "uvicorn",
+    "anyio",
 ]
 
 # intersphinx — cross-ref to Python stdlib docs
@@ -104,17 +129,113 @@ nitpicky = False
 
 html_theme = "furo"
 html_title = f"ARGOS {release}"
-html_static_path = ["_static"]
+# The mark from tools/logo-generator.html (docs/favicon.svg has its geometry;
+# never redrawn), as the sidebar logo and the favicon.
+html_logo = "../docs/favicon.svg"
+html_favicon = "../docs/favicon.svg"
+# One canonical URL per page (<link rel="canonical">), as the showcase has.
+html_baseurl = "https://perretjules.com/argos/docs/"
+# ../docs/fonts: the showcase's IBM Plex files, copied into _static for the
+# text (_static/custom.css) and the diagrams (_static/diagrams.css); one copy of
+# the fonts in the repository.
+html_static_path = ["_static", "../docs/fonts"]
 html_css_files = ["custom.css"]
+# The diagrams follow the page's theme, Furo's toggle included (_static/diagrams.css).
+html_js_files = ["diagrams.js"]
+
+# MathJax from _static, never from a CDN: the site loads nothing remote. 3.2.2's
+# tex-svg-full.js holds every TeX extension and the SVG glyphs, so it fetches no
+# font or component at run time (_static/mathjax/LICENSE.txt, Apache 2.0). Its
+# menu is off: the accessibility explorer it offers would load the speech-rule
+# engine from a CDN.
+mathjax_path = "mathjax/tex-svg-full.js"
+mathjax3_config = {"options": {"enableMenu": False}}
+
+_PLEX_SANS = '"IBM Plex Sans", "IBM Plex Mono", Arial, sans-serif'
+_PLEX_MONO = '"IBM Plex Mono", "IBM Plex Sans", ui-monospace, Menlo, monospace'
 html_theme_options = {
+    # ARGOS's palette instead of Furo's (web/src/design/BRAND.md §3-§5, tokens.css):
+    # IBM Plex for text and code; brass only for the current page in the sidebar,
+    # focus and the links' underline, never as text (brass is 2.61:1 on white):
+    # links are the body text's colour with a brass underline, as on the showcase.
+    # Light pages use --accent-deep #8d6b2b (4.92:1 on white), dark pages --accent
+    # #c49a3c (7.05:1 on Furo's #131416). Admonitions use ARGOS's status roles:
+    # brass for warnings, a neutral grey (light) or --cyan (dark, "secondary
+    # information") for notes, --danger for errors; their icons are in custom.css.
     "light_css_variables": {
-        "color-brand-primary": "#1b4f9c",
-        "color-brand-content": "#1b4f9c",
-        "font-stack": "-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif",
+        "color-brand-primary": "#8d6b2b",
+        "color-brand-content": "#8d6b2b",
+        "color-link": "var(--color-foreground-primary)",
+        "color-link--hover": "var(--color-foreground-primary)",
+        "color-link--visited": "var(--color-foreground-primary)",
+        "color-link--visited--hover": "var(--color-foreground-primary)",
+        "color-link-underline": "#8d6b2b",
+        "color-link-underline--hover": "#8d6b2b",
+        "color-link-underline--visited": "#8d6b2b",
+        "color-link-underline--visited--hover": "#8d6b2b",
+        "color-sidebar-link-text": "var(--color-foreground-primary)",
+        "color-sidebar-link-text--top-level": "var(--color-foreground-primary)",
+        "color-api-name": "var(--color-foreground-primary)",
+        "color-api-pre-name": "var(--color-foreground-secondary)",
+        "color-admonition-title--warning": "#8d6b2b",
+        "color-admonition-title-background--warning": "rgba(141, 107, 43, 0.1)",
+        "color-admonition-title--caution": "#8d6b2b",
+        "color-admonition-title-background--caution": "rgba(141, 107, 43, 0.1)",
+        "color-admonition-title--attention": "#8d6b2b",
+        "color-admonition-title-background--attention": "rgba(141, 107, 43, 0.1)",
+        "color-admonition-title--note": "#5b6562",
+        "color-admonition-title-background--note": "rgba(91, 101, 98, 0.1)",
+        "color-admonition-title--tip": "#5b6562",
+        "color-admonition-title-background--tip": "rgba(91, 101, 98, 0.1)",
+        "color-admonition-title--hint": "#5b6562",
+        "color-admonition-title-background--hint": "rgba(91, 101, 98, 0.1)",
+        "color-admonition-title--important": "#5b6562",
+        "color-admonition-title-background--important": "rgba(91, 101, 98, 0.1)",
+        "color-admonition-title--seealso": "#5b6562",
+        "color-admonition-title-background--seealso": "rgba(91, 101, 98, 0.1)",
+        "color-admonition-title--danger": "#bf7772",
+        "color-admonition-title-background--danger": "rgba(191, 119, 114, 0.12)",
+        "color-admonition-title--error": "#bf7772",
+        "color-admonition-title-background--error": "rgba(191, 119, 114, 0.12)",
+        "font-stack": _PLEX_SANS,
+        "font-stack--headings": _PLEX_SANS,
+        "font-stack--monospace": _PLEX_MONO,
     },
     "dark_css_variables": {
-        "color-brand-primary": "#6ab0f5",
-        "color-brand-content": "#6ab0f5",
+        "color-brand-primary": "#c49a3c",
+        "color-brand-content": "#c49a3c",
+        "color-link": "var(--color-foreground-primary)",
+        "color-link--hover": "var(--color-foreground-primary)",
+        "color-link--visited": "var(--color-foreground-primary)",
+        "color-link--visited--hover": "var(--color-foreground-primary)",
+        "color-link-underline": "#c49a3c",
+        "color-link-underline--hover": "#c49a3c",
+        "color-link-underline--visited": "#c49a3c",
+        "color-link-underline--visited--hover": "#c49a3c",
+        "color-sidebar-link-text": "var(--color-foreground-primary)",
+        "color-sidebar-link-text--top-level": "var(--color-foreground-primary)",
+        "color-api-name": "var(--color-foreground-primary)",
+        "color-api-pre-name": "var(--color-foreground-secondary)",
+        "color-admonition-title--warning": "#d0a85a",
+        "color-admonition-title-background--warning": "rgba(208, 168, 90, 0.12)",
+        "color-admonition-title--caution": "#d0a85a",
+        "color-admonition-title-background--caution": "rgba(208, 168, 90, 0.12)",
+        "color-admonition-title--attention": "#d0a85a",
+        "color-admonition-title-background--attention": "rgba(208, 168, 90, 0.12)",
+        "color-admonition-title--note": "#7da8b2",
+        "color-admonition-title-background--note": "rgba(125, 168, 178, 0.12)",
+        "color-admonition-title--tip": "#7da8b2",
+        "color-admonition-title-background--tip": "rgba(125, 168, 178, 0.12)",
+        "color-admonition-title--hint": "#7da8b2",
+        "color-admonition-title-background--hint": "rgba(125, 168, 178, 0.12)",
+        "color-admonition-title--important": "#7da8b2",
+        "color-admonition-title-background--important": "rgba(125, 168, 178, 0.12)",
+        "color-admonition-title--seealso": "#7da8b2",
+        "color-admonition-title-background--seealso": "rgba(125, 168, 178, 0.12)",
+        "color-admonition-title--danger": "#bf7772",
+        "color-admonition-title-background--danger": "rgba(191, 119, 114, 0.12)",
+        "color-admonition-title--error": "#bf7772",
+        "color-admonition-title-background--error": "rgba(191, 119, 114, 0.12)",
     },
     "source_repository": "https://github.com/jperret21/argos/",
     "source_branch": "main",
@@ -143,4 +264,13 @@ napoleon_include_private_with_doc = False
 
 # autodoc — don't duplicate dataclass fields (attributes + __init__ params)
 autoclass_content = 'class'
+# Default values as written in the source: an object default (a module, say)
+# would otherwise be rendered by its repr, with the build machine's path in it.
+autodoc_preserve_defaults = True
+# Document what each module defines, not the names it re-exports in __all__:
+# a re-export documented twice gave the source views' [docs] links an anchor
+# that does not exist (e.g. site_check's horizontal_at).
+autodoc_default_options = {"ignore-module-all": True}
+# "duplicate": a dataclass field is described twice on its own page, by its
+# docstring's Attributes section and by :undoc-members: (sequencer, session_log).
 suppress_warnings = ["misc.highlighting_failure", "ref.duplicate", "toc.circular", "duplicate"]

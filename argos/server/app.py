@@ -1,0 +1,1353 @@
+"""FastAPI application: routes, auth, CORS and the two WebSockets.
+
+Routes are deliberately thin — validate, call one :class:`Hub` method, return
+its dict. They are plain ``def`` functions, so FastAPI runs them in its
+threadpool and a blocking device call never stalls the event loop that feeds
+the WebSockets.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import math
+import platform
+import re
+import threading
+import time
+from contextlib import asynccontextmanager
+from typing import Annotated, Any, Awaitable, Callable, Literal
+
+import anyio
+from fastapi import APIRouter, Body, Depends, FastAPI, Path, Query, Request, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import Headers
+from starlette.responses import FileResponse, JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.websockets import WebSocketDisconnect, WebSocketState
+
+from argos import __version__
+from argos.server import API_VERSION
+from argos.server.auth import (
+    ALLOWED_ORIGIN_REGEX,
+    WS_CLOSE_FORBIDDEN_ORIGIN,
+    WS_CLOSE_UNAUTHORIZED,
+    TokenAuth,
+    allowed_hosts,
+    host_allowed,
+    origin_allowed,
+)
+from argos.server.errors import ApiError, CatchAllMiddleware, error_body, install_error_handlers
+from argos.server.events import EventBus
+from argos.server import profiles as profile_records
+from argos.server import runtime
+from argos.server import desktop
+from argos.server.hub import Hub
+from argos.server.planning import PlanningService, TransitBody, TransitPlanBody
+from argos.server import review_routes
+from argos.server import export_routes
+from argos.server.sequence_plan import ExportBody, ImportBody, PlanBody, PlanService
+from argos.server.settings import Settings
+from argos.server.targets import star_from_pending
+
+logger = logging.getLogger(__name__)
+
+#: Upper bound on one exposure (s). The Seestar driver's own ExposureMax is
+#: lower; Alpaca rejects what it cannot do.
+MAX_EXPOSURE_S = 3600.0
+
+#: Concurrent /ws/frames clients. Each one can pin an encoded frame (4 MB for
+#: a Seestar frame) in its socket buffer; past this, a newcomer is closed
+#: with 1013 (try again later).
+MAX_FRAME_CLIENTS = 8
+
+
+# ---------------------------------------------------------------------------
+# Request bodies — strict: no string→number coercion, no unknown fields.
+# ---------------------------------------------------------------------------
+
+
+class _Body(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+
+class ConnectBody(_Body):
+    mode: Literal["simulator", "alpaca"]
+    host: str | None = Field(default=None, min_length=1, max_length=253)
+    port: int | None = Field(default=None, ge=1, le=65535)
+
+    @model_validator(mode="after")
+    def _alpaca_needs_address(self) -> "ConnectBody":
+        if self.mode == "alpaca" and (self.host is None or self.port is None):
+            raise ValueError("alpaca mode needs host and port")
+        return self
+
+
+class ExposureBody(_Body):
+    exposure_s: float = Field(gt=0.0, le=MAX_EXPOSURE_S)
+    gain: int = Field(ge=0, le=1000)
+
+
+FrameTypeName = Literal["light", "dark", "flat", "bias"]
+
+
+class CaptureBody(_Body):
+    """A23: v1's ``{exposure_s, gain}`` stays valid; both now default to the settings."""
+
+    exposure_s: float | None = Field(default=None, gt=0.0, le=MAX_EXPOSURE_S)
+    gain: int | None = Field(default=None, ge=0, le=1000)
+    frame_type: FrameTypeName | None = None
+    save: bool = False
+
+
+class LiveBody(_Body):
+    exposure_s: float | None = Field(default=None, gt=0.0, le=MAX_EXPOSURE_S)
+    gain: int | None = Field(default=None, ge=0, le=1000)
+    frame_type: FrameTypeName | None = None
+
+
+class CaptureSettingsBody(_Body):
+    """A22: one commit; the camera's own limits are checked by the hub (never clamped)."""
+
+    exposure_s: float | None = Field(default=None, gt=0.0, le=MAX_EXPOSURE_S)
+    gain: int | None = Field(default=None, ge=0, le=1000)
+    frame_type: FrameTypeName | None = None
+    filter: str | None = Field(default=None, min_length=1, max_length=32)
+    offset: int | None = Field(default=None, ge=0, le=100_000)
+    binning: int | None = Field(default=None, ge=1, le=16)
+
+
+class FilterSelectBody(_Body):
+    name: str = Field(min_length=1, max_length=32)
+
+
+JogAxis = Literal["primary", "secondary"]
+_CLIENT_ID = r"^[A-Za-z0-9_-]{1,64}$"
+
+
+class JogBody(_Body):
+    axis: JogAxis
+    rate_deg_s: float = Field(ge=-5.0, le=5.0)
+    client: str | None = Field(default=None, pattern=_CLIENT_ID)
+    seq: int | None = Field(default=None, ge=0)
+    #: A periodic renewal: it never restarts an axis the server stopped.
+    renew: bool = False
+    #: Wave 6a: "Pause the run and slew" (the interlock, PROPOSAL §7).
+    pause_run: bool = False
+
+
+class JogStopBody(_Body):
+    axis: JogAxis | None = None
+    client: str | None = Field(default=None, pattern=_CLIENT_ID)
+    seq: int | None = Field(default=None, ge=0)
+
+
+class TrackingRateBody(_Body):
+    rate: Literal["sidereal", "lunar", "solar", "king"]
+    pause_run: bool = False  # wave 6a interlock
+
+
+class FocuserMoveBody(_Body):
+    position: int = Field(ge=-1_000_000, le=10_000_000)
+
+
+class FocuserStepBody(_Body):
+    delta: int = Field(ge=-1_000_000, le=1_000_000)
+
+
+class AutofocusBody(_Body):
+    exposure_s: float | None = Field(default=None, gt=0.0, le=MAX_EXPOSURE_S)
+    gain: int | None = Field(default=None, ge=0, le=1000)
+    half_range: int | None = Field(default=None, ge=10, le=100_000)
+    num_steps: int | None = Field(default=None, ge=3, le=41)
+
+
+class ObservationBody(_Body):
+    object_name: str = Field(max_length=68)
+
+
+class ObservationTargetBody(_Body):
+    name: str = Field(min_length=1, max_length=68)
+    ra_hours: float = Field(ge=0.0, le=24.0)
+    dec_deg: float = Field(ge=-90.0, le=90.0)
+    object_type: str = Field(default="", max_length=32)
+    source: str = Field(default="", max_length=64)
+    programme: Literal["variable", "exoplanet", "other"] | None = None
+
+
+# -- wave 4 (Field identification) ---------------------------------------------
+
+
+class FieldSolveBody(_Body):
+    """``POST /api/field/solve``: no option today (strict: unknown fields refused)."""
+
+
+class FieldAutoBody(_Body):
+    enabled: bool
+
+
+class SelectBody(_Body):
+    x: float = Field(ge=-1e6, le=1e6)
+    y: float = Field(ge=-1e6, le=1e6)
+    seq: int | None = Field(default=None, ge=0)
+    tol_px: float | None = Field(default=None, gt=0.0, le=2000.0)
+
+
+class PendingStarBody(_Body):
+    ra_deg: float | None = Field(default=None, ge=-360.0, le=720.0)
+    ra_hours: float | None = Field(default=None, ge=0.0, le=24.0)
+    dec_deg: float = Field(ge=-90.0, le=90.0)
+    auid: str | None = Field(default=None, max_length=32)
+    name: str | None = Field(default=None, max_length=128)
+    source: str = Field(default="manual", min_length=1, max_length=64)
+    mags: dict[Annotated[str, Field(min_length=1, max_length=16)], float] = Field(
+        default_factory=dict, max_length=16
+    )
+    chart_id: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def _needs_ra(self) -> "PendingStarBody":
+        if self.ra_deg is None and self.ra_hours is None:
+            raise ValueError("the star needs ra_deg or ra_hours")
+        return self
+
+
+class TargetRoleBody(_Body):
+    role: Literal["target", "comparison", "check"]
+    selection: int | None = Field(default=None, ge=0)
+    star: PendingStarBody | None = None
+    variable_index: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _exactly_one(self) -> "TargetRoleBody":
+        given = [v for v in (self.selection, self.star, self.variable_index) if v is not None]
+        if len(given) != 1:
+            raise ValueError("give exactly one of selection, star, variable_index")
+        return self
+
+
+def _target_keys(values: list[str]) -> list[str]:
+    """``?also=`` values (repeated or comma-separated) → TargetStar keys.
+
+    A position key holds a comma (``pos:<ra>,<dec>``): a piece that does not
+    start a key (``auid:`` / ``pos:``) continues the previous one.
+    """
+    keys: list[str] = []
+    for value in values:
+        for piece in value.split(","):
+            piece = piece.strip()
+            if not piece:
+                continue
+            if keys and not piece.startswith(("auid:", "pos:")):
+                keys[-1] = f"{keys[-1]},{piece}"
+            else:
+                keys.append(piece)
+    return keys
+
+
+class RecommendBody(_Body):
+    mode: Literal["replace", "complete"]
+    count: int | None = Field(default=None, ge=1, le=20)
+
+
+class CenterTargetBody(_Body):
+    ra_hours: float = Field(ge=0.0, le=24.0)
+    dec_deg: float = Field(ge=-90.0, le=90.0)
+    name: str | None = Field(default=None, max_length=68)
+
+
+class CenterBody(_Body):
+    target: CenterTargetBody | None = None
+    pause_run: bool = False  # wave 6a interlock
+
+
+class SyncBody(_Body):
+    source: Literal["solution"]
+    pause_run: bool = False  # wave 6a interlock
+
+
+class OpenFitsBody(_Body):
+    path: str = Field(min_length=1, max_length=4096)
+
+
+class ShutdownBody(_Body):
+    """``POST /api/app/shutdown`` (wave 8, A7)."""
+
+    force: bool = False
+
+
+class RevealBody(_Body):
+    """``POST /api/fs/reveal`` (wave 8, A12)."""
+
+    path: str = Field(min_length=1, max_length=4096)
+
+
+class GotoBody(_Body):
+    ra_hours: float = Field(ge=0.0, le=24.0)
+    dec_deg: float = Field(ge=-90.0, le=90.0)
+    pause_run: bool = False  # wave 6a interlock
+
+
+class TrackingBody(_Body):
+    enabled: bool
+    pause_run: bool = False  # wave 6a interlock
+
+
+class MotionBody(_Body):
+    """Wave 6a: Park / Unpark with "Pause the run and slew"."""
+
+    pause_run: bool = False
+
+
+class SequenceStartBody(_Body):
+    """Wave 6a (A62): absent = the draft's start time; null = now."""
+
+    start_at_utc: str | None = Field(default=None, max_length=64)
+
+
+class AttentionAckBody(_Body):
+    """Wave 6b: who acknowledged (the client's label)."""
+
+    by: str | None = Field(default=None, max_length=64)
+
+
+class CalibrationPlanBody(_Body):
+    """Wave 6b: darks per Light series and biases per gain (the guide's 20 and 30)."""
+
+    darks: int | None = Field(default=None, ge=0, le=999)
+    biases: int | None = Field(default=None, ge=0, le=999)
+
+
+class DeviceConnectBody(_Body):
+    """API 2: one device or all of them; the address defaults to the config's."""
+
+    mode: Literal["simulator", "alpaca"] = "alpaca"
+    host: str | None = Field(default=None, min_length=1, max_length=253)
+    port: int | None = Field(default=None, ge=1, le=65535)
+
+
+class DiscoveryBody(_Body):
+    port: int | None = Field(default=None, ge=1, le=65535)
+    candidates: list[Annotated[str, Field(min_length=1, max_length=253)]] | None = Field(
+        default=None, max_length=8
+    )
+    broadcast_timeout_s: float | None = Field(default=None, ge=0.5, le=30.0)
+
+
+class ProfileBody(_Body):
+    key: str = Field(min_length=1, max_length=40)
+
+
+class NetworkCheckBody(_Body):
+    internet: bool = False
+
+
+class StellariumBody(_Body):
+    """A19: both default to the config (``stellarium.host``, ``stellarium.port``)."""
+
+    host: str | None = Field(default=None, min_length=1, max_length=253)
+    port: int | None = Field(default=None, ge=1024, le=65535)
+
+
+class SupportBundleBody(_Body):
+    """A5: where to write the ZIP (``null`` = keep it for a download) and what goes in."""
+
+    destination: str | None = Field(default=None, min_length=1, max_length=4096)
+    include_session: bool = False
+    session_dir: str | None = Field(default=None, min_length=1, max_length=4096)
+    include_site: bool = False
+    include_crash_reports: bool = True
+    overwrite: bool = False
+
+
+class SiteSearchBody(_Body):
+    """A82: the free-form place query (an empty one is refused with the Qt text)."""
+
+    query: str = Field(max_length=200)
+
+
+#: Server-side software credited by ``/api/app/info`` (the front-end adds its own).
+# fmt: off
+CREDITS = (
+    {"name": "Python", "use": "server runtime", "licence": "PSF-2.0",
+     "url": "https://www.python.org"},
+    {"name": "NumPy", "use": "image arrays", "licence": "BSD-3-Clause",
+     "url": "https://numpy.org"},
+    {"name": "Astropy", "use": "FITS, coordinates, time", "licence": "BSD-3-Clause",
+     "url": "https://www.astropy.org"},
+    {"name": "alpyca", "use": "ASCOM Alpaca client", "licence": "MIT",
+     "url": "https://github.com/ASCOMInitiative/alpyca"},
+    {"name": "Requests", "use": "HTTP client", "licence": "Apache-2.0",
+     "url": "https://requests.readthedocs.io"},
+    {"name": "FastAPI", "use": "HTTP API", "licence": "MIT",
+     "url": "https://fastapi.tiangolo.com"},
+    {"name": "Starlette", "use": "HTTP and WebSocket toolkit", "licence": "BSD-3-Clause",
+     "url": "https://www.starlette.io"},
+    {"name": "Uvicorn", "use": "HTTP server", "licence": "BSD-3-Clause",
+     "url": "https://www.uvicorn.org"},
+)
+# fmt: on
+
+PROJECT_URL = "https://github.com/jperret21/argos"
+DOCS_URL = "https://perretjules.com/argos/"
+
+
+def _log_topic(logger_name: str) -> str:
+    """Topic of a bridged ``argos.core`` record, from its logger name."""
+    if ".alpaca.camera" in logger_name:
+        return "camera"
+    if ".alpaca.telescope" in logger_name:
+        return "mount"
+    if ".alpaca.discovery" in logger_name:
+        return "discovery"
+    if ".alpaca" in logger_name or ".hardware" in logger_name:
+        return "connection"
+    return "app"
+
+
+# ---------------------------------------------------------------------------
+# Logging bridge: core library messages → /ws/events "log"
+# ---------------------------------------------------------------------------
+
+_BRIDGED_LOGGER = "argos.core"
+
+
+#: A core message repeated within this window is forwarded once.
+_BRIDGE_REPEAT_S = 60.0
+
+
+class _LogBridge(logging.Handler):
+    """Forward ``argos.core`` warnings and errors (Alpaca driver…) as log events.
+
+    The hub's own messages are published directly by :meth:`Hub.log`; only the
+    core library, which knows nothing about the server, comes through here.
+    INFO stays in the server log: the core logs every exposure start and
+    download, which in live view would flood the observer's log. A message
+    repeated within :data:`_BRIDGE_REPEAT_S` (a driver warning on every
+    frame) is forwarded once.
+    """
+
+    def __init__(self, hub: Hub) -> None:
+        super().__init__(level=logging.WARNING)
+        self._hub = hub
+        self._recent: dict[str, float] = {}
+        self._recent_lock = threading.Lock()
+
+    def _first_in_window(self, message: str) -> bool:
+        now = time.monotonic()
+        with self._recent_lock:
+            if len(self._recent) > 256:
+                self._recent = {m: t for m, t in self._recent.items() if now - t < _BRIDGE_REPEAT_S}
+            last = self._recent.get(message)
+            if last is not None and now - last < _BRIDGE_REPEAT_S:
+                return False
+            self._recent[message] = now
+            return True
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            message = record.getMessage()
+            if not self._first_in_window(message):
+                return
+            level = "error" if record.levelno >= logging.ERROR else "warning"
+            self._hub.publish_log(level, message, source="core", topic=_log_topic(record.name))
+        except Exception:
+            self.handleError(record)
+
+
+# ---------------------------------------------------------------------------
+# Host / Origin guard (DNS rebinding)
+# ---------------------------------------------------------------------------
+
+
+class _LocalGuard:
+    """Refuse HTTP requests for a foreign ``Host`` or from a foreign ``Origin``.
+
+    Outermost layer, so nothing behind it runs for such a request. CORS
+    preflights (OPTIONS) are left to the CORS middleware, which refuses them
+    itself; WebSockets are checked in :func:`_admit` to close with 4403.
+    """
+
+    def __init__(self, app: ASGIApp, hosts: frozenset[str] | None) -> None:
+        self.app = app
+        self.hosts = hosts
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            headers = Headers(scope=scope)
+            refusal = None
+            if not host_allowed(headers.get("host"), self.hosts):
+                refusal = error_body("forbidden_host", "This server only answers on localhost")
+            elif scope["method"] != "OPTIONS" and not origin_allowed(headers.get("origin")):
+                refusal = error_body("forbidden_origin", "Requests from this origin are refused")
+            if refusal is not None:
+                await JSONResponse(refusal, status_code=403)(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+# ---------------------------------------------------------------------------
+# WebSocket plumbing
+# ---------------------------------------------------------------------------
+
+
+async def _admit(
+    websocket: WebSocket, auth: TokenAuth, hosts: frozenset[str] | None = None
+) -> bool:
+    """Accept, then close with an application code if the client is not allowed.
+
+    Closing *before* accepting would surface as a bare HTTP 403 on the
+    handshake, which a browser reports as close code 1006 — the contract's
+    4401 must be visible to the front-end, so the socket is accepted first.
+    """
+    await websocket.accept()
+    if not host_allowed(websocket.headers.get("host"), hosts) or not origin_allowed(
+        websocket.headers.get("origin")
+    ):
+        await websocket.close(code=WS_CLOSE_FORBIDDEN_ORIGIN, reason="forbidden origin")
+        return False
+    if not auth.check(websocket.query_params.get("token")):
+        await websocket.close(code=WS_CLOSE_UNAUTHORIZED, reason="unauthorized")
+        return False
+    return True
+
+
+async def _pump(
+    websocket: WebSocket,
+    send_next: Callable[[], Awaitable[bool]],
+    on_text: Callable[[str], Awaitable[None]] | None = None,
+) -> None:
+    """Run *send_next* until it returns False or the client goes away.
+
+    A second task drains the client side, which is how a disconnect is
+    noticed while the sender waits for something to send. An anyio task
+    group (Starlette's own concurrency layer) keeps cancellation clean when
+    the server or the client ends the session first.
+    """
+    bus_closed = False
+
+    async with anyio.create_task_group() as group:
+
+        async def sender() -> None:
+            nonlocal bus_closed
+            try:
+                while await send_next():
+                    pass
+                bus_closed = True
+            except (WebSocketDisconnect, anyio.ClosedResourceError, RuntimeError, OSError):
+                pass  # the client vanished mid-send
+            group.cancel_scope.cancel()
+
+        async def receiver() -> None:
+            try:
+                while True:
+                    message = await websocket.receive()
+                    if message["type"] == "websocket.disconnect":
+                        break
+                    text = message.get("text")
+                    if on_text is not None and text is not None and len(text) <= 4096:
+                        await on_text(text)
+            except (WebSocketDisconnect, anyio.ClosedResourceError, RuntimeError, OSError):
+                pass
+            group.cancel_scope.cancel()
+
+        group.start_soon(sender)
+        group.start_soon(receiver)
+
+    if bus_closed and websocket.application_state == WebSocketState.CONNECTED:
+        # The server is shutting down: say so instead of dropping the socket.
+        try:
+            await websocket.close(code=1001, reason="server shutting down")
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Application factory
+# ---------------------------------------------------------------------------
+
+
+def app_info(settings: Settings, hub: Hub) -> dict[str, Any]:
+    """``GET /api/app/info`` (row A1): about, paths, help header, support summary."""
+    from argos.core.hardware import active
+
+    get = hub.config.get
+    path = hub.config.path
+    return {
+        "name": "ARGOS",
+        "version": __version__,
+        "api": API_VERSION,
+        "python": runtime.python_version(),
+        "platform": platform.platform(terse=True),
+        "paths": {
+            "config": str(path) if path is not None else None,
+            "config_dir": str(hub.config.directory) if hub.config.directory else None,
+            "sessions": str(get("sessions_path", "")),
+            "presets": str(get("data_paths.sequence_presets_directory", "")),
+            "calibrations": str(get("data_paths.camera_calibration_directory", "")),
+            "diagnostics": str(settings.log_dir) if settings.log_dir is not None else None,
+            "log_file": str(settings.log_file) if settings.log_file is not None else None,
+        },
+        "profile": profile_records.summary(active.profile()),
+        "log_level": str(get("ui.log_level", "INFO")),
+        "diagnostics_enabled": bool(get("diagnostics.enabled", False)),
+        # As the Qt support-bundle summary (shell.py:515).
+        "astap_configured": bool(get("astrometry.astap_path", "")),
+        "licence": "GPL-3.0-or-later",
+        "licence_name": "GNU GPL v3 or later",
+        "copyright": "Copyright © 2026 ARGOS contributors",
+        "author": "Jules Perret",
+        "description": (
+            "Scientific acquisition and differential photometry for ZWO Seestar telescopes."
+        ),
+        "credits": [dict(c) for c in CREDITS],
+        "project_url": PROJECT_URL,
+        "docs_url": DOCS_URL,
+        "desktop": bool(getattr(settings, "desktop", False)),  # wave 8: --desktop
+    }
+
+
+def _finite_only(value: Any) -> Any:
+    """A copy with every NaN or infinity replaced by ``None``."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: _finite_only(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite_only(item) for item in value]
+    return value
+
+
+def wire_json(message: Any) -> str:
+    """One ``/ws/events`` frame: strict JSON, as REST answers.
+
+    ``JSON.parse`` rejects ``NaN``; one bad float must never make the browser
+    drop a snapshot, so non-finite numbers go out as ``null`` (FastAPI's REST
+    encoding does the same).
+    """
+    try:
+        return json.dumps(message, separators=(",", ":"), allow_nan=False)
+    except ValueError:
+        return json.dumps(_finite_only(message), separators=(",", ":"), allow_nan=False)
+
+
+def create_app(settings: Settings, hub: Hub | None = None) -> FastAPI:
+    """Build the ASGI app. *hub* is injectable for tests; one is created otherwise."""
+    hub = hub or Hub(EventBus(), sim=settings.sim, settings=settings)
+    # Wave 6a, plan: the draft and the planner (sequence_plan.py, planning.py).
+    if getattr(hub, "plan", None) is None:
+        hub.plan = PlanService(hub)  # type: ignore[attr-defined]
+    if getattr(hub, "planning", None) is None:
+        hub.planning = PlanningService(hub)  # type: ignore[attr-defined]
+    auth = TokenAuth(settings.token)
+    # Wave 8 (desktop): the shutdown route and reveal (desktop.py).
+    lifecycle = desktop.ShutdownService(hub)
+    revealer = desktop.Revealer(hub, settings)
+
+    def refuse_while_closing(request: Request) -> None:
+        """Wave 8: once a shutdown started, only reads (and the shutdown route) run."""
+        if (
+            lifecycle.closing
+            and request.method not in ("GET", "HEAD", "OPTIONS")
+            and request.url.path != "/api/app/shutdown"
+        ):
+            raise ApiError(503, "shutting_down", "ARGOS is shutting down")
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        hub.bus.attach(asyncio.get_running_loop())
+        bridge = _LogBridge(hub)
+        logging.getLogger(_BRIDGED_LOGGER).addHandler(bridge)
+        hub.start()
+        if settings.simulator:
+            try:
+                await run_in_threadpool(hub.connect, "simulator")
+            except ApiError as exc:
+                logger.error("Simulator auto-connect failed: %s", exc.message)
+        try:
+            yield
+        finally:
+            await run_in_threadpool(hub.shutdown)
+            logging.getLogger(_BRIDGED_LOGGER).removeHandler(bridge)
+            hub.bus.detach()
+
+    app = FastAPI(
+        title="ARGOS server",
+        version=__version__,
+        lifespan=lifespan,
+        # Every route but /api/health needs the token: no public schema pages.
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
+    app.state.hub = hub
+    app.state.settings = settings
+    app.state.lifecycle = lifecycle  # the CLI sets its request_exit (__main__.py)
+    app.state.revealer = revealer
+    hosts = allowed_hosts(settings.host)
+    install_error_handlers(app)
+    # Last added runs first: guard → CORS → catch-all → routes.
+    app.add_middleware(CatchAllMiddleware)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=ALLOWED_ORIGIN_REGEX,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+        max_age=600,
+    )
+    app.add_middleware(_LocalGuard, hosts=hosts)
+
+    public = APIRouter()
+    api = APIRouter(
+        prefix="/api", dependencies=[Depends(auth.require), Depends(refuse_while_closing)]
+    )
+
+    @public.get("/api/health")
+    def health() -> dict[str, Any]:
+        return {"ok": True, "version": __version__, "api": API_VERSION, "boot_id": hub.boot_id}
+
+    @api.get("/status")
+    def status() -> dict[str, Any]:
+        return hub.status()
+
+    @api.post("/connection")
+    def connect(body: ConnectBody) -> dict[str, Any]:
+        return hub.connect(body.mode, body.host, body.port)
+
+    @api.delete("/connection")
+    def disconnect() -> dict[str, Any]:
+        return hub.disconnect()
+
+    @api.post("/camera/capture")
+    def capture(body: CaptureBody | None = None) -> dict[str, Any]:
+        body = body or CaptureBody()
+        return hub.capture(body.exposure_s, body.gain, body.frame_type, save=body.save)
+
+    @api.post("/camera/live")
+    def live(body: LiveBody | None = None) -> dict[str, Any]:
+        body = body or LiveBody()
+        return hub.live(body.exposure_s, body.gain, body.frame_type)
+
+    @api.patch("/camera/live")
+    def live_update(body: ExposureBody) -> dict[str, Any]:
+        return hub.update_live(body.exposure_s, body.gain)
+
+    @api.post("/camera/stop")
+    def camera_stop() -> dict[str, Any]:
+        return hub.stop_camera()
+
+    @api.post("/camera/open-fits")
+    def open_fits(body: OpenFitsBody) -> dict[str, Any]:
+        return hub.open_fits(body.path)
+
+    @api.post("/mount/goto")
+    def mount_goto(body: GotoBody) -> dict[str, Any]:
+        return hub.mount_goto(body.ra_hours, body.dec_deg, pause_run=body.pause_run)
+
+    @api.post("/mount/stop")
+    def mount_stop() -> dict[str, Any]:
+        return hub.mount_stop()
+
+    @api.post("/mount/park")
+    def mount_park(body: MotionBody | None = None) -> dict[str, Any]:
+        return hub.mount_park(pause_run=bool(body and body.pause_run))
+
+    @api.post("/mount/unpark")
+    def mount_unpark(body: MotionBody | None = None) -> dict[str, Any]:
+        return hub.mount_unpark(pause_run=bool(body and body.pause_run))
+
+    @api.post("/mount/tracking")
+    def mount_tracking(body: TrackingBody) -> dict[str, Any]:
+        return hub.mount_tracking(body.enabled, pause_run=body.pause_run)
+
+    # -- API 2 (wave 1) -------------------------------------------------------
+
+    @api.get("/app/info")
+    def get_app_info() -> dict[str, Any]:
+        return app_info(settings, hub)
+
+    @api.post("/app/shutdown", status_code=202)
+    def app_shutdown(body: ShutdownBody | None = None) -> dict[str, Any]:
+        return lifecycle.request(force=bool(body and body.force))  # wave 8, A7
+
+    @api.get("/logs")
+    def get_logs(
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=1000, ge=1, le=5000),
+        level: Literal["debug", "cmd", "info", "ok", "warning", "error"] | None = None,
+    ) -> dict[str, Any]:
+        return {**hub.logbook.page(after=after, limit=limit, level=level), "boot_id": hub.boot_id}
+
+    @api.get("/config")
+    def get_config() -> dict[str, Any]:
+        return hub.config.snapshot()
+
+    @api.patch("/config")
+    def patch_config(body: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        hub.sequence.guard_config(body)  # geometry (S15) and noise model (S84) locked in a run
+        return hub.config.patch(body, source="api").to_dict()
+
+    @api.get("/devices")
+    def get_devices() -> dict[str, Any]:
+        return hub.devices()
+
+    # connect-all before {device_id}: the literal path must win.
+    @api.post("/devices/connect-all")
+    def devices_connect_all(body: DeviceConnectBody | None = None) -> dict[str, Any]:
+        body = body or DeviceConnectBody()
+        return hub.connect_all(body.mode, body.host, body.port)
+
+    @api.delete("/devices")
+    def devices_disconnect_all() -> dict[str, Any]:
+        return hub.disconnect_all()
+
+    @api.post("/devices/{device_id}/connect")
+    def device_connect(device_id: str, body: DeviceConnectBody | None = None) -> dict[str, Any]:
+        body = body or DeviceConnectBody()
+        return hub.connect_device(device_id, body.mode, body.host, body.port)
+
+    @api.delete("/devices/{device_id}")
+    def device_disconnect(device_id: str) -> dict[str, Any]:
+        return hub.disconnect_device(device_id)
+
+    @api.post("/discovery", status_code=202)
+    def discovery(body: DiscoveryBody | None = None) -> dict[str, Any]:
+        body = body or DiscoveryBody()
+        job = hub.start_discovery(body.port, body.candidates, body.broadcast_timeout_s)
+        return {"job_id": job["id"], "job": job}
+
+    @api.get("/profiles")
+    def get_profiles() -> dict[str, Any]:
+        return hub.profiles()
+
+    @api.put("/profile")
+    def put_profile(body: ProfileBody) -> dict[str, Any]:
+        return hub.set_profile(body.key)
+
+    @api.get("/network")
+    def get_network() -> dict[str, Any]:
+        return hub.network_state()
+
+    @api.post("/network/check")
+    def network_check(body: NetworkCheckBody | None = None) -> dict[str, Any]:
+        return hub.network_check(internet=(body or NetworkCheckBody()).internet)
+
+    @api.get("/stellarium")
+    def get_stellarium() -> dict[str, Any]:
+        return hub.stellarium_state()
+
+    @api.post("/stellarium")
+    def start_stellarium(body: StellariumBody | None = None) -> dict[str, Any]:
+        body = body or StellariumBody()
+        return hub.stellarium_start(body.host, body.port)
+
+    @api.delete("/stellarium")
+    def stop_stellarium() -> dict[str, Any]:
+        return hub.stellarium_stop()
+
+    @api.get("/jobs")
+    def get_jobs() -> dict[str, Any]:
+        return {"jobs": hub.jobs.list()}
+
+    @api.get("/jobs/{job_id}")
+    def get_job(job_id: str) -> dict[str, Any]:
+        return hub.jobs.get(job_id)
+
+    @api.delete("/jobs/{job_id}")
+    def cancel_job(job_id: str) -> dict[str, Any]:
+        return hub.jobs.cancel(job_id)
+
+    # -- API 2 (wave 2: Settings) ---------------------------------------------
+
+    @api.get("/jobs/{job_id}/download")
+    def job_download(job_id: str) -> FileResponse:
+        path, name = hub.job_download(job_id)
+        # A support bundle is a ZIP; a wave 7 export a text file (A78, A79).
+        media = {".txt": "text/plain", ".csv": "text/csv"}.get(
+            name[name.rfind(".") :].lower() if "." in name else "", "application/zip"
+        )
+        return FileResponse(path, media_type=media, filename=name)
+
+    @api.post("/support-bundle", status_code=202)
+    def support_bundle(body: SupportBundleBody | None = None) -> dict[str, Any]:
+        body = body or SupportBundleBody()
+        job = hub.start_support_bundle(
+            destination=body.destination,
+            include_session=body.include_session,
+            session_dir=body.session_dir,
+            include_site=body.include_site,
+            include_crash_reports=body.include_crash_reports,
+            overwrite=body.overwrite,
+        )
+        return {"job_id": job["id"], "job": job}
+
+    @api.get("/diagnostics/crash-reports")
+    def crash_reports(since: str | None = Query(default=None, max_length=40)) -> dict[str, Any]:
+        return hub.crash_reports(since)
+
+    @api.get("/fs/list")
+    def fs_list(
+        path: str | None = Query(default=None, max_length=4096),
+        kind: Literal["any", "dir", "file"] = "any",
+        ext: str | None = Query(default=None, max_length=200),
+        counts: Literal["fits"] | None = None,
+        hidden: bool = False,
+    ) -> dict[str, Any]:
+        return hub.fs_list(path, kind=kind, ext=ext, counts=counts, hidden=hidden)
+
+    @api.post("/fs/reveal")
+    def fs_reveal(body: RevealBody) -> dict[str, Any]:
+        return revealer.reveal(body.path)  # wave 8, A12: desktop app only
+
+    @api.get("/sessions")
+    def sessions(
+        offset: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=500)
+    ) -> dict[str, Any]:
+        return hub.sessions_page(offset=offset, limit=limit)
+
+    @api.get("/astrometry/astap")
+    def astap(
+        path: str | None = Query(default=None, max_length=4096),
+        database_path: str | None = Query(default=None, max_length=4096),
+        database: str | None = Query(default=None, max_length=40),
+    ) -> dict[str, Any]:
+        return hub.astap_state(path, database_path, database)
+
+    @api.post("/site/search", status_code=202)
+    def site_search(body: SiteSearchBody) -> dict[str, Any]:
+        job = hub.start_site_search(body.query)
+        return {"job_id": job["id"], "job": job}
+
+    @api.get("/site/check")
+    def site_check() -> dict[str, Any]:
+        return hub.site_check_state()
+
+    @api.post("/site/check")
+    def site_check_now() -> dict[str, Any]:
+        return hub.site_check_now()
+
+    @api.get("/caches")
+    def caches() -> dict[str, Any]:
+        return hub.caches()
+
+    @api.delete("/caches/{kind}")
+    def clear_cache(kind: str) -> dict[str, Any]:
+        return hub.clear_cache(kind)
+
+    @api.get("/catalogues/essential")
+    def essential_catalogue() -> dict[str, Any]:
+        from argos.core.catalog.offline import essential_catalogue_info
+
+        return dict(essential_catalogue_info())
+
+    # -- API 2 (wave 3: Observe acquisition) ------------------------------------
+
+    @api.get("/camera/settings")
+    def get_camera_settings() -> dict[str, Any]:
+        return hub.camera_settings()
+
+    @api.put("/camera/settings")
+    def put_camera_settings(body: CaptureSettingsBody) -> dict[str, Any]:
+        return hub.set_camera_settings(body.model_dump(exclude_none=True))
+
+    @api.get("/camera/saved")
+    def camera_saved(
+        after: int = Query(default=0, ge=0), limit: int = Query(default=200, ge=1, le=200)
+    ) -> dict[str, Any]:
+        return hub.saved(after=after, limit=limit)
+
+    @api.get("/filterwheel")
+    def get_filterwheel() -> dict[str, Any]:
+        with hub._lock:
+            return hub.wheel.record()
+
+    @api.post("/filterwheel/select")
+    def filterwheel_select(body: FilterSelectBody) -> dict[str, Any]:
+        with hub._lock:
+            hub._refuse_if_owned()
+        return hub.wheel.select(body.name)
+
+    @api.post("/mount/jog")
+    def mount_jog(body: JogBody) -> dict[str, Any]:
+        return hub.mount_jog(
+            body.axis,
+            body.rate_deg_s,
+            client=body.client,
+            seq=body.seq,
+            renew=body.renew,
+            pause_run=body.pause_run,
+        )
+
+    @api.post("/mount/jog/stop")
+    def mount_jog_stop(body: JogStopBody | None = None) -> dict[str, Any]:
+        body = body or JogStopBody()
+        return hub.mount_jog_stop(body.axis, client=body.client, seq=body.seq)
+
+    @api.post("/mount/tracking-rate")
+    def mount_tracking_rate(body: TrackingRateBody) -> dict[str, Any]:
+        return hub.mount_tracking_rate(body.rate, pause_run=body.pause_run)
+
+    @api.get("/focuser")
+    def get_focuser() -> dict[str, Any]:
+        with hub._lock:
+            return hub.focuser.record()
+
+    @api.post("/focuser/move")
+    def focuser_move(body: FocuserMoveBody) -> dict[str, Any]:
+        return hub.focuser.move(body.position)
+
+    @api.post("/focuser/step")
+    def focuser_step(body: FocuserStepBody) -> dict[str, Any]:
+        return hub.focuser.step(body.delta)
+
+    @api.post("/focuser/halt")
+    def focuser_halt() -> dict[str, Any]:
+        return hub.focuser.halt()
+
+    @api.get("/autofocus")
+    def get_autofocus() -> dict[str, Any]:
+        return hub.autofocus_state()
+
+    @api.post("/autofocus/start")
+    def autofocus_start(body: AutofocusBody | None = None) -> dict[str, Any]:
+        body = body or AutofocusBody()
+        return hub.start_autofocus(body.exposure_s, body.gain, body.half_range, body.num_steps)
+
+    @api.post("/autofocus/stop")
+    def autofocus_stop() -> dict[str, Any]:
+        return hub.stop_autofocus()
+
+    @api.get("/session/conditions")
+    def session_conditions(
+        since_seq: int = Query(default=0, ge=0), limit: int = Query(default=5000, ge=1, le=20000)
+    ) -> dict[str, Any]:
+        return hub.conditions_page(since_seq=since_seq, limit=limit)
+
+    @api.get("/observation")
+    def get_observation() -> dict[str, Any]:
+        with hub._lock:
+            return hub.observation.record()
+
+    @api.put("/observation")
+    def put_observation(body: ObservationBody) -> dict[str, Any]:
+        return hub.observation.set_name(body.object_name)
+
+    @api.post("/observation/target")
+    def post_observation_target(body: ObservationTargetBody) -> dict[str, Any]:
+        return hub.observation.set_target(
+            body.name,
+            body.ra_hours,
+            body.dec_deg,
+            object_type=body.object_type,
+            source=body.source,
+            programme=body.programme,
+        )
+
+    @api.delete("/observation/target")
+    def delete_observation_target() -> dict[str, Any]:
+        return hub.observation.clear_target()
+
+    @api.get("/catalog/resolve")
+    def catalog_resolve(q: str = Query(default="", max_length=200)) -> dict[str, Any]:
+        return hub.observation.resolve(q)
+
+    @api.get("/catalog/suggest")
+    def catalog_suggest(
+        q: str = Query(default="", max_length=200), limit: int = Query(default=8, ge=1, le=50)
+    ) -> dict[str, Any]:
+        return hub.observation.suggest(q, limit=limit)
+
+    @api.get("/catalog/nearby")
+    def catalog_nearby(
+        ra_hours: float = Query(ge=0.0, le=24.0),
+        dec_deg: float = Query(ge=-90.0, le=90.0),
+        network: bool = False,
+        radius_arcsec: float = Query(default=90.0, ge=1.0, le=3600.0),
+    ) -> dict[str, Any]:
+        return hub.observation.nearby(
+            ra_hours, dec_deg, network=network, radius_arcsec=radius_arcsec
+        )
+
+    # -- wave 4: field identification, layers, selection, targets (A32-A33, A43-A53)
+    @api.get("/field")
+    def field_state() -> dict[str, Any]:
+        return hub.field.record()
+
+    @api.post("/field/solve", status_code=202)
+    def field_solve(body: FieldSolveBody | None = None) -> dict[str, Any]:
+        return hub.field.solve()
+
+    @api.delete("/field/solve")
+    def field_solve_cancel() -> dict[str, Any]:
+        return hub.field.cancel_solve()
+
+    @api.put("/field/auto")
+    def field_auto(body: FieldAutoBody) -> dict[str, Any]:
+        return hub.field.set_auto(body.enabled)
+
+    @api.get("/field/catalog")
+    def field_catalog() -> dict[str, Any]:
+        return hub.field.catalog_record()
+
+    @api.post("/field/catalog/refetch", status_code=202)
+    def field_catalog_refetch() -> dict[str, Any]:
+        return hub.field.refetch()
+
+    @api.get("/field/layers")
+    def field_layers() -> dict[str, Any]:
+        return hub.field.layers_record()
+
+    @api.get("/field/transform")
+    def field_transform() -> dict[str, Any]:
+        return hub.field.transform_record()
+
+    @api.get("/field/select")
+    def field_selection() -> dict[str, Any]:
+        return hub.field.selection_record()
+
+    @api.post("/field/select")
+    def field_select(body: SelectBody) -> dict[str, Any]:
+        return hub.field.select(body.x, body.y, seq=body.seq, tol_px=body.tol_px)
+
+    @api.delete("/field/select")
+    def field_select_clear() -> dict[str, Any]:
+        return hub.field.clear_selection()
+
+    @api.get("/targets")
+    def targets_get() -> dict[str, Any]:
+        return hub.targets.record()
+
+    @api.post("/targets")
+    def targets_post(body: TargetRoleBody) -> dict[str, Any]:
+        if body.selection is not None:
+            pending = hub.field.pending_for(body.selection)
+        elif body.variable_index is not None:
+            pending = hub.field.variable_pending(body.variable_index)
+        else:
+            assert body.star is not None
+            pending = body.star.model_dump()
+        return hub.targets.assign(star_from_pending(pending, body.role))
+
+    @api.delete("/targets/{key}")
+    def targets_delete(
+        key: str = Path(min_length=1, max_length=200),
+        also: list[str] = Query(default=[], max_length=64),
+    ) -> dict[str, Any]:
+        return hub.targets.remove(key, also=_target_keys(also))
+
+    # -- wave 5: live photometry (A50, A54-A58)
+    @api.get("/field/variables")
+    def field_variables() -> dict[str, Any]:
+        return hub.field.variables_record()
+
+    @api.get("/photometry/live")
+    def photometry_live() -> dict[str, Any]:
+        return hub.photometry.live_record()
+
+    @api.post("/photometry/comparisons/recommend")
+    def photometry_recommend(body: RecommendBody) -> dict[str, Any]:
+        return hub.targets.recommend(body.mode, body.count)
+
+    @api.post("/mount/center")
+    def mount_center(body: CenterBody | None = None) -> dict[str, Any]:
+        target = body.target.model_dump() if body is not None and body.target else None
+        return hub.mount_center(target, pause_run=bool(body and body.pause_run))
+
+    @api.post("/mount/sync")
+    def mount_sync(body: SyncBody) -> dict[str, Any]:
+        return hub.mount_sync(pause_run=body.pause_run)
+
+    # -- wave 6a: sequences (A62-A64) -------------------------------------------------
+
+    @api.get("/sequence")
+    def sequence_state() -> dict[str, Any]:
+        return hub.sequence.record()
+
+    @api.post("/sequence/start")
+    def sequence_start(body: SequenceStartBody | None = None) -> dict[str, Any]:
+        given = body is not None and "start_at_utc" in body.model_fields_set
+        return hub.sequence.start(body.start_at_utc if body else None, given=given)
+
+    @api.post("/sequence/pause")
+    def sequence_pause() -> dict[str, Any]:
+        return hub.sequence.pause()
+
+    @api.post("/sequence/resume")
+    def sequence_resume() -> dict[str, Any]:
+        return hub.sequence.resume()
+
+    @api.post("/sequence/stop")
+    def sequence_stop() -> dict[str, Any]:
+        return hub.sequence.stop()
+
+    @api.get("/sequence/preflight")
+    def sequence_preflight(
+        start_at_utc: str | None = Query(default=None, max_length=64),
+    ) -> dict[str, Any]:
+        return hub.sequence.preflight(start_at_utc, given=start_at_utc is not None)
+
+    # -- wave 6b: the night (attention, wrap-up) ----------------------------------------
+
+    @api.get("/attention")
+    def attention_state() -> dict[str, Any]:
+        return hub.attention.record()
+
+    @api.post("/attention/ack-all")
+    def attention_ack_all(body: AttentionAckBody | None = None) -> dict[str, Any]:
+        return hub.attention.ack_all(body.by if body else None)
+
+    @api.post("/attention/{item_id}/ack")
+    def attention_ack(
+        item_id: str = Path(min_length=1, max_length=200),
+        body: AttentionAckBody | None = None,
+    ) -> dict[str, Any]:
+        return hub.attention.ack(item_id, body.by if body else None)
+
+    @api.get("/sequence/wrapup")
+    def sequence_wrapup() -> dict[str, Any]:
+        return hub.sequence.wrapup()
+
+    @api.post("/sequence/calibration-plan")
+    def sequence_calibration_plan(body: CalibrationPlanBody | None = None) -> dict[str, Any]:
+        return hub.sequence.calibration_plan(
+            body.darks if body else None, body.biases if body else None
+        )
+
+    # -- wave 6a, plan: draft, presets, files, visibility, transits (A42, A59-A61, A65, A66)
+    @api.get("/sequence/plan")
+    def sequence_plan_get() -> dict[str, Any]:
+        return hub.plan.record()
+
+    @api.put("/sequence/plan")
+    def sequence_plan_put(body: PlanBody) -> dict[str, Any]:
+        return hub.plan.put(body)
+
+    @api.post("/sequence/plan/import")
+    def sequence_plan_import(body: ImportBody) -> dict[str, Any]:
+        return hub.plan.import_plan(body)
+
+    @api.post("/sequence/plan/export")
+    def sequence_plan_export(body: ExportBody) -> dict[str, Any]:
+        return hub.plan.export_plan(body)
+
+    @api.get("/sequence/presets")
+    def sequence_presets() -> dict[str, Any]:
+        return hub.plan.list_presets()
+
+    @api.get("/sequence/presets/{name}")
+    def sequence_preset_get(name: str = Path(min_length=1, max_length=120)) -> dict[str, Any]:
+        return hub.plan.get_preset(name)
+
+    @api.put("/sequence/presets/{name}")
+    def sequence_preset_put(
+        name: str = Path(min_length=1, max_length=120),
+        overwrite: bool = False,
+        body: PlanBody | None = None,
+    ) -> dict[str, Any]:
+        return hub.plan.put_preset(name, body, overwrite=overwrite)
+
+    @api.delete("/sequence/presets/{name}")
+    def sequence_preset_delete(name: str = Path(min_length=1, max_length=120)) -> dict[str, Any]:
+        return hub.plan.delete_preset(name)
+
+    @api.get("/visibility")
+    def visibility(
+        ra_hours: float = Query(ge=0.0, le=24.0),
+        dec_deg: float = Query(ge=-90.0, le=90.0),
+        night: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+        step_min: int = Query(default=10, ge=1, le=60),
+        min_alt_deg: float | None = Query(default=None, ge=0.0, le=89.0),
+    ) -> dict[str, Any]:
+        return hub.planning.visibility(ra_hours, dec_deg, night, step_min, min_alt_deg)
+
+    @api.get("/exoplanets/lookup")
+    def exoplanet_lookup(q: str = Query(default="", max_length=120)) -> dict[str, Any]:
+        return hub.planning.lookup_record(q)
+
+    @api.get("/exoplanets/suggest")
+    def exoplanet_suggest(
+        q: str = Query(default="", max_length=120), limit: int = Query(default=8, ge=1, le=50)
+    ) -> dict[str, Any]:
+        return hub.planning.suggest(q, limit=limit)
+
+    @api.post("/transit/predict")
+    def transit_predict(body: TransitBody) -> dict[str, Any]:
+        return hub.planning.predict_record(body)
+
+    @api.post("/transit/plan")
+    def transit_plan(body: TransitPlanBody) -> dict[str, Any]:
+        return hub.planning.plan(body)
+
+    @app.websocket("/ws/events")
+    async def ws_events(websocket: WebSocket) -> None:
+        if not await _admit(websocket, auth, hosts):
+            return
+        # Wave 3: ``?client=<id>`` names this socket for the jog dead-man.
+        client_id = websocket.query_params.get("client")
+        if client_id is not None and not re.fullmatch(_CLIENT_ID, client_id):
+            client_id = None
+        # The status first (contract), then the other snapshots and the recent
+        # log lines, so a page opened mid-session still shows what happened.
+        sub = hub.bus.subscribe_events(
+            hub.status_event(),
+            history=hub.log_history(),
+            snapshots=hub.initial_snapshots(),
+            after_history=hub.field_snapshots(),
+        )
+
+        async def send_next() -> bool:
+            batch = await sub.next_batch()
+            for message in batch:
+                await websocket.send_text(wire_json(message))
+            return bool(batch)
+
+        async def on_text(text: str) -> None:
+            try:
+                message = json.loads(text)
+            except ValueError:
+                return  # anything else is ignored
+            await run_in_threadpool(hub.client_message, client_id, message)
+
+        try:
+            await _pump(websocket, send_next, on_text)
+        finally:
+            hub.bus.unsubscribe_events(sub)
+            if client_id is not None:
+                # Off the loop (a MoveAxis(…, 0) is an HTTP call to the mount) and not
+                # awaited: a cancelled endpoint must still stop the jog (dead-man).
+                threading.Thread(
+                    target=hub.client_gone, args=(client_id,), name="argos-jog-gone", daemon=True
+                ).start()
+
+    @app.websocket("/ws/frames")
+    async def ws_frames(websocket: WebSocket) -> None:
+        if not await _admit(websocket, auth, hosts):
+            return
+        if hub.bus.frame_client_count >= MAX_FRAME_CLIENTS:
+            await websocket.close(code=1013, reason="too many frame clients")
+            return
+        sub = hub.bus.subscribe_frames()
+
+        async def send_next() -> bool:
+            frame = await sub.next_frame()
+            if frame is None:
+                return False
+            await websocket.send_bytes(frame)
+            return True
+
+        try:
+            await _pump(websocket, send_next)
+        finally:
+            hub.bus.unsubscribe_frames(sub)
+
+    # Wave 7, Review: sessions, curves and frames (A67-A75; review_routes.py).
+    review_routes.add_routes(api, hub)
+    # Wave 7, Review: exports and re-run (A76-A79; export_routes.py).
+    export_routes.add_routes(api, hub)
+
+    app.include_router(public)
+    app.include_router(api)
+    return app

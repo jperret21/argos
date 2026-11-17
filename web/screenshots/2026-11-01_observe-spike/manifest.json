@@ -1,0 +1,25 @@
+{
+  "title": "Observe screen, first web version (spike)",
+  "date": "2026-11-01",
+  "summary": "The first screen of the new web UI, live on the Seestar S50 simulator through the headless server (API v1): WebGL viewer with the portrait frame shown landscape, levels strip with a draggable histogram, Camera and Mount cards, mount state in the status bar, the three themes and the error and offline states.",
+  "shots": [
+    {"file": "live-1440x900-observatory.png", "caption": "Observe, live view, Observatory theme at 1440x900: the rotated frame fills the viewer, the levels strip uses the space under it.", "tags": ["observe", "observatory", "1440x900", "live"]},
+    {"file": "live-1440x900-charcoal.png", "caption": "Observe, live view, Charcoal theme at 1440x900.", "tags": ["observe", "charcoal", "1440x900", "live"]},
+    {"file": "live-1440x900-night-red.png", "caption": "Observe, live view, Night Red theme: the image is rendered red only for dark adaptation.", "tags": ["observe", "night-red", "1440x900", "live"]},
+    {"file": "live-1280x800-observatory.png", "caption": "Observe at 1280x800, the smallest reference screen.", "tags": ["observe", "observatory", "1280x800", "live"]},
+    {"file": "live-1600x1000-observatory.png", "caption": "Observe at 1600x1000.", "tags": ["observe", "observatory", "1600x1000", "live"]},
+    {"file": "rail-closed-1440x900-observatory.png", "caption": "Right panel closed (P): the image takes the full width.", "tags": ["observe", "observatory", "1440x900", "layout"]},
+    {"file": "fill-rail-closed.png", "caption": "Fill mode (Shift+F) with the right panel closed: the frame fills the viewer, a chip says it is cropped.", "tags": ["observe", "viewer", "layout"]},
+    {"file": "handles-dragged.png", "caption": "Black, midtones and white handles dragged directly on the histogram's ADU axis.", "tags": ["observe", "stretch", "histogram"]},
+    {"file": "pending-1440x900.png", "caption": "Exposure changed during live view: the new value applies from the next frame and the pending change is shown.", "tags": ["observe", "camera", "1440x900"]},
+    {"file": "slew-1280x800.png", "caption": "Mount slewing: remaining angle and Abort in the status bar.", "tags": ["observe", "mount", "1280x800"]},
+    {"file": "disconnect-confirm.png", "caption": "Disconnecting during live view or a slew asks for confirmation.", "tags": ["observe", "connection", "dialog"]},
+    {"file": "stale-disconnected.png", "caption": "After a disconnection the last frame is marked as stale, never shown as live.", "tags": ["observe", "states"]},
+    {"file": "server-offline.png", "caption": "Server offline: devices read 'No link', readouts grey out, the viewer says so.", "tags": ["observe", "states", "offline"]},
+    {"file": "invalid-port.png", "caption": "Connection form with an invalid port: inline validation, connect refused.", "tags": ["observe", "connection", "validation"]},
+    {"file": "log-open.png", "caption": "Log drawer open over the Observe screen.", "tags": ["observe", "log"]},
+    {"file": "chip-reveal.png", "caption": "Connection chip in the toolbar revealing the Connection card.", "tags": ["observe", "connection"]},
+    {"file": "live-1280x800.png", "caption": "Functional check at 1280x800 (live view).", "tags": ["observe", "1280x800", "check"]},
+    {"file": "live-1600x1000.png", "caption": "Functional check at 1600x1000 (live view).", "tags": ["observe", "1600x1000", "check"]}
+  ]
+}

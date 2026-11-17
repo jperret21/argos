@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged by Tauri into the bundle's Info.plist (as packaging/argos.spec does for the Qt app). -->
+<plist version="1.0">
+<dict>
+  <!-- The server (a child of the app) discovers the Seestar by UDP broadcast and
+       drives it over HTTP; macOS 15+ asks for local-network access without this. -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Argos needs the local network to discover and control your Seestar telescope.</string>
+</dict>
+</plist>

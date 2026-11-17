@@ -1,0 +1,219 @@
+{
+  "title": "Wave 1: Connection screen and shell, after the review round",
+  "date": "2026-11-01",
+  "summary": "Wave 1 of web/spec/README.md section 7 in its final state, after the design and technical reviews were applied. The Connection screen holds every Qt Connection control: profile, Simulator or Seestar link, discovery, the four devices with per-row actions, and now the Stellarium bridge itself (Start / Stop, clients, the last GoTo and its outcome; API row A19 brought forward from wave 3). What changed on screen: the status-bar activity reports outcomes, not only starts; a lost server link shows \"Last known\" records instead of current-looking ones; Observe reads the mount and the camera from their own device records; Connect all shows queued devices at once and can be stopped from its first moment; log views keep following the newest line and stay smooth with 5 000 lines; rail marks are shape-coded; INFO tags and the discovery radios no longer spend brass. Taken against the ARGOS server with the simulator and a temporary configuration (no real Seestar), in headless Chrome. Night Red: 0 pixels where green or blue exceeds 72 % of red.",
+  "shots": [
+    {
+      "file": "observatory-1440x900-connection-connected.png",
+      "caption": "Connection, observatory 1440x900: the simulator's four devices ready (summary \"4 of 4 devices ready\", the disabled primary reads \"Equipment ready\"; the mount row reads \"Slewing\"), profile locked while the link is held. Planetarium: the Stellarium bridge listening on 127.0.0.1:10001 with one client, whose GoTo to M42 (05h 35m 17.2s −05° 23′ 28″) is shown with its UTC time and outcome \"mount slewing\". The connection log follows the newest line; INFO tags are muted and no row is selected, so brass marks only the primary action, the rail selection and keyboard focus.",
+      "tags": [
+        "connection",
+        "connected",
+        "stellarium",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-connection-device-error.png",
+      "caption": "Connection, observatory 1440x900: Seestar link at 127.0.0.1:9 (a closed port). The camera row is in error with the server's full reason, a red edge and Retry; the other rows untouched; the status bar's activity reads the failure (\"Camera: Cannot reach 127.0.0.1:9 — Connection refused\") instead of \"Connecting…\". The Seestar reachability is red here because the Seestar is the link in use.",
+      "tags": [
+        "connection",
+        "error",
+        "alpaca",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-observe-live.png",
+      "caption": "Observe, observatory 1440x900: live view of the simulator (1 s, gain 80) while the mount slews to M42's coordinates (05h 35m 17.2s −05° 23′ 28″, about 79° still to go). The Camera and Mount cards read each device's own record; the status bar shows the device cluster, the mount's RA / Dec with the angle to go and Abort, the LIVE chip and the cursor readouts. Rate and Latency fold into their tooltip while the slew item needs the room (and always at 1280 px). The rail's Observe mark is a half disc: running.",
+      "tags": [
+        "observe",
+        "live",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "charcoal-1440x900-connection-connected.png",
+      "caption": "Connection, charcoal 1440x900: the simulator's four devices ready (summary \"4 of 4 devices ready\", the disabled primary reads \"Equipment ready\"; the mount row reads \"Slewing\"), profile locked while the link is held. Planetarium: the Stellarium bridge listening on 127.0.0.1:10001 with one client, whose GoTo to M42 (05h 35m 17.2s −05° 23′ 28″) is shown with its UTC time and outcome \"mount slewing\". The connection log follows the newest line; INFO tags are muted and no row is selected, so brass marks only the primary action, the rail selection and keyboard focus.",
+      "tags": [
+        "connection",
+        "connected",
+        "stellarium",
+        "charcoal",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "charcoal-1440x900-connection-device-error.png",
+      "caption": "Connection, charcoal 1440x900: Seestar link at 127.0.0.1:9 (a closed port). The camera row is in error with the server's full reason, a red edge and Retry; the other rows untouched; the status bar's activity reads the failure (\"Camera: Cannot reach 127.0.0.1:9 — Connection refused\") instead of \"Connecting…\". The Seestar reachability is red here because the Seestar is the link in use.",
+      "tags": [
+        "connection",
+        "error",
+        "alpaca",
+        "charcoal",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "charcoal-1440x900-observe-live.png",
+      "caption": "Observe, charcoal 1440x900: live view of the simulator (1 s, gain 80) while the mount slews to M42's coordinates (05h 35m 17.2s −05° 23′ 28″, about 79° still to go). The Camera and Mount cards read each device's own record; the status bar shows the device cluster, the mount's RA / Dec with the angle to go and Abort, the LIVE chip and the cursor readouts. Rate and Latency fold into their tooltip while the slew item needs the room (and always at 1280 px). The rail's Observe mark is a half disc: running.",
+      "tags": [
+        "observe",
+        "live",
+        "charcoal",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "night-red-1440x900-connection-connected.png",
+      "caption": "Connection, night-red 1440x900: the simulator's four devices ready (summary \"4 of 4 devices ready\", the disabled primary reads \"Equipment ready\"; the mount row reads \"Slewing\"), profile locked while the link is held. Planetarium: the Stellarium bridge listening on 127.0.0.1:10001 with one client, whose GoTo to M42 (05h 35m 17.2s −05° 23′ 28″) is shown with its UTC time and outcome \"mount slewing\". The connection log follows the newest line; INFO tags are muted and no row is selected, so brass marks only the primary action, the rail selection and keyboard focus.",
+      "tags": [
+        "connection",
+        "connected",
+        "stellarium",
+        "night-red",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "night-red-1440x900-connection-device-error.png",
+      "caption": "Connection, night-red 1440x900: Seestar link at 127.0.0.1:9 (a closed port). The camera row is in error with the server's full reason, a red edge and Retry; the other rows untouched; the status bar's activity reads the failure (\"Camera: Cannot reach 127.0.0.1:9 — Connection refused\") instead of \"Connecting…\". The Seestar reachability is red here because the Seestar is the link in use.",
+      "tags": [
+        "connection",
+        "error",
+        "alpaca",
+        "night-red",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "night-red-1440x900-observe-live.png",
+      "caption": "Observe, night-red 1440x900: live view of the simulator (1 s, gain 80) while the mount slews to M42's coordinates (05h 35m 17.2s −05° 23′ 28″, about 79° still to go). The Camera and Mount cards read each device's own record; the status bar shows the device cluster, the mount's RA / Dec with the angle to go and Abort, the LIVE chip and the cursor readouts. Rate and Latency fold into their tooltip while the slew item needs the room (and always at 1280 px). The rail's Observe mark is a half disc: running.",
+      "tags": [
+        "observe",
+        "live",
+        "night-red",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "observatory-1280x800-connection-connected.png",
+      "caption": "Connection, observatory 1280x800: the simulator's four devices ready (summary \"4 of 4 devices ready\", the disabled primary reads \"Equipment ready\"; the mount row reads \"Slewing\"), profile locked while the link is held. Planetarium: the Stellarium bridge listening on 127.0.0.1:10001 with one client, whose GoTo to M42 (05h 35m 17.2s −05° 23′ 28″) is shown with its UTC time and outcome \"mount slewing\". The connection log follows the newest line; INFO tags are muted and no row is selected, so brass marks only the primary action, the rail selection and keyboard focus.",
+      "tags": [
+        "connection",
+        "connected",
+        "stellarium",
+        "observatory",
+        "1280x800"
+      ]
+    },
+    {
+      "file": "observatory-1280x800-connection-device-error.png",
+      "caption": "Connection, observatory 1280x800: Seestar link at 127.0.0.1:9 (a closed port). The camera row is in error with the server's full reason, a red edge and Retry; the other rows untouched; the status bar's activity reads the failure (\"Camera: Cannot reach 127.0.0.1:9 — Connection refused\") instead of \"Connecting…\". The Seestar reachability is red here because the Seestar is the link in use.",
+      "tags": [
+        "connection",
+        "error",
+        "alpaca",
+        "observatory",
+        "1280x800"
+      ]
+    },
+    {
+      "file": "observatory-1280x800-observe-live.png",
+      "caption": "Observe, observatory 1280x800: live view of the simulator (1 s, gain 80) while the mount slews to M42's coordinates (05h 35m 17.2s −05° 23′ 28″, about 79° still to go). The Camera and Mount cards read each device's own record; the status bar shows the device cluster, the mount's RA / Dec with the angle to go and Abort, the LIVE chip and the cursor readouts. Rate and Latency fold into their tooltip while the slew item needs the room (and always at 1280 px). The rail's Observe mark is a half disc: running.",
+      "tags": [
+        "observe",
+        "live",
+        "observatory",
+        "1280x800"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-connection-server-lost.png",
+      "caption": "Connection, observatory 1440x900: the ARGOS server stopped under the page. The records are the last ones received and say so: \"Last known: 4 of 4 ready\" with a neutral ring, device rows without state colours under \"Last known · server link lost\", every action disabled, Retry server in the Link card, the status bar's \"Server link lost\".",
+      "tags": [
+        "connection",
+        "server-lost",
+        "stale",
+        "observatory",
+        "1440x900"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-check-discovery-running.png",
+      "caption": "Check run: discovery running as a cancellable job; the discovery row is always present, so starting a search does not move the cards.",
+      "tags": [
+        "connection",
+        "discovery",
+        "job",
+        "observatory",
+        "1440x900",
+        "check"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-check-discovery-choice.png",
+      "caption": "Check run: discovery found two Alpaca servers (local fake responder, broadcast stage only); the choice popover asks which address to use. The log lists the cancelled first search and the second one.",
+      "tags": [
+        "connection",
+        "discovery",
+        "popover",
+        "observatory",
+        "1440x900",
+        "check"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-check-stellarium-goto.png",
+      "caption": "Check run: a GoTo sent from Stellarium through the bridge slews the mount; the Planetarium card shows the target and the outcome.",
+      "tags": [
+        "connection",
+        "stellarium",
+        "goto",
+        "observatory",
+        "1440x900",
+        "check"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-check-stellarium-bind-error.png",
+      "caption": "Check run: the Stellarium bridge cannot bind its port (already in use). The full error is shown on the card, in the log and in a toast; the card badge reads Error.",
+      "tags": [
+        "connection",
+        "stellarium",
+        "error",
+        "observatory",
+        "1440x900",
+        "check"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-check-observe-camera-only.png",
+      "caption": "Check run: Observe with only the camera connected. The Mount card reads its own device record (shows a dash), and Tracking and Park are disabled.",
+      "tags": [
+        "observe",
+        "camera",
+        "mount",
+        "degraded",
+        "observatory",
+        "1440x900",
+        "check"
+      ]
+    },
+    {
+      "file": "observatory-1440x900-check-connect-all-queued.png",
+      "caption": "Check run: Connect all to an unreachable address (192.0.2.1). Every device is marked Queued at once with its own Cancel, the profile locks, and the toolbar reads \"checking the address…\".",
+      "tags": [
+        "connection",
+        "connect-all",
+        "unreachable",
+        "observatory",
+        "1440x900",
+        "check"
+      ]
+    }
+  ]
+}

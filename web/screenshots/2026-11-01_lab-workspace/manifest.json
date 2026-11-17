@@ -1,0 +1,237 @@
+{
+  "title": "Lab: functional workspace (Observe in four task modes, Watch, palette, attention, sections overview)",
+  "date": "2026-11-01",
+  "summary": "Interactive prototype at web/lab/workspace.html (code in web/src/lab/workspace/). Observe keeps one set of regions (toolbar, image, band under the image, right panel of cards, drawer, status bar) and four task modes (Framing, Focus, Field, Run, Alt+1-4) re-arrange them; each mode remembers its own layout. The image is the app's real FitsViewer (WebGL2, auto rotation of the 1080 x 1920 frame) fed with synthetic 16-bit frames rendered in a worker (or the simulator server's live frames with ?frames=server). The night is a seeded synthetic replay modelled on the aggregates of the owner's 2026-09-25 RR Lyr run (195 frames, 51.5 s cadence, HFD jump from frame 148); it is NOT the owner's data, comparison ids are 000-LAB-xxx on purpose, and unlike the real run it has a check star. Shots are 1440 x 900 at DPR 1 in headless Chrome 156 with the simulated clock frozen (?speed=0), except the 1280 x 800 ones, run-live (clock running x60) and the webkit-* ones (real macOS 26.5 WKWebView, rendered at 2x and downscaled to 1440 wide). Night Red audit (research lab rule: a pixel fails when max(G,B) > 8 and > 0.68 x R): 0 failing pixels in 10 of the 13 Chrome Night Red shots; run-night-red, attention-night-red (23 each) and field-night-red (48) fail only on near-black anti-aliased edges of the image overlay labels (--overlay-label = --fg #d88f8f over its black halo; brightest offender max(G,B) = 15/255), and all pass once 8-bit rounding (±0.5 per channel) is allowed for. WebKit 2x originals: run 19 strict / 0 tolerant, Watch and Framing 0.",
+  "shots": [
+    {
+      "file": "run-observatory.png",
+      "caption": "Observe › Run, Observatory, frame 160 of 195 (22:22 UTC). Image 947 x 533 with no black band; the band under it (295 px, exactly the space the fitted 16:9 frame leaves) holds the live light curve as two facets on the planned run window: RR Lyr magnitude (inverted, error bars) over the check star's difference from its median with its trailing 15-point ±1σ envelope; the HFD rule's period is hatched and labelled from 22:13, the newest point ringed, a dashed line marks now. Right panel in the Run preset: Run card (160/195, last frame 12 s ago every 51.5 s observed, ends 22:52 UTC, the HFD item with Focus view / Acknowledge, Pause and Stop…), Photometry (comps used 2/6 marked 'low'), Conditions (HFD 17.1 px with baseline and rule, sparkline), Mount folded to one line. Status bar: REC chip and the attention chip '1 HFD rise'.",
+      "tags": ["observe", "run", "light-curve", "attention", "observatory", "1440x900"]
+    },
+    {
+      "file": "run-charcoal.png",
+      "caption": "Same Run state in Charcoal: same layout, Charcoal tokens on cards, chips and charts (role colours unchanged, BRAND 10).",
+      "tags": ["observe", "run", "charcoal", "1440x900"]
+    },
+    {
+      "file": "run-night-red.png",
+      "caption": "Same Run state in Night Red: the frame rendered red only (value x --viewer-tint), roles told apart by shape (circle / square / triangle), single-hue chart roles, hatch and rule line in the red --warning. Audit: 23 pixels fail the strict test, all on the anti-aliased edges of overlay labels (compass E, '418', '953', '523 chk'), max(G,B) 15/255; 0 with 8-bit rounding tolerance.",
+      "tags": ["observe", "run", "night-red", "audit", "1440x900"]
+    },
+    {
+      "file": "run-healthy-charcoal.png",
+      "caption": "Run at frame 120 (21:47 UTC), before the focus loss: crisp stars (HFD 6.1 px), attention chip '0 Attention', Conditions 'Steady', light curve without hatch; the ends time (22:52 UTC, in 1h 04m) comes from the observed cadence.",
+      "tags": ["observe", "run", "healthy", "charcoal"]
+    },
+    {
+      "file": "run-live-observatory.png",
+      "caption": "Live behaviour: started at frame 146 with the simulated clock at x60, captured 9 s later at frame 157: new synthetic frames arrived through the worker and the real FitsViewer, the curve grew, the HFD rule fired by itself at frame 150 (attention chip, Run card line, hatch), the last-frame age ticks (31 s). Values changed only when a frame arrived; nothing tweened.",
+      "tags": ["observe", "run", "live", "attention", "observatory"]
+    },
+    {
+      "file": "run-complete-observatory.png",
+      "caption": "Run complete (195/195): the Run card becomes the wrap-up: outcome and 'Tracking is still on', calibration for tonight's lights ('Take 20 darks', about 17 min at tonight's observed cadence; 'Take 30 biases'), Park by hold-to-confirm, session folder and size. HUD chip DONE, status bar 'Done RR Lyr 195/195'.",
+      "tags": ["observe", "run", "wrap-up", "observatory"]
+    },
+    {
+      "file": "run-1280x800-observatory.png",
+      "caption": "Run at 1280 x 800: the mode bar drops its labels and the command field collapses to its icon (container query on the toolbar, 1240 px), image 787 x 443 still with no black band, band 285 px, right panel unchanged at 400 px.",
+      "tags": ["observe", "run", "1280x800", "observatory", "responsive"]
+    },
+    {
+      "file": "framing-observatory.png",
+      "caption": "Observe › Framing (live view #128, 2.0 s): Mount card open on the target block (object, distance from pointing, Slew, Centre disabled until the field is identified, Park), Camera card (exposure and gain in the app's NumberField, frame type and filter segmented, Shot). The band holds the app's own Histogram with B / M / W handles, the levels, and the exposure check 'peak, not picture': peaks measured on the frame on screen as true-length bars against 65 535 (RR Lyr 46 998, brightest comparison 28 900, one candidate 'clipped'), clipped pixels, sky, HFD, stars. 'Field not identified · S' chip, no compass yet.",
+      "tags": ["observe", "framing", "exposure-check", "histogram", "observatory"]
+    },
+    {
+      "file": "framing-charcoal.png",
+      "caption": "Framing in Charcoal.",
+      "tags": ["observe", "framing", "charcoal"]
+    },
+    {
+      "file": "framing-night-red.png",
+      "caption": "Framing in Night Red: histogram, meters, NumberFields and segmented controls all token-drawn; audit 0 failing pixels.",
+      "tags": ["observe", "framing", "night-red", "audit"]
+    },
+    {
+      "file": "framing-1280x800-night-red.png",
+      "caption": "Framing at 1280 x 800 in Night Red: mode bar icon-only, image 787 x 443, band 285 px; audit 0.",
+      "tags": ["observe", "framing", "night-red", "1280x800", "audit"]
+    },
+    {
+      "file": "focus-observatory.png",
+      "caption": "Observe › Focus during an autofocus (step 7 of 14): the V-curve gets 58 % of the band (steps still to measure are open ticks on its axis), HFD now and best in 22 px, the HFD trend of the last 30 minutes; HFD rings with values on the brightest stars; Focuser card first (Halt and progress), focus steps disabled with the reason while autofocus runs.",
+      "tags": ["observe", "focus", "v-curve", "observatory"]
+    },
+    {
+      "file": "focus-during-run-charcoal.png",
+      "caption": "Focus mode opened DURING the run (the path of the alert's 'Focus view'): the last autofocus V-curve with its fit and best position 1 305, next to this run's HFD over the last 30 min with baseline and the 1.5 x rule line: the jump to about 17 px at 22:13 is explained where the focus is judged. Rings on stars read 16-18 px. The run keeps going (REC chip).",
+      "tags": ["observe", "focus", "run", "attention", "charcoal"]
+    },
+    {
+      "file": "mode-switch-reduced-observatory.png",
+      "caption": "Same Focus-during-run state in Observatory with ?motion=reduced: mode switches are an instant swap (the 180 ms View Transition cross-fade is skipped); per-mode layout: Focuser and Camera open, Mount and Photometry folded with one-line summaries.",
+      "tags": ["observe", "focus", "reduced-motion", "observatory"]
+    },
+    {
+      "file": "field-observatory.png",
+      "caption": "Observe › Field, field identified: the band is the comparison workspace: candidates table (role shape, star, V, B−V, Δ(B−V) against the target, separation, peak ADU measured on this frame, SNR, Nbr = catalogue stars inside the 31″ aperture, status), flagged values underlined in --warning (Δ(B−V) > 0.3, blend), sorted by |Δ(B−V)|. Hovering a row rings its star on the image (dotted, 000-LAB-666); the selected star (000-LAB-665) has the brass selection ring, the compact on-image star card (identity + role buttons only) and the Inspector card with an aperture thumbnail made from this frame's own pixels (aperture and sky annulus drawn). Grid of N / E compass, 5′ scale bar, field chips (2.39″/px, rot 91.2°, target 1.5′).",
+      "tags": ["observe", "field", "inspector", "table", "observatory"]
+    },
+    {
+      "file": "field-night-red.png",
+      "caption": "Field in Night Red: role shapes, dashed candidate squares, selection ring, thumbnail in the red viewer tint. Audit: 48 strict-test pixels, all overlay-label anti-aliasing (max(G,B) 15), 0 with rounding tolerance.",
+      "tags": ["observe", "field", "night-red", "audit"]
+    },
+    {
+      "file": "watch-observatory.png",
+      "caption": "Watch (W): the run read from 2 m. Attention row replaces the state row: 'HFD 16.0 px · 2.5 x baseline' (a short headline for distance; the full rule is in the list) with Acknowledge. Target 7.627 at 88 px, check σ 0.028 at 66 px with comparisons used and verdict, end 22:52 UTC (in 30 min), the light curve with 20 px ticks and 9 px markers, stars / HFD / altitude tiles at 48 px with sparklines and a 'rule' tag; footer: links, Dim 100/60/30 %, Pause by hold-to-confirm, 'W or Esc: back'. Only W, Esc, ? and Mod+K act here.",
+      "tags": ["watch", "glance", "attention", "observatory"]
+    },
+    {
+      "file": "watch-charcoal.png",
+      "caption": "Watch in Charcoal.",
+      "tags": ["watch", "charcoal"]
+    },
+    {
+      "file": "watch-night-red.png",
+      "caption": "Watch in Night Red, the reference case: everything from Night Red tokens, attention by outline weight and words (no large red fill), curve in single-hue role reds with shapes. Audit 0 failing pixels.",
+      "tags": ["watch", "night-red", "audit"]
+    },
+    {
+      "file": "watch-dim30-night-red.png",
+      "caption": "Watch dimmed to 30 % (CSS brightness filter on the whole view): hue kept, so red-only stays red-only; audit 0.",
+      "tags": ["watch", "night-red", "dim", "audit"]
+    },
+    {
+      "file": "watch-healthy-nocheck-night-red.png",
+      "caption": "Watch at frame 120 with no check star (?nocheck=1, the case of all three real runs): first row RUNNING / 120 / 195 frames / 12 s last frame every 52 s; the CHECK tile says 'No check star · add one in Field'; the curve shows the target facet only. Audit 0.",
+      "tags": ["watch", "night-red", "no-check-star", "audit"]
+    },
+    {
+      "file": "watch-1280x800-night-red.png",
+      "caption": "Watch at 1280 x 800 in Night Red: the headline font clamps (2.6 vw) and ellipsises rather than pushing Acknowledge off screen; rows shrink in height only. Audit 0.",
+      "tags": ["watch", "night-red", "1280x800", "audit"]
+    },
+    {
+      "file": "palette-park-observatory.png",
+      "caption": "Command palette (Mod+K) during the run, query 'park': ranked by prefix / word start / substring / subsequence with the matched letters underlined; 'Park the mount' is listed but disabled with the server's reason ('not now: the sequence is running (pause it first)'); 3 of 79 commands (index = the app's keymap registry + modes, views, panels, hardware, stars, settings).",
+      "tags": ["palette", "keyboard", "hardware", "observatory"]
+    },
+    {
+      "file": "palette-confirm-charcoal.png",
+      "caption": "Palette, no run, 'park' + Enter: a hardware action never runs on Enter alone; the row opens its confirmation in place ('Park the mount? Parking closes the Seestar arm and stops tracking.' Cancel / Park · Enter).",
+      "tags": ["palette", "hardware", "confirmation", "charcoal"]
+    },
+    {
+      "file": "palette-empty-night-red.png",
+      "caption": "Palette with an empty query in Night Red: modes with their Alt+1-4 key caps and task hints, views, hardware (disabled reasons during the run), then actions from the app registry; scrim and surfaces token-drawn. Audit 0.",
+      "tags": ["palette", "night-red", "audit"]
+    },
+    {
+      "file": "attention-observatory.png",
+      "caption": "Attention list from the status-bar chip (the notification area for unattended runs): level word + edge weight (never colour alone), time and frame, the rule's numbers ('HFD above 1.5 x 6.38 px for 3 frames in a row (16.8, 15.8, 16.0 px, frames 148-150)'), 'Focus view' and Acknowledge; sound Off / Soft / Normal (Web Audio tones, armed by a click); no OS notification.",
+      "tags": ["attention", "notifications", "observatory"]
+    },
+    {
+      "file": "attention-night-red.png",
+      "caption": "Attention list in Night Red. Audit: 23 strict-test pixels from overlay labels on the image behind, 0 with rounding tolerance.",
+      "tags": ["attention", "night-red", "audit"]
+    },
+    {
+      "file": "arrange-charcoal.png",
+      "caption": "Arrange (Panels popover) for Run after folding Conditions: each card Open / Folded / Hidden for THIS mode, the change marked ('preset: open'), band and drawer toggles with their keys, 'Reset Run layout' / 'Reset all four modes'. A dot on the Run segment and on the Arrange button says the mode's layout differs from its preset; the folded Conditions header keeps 'HFD 17.1 px · 2 403 stars'.",
+      "tags": ["layout", "presets", "arrange", "charcoal"]
+    },
+    {
+      "file": "band-drag-observatory.png",
+      "caption": "Dragging the band's separator (WAI-ARIA splitter, 7 px hit area on a 1 px line): the live cost is shown on the image ('Band 445 px · image 681 × 383 · side margins 133 px'): what a taller curve costs in image pixels. The header then says 'set by you' with 'Fit to image' to return to the BRAND 11.1 size; the mode gets its 'modified' dot.",
+      "tags": ["layout", "splitter", "interaction", "observatory"]
+    },
+    {
+      "file": "drawer-conditions-observatory.png",
+      "caption": "Drawer on the Conditions tab (D): HFD, stars and sky as small multiples on the run window with one crosshair, baseline and rule lines, the HFD period hatched. Opening the drawer shrank the band to its one-row form ('Light curve #160 7.627 ± 0.034 TG · check 8.582 · HFD rule since 22:13'), as tall as the space left, so the image stays 947 x 533 with no black band.",
+      "tags": ["drawer", "conditions", "layout", "observatory"]
+    },
+    {
+      "file": "drawer-log-night-red.png",
+      "caption": "Drawer on the Log tab during Framing, Night Red: UTC time, level tag (told apart by the word, BRAND 4.3), source, text; the band in its compact levels row. Audit 0.",
+      "tags": ["drawer", "log", "night-red", "audit"]
+    },
+    {
+      "file": "region-stats-observatory.png",
+      "caption": "Region statistics (R, drag a box; the viewer does not pan meanwhile): 330 x 410 px, median 1 196, mean 1 231, σ 720.1, max 65 535, clipped 1, computed on the frame's own pixels (the clipped pixel is one of the synthetic sensor's hot pixels). Cursor readout bottom right: X 676 Y 296 ADU 1 281 (no RA / Dec until the field is identified).",
+      "tags": ["inspector", "region", "hud", "observatory"]
+    },
+    {
+      "file": "hover-readout-run-observatory.png",
+      "caption": "Hovering the light curve: one crosshair through both facets, the hovered point ringed (10-12 px, --chart-highlight), the header readout in mono: '#125 21:52:10 UTC JD 2461309.41122 7.572 ± 0.012 chk +0.012' (legend and readout in the header, never over the data).",
+      "tags": ["chart", "light-curve", "hover", "observatory"]
+    },
+    {
+      "file": "hold-park-charcoal.png",
+      "caption": "Hold-to-confirm on Park in the wrap-up, captured 380 ms into the 700 ms hold: the fill is elapsed time (linear; four steps under reduced motion), the label reads 'Release to cancel'; releasing early sends nothing; Enter opens the inline two-button confirmation instead.",
+      "tags": ["hardware", "hold-to-confirm", "charcoal"]
+    },
+    {
+      "file": "comfortable-run-observatory.png",
+      "caption": "Comfortable density (?density=comfortable, proposal): key values 26 px (frames 160, last frame, ends, target magnitude, check σ), readouts 20 px, table rows 28 px; toolbar, icons and image unchanged (not a page zoom, Q-G4).",
+      "tags": ["density", "observatory"]
+    },
+    {
+      "file": "overview-observatory.png",
+      "caption": "Sections overview (rail foot): Connection, Observe, Plan, Review and Settings as blueprints at the same 1440 x 900 scale: the same rail, one toolbar row with the same right end (command field, Watch, Arrange, Panels), a hero region (outlined), optional band (hatched), right panel, drawer (dashed), status bar; regions new in this proposal carry a corner tick and the word 'new' (night checklist strip, task band, review health strip). The sixth cell lists what every section shares.",
+      "tags": ["overview", "sections", "information-architecture", "observatory"]
+    },
+    {
+      "file": "overview-charcoal.png",
+      "caption": "Sections overview in Charcoal.",
+      "tags": ["overview", "charcoal"]
+    },
+    {
+      "file": "overview-night-red.png",
+      "caption": "Sections overview in Night Red; audit 0.",
+      "tags": ["overview", "night-red", "audit"]
+    },
+    {
+      "file": "section-plan-observatory.png",
+      "caption": "Plan selected in the rail: its blueprint at full size inside the live shell (the rail and status bar are real): run strip, Steps as the hero, Visibility as the band, Log drawer, Plan cards; a note says the lab builds Observe only.",
+      "tags": ["sections", "plan", "blueprint", "observatory"]
+    },
+    {
+      "file": "section-review-night-red.png",
+      "caption": "Review blueprint in Night Red: health strip (new), plot wall as the hero, Frames · Ensemble · Log drawer, Review cards. Audit 0.",
+      "tags": ["sections", "review", "blueprint", "night-red", "audit"]
+    },
+    {
+      "file": "server-frames-observatory.png",
+      "caption": "?frames=server: the real ARGOS simulator server (port 8784, temporary config) in live view feeds the lab through the app's own FrameStream; the real FitsViewer shows its 1080 x 1920 frame #58, the HUD chips and the sky value come from the frame header (1.0 s, simulator, UTC time), the histogram from its pixels. Honest limit: the star peaks (shown '—', empty bars), the cards and the overlays stay synthetic, so their positions do not match these stars.",
+      "tags": ["server", "simulator", "fitsviewer", "observatory"]
+    },
+    {
+      "file": "webkit-run-night-red.png",
+      "caption": "WebKit check: Run in Night Red rendered by a real WKWebView of macOS 26.5 (the research lab's probe, binary stamped for the macOS 26 SDK, as a Tauri build gets), 2x, downscaled: WebGL2 frame, uPlot facets with device-scaled canvas labels, container queries and View Transitions present. Audit of the 2x original: 19 strict / 0 tolerant pixels.",
+      "tags": ["webkit", "wkwebview", "run", "night-red", "audit"]
+    },
+    {
+      "file": "webkit-watch-night-red.png",
+      "caption": "WebKit (WKWebView, macOS 26.5): Watch in Night Red, identical layout to Chrome; audit of the 2x original 0.",
+      "tags": ["webkit", "wkwebview", "watch", "night-red", "audit"]
+    },
+    {
+      "file": "webkit-framing-night-red.png",
+      "caption": "WebKit (WKWebView, macOS 26.5): Framing in Night Red with the app's Histogram and the exposure check; audit of the 2x original 0.",
+      "tags": ["webkit", "wkwebview", "framing", "night-red", "audit"]
+    },
+    {
+      "file": "webkit-field-observatory.png",
+      "caption": "WebKit (WKWebView, macOS 26.5): Field with the candidates table, Inspector thumbnail and star card.",
+      "tags": ["webkit", "wkwebview", "field", "observatory"]
+    },
+    {
+      "file": "webkit-palette-charcoal.png",
+      "caption": "WebKit (WKWebView, macOS 26.5): command palette opened from the URL; the input has focus (document.activeElement INPUT) and 3 options are listed for 'park'.",
+      "tags": ["webkit", "wkwebview", "palette", "charcoal"]
+    }
+  ]
+}

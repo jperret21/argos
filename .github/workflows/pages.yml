@@ -47,16 +47,21 @@ jobs:
       # Sphinx renders the architecture diagrams through the native `dot`
       # executable, which the Python extension does not bundle. Because the
       # build runs with -W, a missing dot fails the job rather than warning.
+      # fonts-ibm-plex: dot sizes each box with the font the .dot files name
+      # (IBM Plex, which the page then serves from _static/diagrams.css);
+      # without it the boxes are measured for a fallback font.
       - name: Install Graphviz
-        run: sudo apt-get update && sudo apt-get install -y graphviz
+        run: sudo apt-get update && sudo apt-get install -y graphviz fonts-ibm-plex
 
       # PyQt6 is fully mocked in docsrc/conf.py, so the docs build needs no
       # Qt runtime and no display — the docs extra alone is enough.
       - name: Install dependencies
         run: uv sync --extra docs
 
+      # Doctrees outside the published folder: 20 MB of pickles, which also
+      # hold the build machine's paths.
       - name: Build documentation
-        run: uv run --extra docs sphinx-build -W -b html docsrc _build/docs
+        run: uv run --extra docs sphinx-build -W -b html -d _build/doctrees docsrc _build/docs
 
       - name: Assemble the site
         run: |

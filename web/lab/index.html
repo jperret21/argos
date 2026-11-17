@@ -1,0 +1,610 @@
+<!doctype html>
+<html lang="en" data-theme="observatory">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="icon" href="data:," />
+    <title>ARGOS Lab</title>
+    <script>
+      // Theme before the first paint (no graphite flash in Night Red). Lab only:
+      // ?theme=observatory|charcoal|night-red, else the lab's own remembered
+      // choice. The lab never writes the app's argos.* keys.
+      (function () {
+        var t = null;
+        try {
+          t = new URLSearchParams(location.search).get('theme');
+          if (!t) t = localStorage.getItem('argos-lab.theme');
+        } catch (e) {
+          /* storage can be blocked: keep the default */
+        }
+        if (t === 'observatory' || t === 'charcoal' || t === 'night-red') {
+          document.documentElement.setAttribute('data-theme', t);
+        }
+      })();
+    </script>
+    <link rel="stylesheet" href="../src/design/tokens.css" />
+    <style>
+      html {
+        background: var(--bg);
+        scrollbar-color: var(--border) var(--bg);
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: var(--font-ui);
+        font-size: var(--text-m);
+        line-height: var(--leading-normal);
+        -webkit-font-smoothing: antialiased;
+      }
+      ::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+        background: var(--bg);
+      }
+      ::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: var(--radius-round);
+      }
+      a {
+        color: var(--fg);
+        text-decoration: underline;
+        text-decoration-color: var(--border);
+        text-underline-offset: 3px;
+      }
+      a:hover {
+        text-decoration-color: var(--fg-muted);
+      }
+      :focus-visible {
+        outline: var(--focus-ring-w) solid var(--focus-ring);
+        outline-offset: var(--focus-ring-offset);
+      }
+      code,
+      .num {
+        font-family: var(--font-mono);
+        font-variant-numeric: var(--numeric);
+        font-size: var(--text-s);
+      }
+      .page {
+        max-width: 1240px;
+        margin: 0 auto;
+        padding: 0 16px 48px;
+      }
+
+      /* Header: the mark (generated file, never redrawn: shown through a mask),
+         the wordmark in Plex Sans 600, the lab's date, the theme choice. */
+      header.top {
+        display: flex;
+        align-items: center;
+        gap: var(--space-4);
+        min-height: 56px;
+        border-bottom: var(--border-w) solid var(--border);
+        flex-wrap: wrap;
+      }
+      .mark {
+        width: 24px;
+        height: 24px;
+        flex: none;
+        background: var(--accent);
+        -webkit-mask: url('../src/design/icons/about.svg') center / contain no-repeat;
+        mask: url('../src/design/icons/about.svg') center / contain no-repeat;
+      }
+      .wordmark {
+        font-weight: var(--weight-semibold);
+        font-size: 19px;
+        letter-spacing: -0.065em;
+      }
+      .eyebrow {
+        color: var(--text-muted);
+        font-family: var(--font-mono);
+        font-size: var(--text-2xs);
+        font-weight: var(--weight-medium);
+        letter-spacing: var(--tracking-caps);
+        text-transform: uppercase;
+      }
+      .grow {
+        flex: 1;
+      }
+      .seg {
+        display: inline-flex;
+        border: var(--border-w) solid var(--border);
+        border-radius: var(--radius-s);
+        padding: 1px;
+        gap: 1px;
+      }
+      .seg button {
+        height: 26px;
+        padding: 0 var(--space-3);
+        border: var(--border-w) solid transparent;
+        border-radius: var(--radius-s);
+        background: transparent;
+        color: var(--text-muted);
+        font: inherit;
+        font-size: var(--text-s);
+        cursor: pointer;
+        transition: background-color var(--duration-fast) var(--ease-standard);
+      }
+      .seg button:hover {
+        background: var(--hover-bg);
+        color: var(--fg);
+      }
+      .seg button[aria-checked='true'] {
+        background: var(--toggled-bg);
+        border-color: var(--border);
+        color: var(--fg);
+      }
+
+      .intro {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: var(--space-5);
+        padding: var(--space-6) 0 var(--space-5);
+      }
+      @media (min-width: 1000px) {
+        .intro {
+          grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+        }
+      }
+      h1 {
+        margin: 0 0 var(--space-3);
+        font-size: var(--text-2xl);
+        font-weight: var(--weight-semibold);
+        letter-spacing: -0.02em;
+        line-height: var(--leading-tight);
+      }
+      .intro p {
+        margin: 0 0 var(--space-3);
+        color: var(--fg);
+        line-height: var(--leading-relaxed);
+        max-width: 68ch;
+        text-wrap: pretty;
+      }
+      .muted {
+        color: var(--text-muted);
+      }
+      .docs {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-2);
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .docs li {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 2px;
+        padding: var(--space-3) var(--space-4);
+        border: var(--border-w) solid var(--border-soft);
+        border-radius: var(--radius-m);
+        background: var(--bg-2);
+      }
+      .docs li.first {
+        border-color: var(--border);
+      }
+      .docs a {
+        font-weight: var(--weight-medium);
+      }
+      .docs span {
+        color: var(--text-muted);
+        font-size: var(--text-s);
+      }
+
+      h2 {
+        display: flex;
+        align-items: baseline;
+        gap: var(--space-3);
+        margin: var(--space-6) 0 var(--space-4);
+        font-size: var(--text-l);
+        font-weight: var(--weight-semibold);
+      }
+      .cards {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: var(--space-4);
+      }
+      @media (min-width: 1000px) {
+        .cards {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+      .card {
+        display: flex;
+        flex-direction: column;
+        border: var(--border-w) solid var(--border);
+        border-radius: var(--radius-m);
+        background: var(--bg-2);
+        overflow: hidden;
+      }
+      .card header {
+        display: flex;
+        align-items: baseline;
+        gap: var(--space-3);
+        padding: var(--space-4) var(--space-4) var(--space-1);
+        flex-wrap: wrap;
+      }
+      .card h3 {
+        margin: 0;
+        font-size: var(--text-l);
+        font-weight: var(--weight-semibold);
+      }
+      .card h3 a {
+        text-decoration: none;
+      }
+      .card h3 a:hover {
+        text-decoration: underline;
+        text-decoration-color: var(--fg-muted);
+      }
+      .card .one {
+        margin: 0;
+        padding: 0 var(--space-4) var(--space-3);
+        color: var(--fg);
+        line-height: var(--leading-normal);
+      }
+      .thumb {
+        display: block;
+        border-top: var(--border-w) solid var(--border-soft);
+        border-bottom: var(--border-w) solid var(--border-soft);
+        background: var(--viewer-bg);
+        aspect-ratio: 16 / 10;
+        overflow: hidden;
+      }
+      .thumb img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: top left;
+      }
+      /* One picture per theme family. Night Red pictures are scaled with
+         nearest-neighbour sampling: a smoothing filter with negative lobes can
+         create green or blue above red on near-black edges (measured on a
+         resampled capture), nearest-neighbour only repeats audited pixels. */
+      [data-theme='night-red'] .thumb .day,
+      html:not([data-theme='night-red']) .thumb .nr {
+        display: none;
+      }
+      [data-theme='night-red'] .thumb .nr,
+      [data-theme='night-red'] .thumb .nrpx {
+        image-rendering: pixelated;
+      }
+      .links {
+        margin: 0;
+        padding: var(--space-3) var(--space-4) var(--space-4);
+        list-style: none;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+      }
+      .links li {
+        display: grid;
+        grid-template-columns: 172px minmax(0, 1fr);
+        gap: var(--space-3);
+        padding: 5px 0;
+        border-bottom: var(--border-w) solid var(--border-soft);
+        font-size: var(--text-s);
+      }
+      .links li:last-child {
+        border-bottom: none;
+      }
+      .links li span {
+        color: var(--text-muted);
+      }
+      @media (max-width: 560px) {
+        .links li {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 0;
+        }
+      }
+      .card footer {
+        margin-top: auto;
+        padding: var(--space-3) var(--space-4);
+        border-top: var(--border-w) solid var(--border-soft);
+        color: var(--text-muted);
+        font-size: var(--text-s);
+      }
+
+      .shots {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: var(--space-3);
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .shots li {
+        font-size: var(--text-s);
+      }
+      .shots a {
+        display: block;
+      }
+      .shots .thumb {
+        border: var(--border-w) solid var(--border-soft);
+        border-radius: var(--radius-s);
+        margin-bottom: var(--space-1);
+      }
+      /* Non-Night-Red captures are not shown in Night Red (they emit grey,
+         blue and green light); the link and caption stay. */
+      [data-theme='night-red'] .shots .thumb.day-only img {
+        display: none;
+      }
+      [data-theme='night-red'] .shots .thumb.day-only::after {
+        content: 'Hidden in Night Red: an Observatory or Charcoal capture';
+        display: grid;
+        place-items: center;
+        height: 100%;
+        color: var(--text-muted);
+        font-size: var(--text-xs);
+        text-align: center;
+        padding: 0 var(--space-3);
+      }
+      .folders {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+      }
+      .folders li {
+        display: grid;
+        grid-template-columns: 300px minmax(0, 1fr);
+        gap: var(--space-3);
+        padding: 6px 0;
+        border-bottom: var(--border-w) solid var(--border-soft);
+        font-size: var(--text-s);
+      }
+      @media (max-width: 700px) {
+        .folders li {
+          grid-template-columns: minmax(0, 1fr);
+        }
+      }
+      .folders span {
+        color: var(--text-muted);
+      }
+      .run {
+        padding: var(--space-4);
+        border: var(--border-w) solid var(--border-soft);
+        border-radius: var(--radius-m);
+        background: var(--bg-2);
+        overflow-x: auto;
+      }
+      .run pre {
+        margin: 0;
+        font-family: var(--font-mono);
+        font-size: var(--text-s);
+        line-height: var(--leading-relaxed);
+        color: var(--fg);
+        white-space: pre;
+      }
+      .run p {
+        margin: var(--space-3) 0 0;
+        color: var(--text-muted);
+        font-size: var(--text-s);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="top">
+        <span class="mark" role="img" aria-label="ARGOS mark"></span>
+        <span class="wordmark">ARGOS</span>
+        <span class="eyebrow">Lab · UI refresh · 2026-11-01</span>
+        <span class="grow"></span>
+        <span class="eyebrow" id="theme-label">Theme</span>
+        <div class="seg" role="radiogroup" aria-labelledby="theme-label" id="theme">
+          <button type="button" role="radio" data-theme-id="observatory" aria-checked="true">Observatory</button>
+          <button type="button" role="radio" data-theme-id="charcoal" aria-checked="false">Charcoal</button>
+          <button type="button" role="radio" data-theme-id="night-red" aria-checked="false">Night Red</button>
+        </div>
+      </header>
+
+      <section class="intro" aria-labelledby="intro-title">
+        <div>
+          <h1 id="intro-title">The refreshed ARGOS interface, as working prototypes</h1>
+          <p>
+            Four labs built by the design team on synthetic data: the Observe workspace in its four task modes and
+            the Watch view, the live charts, the control system, and the stack research behind them. They import the
+            app's tokens, icons and components read-only; nothing here is wired to the telescope, and the lab is not
+            the app.
+          </p>
+          <p class="muted">
+            Every page reads <code>?theme=observatory|charcoal|night-red</code> and <code>?motion=reduced</code>. The
+            links below carry the theme chosen above. Synthetic nights: RR Lyr (a replay modelled on the totals of the
+            owner's 2026-09-25 run, not his data) and SW And (a synthetic ephemeris).
+          </p>
+        </div>
+        <ul class="docs" aria-label="Documents">
+          <li class="first">
+            <a href="PROPOSAL.md">PROPOSAL.md: the synthesis for the owner</a>
+            <span>Direction in seven principles, every proposal adopted, adapted or rejected with its reason, BRAND amendments, tokens, promotion by wave, WebKit risks, decisions.</span>
+          </li>
+          <li>
+            <a href="research/functional-spaces.md">Functional spaces of an ARGOS night</a>
+            <span>UX research: 13 tasks from preparation to the morning after, reading distance, findings from three real nights.</span>
+          </li>
+          <li>
+            <a href="research/stack-capabilities.md">What our stack can do</a>
+            <span>Svelte 5, uPlot, Canvas, WebGL2 and CSS, measured in Chromium 156 and a macOS 26.5 WKWebView.</span>
+          </li>
+        </ul>
+      </section>
+
+      <h2>Prototypes <span class="eyebrow">synthetic data · Chrome 156 and WKWebView checked</span></h2>
+      <div class="cards">
+        <article class="card" aria-labelledby="c-ws">
+          <header><h3 id="c-ws"><a data-lab href="workspace.html?scene=run">Observe workspace</a></h3><span class="eyebrow">workspace.html</span></header>
+          <p class="one">One set of regions, four task modes (Framing, Focus, Field, Run), a band under the image that follows the task, the Run card, Watch for 2 m, attention, command palette.</p>
+          <a class="thumb" data-lab href="workspace.html?scene=run" aria-hidden="true" tabindex="-1">
+            <img class="day" loading="lazy" src="../screenshots/2026-11-01_lab-synthesis/hero-01-observe-run-observatory.png" alt="" />
+            <img class="nr" loading="lazy" src="../screenshots/2026-11-01_lab-synthesis/hero-02-observe-run-night-red.png" alt="" />
+          </a>
+          <ul class="links">
+            <li><a data-lab href="workspace.html?scene=run">Run</a><span>Frame 160 of 195, HFD rule fired at 22:13: light curve in the band, Run card, attention chip.</span></li>
+            <li><a data-lab href="workspace.html?scene=run&amp;frame=146&amp;speed=60">Run, live at ×60</a><span>Frames flow through the real FitsViewer; the HFD rule fires by itself at frame 150.</span></li>
+            <li><a data-lab href="workspace.html?scene=framing">Framing</a><span>Levels and the exposure check: peaks measured against 65 535, not judged on the picture.</span></li>
+            <li><a data-lab href="workspace.html?scene=focus">Focus</a><span>Autofocus in progress: V-curve and HFD trend in the band, Focuser card first.</span></li>
+            <li><a data-lab href="workspace.html?scene=run&amp;mode=focus">Focus during the run</a><span>Where the alert's "Focus view" lands: the jump to 17 px against the 1.5× baseline line.</span></li>
+            <li><a data-lab href="workspace.html?scene=field&amp;select=2&amp;hover=4">Field</a><span>Comparison candidates (V, B−V, Δ(B−V), separation, peak, neighbours) linked to the image; Inspector.</span></li>
+            <li><a data-lab href="workspace.html?scene=run-complete">Wrap-up</a><span>Run complete: darks and biases for tonight's lights, Park by hold-to-confirm.</span></li>
+            <li><a data-lab href="workspace.html?scene=run&amp;view=watch">Watch</a><span>The run read from 2 m: 88 / 66 px digits, attention row that keeps the last-frame age, dimming.</span></li>
+            <li><a data-lab href="workspace.html?scene=run&amp;view=palette">Command palette</a><span>⌘K / Ctrl+K over 79 commands; hardware actions confirm in place, disabled ones say why.</span></li>
+            <li><a data-lab href="workspace.html?scene=run&amp;attention=open">Attention list</a><span>Rule with its numbers, Acknowledge, suggested view, sound Off / Soft / Normal.</span></li>
+            <li><a data-lab href="workspace.html?scene=run&amp;density=comfortable">Comfortable density</a><span>Key values 26 px, rows 28 px, through tokens: not a page zoom.</span></li>
+            <li><a data-lab href="workspace.html?scene=run&amp;view=overview">Sections overview</a><span>Design artefact: Connection, Observe, Plan, Review, Settings as blueprints of the same regions.</span></li>
+          </ul>
+          <footer>Code: <code>web/src/lab/workspace/</code> · screenshots: <a href="../screenshots/2026-11-01_lab-workspace/manifest.json">2026-11-01_lab-workspace</a></footer>
+        </article>
+
+        <article class="card" aria-labelledby="c-ch">
+          <header><h3 id="c-ch"><a data-lab href="charts.html?demo=curve">Live charts</a></h3><span class="eyebrow">charts.html</span></header>
+          <p class="one">uPlot charts on one simulated clock: linked facets, zoom that new frames never move, UTC / JD / BJD, the age of the last frame on the time axis, rules drawn where they fire.</p>
+          <a class="thumb" data-lab href="charts.html?demo=wall" aria-hidden="true" tabindex="-1">
+            <img class="day" loading="lazy" src="../screenshots/2026-11-01_lab-synthesis/hero-06-review-plot-wall-charcoal.png" alt="" />
+            <img class="nr" loading="lazy" src="../screenshots/2026-11-01_lab-synthesis/hero-07-autofocus-vcurve-night-red.png" alt="" />
+          </a>
+          <ul class="links">
+            <li><a data-lab href="charts.html?demo=curve">Light curve</a><span>Target, check (trailing ±1σ band) and comparison ensemble on one linked axis; fit, follow, zoom kept.</span></li>
+            <li><a data-lab href="charts.html?demo=wall">Plot wall</a><span>Review: one star per cell, session health strip, linked cursor and zoom, selected time across cells.</span></li>
+            <li><a data-lab href="charts.html?demo=vcurve">V-curve</a><span>Autofocus point by point; weighted hyperbola fit with ±1σ; vertex provisional until decided.</span></li>
+            <li><a data-lab href="charts.html?demo=conditions">Conditions</a><span>HFD, stars, sky, airmass to "now"; the gap is the last frame's age, hatched when overdue.</span></li>
+            <li><a data-lab href="charts.html?demo=visibility">Visibility</a><span>Twilight as luminance steps, minimum-altitude handle, transit, Moon, planned run and frames taken.</span></li>
+            <li><a data-lab href="charts.html?demo=histogram">Histogram</a><span>Keyboard B / M / W handles, clipped-to-black and -white fractions, the exact display ramp.</span></li>
+            <li><a data-lab href="charts.html?demo=mini">Mini charts</a><span>Sparklines and meters for chips, rail rows and glance tiles; normal, attention, stale, no data.</span></li>
+            <li><a data-lab href="charts.html?demo=context&amp;chrome=0">In context</a><span>Charts at true size in an Observe › Run mock (superseded by the workspace's Run; kept for scale).</span></li>
+          </ul>
+          <footer>Code: <code>web/src/lab/charts/</code> · screenshots: <a href="../screenshots/2026-11-01_lab-charts/manifest.json">2026-11-01_lab-charts</a></footer>
+        </article>
+
+        <article class="card" aria-labelledby="c-ct">
+          <header><h3 id="c-ct"><a data-lab href="controls.html?plate=buttons">Controls</a></h3><span class="eyebrow">controls.html</span></header>
+          <p class="one">One control button in every state, the time ring, value fields that send one value per commit, the focuser gauge, the jog pad with a visible dead-man, hold-to-confirm.</p>
+          <a class="thumb" data-lab href="controls.html?plate=focuser" aria-hidden="true" tabindex="-1">
+            <img class="day" loading="lazy" src="../screenshots/2026-11-01_lab-synthesis/hero-08-focuser-control-charcoal.png" alt="" />
+            <img class="nr" loading="lazy" src="../screenshots/2026-11-01_lab-controls/focuser-night-red.png" alt="" />
+          </a>
+          <ul class="links">
+            <li><a data-lab href="controls.html?plate=buttons">Buttons</a><span>Rest to error, busy, progress ring and hold ring; unavailable controls say why when pressed.</span></li>
+            <li><a data-lab href="controls.html?plate=toolbar">Toolbars</a><span>Built from data, priority overflow that counts what it holds, split buttons, key hints while ⌘ is held.</span></li>
+            <li><a data-lab href="controls.html?plate=values">Values</a><span>Scrub fields with a visible commit model, steppers that repeat, sliders with ticks, detents and fine drag.</span></li>
+            <li><a data-lab href="controls.html?plate=focuser">Focuser</a><span>Two-scale travel gauge, queued taps, Go to that never moves on blur, Halt always available.</span></li>
+            <li><a data-lab href="controls.html?plate=mount">Mount jog</a><span>Alt / Az keys on the alt-az Seestar, two axes at once, renewal age, server stop after 1 s.</span></li>
+            <li><a data-lab href="controls.html?plate=confirm">Confirm and progress</a><span>Hold 0.7 s for Park and Pause-and-slew; Enter opens the inline confirmation; progress inside buttons.</span></li>
+            <li><a data-lab href="controls.html?plate=status">Status and keys</a><span>Chips double-coded, attention levels by mark and word (never the check star's triangle), key caps.</span></li>
+          </ul>
+          <footer>Code: <code>web/src/lab/controls/</code> · screenshots: <a href="../screenshots/2026-11-01_lab-controls/manifest.json">2026-11-01_lab-controls</a></footer>
+        </article>
+
+        <article class="card" aria-labelledby="c-rs">
+          <header><h3 id="c-rs"><a data-lab href="research.html?demo=curve">Stack research</a></h3><span class="eyebrow">research.html</span></header>
+          <p class="one">The techniques underneath, measured in both engines: big data outside Svelte's proxy, uPlot plugins, a 2 Mpx frame per second, motion rules, popovers, a 10 000-row table, a support matrix.</p>
+          <a class="thumb" data-lab href="research.html?demo=curve" aria-hidden="true" tabindex="-1">
+            <img class="day" loading="lazy" src="../screenshots/2026-11-01_lab-research/curve-observatory.png" alt="" />
+            <img class="nr" loading="lazy" src="../screenshots/2026-11-01_lab-research/curve-threshold-night-red.png" alt="" />
+          </a>
+          <ul class="links">
+            <li><a data-lab href="research.html?demo=curve">Light curve</a><span>Shape-coded markers and error bars in one Path2D, stability band, draggable HFD threshold, 50 000 points.</span></li>
+            <li><a data-lab href="research.html?demo=frame">Frame 1 fps</a><span>Worker statistics, WebGL2 R16UI upload, perceptual (OKLCH) Fire and Ice palettes.</span></li>
+            <li><a data-lab href="research.html?demo=motion">Motion</a><span>Spring, Tween and flip for orientation only; values jump; reduced motion is instant.</span></li>
+            <li><a data-lab href="research.html?demo=space">Space</a><span>Resizable rail and drawer, container queries, subgrid forms, :has() validation.</span></li>
+            <li><a data-lab href="research.html?demo=popover">Popover</a><span>Popover API with anchor positioning, and the script fallback WKWebView needs on an old SDK.</span></li>
+            <li><a data-lab href="research.html?demo=table">Table</a><span>10 000 frames in 41 DOM rows, keyboard grid, filter painted with the Custom Highlight API.</span></li>
+            <li><a data-lab href="research.html?demo=support">Support</a><span>Feature detection and micro-benchmarks in this engine, beside the recorded Chromium and WebKit runs.</span></li>
+          </ul>
+          <footer>Code: <code>web/src/lab/research/</code> · screenshots: <a href="../screenshots/2026-11-01_lab-research/manifest.json">2026-11-01_lab-research</a></footer>
+        </article>
+      </div>
+
+      <h2>Hero screenshots <span class="eyebrow">2026-11-01_lab-synthesis · 1440 x 900 unless noted</span></h2>
+      <ul class="shots" aria-label="Hero screenshots">
+        <li><a href="../screenshots/2026-11-01_lab-synthesis/hero-01-observe-run-observatory.png"><span class="thumb day-only"><img loading="lazy" src="../screenshots/2026-11-01_lab-synthesis/hero-01-observe-run-observatory.png" alt="" /></span>Observe › Run, Observatory</a></li>
+        <li><a href="../screenshots/2026-11-01_lab-synthesis/hero-02-observe-run-night-red.png"><span class="thumb"><img class="nrpx" loading="lazy" src="../screenshots/2026-11-01_lab-synthesis/hero-02-observe-run-night-red.png" alt="" /></span>Observe › Run, Night Red</a></li>
+        <li><a href="../screenshots/2026-11-01_lab-synthesis/hero-03-watch-attention-night-red.png"><span class="thumb"><img class="nrpx" style="object-position: center 55%" loading="lazy" src="../screenshots/2026-11-01_lab-synthesis/hero-03-watch-attention-night-red.png" alt="" /></span>Watch with an attention item, Night Red</a></li>
+        <li><a href="../screenshots/2026-11-01_lab-synthesis/hero-04-observe-field-observatory.png"><span class="thumb day-only"><img loading="lazy" src="../screenshots/2026-11-01_lab-synthesis/hero-04-observe-field-observatory.png" alt="" /></span>Observe › Field, Observatory</a></li>
+        <li><a href="../screenshots/2026-11-01_lab-synthesis/hero-05-observe-focus-during-run-charcoal.png"><span class="thumb day-only"><img loading="lazy" src="../screenshots/2026-11-01_lab-synthesis/hero-05-observe-focus-during-run-charcoal.png" alt="" /></span>Focus during the run, Charcoal</a></li>
+        <li><a href="../screenshots/2026-11-01_lab-synthesis/hero-06-review-plot-wall-charcoal.png"><span class="thumb day-only"><img loading="lazy" src="../screenshots/2026-11-01_lab-synthesis/hero-06-review-plot-wall-charcoal.png" alt="" /></span>Review plot wall, Charcoal</a></li>
+        <li><a href="../screenshots/2026-11-01_lab-synthesis/hero-07-autofocus-vcurve-night-red.png"><span class="thumb"><img class="nrpx" loading="lazy" src="../screenshots/2026-11-01_lab-synthesis/hero-07-autofocus-vcurve-night-red.png" alt="" /></span>Autofocus V-curve, Night Red</a></li>
+        <li><a href="../screenshots/2026-11-01_lab-synthesis/hero-08-focuser-control-charcoal.png"><span class="thumb day-only"><img loading="lazy" src="../screenshots/2026-11-01_lab-synthesis/hero-08-focuser-control-charcoal.png" alt="" /></span>Focuser control states, Charcoal</a></li>
+        <li><a href="../screenshots/2026-11-01_lab-synthesis/hero-09-command-palette-confirm-charcoal.png"><span class="thumb day-only"><img loading="lazy" src="../screenshots/2026-11-01_lab-synthesis/hero-09-command-palette-confirm-charcoal.png" alt="" /></span>Command palette, Park confirmed in place</a></li>
+        <li><a href="../screenshots/2026-11-01_lab-synthesis/hero-10-observe-run-1280x800-charcoal.png"><span class="thumb day-only"><img loading="lazy" src="../screenshots/2026-11-01_lab-synthesis/hero-10-observe-run-1280x800-charcoal.png" alt="" /></span>Observe › Run at 1280 x 800, Charcoal</a></li>
+      </ul>
+      <p class="muted">Captions, audits and measurements: <a href="../screenshots/2026-11-01_lab-synthesis/manifest.json">manifest.json</a>. The PNG files are not tracked by git; the manifests are.</p>
+
+      <h2>All screenshot folders</h2>
+      <ul class="folders">
+        <li><a href="../screenshots/2026-11-01_lab-synthesis/manifest.json">2026-11-01_lab-synthesis</a><span>10 hero shots after the art director's harmonisation fixes.</span></li>
+        <li><a href="../screenshots/2026-11-01_lab-workspace/manifest.json">2026-11-01_lab-workspace</a><span>46 shots: modes, Watch, palette, attention, overview, WKWebView renders.</span></li>
+        <li><a href="../screenshots/2026-11-01_lab-charts/manifest.json">2026-11-01_lab-charts</a><span>56 shots: every chart in three themes, interaction states, WKWebView renders.</span></li>
+        <li><a href="../screenshots/2026-11-01_lab-controls/manifest.json">2026-11-01_lab-controls</a><span>51 shots: seven plates in three themes, real-input states, WKWebView renders.</span></li>
+        <li><a href="../screenshots/2026-11-01_lab-research/manifest.json">2026-11-01_lab-research</a><span>36 shots: seven demos, WKWebView renders.</span></li>
+        <li><a href="../screenshots/index.html">Gallery (screenshots/index.html)</a><span>Shared gallery: regenerate with <code>python web/scripts/build_screenshot_gallery.py</code>.</span></li>
+      </ul>
+
+      <h2>Run it</h2>
+      <div class="run">
+        <pre>cd web
+npx vite --port 5205 --strictPort        # then open http://localhost:5205/lab/index.html
+
+# screenshots (system Chrome through puppeteer-core), one script per lab
+node src/lab/workspace/capture.mjs --base http://localhost:5205 --out /tmp/ws
+node src/lab/charts/capture.mjs    --base http://localhost:5205/lab/charts.html --out /tmp/ch
+node src/lab/controls/capture.mjs  --base http://localhost:5205/lab/controls.html --out /tmp/ct
+node lab/research/demos/capture.mjs --base http://localhost:5205/lab/research.html --out /tmp/rs
+
+# Night Red pixel audit (both rules) and brass count, no dependency
+node lab/synthesis/audit-png.mjs --brass /tmp/ws/*.png</pre>
+        <p>The labs never write the app's <code>argos.*</code> storage keys and request nothing outside the machine.</p>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        var root = document.documentElement;
+        var group = document.getElementById('theme');
+        var radios = Array.prototype.slice.call(group.querySelectorAll('[role="radio"]'));
+        function current() {
+          return root.getAttribute('data-theme') || 'observatory';
+        }
+        function apply(t, remember) {
+          root.setAttribute('data-theme', t);
+          radios.forEach(function (r) {
+            var on = r.getAttribute('data-theme-id') === t;
+            r.setAttribute('aria-checked', on ? 'true' : 'false');
+            r.tabIndex = on ? 0 : -1;
+          });
+          document.querySelectorAll('a[data-lab]').forEach(function (a) {
+            try {
+              var u = new URL(a.getAttribute('href'), location.href);
+              u.searchParams.set('theme', t);
+              a.setAttribute('href', u.pathname.split('/').pop() + u.search);
+            } catch (e) {
+              /* keep the link as written */
+            }
+          });
+          if (remember) {
+            try {
+              localStorage.setItem('argos-lab.theme', t);
+            } catch (e) {
+              /* storage can be blocked: the choice lasts for this page */
+            }
+          }
+        }
+        radios.forEach(function (r, i) {
+          r.addEventListener('click', function () {
+            apply(r.getAttribute('data-theme-id'), true);
+          });
+          r.addEventListener('keydown', function (e) {
+            var d = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+            if (!d) return;
+            e.preventDefault();
+            var next = radios[(i + d + radios.length) % radios.length];
+            apply(next.getAttribute('data-theme-id'), true);
+            next.focus();
+          });
+        });
+        apply(current(), false);
+      })();
+    </script>
+  </body>
+</html>

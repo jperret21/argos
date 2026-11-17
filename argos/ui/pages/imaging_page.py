@@ -39,9 +39,12 @@ tests keep one stable surface):
 from __future__ import annotations
 
 import base64
+import functools
 import logging
 import math
 import time
+from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -63,7 +66,7 @@ from PyQt6.QtWidgets import (
 )
 
 from argos.core.alpaca.telescope import MountPosition
-from argos.core.config import Config
+from argos.core.config import Config, observing_site
 from argos.core.session.acquisition_engine import AcquisitionEngine
 from argos.core.session.device_session import DeviceSession
 from argos.core.session.types import (
@@ -73,13 +76,17 @@ from argos.core.session.types import (
     LiveFrame,
 )
 from argos.core.catalog import PointSourceIdentity, cached_exoplanet_hosts_in_cone
+from argos.core.catalog.gaia import gaia_sources_for_set
 from argos.core.catalog.offline import essential_catalogue_objects
 from argos.core.catalog.photometry import separation_arcmin
 from argos.core.catalog.object_resolver import is_variable_object_type
 from argos.core.catalog.targets import TargetStar
-from argos.core.hardware import active as hardware
-from argos.core.imaging import sensor_models
-from argos.core.imaging.astrometry_session import field_geometry, project_points
+from argos.core.hardware import egain as camera_egain
+from argos.core.imaging.astrometry_session import (
+    batch_frame_solver,
+    field_geometry,
+    project_points,
+)
 from argos.core.imaging.debayer import VIEW_SUPERPIXEL
 from argos.core.imaging.metrics import (
     arcsec_per_full_px,
@@ -88,8 +95,9 @@ from argos.core.imaging.metrics import (
     TRACK_SNAP_SEARCH,
     measure_star_at,
 )
-from argos.core.imaging.platesolve import format_dec_dms, format_ra_hms
+from argos.core.imaging.platesolve import find_astap, format_dec_dms, format_ra_hms
 from argos.core.photometry.airmass import airmass_from_altitude
+from argos.core.photometry.params import NOISE_MODEL_KEYS
 from argos.ui import design, theme
 from argos.ui.panels.log_panel import LogPanel
 from argos.ui.panels.manual_control_dialog import ManualControlDialog
@@ -102,7 +110,7 @@ from argos.ui.widgets.histogram_dock import HistogramDock
 from argos.ui.widgets.image_toolbar import ImageToolbar
 from argos.ui.widgets.lightcurve_panel import LightCurvePanel
 from argos.ui.widgets.mount_dock import MountDock
-from argos.ui.panels.photometry_window import PhotometryWindow
+from argos.ui.panels.photometry_window import PhotometrySetupPanel, PhotometryWindow
 from argos.ui.widgets.overlay_bar import OverlayBar
 from argos.ui.widgets.astrometry_settings import AstrometrySettingsDialog, SECTION_CATALOG
 from argos.ui.widgets.star_info_card import StarInfoCard
@@ -196,9 +204,13 @@ class ImagingPage(QWidget):
         self._armed: set = set()  # overlays auto-shown once when first available
         # §6 P4: live photometry preview (light curve + metrics window).
         self._photometry_window: PhotometryWindow | None = None
+        #: S79: the crowded comparison/check stars already named in the Activity log.
+        self._crowding_warned: set[str] = set()
         self._metrics_t0: float | None = None
         self._batch_worker = None  # WS7 batch re-run (QThread) + its progress dialog
         self._batch_dialog: QProgressDialog | None = None
+        self._batch_total = 0  # frames handed to the running batch re-run
+        self._sequence_active = False  # the aperture geometry is locked meanwhile
         self._object_resolver_worker: ObjectResolverWorker | None = None
         self._nearby_object_resolver_worker: NearbyObjectResolverWorker | None = None
         self._point_identity_worker: PointIdentityWorker | None = None
@@ -633,9 +645,13 @@ class ImagingPage(QWidget):
         self.action_changed.emit(_STATE_ACTION[state])
         self._camera_dock.set_live_running(state is CameraState.LIVE)
         # WS8 cockpit: freeze the capture form while the sequence owns the
-        # camera (SEQUENCE and its nested AUTOFOCUS pass); any release —
-        # complete, stopped or error — transitions state and unfreezes.
-        self._camera_dock.set_sequence_lock(state in (CameraState.SEQUENCE, CameraState.AUTOFOCUS))
+        # camera (SEQUENCE and its nested AUTOFOCUS pass) or a stand-alone
+        # autofocus runs; any release — complete, stopped or error —
+        # transitions state and unfreezes. The hint names the owner.
+        self._camera_dock.set_sequence_lock(
+            state in (CameraState.SEQUENCE, CameraState.AUTOFOCUS),
+            owner="autofocus" if state is CameraState.AUTOFOCUS else "sequence",
+        )
 
     # ------------------------------------------------------------------
     # Device session state → docks (the session owns the device handles)
@@ -647,6 +663,8 @@ class ImagingPage(QWidget):
         enabled = state in ("connected", "busy")
         if device == "mount":
             self._mount_dock.set_enabled(enabled)
+            if not enabled and self._jog_dialog is not None and self._jog_dialog.isVisible():
+                self._jog_dialog.close()  # stops any axis it moves; reopened on the new handle
         elif device == "camera":
             self._camera_dock.set_enabled(enabled)
             if state == "disconnected":
@@ -679,6 +697,7 @@ class ImagingPage(QWidget):
 
     @pyqtSlot(object)
     def _on_focuser_state(self, foc: FocuserState) -> None:
+        self._focuser_dock.set_max_step(foc.max_step)
         self._focuser_dock.set_position(foc.position)
 
     def _on_filter_move(self, position: int) -> None:
@@ -1323,20 +1342,23 @@ class ImagingPage(QWidget):
         if not path:
             return
         try:
-            from astropy.io import fits as _fits
-
-            raw = _fits.getdata(path)
-            if raw is None or getattr(raw, "ndim", 0) != 2:
-                raise ValueError("expected a single 2-D image HDU")
+            # Another field, another night: the engine drops its WCS, dates
+            # the frame from its header and forgets the last run's folder.
+            exposure_mid = self._engine.open_fits_frame(path)
         except Exception as exc:
             self.log_message.emit("ERROR", f"Open FITS: {exc}")
             return
-        # The display/measure pipeline speaks the sensor's raw dtype.
-        self._engine.ingest_frame(np.ascontiguousarray(raw, dtype=np.uint16))
+        self._clear_astrometry()  # the previous field's overlays and markers
         self._frame_context_lbl.setText(f"Opened  {Path(path).name}")
         self.log_message.emit(
             "OK", f"Loaded {Path(path).name} — solve to enable catalog & photometry."
         )
+        if exposure_mid is None:
+            self.log_message.emit(
+                "WARN",
+                f"{Path(path).name} has no DATE-OBS/EXPTIME — no photometry point can be "
+                "dated, so none will be measured on it.",
+            )
 
     def open_fits(self) -> None:
         """Open a FITS image into Capture from the application File menu."""
@@ -1740,7 +1762,10 @@ class ImagingPage(QWidget):
         self._project_targets()
 
     def _project_targets(self) -> None:
-        tset = self._engine.target_set()
+        from argos.core.photometry.airmass import julian_date
+
+        # S77: a star with a proper motion is drawn where it is now (as the web's).
+        tset = self._engine.target_set().at_jd(julian_date(datetime.now(timezone.utc)))
         wcs, gs = self._overlay_wcs(), self._green_shape
         self._target_green = project_points(wcs, gs, ((s.ra_deg, s.dec_deg) for s in tset.stars))
         pts = []
@@ -2091,6 +2116,7 @@ class ImagingPage(QWidget):
     def _open_photometry(self, *, select_variable: bool = False) -> None:
         if self._photometry_window is None:
             self._photometry_window = PhotometryWindow(self)
+            self._photometry_window.setup.set_geometry_locked(self._sequence_active)
             self._photometry_window.lightcurves = self._engine.lightcurves
             self._photometry_window.set_export_meta(
                 str(self._cfg("observer.obscode", "XXX") or "XXX"),
@@ -2130,6 +2156,11 @@ class ImagingPage(QWidget):
         # ``load_curves`` snapshots into a copy; restore the engine's live dict so
         # AAVSO/CSV export reflects points (and targets) added after this open.
         self._photometry_window.lightcurves = self._engine.lightcurves
+        # Exports open in the last run's folder, else the sessions folder.
+        last_dir = self._engine.last_sequence_dir
+        self._photometry_window.default_dir = (
+            last_dir.parent if last_dir is not None else self._config.sessions_path
+        )
         self._refresh_target_table()
         self._photometry_window.comparisons.set_quality_report(
             self._engine.comparison_quality_report
@@ -2151,6 +2182,21 @@ class ImagingPage(QWidget):
 
     @pyqtSlot(str, object)
     def _on_photometry_setting_changed(self, key: str, value: object) -> None:
+        if self._sequence_active and key in PhotometrySetupPanel.GEOMETRY_KEYS:
+            # The controls are disabled during a run; refuse anything that
+            # still arrives, so one curve keeps one aperture.
+            self.log_message.emit(
+                "WARN", "Aperture geometry is locked while a sequence runs — change ignored."
+            )
+            self._sync_photometry_setup()
+            return
+        if self._sequence_active and key in NOISE_MODEL_KEYS:
+            # S84: the noise model sets the SNR the gates read and the formal errors;
+            # Qt has no control for it (a config key), refused as the geometry is.
+            self.log_message.emit(
+                "WARN", "The noise model is locked while a sequence runs — change ignored."
+            )
+            return
         self._config.set(key, value)
         self._sync_photometry_setup()
         # If a catalogue star is selected, redraw its aperture ring immediately
@@ -2189,15 +2235,35 @@ class ImagingPage(QWidget):
             self.log_message.emit(
                 "OK", f"Photometry: replaced the VSP ensemble with {added} pilot-qualified star(s)."
             )
-        else:
+        elif not self._engine.comparisons:
             self.log_message.emit(
                 "WARN",
                 "Photometry: no pilot-qualified comparison found — solve a full-resolution frame first.",
+            )
+        else:  # S32: the field's VSP stars all fail the pilot gate (logged above)
+            self.log_message.emit(
+                "WARN",
+                "Photometry: no pilot-qualified comparison found — the ensemble is unchanged.",
             )
 
     def _refresh_target_table(self) -> None:
         if self._photometry_window is not None:
             self._photometry_window.set_targets(self._engine.target_set().stars)
+        self._warn_crowding()
+
+    def _warn_crowding(self) -> None:
+        """S79: a comparison or check star with a brighter star of the set (or a
+        variable) within about 2 aperture radii is named in the Comparisons tab, and once
+        in the Activity log for each new such star."""
+        crowded, radius = self._engine.crowding()
+        names = {s.key(): s.display_name for s in self._engine.target_set().stars}
+        lines = [why.text(names.get(key, key), radius) for key, why in crowded.items()]
+        if self._photometry_window is not None:
+            self._photometry_window.comparisons.set_crowding(lines)
+        for key, line in zip(crowded, lines):
+            if key not in self._crowding_warned:
+                self.log_message.emit("WARN", f"Comparison crowded — {line}")
+        self._crowding_warned = set(crowded)
 
     def _refresh_variable_table(self) -> None:
         """Feed the Variables tab: one row per cached VSX variable, in order."""
@@ -2255,7 +2321,12 @@ class ImagingPage(QWidget):
         if self._batch_worker is not None:
             return  # one at a time
         from argos.core.photometry.params import PhotometryParams
-        from argos.workers.photometry_batch_worker import BatchRequest, PhotometryBatchWorker
+        from argos.workers.photometry_batch_worker import (
+            BatchRequest,
+            PhotometryBatchWorker,
+            discover_light_frames,
+            rerun_output_dir,
+        )
 
         wcs = self._astrometry.wcs
         if wcs is None:
@@ -2284,26 +2355,41 @@ class ImagingPage(QWidget):
         folder = QFileDialog.getExistingDirectory(self, "Folder of saved subs", start)
         if not folder:
             return
-        paths = sorted(Path(folder).glob("*.fits"), key=lambda p: p.stat().st_mtime)
+        # Argos writes .fit; calibration frames (IMAGETYP) and another object's
+        # frames (OBJECT, S62) are never measured.
+        paths = discover_light_frames(Path(folder), tset.object_name)
         if not paths:
-            paths = sorted(Path(folder).rglob("*.fits"), key=lambda p: p.stat().st_mtime)
-        if not paths:
-            QMessageBox.information(self, "No frames", f"No FITS files in {folder}")
+            QMessageBox.information(
+                self,
+                "No frames",
+                f"No light frames (.fit/.fits/.fts) of {tset.object_name or 'the target'}"
+                f" in {folder}",
+            )
             return
         params = PhotometryParams.from_config(self._cfg, egain=self._engine_egain())
+        crval = (getattr(wcs, "crval1", None), getattr(wcs, "crval2", None))
+        centre = (crval[0] / 15.0 % 24.0, crval[1]) if None not in crval else None
         req = BatchRequest(
             fits_paths=paths,
             wcs=wcs,
             target_set=tset,
             params=params,
-            out_dir=self._config.sessions_path.parent / "targets",
+            # A new folder in the session per re-run: never another run's CSVs.
+            out_dir=rerun_output_dir(Path(folder), datetime.now(timezone.utc)),
             object_name=tset.object_name or "untitled",
-            site=(
-                self._cfg("site.latitude", None),
-                self._cfg("site.longitude", None),
-                self._cfg("site.elevation", 0.0) or 0.0,
-            ),
+            # Never the 0/0 default: no site, no airmass and no BJD_TDB.
+            site=observing_site(self._config) or (None, None, 0.0),
             diagnostics=bool(self._cfg("diagnostics.enabled", False)),
+            # Each saved sub's errors use its own gain; the form's only as a fallback.
+            egain_table=self._cfg("camera.egain_table", {}) or {},
+            # S43: a frame on which the tracker loses the field is re-solved near
+            # the reference's centre and the apertures re-anchored on it.
+            solver=batch_frame_solver(self._cfg, centre),
+            # S77: the proper motions of the set's VSX/VSP stars (Gaia DR3, cached).
+            proper_motions=functools.partial(
+                gaia_sources_for_set,
+                allow_network=bool(self._cfg("catalog.field_stars_enabled", True)),
+            ),
         )
         dialog = QProgressDialog("Re-running photometry…", "Cancel", 0, len(paths), self)
         dialog.setWindowTitle("Batch photometry")
@@ -2314,25 +2400,23 @@ class ImagingPage(QWidget):
         worker.finished_batch.connect(self._on_batch_done)
         self._batch_worker = worker
         self._batch_dialog = dialog
+        self._batch_total = len(paths)
         dialog.show()
         worker.start()
 
     def _engine_egain(self) -> float:
-        """e-/ADU for an offline batch: config table, then the sensor reference.
+        """e-/ADU for an offline batch: config table, the observer's photon-transfer
+        file, the profile's photon transfer (S73), then the sensor reference
+        (``hardware.egain.live``).
 
         Mirrors ``AcquisitionEngine._egain`` minus the driver step, which needs
         a live handle. Falling back to 1.0 here — as this used to — silently
         treated ADU as electrons and made every batch SNR and formal error
-        wrong, without any warning.
+        wrong, without any warning. Each frame's own gain comes first (S41).
         """
-        gain = self._camera_dock.params().gain
-        table = self._cfg("camera.egain_table", {}) or {}
-        if isinstance(table, dict) and str(gain) in table:
-            try:
-                return float(table[str(gain)])
-            except (TypeError, ValueError):
-                pass
-        return sensor_models.lookup_egain(hardware.profile().sensor, gain)
+        return camera_egain.live(
+            self._camera_dock.params().gain, table=self._cfg("camera.egain_table", {}) or {}
+        )
 
     @pyqtSlot(object)
     def _on_batch_done(self, result) -> None:
@@ -2343,18 +2427,101 @@ class ImagingPage(QWidget):
         if not result.ok:
             QMessageBox.warning(self, "Batch failed", result.error)
             return
-        if not result.curves:
+        total = self._batch_total or result.frames_done + result.frames_skipped
+        if result.cancelled:
+            # Partial curves never replace the live ones, and nothing was written.
             self.log_message.emit(
                 "WARN",
-                "Batch photometry: no points measured — see the per-frame notes "
-                "in targets/*_diagnostics.jsonl.",
+                f"Batch photometry cancelled after {result.frames_done + result.frames_skipped}"
+                f"/{total} frame(s) — nothing saved.",
             )
             return
+        if result.frames_skipped:
+            self.log_message.emit(
+                "WARN",
+                f"Batch photometry: {result.frames_skipped} frame(s) skipped "
+                "(unreadable, or no DATE-OBS to date a point).",
+            )
+        if not result.curves:
+            notes = (
+                f" — see the per-frame notes in {result.out_dir}"
+                if result.out_dir is not None and self._cfg("diagnostics.enabled", False)
+                else ""
+            )
+            self.log_message.emit("WARN", f"Batch photometry: no points measured{notes}.")
+            return
+        roles = Counter(getattr(curve, "role", "target") for curve in result.curves.values())
+        counts = ", ".join(
+            f"{roles[role]} {role}" for role in ("target", "check", "comparison") if roles[role]
+        )
+        where = f" → {result.out_dir}" if result.out_dir is not None else ""
         self.log_message.emit(
             "OK",
-            f"Batch photometry: {result.frames_done} frame(s), {len(result.curves)} target(s).",
+            f"Batch photometry: {result.frames_done} frame(s) measured; curves: {counts}{where}.",
         )
-        if abs(result.rotation_deg) > 0.05 or result.shift_px > 1.0:
+        if result.frames_resolved:
+            self.log_message.emit(
+                "INFO",
+                f"Batch photometry: the field jumped on {result.frames_resolved} frame(s); "
+                "each was re-solved and the apertures re-anchored on it.",
+            )
+        if result.frames_unanchored:
+            # S43: never "tracked" when the apertures were not on the field.
+            self.log_message.emit(
+                "WARN",
+                f"Batch photometry: {result.frames_unanchored} frame(s) measured where the "
+                "field was lost (a pointing jump or clouds) and not re-solved: their points "
+                "are flagged suspect and left out of the AAVSO export.",
+            )
+        if result.frames_unverified:
+            # S58: a lock on 1-2 anchors verifies nothing away from a fresh solution.
+            self.log_message.emit(
+                "WARN",
+                f"Batch photometry: {result.frames_unverified} frame(s) steered by fewer than"
+                " 3 anchor stars had no verified lock (no solution of that frame or the one"
+                " before within 10 px): their points are flagged suspect and left out of the"
+                " AAVSO export.",
+            )
+        if result.frames_rotation_solved:
+            # S69 (a): the field turned more than 2° since its solution.
+            self.log_message.emit(
+                "INFO",
+                f"Batch photometry: the field turned more than 2° since its solution on"
+                f" {result.frames_rotation_solved} frame(s); each was re-solved.",
+            )
+        if result.stars_off_centre:
+            # S69 (b): a comparison or check star off its aperture leaves the ensemble.
+            self.log_message.emit(
+                "WARN",
+                f"Batch photometry: {result.stars_off_centre} comparison/check measurement(s)"
+                " more than 1 px from their aperture centre were left out of their frame's"
+                " ensemble; their points are flagged suspect.",
+            )
+        if result.frames_rotation_unsolved:
+            # S69 (a): the 2° re-solve failed; the tracker carried the apertures.
+            self.log_message.emit(
+                "WARN",
+                f"Batch photometry: the field turned more than 2° since its solution on"
+                f" {result.frames_rotation_unsolved} frame(s) that did not re-solve; their"
+                " apertures followed the tracker.",
+            )
+        if result.frames_no_target_point:
+            # S69 (b): every comparison off-centre leaves no ensemble.
+            self.log_message.emit(
+                "WARN",
+                f"Batch photometry: {result.frames_no_target_point} frame(s) have no target"
+                " point: every comparison was more than 1 px from its aperture centre.",
+            )
+        if result.frames_no_detection:
+            # S67: S35's rule on the re-run's own frames.
+            self.log_message.emit(
+                "WARN",
+                f"Batch photometry: {result.frames_no_detection} frame(s) show no detection"
+                " (a target below SNR 3, or a zero point more than 1 mag from the run's):"
+                " their points are flagged suspect and left out of the AAVSO export.",
+            )
+        lost = result.frames_resolved or result.frames_unanchored or result.frames_unverified
+        if not lost and (abs(result.rotation_deg) > 0.05 or result.shift_px > 1.0):
             self.log_message.emit(
                 "INFO",
                 f"Apertures tracked the field: {result.rotation_deg:+.2f}° rotation, "
@@ -2375,14 +2542,19 @@ class ImagingPage(QWidget):
 
     def _render_curves(self) -> None:
         """Re-render every curve surface from the engine's store (the ONLY
-        rendering path for whole-store changes: batch adopt, object change)."""
-        self._lightcurve_panel.set_curves(self._engine.lightcurves)
+        rendering path for whole-store changes: batch adopt, object change,
+        uncertainty-floor updates during a run).
+
+        The user's zoom is kept. A hidden Photometry window is skipped, as for
+        single points: ``_open_photometry`` reloads it from the store."""
+        self._lightcurve_panel.set_curves(self._engine.lightcurves, keep_view=True)
         win = self._photometry_window
-        if win is not None:
+        if win is not None and win.isVisible():
             win.load_curves(
                 self._engine.lightcurves,
                 obscode=str(self._cfg("observer.obscode", "XXX") or "XXX"),
                 filt=str(self._cfg("photometry.default_band", "TG") or "TG"),
+                keep_view=True,
             )
             # load_curves snapshots into a copy; keep exports on the live store.
             win.lightcurves = self._engine.lightcurves
@@ -2400,6 +2572,8 @@ class ImagingPage(QWidget):
             point.mag_err,
             saturated=point.saturated,
             role=point.role,
+            relative_flux=point.relative_flux,
+            relative_flux_err=point.relative_flux_err,
         )
         win = self._photometry_window
         if win is not None and win.isVisible():
@@ -2539,11 +2713,26 @@ class ImagingPage(QWidget):
         # Arm the periodic re-solve for the run (and restore the user's choice
         # after): it re-bases the WCS + live tracker so rigid-fit error never
         # accumulates, keeping markers and apertures on the stars all night.
+        # Armed whether or not a WCS exists: any GoTo clears it, and without
+        # one no point is measured for the whole run (sequence photometry
+        # needs the field identified). Not for calibration-only runs, and not
+        # without ASTAP, which would fail on every frame.
+        self._sequence_active = running
+        if self._photometry_window is not None:
+            self._photometry_window.setup.set_geometry_locked(running)
         if running:
             self._auto_solve_before_seq = self._astrometry.auto
-            if self._astrometry.wcs is not None and not self._astrometry.auto:
-                self.auto_solve_armed.emit(True)  # menu action → set_auto via toggled
-                self.log_message.emit("INFO", "Sequence: auto-solve armed for the run.")
+            if not self._astrometry.auto and self._engine.sequence_has_light_frames():
+                astap = find_astap(str(self._config.get("astrometry.astap_path", "") or ""))
+                if astap is None:
+                    self.log_message.emit(
+                        "WARN",
+                        "Sequence: ASTAP not found — the field cannot be identified, "
+                        "so no live photometry will be measured.",
+                    )
+                else:
+                    self.auto_solve_armed.emit(True)  # menu action → set_auto via toggled
+                    self.log_message.emit("INFO", "Sequence: auto-solve armed for the run.")
         elif not getattr(self, "_auto_solve_before_seq", True):
             self.auto_solve_armed.emit(False)
         if not running:
@@ -2794,6 +2983,9 @@ class ImagingPage(QWidget):
         if self._jog_dialog is None:
             self._jog_dialog = ManualControlDialog(telescope, parent=self)
             self._jog_dialog.log_message.connect(self.log_message)
+        else:
+            # A reconnect creates a new Telescope: never jog the old handle.
+            self._jog_dialog.set_telescope(telescope)
         self._jog_dialog.show()
         self._jog_dialog.raise_()
 
@@ -2812,6 +3004,12 @@ class ImagingPage(QWidget):
 
     def _on_focuser_halt(self) -> None:
         if not self._session.focuser:
+            return
+        if self._engine.autofocus_running:
+            # Stop AF (and Halt, which shares this slot while AF runs): the
+            # worker stops the sweep and drives the focuser back to its start.
+            # A Halt after that would freeze the return anywhere in the sweep.
+            self._engine.stop_autofocus()
             return
         self._engine.stop_autofocus()
         self._session.focuser_halt()
@@ -2841,10 +3039,16 @@ class ImagingPage(QWidget):
     @pyqtSlot(int, object)
     def _on_af_done(self, best_pos: int, best_hfd) -> None:
         self._focuser_dock.set_position(best_pos)
-        hfd_str = f"{best_hfd:.1f}" if best_hfd is not None else "—"
         self._focuser_dock.vcurve.set_best(best_pos, best_hfd)
         self.autofocus_best.emit(best_pos, best_hfd)
-        self.log_message.emit("OK", f"Autofocus complete — best pos={best_pos}  HFD={hfd_str}")
+        if best_hfd is None:
+            # A stop, a rejected (non-V) sweep or too few frames: the worker
+            # drove the focuser back to its start and reports where it ended.
+            self.log_message.emit(
+                "INFO", f"Autofocus ended without a result — focuser back at {best_pos}."
+            )
+            return
+        self.log_message.emit("OK", f"Autofocus complete — best pos={best_pos}  HFD={best_hfd:.1f}")
         self.action_changed.emit(f"Focused  pos={best_pos}")
 
     # ------------------------------------------------------------------

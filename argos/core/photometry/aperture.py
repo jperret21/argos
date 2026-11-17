@@ -12,13 +12,30 @@ from dataclasses import dataclass
 
 import numpy as np
 
+#: Raw pixels averaged in one green-plane value, (G1+G2)/2 (``imaging.green``): the
+#: ``plane_pixels`` of S72's noise model. The default, 1, is the 0.4.x model.
+GREEN_PIXELS = 2
+
+#: The sky under the aperture is the annulus' sigma-clipped mean (S76): pixels farther
+#: than ``SKY_CLIP_SIGMA`` standard deviations from the median are rejected and the
+#: clip repeated until it rejects nothing, at most ``SKY_CLIP_MAXITERS`` passes
+#: (photutils' ``ApertureStats`` default, ``astropy.stats.SigmaClip(sigma=3,
+#: maxiters=10)``: median centre, standard deviation, bounds inclusive). The median
+#: it replaces lands on the 4-8 ADU grid of the 8-ADU-stepped green plane.
+SKY_CLIP_SIGMA = 3.0
+SKY_CLIP_MAXITERS = 10
+
+#: Variance of the sky estimate over sigma² / n_sky (S75): 1 for a mean (S76; a
+#: median's was pi/2).
+SKY_ESTIMATE_VARIANCE_FACTOR = 1.0
+
 
 @dataclass(frozen=True)
 class AperturePhot:
     """One aperture measurement (instrumental, uncalibrated)."""
 
     flux_adu: float  # background-subtracted aperture sum
-    sky_adu: float  # per-pixel sky (annulus median)
+    sky_adu: float  # per-pixel sky (annulus 3-sigma-clipped mean, S76)
     n_pix: int  # aperture pixel count
     peak_adu: float  # brightest pixel in the aperture
     snr: float  # flux / flux_err (electrons)
@@ -39,24 +56,49 @@ def measure_aperture(
     egain: float = 1.0,
     read_noise_e: float = 1.5,
     sat_adu: float = 60000.0,
+    black_adu: float = 0.0,
+    plane_pixels: int = 1,
+    scint_frac: float = 0.0,
 ) -> AperturePhot | None:
     """Measure a star at (x, y) green px with a circular aperture + sky annulus.
 
     Args:
-        green: 2-D green plane (float-able).
+        green: 2-D green plane (G1+G2)/2 (float-able).
         x, y:  Centre, green px.
         r_ap:  Aperture radius (green px).
         r_in, r_out: Sky-annulus inner/outer radii (green px).
-        egain: e-/ADU for the CCD-equation noise (≤0 → treated as 1).
-        read_noise_e: Read noise (e- RMS) per pixel.
+        egain: e-/ADU of one raw pixel, the frame's EGAIN (≤0 → treated as 1).
+        read_noise_e: Read noise (e- RMS) of one raw pixel.
         sat_adu: Linearity/full-well threshold for the saturation flag.
+        black_adu: The camera's black level (ADU): the part of the sky level
+            that is no photon and carries no Poisson noise (S72).
+        plane_pixels: Raw pixels averaged in each value of ``green``.
+        scint_frac: Scintillation, relative flux sigma (S74), added in quadrature to
+            ``inst_mag_err`` only: ``snr`` stays the detection's (photons, sky,
+            read noise), which the gates read.
+
+    S72's noise model (``plane_pixels=2``, :data:`GREEN_PIXELS`): each value of the
+    (G1+G2)/2 plane holds two pixels' electrons, ``2 × egain`` per ADU, and two
+    pixels' read noise, ``rn/√2`` ADU at the raw gain; the sky's Poisson term
+    counts only the electrons above ``black_adu``; and the sky subtracted under the
+    aperture is itself an estimate, the 3-sigma-clipped mean of the ``n_sky`` annulus
+    pixels the clip keeps (S76), whose error the CCD equation's
+    ``n_pix (1 + n_pix / n_sky)`` form counts (S75). With ``plane_pixels=1`` and no
+    black level it is the 0.4.x
+    model: one raw pixel's gain, the whole sky level as photons, no sky-estimate
+    term. :class:`~argos.core.photometry.params.PhotometryParams` chooses.
 
     Returns:
-        An :class:`AperturePhot`, or ``None`` if the aperture falls off the frame.
+        An :class:`AperturePhot`, or ``None`` unless the aperture and the sky annulus
+        lie wholly on the frame (S81: a box clipped at the edge measured a truncated
+        aperture, up to 5 mag faint, or a truncated annulus, and the row was written
+        as a good point).
     """
     g = np.asarray(green, dtype=np.float32)
     h, w = g.shape
     r_out = max(float(r_out), float(r_ap))
+    if not _annulus_on_frame(x, y, r_out, w, h):
+        return None  # S81
     xi, yi = int(round(x)), int(round(y))
     x0, x1 = max(0, xi - int(r_out) - 1), min(w, xi + int(r_out) + 2)
     y0, y1 = max(0, yi - int(r_out) - 1), min(h, yi + int(r_out) + 2)
@@ -71,7 +113,7 @@ def measure_aperture(
     ann = (dist2 > r_in * r_in) & (dist2 <= r_out * r_out)
 
     sky_pixels = sub[ann]
-    sky = float(np.median(sky_pixels)) if sky_pixels.size else 0.0
+    sky, n_sky = sky_level(sky_pixels)  # S76
     sky_sigma = float(np.std(sky_pixels)) if sky_pixels.size else 0.0
     ap_vals = sub[ap]
     n_pix = int(ap.sum())
@@ -80,16 +122,20 @@ def measure_aperture(
     saturated = bool(peak >= sat_adu)
     suspect = _peak_lacks_psf_support(sub, ap, sky, sky_sigma, peak)
 
-    egain = egain if egain and egain > 0 else 1.0
-    flux_e = max(flux, 0.0) * egain
-    sky_e = max(sky, 0.0) * egain
-    var_e = flux_e + n_pix * (sky_e + read_noise_e * read_noise_e)
+    k = _plane_gain(egain, plane_pixels)
+    flux_e = max(flux, 0.0) * k
+    sky_terms = float(n_pix)
+    if max(int(plane_pixels), 1) > 1 and n_sky > 0:
+        sky_terms *= 1.0 + SKY_ESTIMATE_VARIANCE_FACTOR * n_pix / n_sky  # S75, S76
+    var_e = flux_e + sky_terms * _pixel_variance_e(sky, k, read_noise_e, black_adu, plane_pixels)
     flux_err_e = math.sqrt(var_e) if var_e > 0 else 0.0
     snr = (flux_e / flux_err_e) if flux_err_e > 0 else 0.0
 
     if flux > 0.0:
         inst_mag = -2.5 * math.log10(flux)
         inst_mag_err = (1.0857 * flux_err_e / flux_e) if flux_e > 0 else None
+        if inst_mag_err is not None and scint_frac and scint_frac > 0:
+            inst_mag_err = 1.0857 * math.hypot(flux_err_e / flux_e, float(scint_frac))  # S74
     else:
         inst_mag = inst_mag_err = None
 
@@ -104,6 +150,76 @@ def measure_aperture(
         inst_mag_err=inst_mag_err if inst_mag_err is None else round(inst_mag_err, 4),
         suspect=suspect,
     )
+
+
+def _annulus_on_frame(x: float, y: float, r_out: float, w: int, h: int) -> bool:
+    """S81: whether every pixel centre within ``r_out`` of (x, y) lies on a ``w`` x ``h``
+    frame (the aperture and the sky annulus are whole). False for a non-finite centre."""
+    if not (math.isfinite(x) and math.isfinite(y)):
+        return False
+    return (
+        math.ceil(x - r_out) >= 0
+        and math.floor(x + r_out) <= w - 1
+        and math.ceil(y - r_out) >= 0
+        and math.floor(y + r_out) <= h - 1
+    )
+
+
+def sky_level(values: np.ndarray) -> tuple[float, int]:
+    """The sky level of annulus pixels and the number of pixels it is the mean of (S76).
+
+    The 3-sigma-clipped mean (:data:`SKY_CLIP_SIGMA`, :data:`SKY_CLIP_MAXITERS`):
+    keep the pixels within 3 standard deviations of the median, recompute both on
+    what is kept, and repeat until nothing more is rejected (at most 10 passes), as
+    ``astropy.stats.sigma_clipped_stats(values, sigma=3, maxiters=10)``. A star or a
+    hot pixel in the annulus is rejected as the median rejected it, but the level is
+    no longer the median of a plane stepped by 8 ADU, which sits on a 4-8 ADU grid
+    (about 2 ADU rms per pixel on the S30 Pro's frames, in no error term). ``(0.0, 0)``
+    for no pixel.
+    """
+    kept = np.asarray(values, dtype=np.float64).ravel()
+    kept = kept[np.isfinite(kept)]
+    if not kept.size:
+        return 0.0, 0
+    for _ in range(SKY_CLIP_MAXITERS):
+        centre, spread = float(np.median(kept)), float(np.std(kept))
+        bound = SKY_CLIP_SIGMA * spread
+        inside = (kept >= centre - bound) & (kept <= centre + bound)
+        if inside.all():
+            break
+        kept = kept[inside]
+    return float(np.mean(kept)), int(kept.size)
+
+
+def sky_sigma_adu(
+    sky_adu: float,
+    *,
+    egain: float = 1.0,
+    read_noise_e: float = 1.5,
+    black_adu: float = 0.0,
+    plane_pixels: int = 1,
+) -> float:
+    """The noise model's sigma (ADU) of one plane pixel at ``sky_adu`` (S72).
+
+    What :func:`measure_aperture` assumes for every aperture and annulus pixel
+    with the same arguments: Poisson noise of the electrons above the black
+    level, plus ``plane_pixels`` pixels' read noise.
+    """
+    k = _plane_gain(egain, plane_pixels)
+    return math.sqrt(_pixel_variance_e(sky_adu, k, read_noise_e, black_adu, plane_pixels)) / k
+
+
+def _plane_gain(egain: float, plane_pixels: int) -> float:
+    """e- per ADU of a plane whose values average ``plane_pixels`` raw pixels."""
+    return max(int(plane_pixels), 1) * (egain if egain and egain > 0 else 1.0)
+
+
+def _pixel_variance_e(
+    level_adu: float, k: float, read_noise_e: float, black_adu: float, plane_pixels: int
+) -> float:
+    """Variance (e-², at gain ``k``) of one plane pixel at ``level_adu``."""
+    photons_e = max(level_adu - (black_adu or 0.0), 0.0) * k
+    return photons_e + max(int(plane_pixels), 1) * read_noise_e * read_noise_e
 
 
 def _peak_lacks_psf_support(

@@ -37,3 +37,2611 @@ def test_ingest_frame_feeds_the_live_pipeline(qapp, tmp_path) -> None:
     assert frames[0].decimated is False
     # Solve/photometry read the same authoritative frame.
     assert engine._last_raw is raw and engine._last_raw_decimated is False
+
+
+# ---------------------------------------------------------------------------
+# Take shot: a real engine, a fake camera/wheel/preview worker, and a
+# synchronous thread pool, so the FITS save really writes under tmp_path.
+# ---------------------------------------------------------------------------
+
+
+class _Sig:
+    """Stand-in for a worker signal: records the connected slots."""
+
+    def __init__(self) -> None:
+        self.slots: list = []
+
+    def connect(self, slot) -> None:
+        self.slots.append(slot)
+
+
+class _FakePreviewWorker:
+    """Records how the engine created it; never exposes anything."""
+
+    created: list[dict] = []
+
+    def __init__(self, camera, **kwargs) -> None:
+        self.kw = kwargs
+        _FakePreviewWorker.created.append(kwargs)
+        self.frame_ready = _Sig()
+        self.status_updated = _Sig()
+        self.error_occurred = _Sig()
+        self.finished = _Sig()
+        self.updates: list = []
+
+    def start(self) -> None:
+        pass
+
+    def isRunning(self) -> bool:  # noqa: N802 (QThread API)
+        return False
+
+    def update_settings(self, *args, **kwargs) -> None:
+        self.updates.append((args, kwargs))
+
+    def stop(self) -> None:
+        pass
+
+    def wait(self, _ms: int = 0) -> bool:
+        return True
+
+
+class _FakeCamera:
+    def __init__(self) -> None:
+        self.gains: list = []
+        self.exposures: list = []
+
+    def get_ccd_temperature(self):
+        return 20.0
+
+    def get_electrons_per_adu(self):
+        return None
+
+    def get_offset(self):
+        return None
+
+    def get_readout_mode_name(self):
+        return None
+
+    def set_gain(self, gain) -> None:
+        self.gains.append(gain)
+
+    def try_get_gain(self):
+        return self.gains[-1] if self.gains else None
+
+    def start_exposure(self, exposure, light=True) -> None:
+        self.exposures.append((exposure, light))
+
+    def is_image_ready(self) -> bool:
+        return True
+
+    def get_image_array(self):
+        return _star_frame()
+
+    def stop_exposure(self) -> None:
+        pass
+
+
+class _FakeWheel:
+    """Seestar wheel: 0 = Dark, 1 = IR, 2 = LP. Moves are instantaneous."""
+
+    names = {0: "Dark", 1: "IR", 2: "LP"}
+
+    def __init__(self, position: int = 1) -> None:
+        self.position = position
+        self.set_calls: list[int] = []
+
+    def get_position(self) -> int:
+        return self.position
+
+    def set_position(self, position: int) -> None:
+        self.set_calls.append(position)
+        self.position = position
+
+    def position_name(self) -> str:
+        return self.names[self.position]
+
+
+class _SyncPool:
+    """QThreadPool stand-in: runs the task at once, on this thread."""
+
+    def start(self, task) -> None:
+        task.run()
+
+
+def _star_frame(h: int = 120, w: int = 160, sigma: float = 2.0) -> np.ndarray:
+    yy, xx = np.mgrid[0:h, 0:w]
+    star = 20000.0 * np.exp(-((xx - 80.0) ** 2 + (yy - 60.0) ** 2) / (2 * sigma**2))
+    return (star + 300.0).astype(np.uint16)
+
+
+@pytest.fixture
+def shot_rig(qapp, tmp_path, monkeypatch):
+    """(engine, session, form, logs): ``form["p"]`` is what the Camera form shows."""
+    import argos.core.session.acquisition_engine as ae
+    from argos.ui.widgets.camera_dock import CaptureParams
+
+    _FakePreviewWorker.created = []
+    monkeypatch.setattr(ae, "LivePreviewWorker", _FakePreviewWorker)
+    monkeypatch.setattr(ae.QThreadPool, "globalInstance", staticmethod(lambda: _SyncPool()))
+    cfg = Config(dict(_DEFAULTS, sessions_path=str(tmp_path / "sessions")))
+    session = DeviceSession(cfg)
+    session._camera = _FakeCamera()
+    engine = AcquisitionEngine(cfg, session)
+    form = {"p": CaptureParams("Light Frame", "V1", "IR", 10.0, 80)}
+    engine.set_providers(lambda: form["p"], lambda: 1)
+    logs: list[tuple[str, str]] = []
+    engine.log_message.connect(lambda level, msg: logs.append((level, msg)))
+    return engine, session, form, logs
+
+
+def test_dark_take_shot_refused_unless_the_wheel_is_on_the_dark_slot(shot_rig) -> None:
+    """S1: the Seestar has no shutter — its wheel's Dark slot is the only one.
+
+    A Dark/Bias Take shot with the wheel on a light filter used to expose a
+    light frame and label it IMAGETYP=Dark; used as a master dark it corrupts
+    every calibrated science frame.
+    """
+    from argos.ui.widgets.camera_dock import CaptureParams
+    from argos.workers.camera_service import CameraState
+
+    engine, session, form, logs = shot_rig
+    session._filterwheel = _FakeWheel(position=1)  # wheel on IR
+
+    for frame_type in ("Dark Frame", "Bias Frame"):
+        form["p"] = CaptureParams(frame_type, "V1", "IR", 10.0, 80)
+        logs.clear()
+        engine.take_shot()
+        assert _FakePreviewWorker.created == [], f"{frame_type} exposed behind IR"
+        assert engine.camera_state is CameraState.IDLE
+        assert engine._capture_pending == 0
+        assert any(level == "WARN" and "Dark" in msg for level, msg in logs), logs
+
+    # Live owns the camera: the shot must not tag the next (light) frame either.
+    form["p"] = CaptureParams("Light Frame", "V1", "IR", 10.0, 80)
+    engine.start_live()
+    form["p"] = CaptureParams("Dark Frame", "V1", "IR", 10.0, 80)
+    engine.take_shot()
+    assert engine._capture_pending == 0
+    engine.stop_live()
+
+    # Filter "Dark" selected (the Camera form moves the wheel; it settles at
+    # once here): the shot goes, shutter closed.
+    session.move_filter(0)
+    _FakePreviewWorker.created = []
+    form["p"] = CaptureParams("Dark Frame", "V1", "Dark", 10.0, 80)
+    engine.take_shot()
+    assert len(_FakePreviewWorker.created) == 1
+    assert _FakePreviewWorker.created[0]["light"] is False
+    assert engine._capture_pending == 1
+
+
+def test_dark_take_shot_without_a_wheel_warns_that_the_scope_must_be_covered(shot_rig) -> None:
+    from argos.ui.widgets.camera_dock import CaptureParams
+
+    engine, session, form, logs = shot_rig
+    assert session.filterwheel is None
+    form["p"] = CaptureParams("Dark Frame", "V1", "IR", 10.0, 80)
+    engine.take_shot()
+    assert len(_FakePreviewWorker.created) == 1  # no wheel to check: trust the observer
+    assert any(level == "WARN" and "cover" in msg for level, msg in logs), logs
+
+
+class _OneFrameCamera(_FakeCamera):
+    """Lets a real LivePreviewWorker deliver exactly one frame, then stop."""
+
+    worker = None
+
+    def get_image_array(self):
+        self.worker.stop()  # the loop ends after this frame is emitted
+        return _star_frame()
+
+
+@pytest.fixture
+def real_preview_rig(qapp, tmp_path, monkeypatch):
+    """The engine with the real LivePreviewWorker, run on this thread."""
+    import argos.core.session.acquisition_engine as ae
+    from argos.ui.widgets.camera_dock import CaptureParams
+    from argos.workers.exposure_worker import LivePreviewWorker
+
+    monkeypatch.setattr(LivePreviewWorker, "start", lambda self: None)
+    monkeypatch.setattr(ae.QThreadPool, "globalInstance", staticmethod(lambda: _SyncPool()))
+    cfg = Config(dict(_DEFAULTS, sessions_path=str(tmp_path / "sessions")))
+    session = DeviceSession(cfg)
+    camera = _OneFrameCamera()
+    session._camera = camera
+    engine = AcquisitionEngine(cfg, session)
+    form = {"p": CaptureParams("Light Frame", "V1", "IR", 10.0, 80)}
+    engine.set_providers(lambda: form["p"], lambda: 1)
+
+    def deliver_one_frame() -> None:
+        camera.worker = engine._preview
+        engine._preview.run()  # synchronous: frame_ready reaches the engine directly
+
+    return engine, camera, form, deliver_one_frame, tmp_path / "sessions"
+
+
+def _saved_headers(root) -> list:
+    from astropy.io import fits
+
+    return [(path, fits.getheader(path)) for path in sorted(root.rglob("*.fit"))]
+
+
+def test_take_shot_header_records_the_settings_the_frame_was_exposed_with(
+    real_preview_rig,
+) -> None:
+    """S2: the form edited during the exposure must not rewrite its header."""
+    from argos.ui.widgets.camera_dock import CaptureParams
+
+    engine, camera, form, deliver_one_frame, root = real_preview_rig
+    engine.take_shot()  # the worker is created with 10 s / gain 80 / Light / IR
+    form["p"] = CaptureParams("Flat Frame", "V1", "LP", 30.0, 200)  # edited meanwhile
+    deliver_one_frame()
+
+    assert camera.exposures == [(10.0, True)] and camera.gains == [80]
+    ((path, hdr),) = _saved_headers(root)
+    assert hdr["EXPTIME"] == 10.0
+    assert hdr["GAIN"] == 80
+    assert hdr["IMAGETYP"] == "Light Frame"
+    assert hdr["FILTER"] == "IR"
+    assert "_ir_" in path.name.lower() and "e010000ms" in path.name and "g080" in path.name
+
+
+def test_live_take_shot_saves_the_in_flight_frame_with_its_own_exposure(
+    real_preview_rig,
+) -> None:
+    """S2: Live at 10 s, set 30 s and press Take shot during the exposure."""
+    from argos.ui.widgets.camera_dock import CaptureParams
+
+    engine, camera, form, deliver_one_frame, root = real_preview_rig
+    engine.start_live()
+    form["p"] = CaptureParams("Light Frame", "V1", "IR", 30.0, 80)
+    engine.take_shot()  # Live: tags the next frame to arrive (exposed at 10 s)
+    deliver_one_frame()
+
+    assert camera.exposures == [(10.0, True)]
+    ((_, hdr),) = _saved_headers(root)
+    assert hdr["EXPTIME"] == 10.0
+
+
+def _deliver(engine, frame=None) -> None:
+    """Hand the engine one frame as the preview worker would, with the
+    settings snapshot the worker took when it started the exposure."""
+    from datetime import datetime, timedelta, timezone
+
+    from argos.workers.exposure_worker import FrameSettings
+
+    params = engine._preview.kw["tag"]
+    used = FrameSettings(params.exposure_s, params.gain, engine._preview.kw["light"], params)
+    frame = _star_frame() if frame is None else frame
+    start = datetime(2026, 10, 1, 22, 0, 0, tzinfo=timezone.utc)
+    engine._on_frame(frame, frame, start, start + timedelta(seconds=10.4), used)
+
+
+def test_take_shot_after_a_sequence_records_the_filter_the_wheel_is_on(shot_rig, tmp_path) -> None:
+    """S3: a sequence moves the wheel itself; the Camera form is not told.
+
+    A Take shot afterwards wrote the form's filter (IR) into FILTER and the
+    folder/file name while the wheel sat on LP.
+    """
+    from argos.core.imaging.sequencer import SequencePlan, SequenceStep
+    from argos.ui.widgets.camera_dock import CaptureParams
+    from argos.workers.sequence_worker import SequenceWorker
+
+    engine, session, form, logs = shot_rig
+    wheel = _FakeWheel(position=1)  # IR; the Camera form shows IR
+    session._filterwheel = wheel
+    moved: list[tuple[int, str]] = []
+    session.filter_moved.connect(lambda pos, name: moved.append((pos, name)))
+
+    plan = SequencePlan(
+        steps=[SequenceStep(frame_type="Light", filter_name="LP", exposure_s=0.0, count=1)],
+        object_name="V1",
+        base_dir=tmp_path / "seq",
+    )
+    SequenceWorker(
+        camera=session.camera,
+        telescope=None,
+        filterwheel=wheel,
+        plan=plan,
+        frame_context_provider=engine._sequence_frame_context,
+        base_dir=tmp_path / "seq",
+    ).run()  # synchronous
+    assert wheel.position_name() == "LP"
+    assert moved == []  # the sequence moved the wheel behind the Camera form's back
+
+    # (1) The header reads the wheel, whatever the form still shows.
+    form["p"] = CaptureParams("Light Frame", "V1", "IR", 10.0, 80)
+    engine.take_shot()
+    _deliver(engine)
+    ((path, hdr),) = _saved_headers(tmp_path / "sessions")
+    assert hdr["FILTER"] == "LP"
+    assert "_lp_" in path.name.lower()  # the file name carries the filter (not the folder)
+    assert any(level == "WARN" and "LP" in msg for level, msg in logs), logs
+
+    # (2) The end of the run re-reads the wheel so the Camera form resyncs.
+    engine._on_seq_finished(True)  # what the worker's finished signal triggers
+    assert moved == [(2, "LP")]
+
+
+def test_take_shot_keeps_the_form_filter_when_the_wheel_cannot_be_read(shot_rig, tmp_path) -> None:
+    engine, session, form, logs = shot_rig
+    wheel = _FakeWheel(position=1)
+    wheel.position = -1  # still turning: position_name() would say "Moving…"
+    wheel.names = {**_FakeWheel.names, -1: "Moving…"}
+    session._filterwheel = wheel
+    engine.take_shot()
+    _deliver(engine)
+    ((_, hdr),) = _saved_headers(tmp_path / "sessions")
+    assert hdr["FILTER"] == "IR"
+
+
+class _HeldWheelPool(_SyncPool):
+    """Runs every task at once except wheel moves, held until ``settle()``:
+    the wheel turns for as long as the test wants."""
+
+    def __init__(self) -> None:
+        self.held: list = []
+
+    def start(self, task) -> None:
+        if type(task).__name__ == "_FilterMoveRunnable":
+            self.held.append(task)
+        else:
+            task.run()
+
+    def settle(self) -> None:
+        while self.held:
+            self.held.pop(0).run()
+
+
+def _frame_with(engine, tag, start) -> None:
+    """Hand the engine one frame exposed from ``start`` with the form ``tag``."""
+    from datetime import timedelta
+
+    from argos.workers.exposure_worker import FrameSettings
+
+    light = tag.frame_type == "Light Frame"
+    used = FrameSettings(tag.exposure_s, tag.gain, light, tag)
+    frame = _star_frame()
+    engine._on_frame(frame, frame, start, start + timedelta(seconds=10.4), used)
+
+
+def test_dark_take_shot_waits_for_the_wheel_to_settle_on_dark(
+    shot_rig, tmp_path, monkeypatch
+) -> None:
+    """S1 (gap found in review): the Filter combo shows 'Dark' as soon as it
+    is picked, while the wheel still turns. The guard read only the combo,
+    so a Dark shot taken at once exposed through the moving wheel and was
+    saved as a clean IMAGETYP='Dark Frame', FILTER='Dark'. Same when a
+    refused move could not be read back (the combo stayed on 'Dark')."""
+    import argos.core.session.acquisition_engine as ae
+    from argos.ui.widgets.camera_dock import CaptureParams
+    from argos.workers.camera_service import CameraState
+
+    engine, session, form, logs = shot_rig
+    pool = _HeldWheelPool()
+    monkeypatch.setattr(ae.QThreadPool, "globalInstance", staticmethod(lambda: pool))
+    wheel = _FakeWheel(position=1)
+    session._filterwheel = wheel
+    form["p"] = CaptureParams("Dark Frame", "V1", "Dark", 10.0, 80)
+
+    session.move_filter(0)  # Dark picked: the wheel starts turning
+    engine.take_shot()
+    assert _FakePreviewWorker.created == [], "a dark exposed through a turning wheel"
+    assert engine.camera_state is CameraState.IDLE and engine._capture_pending == 0
+    assert any(level == "WARN" and "turning" in msg for level, msg in logs), logs
+
+    pool.settle()  # the wheel reports it is on Dark
+    assert session.filter_slot == "Dark"
+    engine.take_shot()
+    assert len(_FakePreviewWorker.created) == 1
+    assert _FakePreviewWorker.created[0]["light"] is False
+    engine._capture_pending = 0
+    engine._camera_service.release(CameraState.SINGLE)
+
+    # A refused move that cannot be read back: filter_moved(-1, "") leaves
+    # the combo on the slot that was asked for.
+    from argos.core.alpaca.client import AlpacaError
+
+    wheel.set_position = lambda _p: (_ for _ in ()).throw(AlpacaError(1025, "Invalid value"))
+    wheel.get_position = lambda: (_ for _ in ()).throw(AlpacaError(0, "Timeout"))
+    session.move_filter(0)
+    pool.settle()
+    assert session.filter_slot is None and not session.filter_moving
+    _FakePreviewWorker.created = []
+    logs.clear()
+    engine.take_shot()
+    assert _FakePreviewWorker.created == []
+    assert any(level == "WARN" and "unknown" in msg for level, msg in logs), logs
+
+
+def test_dark_shot_is_dropped_if_the_wheel_leaves_the_dark_slot(
+    shot_rig, tmp_path, monkeypatch
+) -> None:
+    """S1: a Dark shot accepted on the Dark slot must not be saved once the
+    wheel has been turned to a light filter before its frame arrives."""
+    from datetime import datetime, timezone
+
+    from argos.ui.widgets.camera_dock import CaptureParams
+    from argos.workers.camera_service import CameraState
+
+    engine, session, form, logs = shot_rig
+    session._filterwheel = _FakeWheel(position=1)
+    session.move_filter(0)  # settles at once (synchronous pool)
+    dark = CaptureParams("Dark Frame", "V1", "Dark", 10.0, 80)
+    form["p"] = dark
+    engine.take_shot()
+    assert engine._capture_pending == 1
+
+    start = datetime.now(timezone.utc)
+    session.move_filter(1)  # IR picked during the exposure
+    _frame_with(engine, dark, start)  # exposed while the wheel turned: skipped
+    assert _saved_headers(tmp_path / "sessions") == []
+    assert engine._capture_pending == 1
+
+    # The loop's next frame starts after the move, the form still on Dark Frame.
+    _frame_with(
+        engine, CaptureParams("Dark Frame", "V1", "IR", 10.0, 80), datetime.now(timezone.utc)
+    )
+    assert _saved_headers(tmp_path / "sessions") == []
+    assert engine._capture_pending == 0
+    assert engine.camera_state is CameraState.IDLE
+    assert any(level == "WARN" and "not saved" in msg for level, msg in logs), logs
+
+
+def test_take_shot_never_saves_a_frame_exposed_while_the_wheel_turned(shot_rig, tmp_path) -> None:
+    """S3 (gap found in review): in Live the Filter combo stays usable, so the
+    wheel could turn during the exposure a Take shot then saved, and FITS
+    FILTER recorded the slot the wheel ended on, read after the exposure."""
+    from datetime import datetime, timezone
+
+    from argos.ui.widgets.camera_dock import CaptureParams
+
+    engine, session, form, logs = shot_rig
+    session._filterwheel = _FakeWheel(position=1)
+    ir = CaptureParams("Light Frame", "V1", "IR", 10.0, 80)
+    form["p"] = ir
+    engine.start_live()
+    in_flight_start = datetime.now(timezone.utc)  # the exposure starts on IR
+    lp = CaptureParams("Light Frame", "V1", "LP", 10.0, 80)
+    form["p"] = lp
+    session.move_filter(2)  # LP picked mid-exposure (settles at once here)
+    engine.take_shot()
+
+    _frame_with(engine, ir, in_flight_start)
+    assert _saved_headers(tmp_path / "sessions") == []
+    assert any(level == "INFO" and "moved during" in msg for level, msg in logs), logs
+
+    _frame_with(engine, lp, datetime.now(timezone.utc))  # the next frame, all on LP
+    ((path, hdr),) = _saved_headers(tmp_path / "sessions")
+    assert hdr["FILTER"] == "LP" and "_lp_" in path.name.lower()
+    assert not any("not on the form" in msg for _level, msg in logs)
+    engine.stop_live()
+
+
+def _write_fits(path, header: dict) -> None:
+    from astropy.io import fits
+
+    hdu = fits.PrimaryHDU(_star_frame())
+    for key, value in header.items():
+        hdu.header[key] = value
+    hdu.writeto(path)
+
+
+def _open_fits_from_the_page(engine, path, monkeypatch, logs) -> list:
+    """Run ImagingPage._on_open_fits on a stand-in page around the real engine."""
+    from types import SimpleNamespace
+
+    import argos.ui.pages.imaging_page as ip
+
+    cleared: list[bool] = []
+
+    def clear_astrometry() -> None:
+        cleared.append(True)
+        engine.invalidate_astrometry()
+
+    monkeypatch.setattr(
+        ip.QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(path), ""))
+    )
+    page = SimpleNamespace(
+        _cfg=lambda key, default: default,
+        _engine=engine,
+        _frame_context_lbl=SimpleNamespace(setText=lambda text: None),
+        log_message=SimpleNamespace(emit=lambda level, msg: logs.append((level, msg))),
+        _clear_astrometry=clear_astrometry,
+    )
+    ip.ImagingPage._on_open_fits(page)
+    return cleared
+
+
+def test_opened_fits_is_dated_by_its_header_and_drops_the_previous_wcs(
+    shot_rig, tmp_path, monkeypatch
+) -> None:
+    """S4: Open FITS used to keep the previous field's WCS and the previous
+    live frame's epoch, so the point measured after a solve was stamped with
+    the wrong time (and could land in the last run's CSV)."""
+    from datetime import datetime, timezone
+
+    engine, session, form, logs = shot_rig
+    engine._last_exposure_mid = datetime(2026, 11, 1, 3, 0, 5, tzinfo=timezone.utc)  # live
+    engine.astrometry._wcs = object()  # ... solved: the previous field
+    engine._active_run_root = tmp_path / "last_run"  # ... of the last sequence
+    path = tmp_path / "archived.fit"
+    _write_fits(path, {"DATE-OBS": "2026-09-15T21:00:00", "EXPTIME": 10.0})
+
+    cleared = _open_fits_from_the_page(engine, path, monkeypatch, logs)
+
+    assert engine.last_raw is not None and engine.last_raw.shape == (120, 160)
+    assert engine.astrometry.wcs is None
+    assert engine._last_exposure_mid == datetime(2026, 9, 15, 21, 0, 5, tzinfo=timezone.utc)
+    assert engine._active_run_root is None
+    assert cleared  # the page dropped its overlays/markers too
+
+    # DATE-AVG, when present, is the midpoint itself.
+    _write_fits(
+        tmp_path / "avg.fit",
+        {"DATE-OBS": "2026-09-15T21:00:00", "DATE-AVG": "2026-09-15T21:00:07.5", "EXPTIME": 10.0},
+    )
+    engine.open_fits_frame(tmp_path / "avg.fit")
+    assert engine._last_exposure_mid == datetime(2026, 9, 15, 21, 0, 7, 500000, tzinfo=timezone.utc)
+
+
+def test_opened_fits_without_a_date_measures_no_point(shot_rig, tmp_path, monkeypatch) -> None:
+    """S4: no DATE-OBS → no epoch → no point (never 'now', never the last frame's)."""
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.catalog.targets import ROLE_TARGET, TargetSet, TargetStar
+
+    engine, session, form, logs = shot_rig
+    engine._last_exposure_mid = datetime(2026, 11, 1, 3, 0, 5, tzinfo=timezone.utc)  # live
+    path = tmp_path / "undated.fit"
+    _write_fits(path, {"EXPTIME": 10.0})
+    _open_fits_from_the_page(engine, path, monkeypatch, logs)
+
+    star = TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1")
+    tset = TargetSet(object_name="V1", stars=[star])
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    engine.astrometry._wcs = object()  # solved since
+    diff = SimpleNamespace(
+        mag=12.0,
+        mag_err=0.01,
+        formal_mag_err=0.01,
+        comps_used=3,
+        zero_point=0.0,
+        zp_rms=0.0,
+        note="",
+    )
+    phot = SimpleNamespace(sky_adu=300.0, saturated=False, suspect=False)
+    result = SimpleNamespace(star=star, diff=diff, relative=None, phot=phot)
+    monkeypatch.setattr(ae, "measure_frame", lambda *a, **k: [result])
+    monkeypatch.setattr(engine, "_wcs_for_frame", lambda *a: None)
+    monkeypatch.setattr(engine, "_write_live_quality_report", lambda tset: None)
+    points: list = []
+    engine.photometry_point.connect(points.append)
+    engine.curves_changed.connect(lambda: points.append("curves"))
+
+    engine._measure_photometry()
+
+    assert engine._last_exposure_mid is None
+    assert points == [] and engine.lightcurves == {}
+    assert any(level == "WARN" and "time" in msg.lower() for level, msg in logs), logs
+
+
+def test_opened_fits_that_is_not_raw_16_bit_data_is_refused(
+    shot_rig, tmp_path, monkeypatch
+) -> None:
+    """S4 (part left open, found in review): Open FITS cast any data to
+    uint16. A negative value (dark-subtracted, calibrated frame) wrapped to
+    about 65535 and 70000 to 4464; the frame still solved and was measured
+    with wrong sky and aperture sums, now dated as if trustworthy."""
+    from datetime import datetime, timezone
+
+    from astropy.io import fits
+
+    engine, session, form, logs = shot_rig
+    live = _star_frame()
+    engine.ingest_frame(live)
+    mid = datetime(2026, 11, 1, 3, 0, 5, tzinfo=timezone.utc)
+    engine._last_exposure_mid = mid
+    wcs = object()
+    engine.astrometry._wcs = wcs
+    header = {"DATE-OBS": "2026-09-15T21:00:00", "EXPTIME": 10.0}
+
+    calibrated = _star_frame().astype(np.float32) - 300.5  # negative sky, fractions
+    stacked = _star_frame().astype(np.int32) * 4  # beyond 16 bits
+    for name, data in (("calibrated.fit", calibrated), ("stacked.fit", stacked)):
+        path = tmp_path / name
+        hdu = fits.PrimaryHDU(data)
+        for key, value in header.items():
+            hdu.header[key] = value
+        hdu.writeto(path)
+        logs.clear()
+        _open_fits_from_the_page(engine, path, monkeypatch, logs)
+        assert any(level == "ERROR" and "raw" in msg for level, msg in logs), logs
+        # The engine is untouched: the live frame, its time and its WCS stay.
+        assert engine.last_raw is live
+        assert engine._last_exposure_mid == mid and engine.astrometry.wcs is wcs
+
+    # Raw counts stored in another type are accepted as they are.
+    path = tmp_path / "raw_as_float.fit"
+    hdu = fits.PrimaryHDU(_star_frame().astype(np.float32))
+    hdu.header["DATE-OBS"] = "2026-09-15T21:00:00"
+    hdu.writeto(path)
+    engine.open_fits_frame(path)
+    assert engine.last_raw.dtype == np.uint16
+    assert np.array_equal(engine.last_raw, _star_frame())
+
+
+def test_take_shot_qa_headers_describe_the_saved_frame(shot_rig, tmp_path) -> None:
+    """S20: HFD/NSTARS/SKYLEVEL came from the last frame the display had
+    processed (the previous frame at best, a half-res preview otherwise)."""
+    from argos.core.imaging.metrics import detect_stars, frame_metrics
+
+    engine, session, form, logs = shot_rig
+    stale = frame_metrics(_star_frame(sigma=6.0) + np.uint16(2000))  # an earlier, defocused frame
+    engine._last_metrics = stale
+    engine.take_shot()
+    saved = _star_frame(sigma=1.5)
+    _deliver(engine, saved)
+
+    ((_, hdr),) = _saved_headers(tmp_path / "sessions")
+    truth = frame_metrics(saved)
+    assert abs(truth.hfd - stale.hfd) > 1.0 and abs(truth.sky_adu - stale.sky_adu) > 100
+    assert hdr["HFD"] == pytest.approx(truth.hfd, abs=0.01)
+    assert hdr["SKYLEVEL"] == pytest.approx(truth.sky_adu, abs=0.1)
+    assert hdr["NSTARS"] == truth.star_count
+    # As for a sequence frame, FWHM is measured on the saved array too.
+    assert hdr["FWHM"] == pytest.approx(detect_stars(saved).mean_fwhm, abs=0.01)
+
+
+def test_frames_saved_after_the_mount_went_away_carry_no_pointing(shot_rig, tmp_path) -> None:
+    """X1: a disconnected (or lost) mount's last polled position went into
+    the next frames' RA, DEC, ALTITUDE, AZIMUTH and AIRMASS."""
+    from unittest.mock import MagicMock
+
+    from argos.core.alpaca.telescope import MountPosition
+
+    engine, session, form, logs = shot_rig
+    session._telescope = MagicMock()
+    session._on_position(MountPosition(5.0, 20.0, 45.0, 120.0, True, False))
+    assert engine._sequence_frame_context("V1", "IR").altitude == 45.0  # mount up: used
+
+    session.disconnect_mount()
+
+    ctx = engine._sequence_frame_context("V1", "IR")
+    assert (ctx.ra, ctx.dec, ctx.altitude, ctx.azimuth) == (None, None, None, None)
+    engine.take_shot()
+    _deliver(engine)
+    ((_, hdr),) = _saved_headers(tmp_path / "sessions")
+    for key in ("RA", "DEC", "OBJCTRA", "OBJCTDEC", "ALTITUDE", "AZIMUTH", "AIRMASS"):
+        assert key not in hdr, f"{key} written from a disconnected mount"
+
+
+def test_no_site_set_means_no_site_products_not_latitude_0_longitude_0(
+    shot_rig, tmp_path, monkeypatch
+) -> None:
+    """With no site set, the config's 0/0 defaults were used as the site:
+    the live point's airmass (the CSV airmass column and AAVSO AMASS) was
+    computed for 0/0 (1.379 for SS Cyg at 2026-11-01 19:00 UTC, where the
+    mount said 1.154 and Paris sees 1.005), and FITS got SITELAT/SITELONG 0."""
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.alpaca.telescope import MountPosition
+    from argos.core.catalog.targets import ROLE_TARGET, TargetSet, TargetStar
+    from argos.core.photometry.airmass import airmass_at, airmass_from_altitude, julian_date
+
+    engine, session, form, logs = shot_rig
+    assert engine._config.get("site.name") == "" and engine._config.get("site.latitude") == 0.0
+    session._telescope = MagicMock()
+    session._on_position(MountPosition(21.7, 43.6, 60.0, 270.0, True, False))
+    star = TargetStar(role=ROLE_TARGET, ra_deg=325.678, dec_deg=43.586, name="SS Cyg")
+    monkeypatch.setattr(engine, "target_set", lambda: TargetSet("SS Cyg", [star]))
+    diff = SimpleNamespace(
+        mag=11.0, mag_err=0.02, formal_mag_err=0.02, comps_used=3, zero_point=0.0, zp_rms=0.0
+    )
+    diff.note = ""
+    phot = SimpleNamespace(sky_adu=300.0, saturated=False, suspect=False)
+    result = SimpleNamespace(star=star, diff=diff, relative=None, phot=phot)
+    monkeypatch.setattr(ae, "measure_frame", lambda *a, **k: [result])
+    monkeypatch.setattr(engine, "_wcs_for_frame", lambda *a: None)
+    monkeypatch.setattr(engine, "_write_live_quality_report", lambda tset: None)
+    mid = datetime(2026, 11, 1, 19, 0, tzinfo=timezone.utc)
+    jd = julian_date(mid)
+
+    def measure():
+        engine.astrometry._wcs = object()
+        engine._last_raw, engine._last_raw_decimated = _star_frame(), False
+        engine._last_exposure_mid = mid
+        engine._last_filter = "IR"  # the form's filter, as a live frame has it (S49)
+        engine._measure_photometry()
+        return _lc(engine, "SS Cyg").points[-1]
+
+    point = measure()
+    assert point.airmass == pytest.approx(airmass_from_altitude(60.0))  # the mount's
+    assert point.airmass != pytest.approx(airmass_at(jd, 325.678, 43.586, 0.0, 0.0))
+    assert point.bjd_tdb is None
+    ctx = engine._sequence_frame_context("SS Cyg", "IR")
+    assert (ctx.site_lat, ctx.site_lon, ctx.site_elev) == (None, None, None)
+    engine.take_shot()
+    _deliver(engine)
+    ((_, hdr),) = _saved_headers(tmp_path / "sessions")
+    assert "SITELAT" not in hdr and "SITELONG" not in hdr
+
+    # A site that was set (here typed, without a name) is used as before, when the
+    # mount points where it says (S78 amended: else every star takes the mount's).
+    engine._config._data["site"] = {"name": "", "latitude": 48.85, "longitude": 2.35}
+    from argos.core.imaging.sky_geometry import horizontal_at
+
+    monkeypatch.setattr(ae, "_utcnow", lambda: mid)
+    alt, az = horizontal_at(jd, 325.678 / 15.0, 43.586, 48.85, 2.35)
+    session._last_position = MountPosition(325.678 / 15.0, 43.586, alt, az, True, False)
+    point = measure()
+    assert point.airmass == pytest.approx(airmass_at(jd, 325.678, 43.586, 48.85, 2.35))
+    assert point.bjd_tdb is not None
+    assert engine._sequence_frame_context("SS Cyg", "IR").site_lat == 48.85
+
+
+def test_engine_reports_whether_the_running_sequence_shoots_lights(shot_rig, monkeypatch) -> None:
+    """S14: the page arms field identification only for runs with Light frames."""
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.imaging.sequencer import SequencePlan, SequenceStep
+
+    class _Worker:
+        """Stands in for SequenceWorker: signals to connect, never runs."""
+
+        def __init__(self, **_kwargs) -> None:
+            for name in (
+                "step_started",
+                "frame_image",
+                "frame_saved",
+                "progress",
+                "autofocus_due",
+                "paused",
+                "error_occurred",
+                "finished",
+            ):
+                setattr(self, name, _Sig())
+
+        def start(self) -> None:
+            pass
+
+        def isRunning(self) -> bool:  # noqa: N802 (QThread API)
+            return True
+
+    monkeypatch.setattr(ae, "SequenceWorker", _Worker)
+    engine, session, form, logs = shot_rig
+    assert engine.sequence_has_light_frames() is False  # nothing running
+
+    darks = SequencePlan(steps=[SequenceStep(frame_type="Dark", count=5)])
+    assert engine.start_sequence(darks)
+    assert engine.sequence_has_light_frames() is False
+    engine._on_seq_finished(False)
+
+    mixed = SequencePlan(
+        steps=[SequenceStep(frame_type="Light", count=0), SequenceStep(frame_type="Light")]
+    )
+    assert engine.start_sequence(mixed)
+    assert engine.sequence_has_light_frames() is True
+    engine._on_seq_finished(True)
+    assert engine.sequence_has_light_frames() is False
+
+
+def test_quality_report_emitted_in_live_preview(qapp, tmp_path) -> None:
+    """S17: the comparison vetting was computed only once a sequence had
+    saved a frame, so plain live preview never got a report."""
+    from argos.core.catalog.targets import ROLE_COMPARISON, TargetSet, TargetStar
+    from argos.core.photometry.lightcurve import LcPoint, LightCurve
+
+    cfg = Config(dict(_DEFAULTS, sessions_path=str(tmp_path)))
+    engine = AcquisitionEngine(cfg, DeviceSession(cfg))
+    stars = [TargetStar(ROLE_COMPARISON, float(i), 10.0, auid=f"C{i}") for i in (1, 2, 3)]
+    for star in stars:
+        curve = LightCurve(
+            auid=star.auid, name=star.auid, role=ROLE_COMPARISON, filter_name="clear"
+        )
+        for i in range(12):
+            mag = 10.0 + 0.01 * (i % 3 - 1)
+            curve.append(LcPoint(2461315.5 + i / 1440.0, mag, 0.02, formal_mag_err=0.02))
+        engine._lightcurves[f"{star.auid}@clear"] = curve
+    reports: list = []
+    engine.comparison_quality_updated.connect(reports.append)
+    assert engine._active_run_root is None  # live preview, no sequence yet
+
+    engine._write_live_quality_report(TargetSet(object_name="Test", stars=stars))
+
+    assert len(reports) == 1  # 0 on 0.4.2
+    assert [entry["auid"] for entry in reports[0]["comparison_stars"]] == ["C1", "C2", "C3"]
+    assert engine.comparison_quality_report is reports[0]
+    # Outside a run there is no session folder to write the report into.
+    assert list(tmp_path.rglob("photometry_quality.json")) == []
+
+
+def test_floor_change_rerenders_once_per_frame(shot_rig, monkeypatch) -> None:
+    """S19: once the systematic floor applies (10th point), each star of each
+    frame emitted curves_changed, i.e. a whole-store re-render per star."""
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+
+    engine, _session, _form, _logs = shot_rig
+    stars = [TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1")] + [
+        TargetStar(role=ROLE_COMPARISON, ra_deg=10.0 + k / 100, dec_deg=20.0, auid=f"C{k}")
+        for k in (1, 2)
+    ]
+    tset = TargetSet(object_name="V1", stars=stars)
+    frame = {"i": 0}
+
+    def measure(*_args, **_kwargs):
+        mag = 12.0 + 0.01 * ((7 * frame["i"]) % 5 - 2)
+        diff = SimpleNamespace(
+            mag=mag,
+            mag_err=0.01,
+            formal_mag_err=0.01,
+            comps_used=2,
+            zero_point=0.0,
+            zp_rms=0.0,
+            note="",
+        )
+        phot = SimpleNamespace(sky_adu=300.0, saturated=False, suspect=False)
+        return [SimpleNamespace(star=s, diff=diff, relative=None, phot=phot) for s in stars]
+
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    monkeypatch.setattr(engine, "_wcs_for_frame", lambda *a: None)
+    monkeypatch.setattr(engine, "_write_live_quality_report", lambda tset: None)
+    monkeypatch.setattr(ae, "measure_frame", measure)
+    monkeypatch.setattr(ae, "bjd_tdb", lambda *a: None)  # no IERS download
+    monkeypatch.setattr(ae, "airmass_at", lambda *a: None)
+    engine.astrometry._wcs = object()
+    engine._last_raw = np.zeros((16, 16), np.uint16)
+    engine._last_raw_decimated = False
+    renders: list[int] = []
+    engine.curves_changed.connect(lambda: renders.append(frame["i"]))
+
+    t0 = datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc)
+    for i in range(15):
+        frame["i"] = i
+        engine._last_exposure_mid = t0 + timedelta(minutes=i)
+        engine._measure_photometry()
+
+    per_frame = [renders.count(i) for i in range(15)]
+    assert sum(per_frame) > 0  # the floor applied (and re-rendered) from the 10th point
+    assert max(per_frame) == 1, per_frame  # 3 per frame (one per star) on 0.4.2
+    assert sorted(len(lc.points) for lc in engine.lightcurves.values()) == [15, 15, 15]
+    assert all(p.sigma_syst is not None for lc in engine.lightcurves.values() for p in lc.points)
+
+
+class _ReturningAfWorker:
+    """Stands in for an AutofocusWorker still driving the focuser back to its
+    start after a stop (its return may take up to 30 s; Stop AF waits 10 s)."""
+
+    created: list = []
+
+    def __init__(self, **_kwargs) -> None:
+        _ReturningAfWorker.created.append(self)
+        self.running = False
+        self.stops = 0
+        self.waits: list[int] = []
+        for name in ("step_done", "best_found", "error_occurred", "finished"):
+            setattr(self, name, _Sig())
+
+    def start(self) -> None:
+        self.running = True
+
+    def isRunning(self) -> bool:  # noqa: N802 (QThread API)
+        return self.running
+
+    def stop(self) -> None:
+        self.stops += 1
+
+    def wait(self, ms: int = 0) -> bool:
+        self.waits.append(ms)
+        return not self.running
+
+
+def test_stop_af_keeps_a_returning_worker_and_refuses_a_second_sweep(shot_rig, monkeypatch) -> None:
+    """S23 (gap found in review): when the return to the start outlasted the
+    10 s wait, Stop AF dropped the worker and released the camera while the
+    worker still drove the focuser; a new Start AF then ran a second worker
+    on the same focuser, both commanding moves."""
+    from unittest.mock import MagicMock
+
+    import argos.core.session.acquisition_engine as ae
+    from argos.workers.camera_service import CameraState
+
+    engine, session, form, logs = shot_rig
+    _ReturningAfWorker.created = []
+    monkeypatch.setattr(ae, "AutofocusWorker", _ReturningAfWorker)
+    session._focuser = MagicMock()
+
+    engine.start_autofocus()
+    (first,) = _ReturningAfWorker.created
+    engine.stop_autofocus()  # the return outlasts the wait
+
+    assert first.stops == 1 and first.running
+    assert engine._autofocus is first
+    assert engine.camera_state is CameraState.AUTOFOCUS
+    assert any(level == "INFO" and "returning" in msg for level, msg in logs), logs
+    engine.start_autofocus()
+    engine.request_autofocus()  # the Focus screen's toggle: a second Stop
+    assert len(_ReturningAfWorker.created) == 1  # no second sweep
+    assert first.waits == [engine._AF_STOP_WAIT_MS]  # no second 10 s freeze
+
+    first.running = False  # back at the start: the worker ends
+    engine._on_af_finished()
+    assert engine.camera_state is CameraState.IDLE
+    engine.start_autofocus()
+    assert len(_ReturningAfWorker.created) == 2
+
+
+def _fake_measure_rig(engine, monkeypatch, tset, seen_fwhm):
+    """``_measure_photometry`` with measure_frame stubbed: every star gets a point."""
+    from types import SimpleNamespace
+
+    import argos.core.session.acquisition_engine as ae
+
+    def measure(*_args, fwhm=None, **_kwargs):
+        seen_fwhm.append(fwhm)
+        diff = SimpleNamespace(
+            mag=12.0, mag_err=0.01, formal_mag_err=0.01, comps_used=2, zero_point=0.0, zp_rms=0.0
+        )
+        diff.note = ""
+        phot = SimpleNamespace(sky_adu=300.0, saturated=False, suspect=False)
+        return [SimpleNamespace(star=s, diff=diff, relative=None, phot=phot) for s in tset.stars]
+
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    monkeypatch.setattr(engine, "_wcs_for_frame", lambda *a: None)
+    monkeypatch.setattr(engine, "_write_live_quality_report", lambda tset: None)
+    monkeypatch.setattr(ae, "measure_frame", measure)
+    monkeypatch.setattr(ae, "bjd_tdb", lambda *a: None)  # no IERS download
+    monkeypatch.setattr(ae, "airmass_at", lambda *a: None)
+    engine.astrometry._wcs = object()
+    engine._last_raw = np.zeros((16, 16), np.uint16)
+    engine._last_raw_decimated = False
+
+
+def test_series_fwhm_is_frozen_on_the_first_measured_frame(shot_rig, monkeypatch) -> None:
+    """S31: the series FWHM (one aperture per series, P7) was read before
+    ``_diagnostics`` reset it for a new object, so the first point had its own
+    aperture and the series used the second frame's FWHM (the owner's CSVs:
+    fwhm 2.16 on the first row, 2.12 on the 194 others)."""
+    from datetime import datetime, timedelta, timezone
+
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+
+    engine, _session, _form, _logs = shot_rig
+    tset = TargetSet(
+        object_name="V1",
+        stars=[
+            TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1"),
+            TargetStar(role=ROLE_COMPARISON, ra_deg=10.01, dec_deg=20.0, auid="C1"),
+        ],
+    )
+    seen: list = []
+    _fake_measure_rig(engine, monkeypatch, tset, seen)
+    t0 = datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc)
+    for i, fwhm in enumerate((2.0, 3.0, 2.5)):
+        engine._last_fwhm = fwhm
+        engine._last_exposure_mid = t0 + timedelta(minutes=i)
+        engine._measure_photometry()
+
+    assert seen == [2.0, 2.0, 2.0]  # [2.0, 3.0, 3.0] before the fix
+    assert [p.fwhm for p in _lc(engine, "V1").points] == [2.0, 2.0, 2.0]
+
+
+def test_recommend_without_vsp_stars_keeps_the_ensemble(shot_rig, monkeypatch) -> None:
+    """S32: "Recommend from pilot" (and the comparison-count spin) removed every
+    VSP comparison before looking for new ones, so with no VSP catalogue (not
+    solved yet, the catalogue not back, or after a GoTo) the ensemble was
+    emptied and targets.json saved without comparisons."""
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+
+    engine, _session, _form, _logs = shot_rig
+    tset = TargetSet(
+        object_name="V1",
+        stars=[
+            TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1"),
+            TargetStar(ROLE_COMPARISON, 10.01, 20.0, auid="C1", source="vsp_auto", mags={"V": 9}),
+            TargetStar(ROLE_COMPARISON, 10.02, 20.0, auid="C2", source="vsp", mags={"V": 10}),
+        ],
+    )
+    saved: list = []
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    monkeypatch.setattr(engine, "_save_target_set", saved.append)
+    assert engine.comparisons == []  # no VSP catalogue for this field
+
+    assert engine.reselect_comparison_stars() == 0
+
+    assert [s.auid for s in tset.by_role(ROLE_COMPARISON)] == ["C1", "C2"]  # [] before
+    assert saved == []
+
+
+def test_a_role_change_starts_a_new_curve(shot_rig, monkeypatch) -> None:
+    """S33: a star whose role changed kept appending to its old curve, so a
+    check star's curve (and its check_*.csv) began with the leave-one-out
+    magnitudes it had as a comparison, under the comparison role."""
+    from datetime import datetime, timedelta, timezone
+
+    from argos.core.catalog.targets import (
+        ROLE_CHECK,
+        ROLE_COMPARISON,
+        ROLE_TARGET,
+        TargetSet,
+        TargetStar,
+    )
+
+    engine, _session, _form, _logs = shot_rig
+    star = TargetStar(role=ROLE_COMPARISON, ra_deg=10.01, dec_deg=20.0, auid="C1")
+    tset = TargetSet(
+        object_name="V1",
+        stars=[TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1"), star],
+    )
+    _fake_measure_rig(engine, monkeypatch, tset, [])
+    renders: list[int] = []
+    engine.curves_changed.connect(lambda: renders.append(1))
+    t0 = datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc)
+    for i in range(3):
+        if i == 2:
+            tset.set_role(TargetStar(role=ROLE_CHECK, ra_deg=10.01, dec_deg=20.0, auid="C1"))
+        engine._last_exposure_mid = t0 + timedelta(minutes=i)
+        engine._measure_photometry()
+
+    curve = _lc(engine, "C1")
+    assert curve.role == ROLE_CHECK and len(curve.points) == 1  # comparison, 3 before
+    assert renders == [1]  # the old comparison curve leaves the display
+
+
+def test_each_filter_has_its_own_curve_csv_and_vetting_s49(shot_rig, tmp_path, monkeypatch) -> None:
+    """S49: a run whose Light steps alternate two filters put every point of a
+    star in one curve (one CSV, one systematic floor, one leave-one-out
+    vetting), whatever the filter. Now one curve and one CSV per (star, filter),
+    the filter in the file name, and the comparisons vetted per filter."""
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+    from argos.core.photometry.lightcurve import read_curves_csv
+
+    engine, _session, _form, _logs = shot_rig
+    comps = [TargetStar(ROLE_COMPARISON, 10.01 * i, 20.0, auid=f"C{i}") for i in (1, 2, 3)]
+    tset = TargetSet(
+        object_name="V1",
+        stars=[TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1"), *comps],
+    )
+    _fake_measure_rig(engine, monkeypatch, tset, [])
+    real_report = type(engine)._write_live_quality_report.__get__(engine)
+    monkeypatch.setattr(engine, "_write_live_quality_report", real_report)  # the S17 report
+    names: list[str] = []
+    engine.photometry_point.connect(lambda point: names.append(point.name))
+    run = tmp_path / "20261112T200000Z_V1"
+    (run / "lights").mkdir(parents=True)
+    t0 = datetime(2026, 11, 12, 20, 0, tzinfo=timezone.utc)
+    for i, filt in enumerate(["V", "B", "V", "B", "V"]):
+        record = SimpleNamespace(
+            image_type="Light Frame",
+            timestamp=(t0 + timedelta(minutes=i)).isoformat(),
+            exposure_s=10.0,
+            filter_name=filt,
+        )
+        engine._on_seq_frame_saved(str(run / "lights" / f"f{i}.fit"), record)
+
+    keys = sorted(k for k in engine.lightcurves if k.startswith("V1@"))
+    assert keys == ["V1@b", "V1@v"]  # one curve "V1" with 5 points before the fix
+    assert [len(engine.lightcurves[k].points) for k in keys] == [2, 3]
+    assert {engine.lightcurves[k].filter_name for k in keys} == {"b", "v"}
+    phot = run / "photometry"
+    assert len(read_curves_csv(phot / "target_V1_v_V1.csv")["target:target_V1_v_V1"].points) == 3
+    assert len(read_curves_csv(phot / "target_V1_b_V1.csv")["target:target_V1_b_V1"].points) == 2
+    assert (phot / "comparison_V1_b_C1.csv").exists()
+    assert not (phot / "target_V1_V1.csv").exists()
+    # S17 per filter: the run's first filter keeps photometry_quality.json.
+    assert (run / "photometry_quality.json").exists()
+    assert (run / "photometry_quality_b.json").exists()
+    assert names[:4] == ["V1", "C1", "C2", "C3"]  # one filter so far: the star's name
+    assert "V1 [b]" in names and "V1 [v]" in names  # two filters: each series says which
+
+
+def test_an_opened_frame_never_takes_the_mount_airmass(shot_rig, tmp_path, monkeypatch) -> None:
+    """S34: without a site, a point's airmass is the mount's (X2) — also for a
+    FITS opened from another night, whose point got the altitude the mount has
+    now (airmass 1.154 for a mount at 60°, whatever the archived frame saw)."""
+    from unittest.mock import MagicMock
+
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.alpaca.telescope import MountPosition
+    from argos.core.catalog.targets import ROLE_TARGET, TargetSet, TargetStar
+    from argos.core.photometry.airmass import airmass_from_altitude
+
+    engine, session, _form, _logs = shot_rig
+    session._telescope = MagicMock()
+    session._on_position(MountPosition(21.7, 43.6, 60.0, 270.0, True, False))
+    star = TargetStar(role=ROLE_TARGET, ra_deg=325.678, dec_deg=43.586, name="SS Cyg")
+    seen: list = []
+    _fake_measure_rig(engine, monkeypatch, TargetSet("SS Cyg", [star]), seen)
+    monkeypatch.setattr(ae, "measure_frame", lambda *a, **k: [_one_result(star)])
+    path = tmp_path / "archived.fit"
+    _write_fits(path, {"DATE-OBS": "2026-09-15T21:00:00", "EXPTIME": 10.0})
+
+    engine.open_fits_frame(path)
+    engine.astrometry._wcs = object()
+    engine._measure_photometry()
+    assert _lc(engine, "SS Cyg").points[-1].airmass is None  # 1.154 before the fix
+
+    # A camera frame of tonight keeps the mount's airmass (X2).
+    engine.ingest_frame(_star_frame())
+    engine._measure_photometry()
+    assert _lc(engine, "SS Cyg").points[-1].airmass == pytest.approx(airmass_from_altitude(60.0))
+
+
+def _lc(engine, star_key: str):
+    """The one curve of a star (S49: curves are keyed ``<star>@<filter>``)."""
+    (curve,) = [c for k, c in engine.lightcurves.items() if k.split("@")[0] == star_key]
+    return curve
+
+
+def _one_result(star):
+    from types import SimpleNamespace
+
+    diff = SimpleNamespace(
+        mag=11.0, mag_err=0.02, formal_mag_err=0.02, comps_used=3, zero_point=0.0, zp_rms=0.0
+    )
+    diff.note = ""
+    phot = SimpleNamespace(sky_adu=300.0, saturated=False, suspect=False)
+    return SimpleNamespace(star=star, diff=diff, relative=None, phot=phot)
+
+
+class _GridWCS:
+    """A solve that places each star at a fixed green-plane pixel."""
+
+    def __init__(self, xy: dict) -> None:
+        self._xy = xy
+
+    def world_to_pixel_deg(self, ra: float, dec: float):
+        return self._xy[(ra, dec)]
+
+
+def _field_frame(green_xy, h: int = 400, w: int = 600) -> np.ndarray:
+    """A raw frame with bright stars at ``green_xy`` (green px) on a noisy sky."""
+    yy, xx = np.mgrid[0:h, 0:w]
+    img = np.random.default_rng(7).normal(300.0, 12.0, (h, w))
+    for gx, gy in green_xy:
+        img += 15000.0 * np.exp(-((xx - 2 * gx) ** 2 + (yy - 2 * gy) ** 2) / (2 * 3.0**2))
+    return np.clip(img, 0, 65535).astype(np.uint16)
+
+
+def test_a_field_that_moved_since_the_solve_gets_no_point(shot_rig, monkeypatch) -> None:
+    """S35: a frame measured through a solution the field has since left by more
+    than the tracker's search radius (a sequence frame measured through the
+    previous frame's solve, after a pointing jump) was measured on blank sky.
+    With no anchor qualified, the tracker fell back to every star of the set at
+    the stale positions and took noise centroids as anchors: a target point
+    with no flag and no warning (the owner's RR Lyr 2026-09-25 run, frames
+    52 and 175)."""
+    from datetime import datetime, timezone
+
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+
+    engine, _session, _form, logs = shot_rig
+    xy = {(10.0, 20.0): (150.0, 100.0)}
+    stars = [TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1")]
+    for i, pos in enumerate([(60.0, 50.0), (230.0, 60.0), (70.0, 150.0), (220.0, 150.0)]):
+        ra = 10.0 + 0.01 * (i + 1)
+        xy[(ra, 20.0)] = pos
+        stars.append(
+            TargetStar(ROLE_COMPARISON, ra, 20.0, auid=f"C{i}", source="vsp", mags={"V": 10.0})
+        )
+    tset = TargetSet(object_name="V1", stars=stars)
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    frame_a = _field_frame(list(xy.values()))
+    frame_b = np.roll(frame_a, 60, axis=1)  # the field moved 30 green px (search radius 15)
+
+    def measure(raw, minute: int) -> None:
+        engine.astrometry._wcs = _GridWCS(xy)
+        engine._on_reference_solved(None, None, "")
+        engine._last_raw, engine._last_raw_decimated = raw, False
+        engine._last_exposure_mid = datetime(2026, 11, 1, 3, minute, tzinfo=timezone.utc)
+        engine._measure_photometry()
+
+    measure(frame_a, 0)
+    assert len(_lc(engine, "V1").points) == 1  # the solved frame is measured
+    assert engine._tracker.anchors_used == 4
+
+    measure(frame_b, 1)
+    assert len(_lc(engine, "V1").points) == 1  # 2, unflagged, before the fix
+    assert any(level == "WARN" and "field moved" in msg for level, msg in logs)
+
+    # Back on the solved field (no new solve): the tracker finds its stars again.
+    engine._last_raw = frame_a
+    engine._measure_photometry()
+    assert len(_lc(engine, "V1").points) == 2
+
+
+def _s48_field(engine, monkeypatch):
+    """Target V1 and four comparisons; frame A as solved, frame B after a 30 green
+    px jump, with field stars 5 px from where comparison C0 and the target were
+    (a crowded field: a tracker window re-centroids a neighbour within its 15 px
+    search radius, and the moved target aperture falls on another star)."""
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+
+    xy = {(10.0, 20.0): (150.0, 100.0)}
+    stars = [TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1")]
+    for i, pos in enumerate([(60.0, 50.0), (230.0, 60.0), (70.0, 150.0), (220.0, 150.0)]):
+        ra = 10.0 + 0.01 * (i + 1)
+        xy[(ra, 20.0)] = pos
+        stars.append(
+            TargetStar(ROLE_COMPARISON, ra, 20.0, auid=f"C{i}", source="vsp", mags={"V": 10.0})
+        )
+    tset = TargetSet(object_name="V1", stars=stars)
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    frame_a = _field_frame(list(xy.values()))
+    frame_b = _field_frame([(x + 30.0, y) for x, y in xy.values()] + [(64.0, 53.0), (154.0, 103.0)])
+    return xy, frame_a, frame_b
+
+
+def test_a_frame_whose_anchors_show_no_star_gets_no_point_s48(shot_rig, monkeypatch) -> None:
+    """S48: the lock check of the live and sequence paths. After a jump larger
+    than the search radius, one tracker window centroided a neighbour, the
+    tracker kept "1 anchor" and moved every aperture by that window's offset:
+    S35 (no anchor at all) did not fire and the frame was measured on blank sky
+    (the 6a review's server replay of RR Lyr frames 40-79: 8 unflagged points
+    21-67 px off). Fewer than half the anchors showing a star where the tracked
+    solution places them now means no point, and a re-solve due at once."""
+    from datetime import datetime, timezone
+
+    engine, _session, _form, logs = shot_rig
+    xy, frame_a, frame_b = _s48_field(engine, monkeypatch)
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+    for minute, raw in enumerate((frame_a, frame_b)):
+        # A sequence measures each saved sub through the latest solve.
+        engine._last_raw, engine._last_raw_decimated = raw, False
+        engine._last_exposure_mid = datetime(2026, 11, 1, 3, minute, tzinfo=timezone.utc)
+        engine._measure_photometry()
+        if minute == 0:
+            assert len(_lc(engine, "V1").points) == 1
+            assert engine._tracker.anchors_used == 4
+    assert engine._tracker.anchors_used >= 1  # S35 does not fire: an anchor was "found"
+    assert len(_lc(engine, "V1").points) == 1  # 2, on blank sky, before the fix
+    assert any(level == "WARN" and "anchor" in msg for level, msg in logs), logs
+    assert engine.astrometry._due(None) is True  # a re-solve is due at once
+
+
+def test_a_run_re_solves_the_frame_whose_lock_was_lost_s48(shot_rig, monkeypatch) -> None:
+    """In a run the sub in hand is solved at once (its solution serves the next
+    sub); outside a run only the next frame is due (a live point follows each
+    solve, and solving the same frame again would repeat it)."""
+    from datetime import datetime, timezone
+
+    from argos.workers.camera_service import CameraState
+
+    engine, _session, _form, _logs = shot_rig
+    xy, frame_a, frame_b = _s48_field(engine, monkeypatch)
+    started: list = []
+    monkeypatch.setattr(
+        engine.astrometry, "on_new_frame", lambda raw, shape, *a, **k: started.append(shape)
+    )
+    for state in (CameraState.LIVE, CameraState.SEQUENCE):
+        monkeypatch.setattr(engine._camera_service, "_state", state)
+        engine.astrometry._wcs = _GridWCS(xy)
+        engine._on_reference_solved(None, None, "")
+        for minute, raw in enumerate((frame_a, frame_b)):
+            engine._last_raw, engine._last_raw_decimated = raw, False
+            engine._last_exposure_mid = datetime(2026, 11, 1, 3, minute, tzinfo=timezone.utc)
+            engine._measure_photometry()
+        assert started == ([] if state is CameraState.LIVE else [(200, 300)])
+
+
+def test_the_lock_check_costs_no_good_frame_s48(shot_rig, monkeypatch) -> None:
+    """S48 on a field that only drifts (6 green px, inside the search radius):
+    every frame keeps its point."""
+    from datetime import datetime, timezone
+
+    engine, _session, _form, logs = shot_rig
+    xy, frame_a, _frame_b = _s48_field(engine, monkeypatch)
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+    for minute in range(4):
+        raw = _field_frame([(x + 2.0 * minute, y + minute) for x, y in xy.values()])
+        engine._last_raw, engine._last_raw_decimated = raw, False
+        engine._last_exposure_mid = datetime(2026, 11, 1, 3, minute, tzinfo=timezone.utc)
+        engine._measure_photometry()
+    assert len(_lc(engine, "V1").points) == 4
+    assert not any("Photometry skipped" in msg for _level, msg in logs)
+
+
+def test_a_set_change_never_re_anchors_on_a_stale_solution_s52(shot_rig, monkeypatch) -> None:
+    """S52: a target-set change between two solves (the VSP backfill after the
+    first solve, a role edit) dropped the tracker, and the next sub rebuilt it
+    on the raw solution although the field had drifted 30 green px since. Only
+    a neighbour that happened to sit near a comparison's solved position was
+    seen there: the tracker kept that 1 anchor, the S48 check passed with 1 of
+    1, and every aperture measured blank sky until the next solve (the science
+    review's server replay of RR Lyr 2026-09-25 frames 0-79: five unflagged
+    target points 30-37 px off, SNR 0-2.6). The tracker is now rebuilt on the
+    solution as tracked so far, and in a run the next sub is solved at once."""
+    import math
+    import time
+    from datetime import datetime, timezone
+
+    from argos.core.catalog.targets import ROLE_COMPARISON, TargetStar
+    from argos.workers.camera_service import CameraState
+
+    engine, _session, _form, _logs = shot_rig
+    xy, _frame_a, _frame_b = _s48_field(engine, monkeypatch)
+    monkeypatch.setattr(engine._camera_service, "_state", CameraState.SEQUENCE)
+    monkeypatch.setattr(engine.astrometry, "on_new_frame", lambda *a, **k: None)
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+    engine.astrometry._last_solve_monotonic = time.monotonic()  # the solve is fresh
+
+    def sub(minute: int, dx: float) -> None:
+        # The field drifts; a field star rides along 30 px west of C0, so it sits
+        # 5 px from C0's solved position once the field has moved 30 px.
+        stars = [(x + dx, y) for x, y in xy.values()] + [(34.0 + dx, 53.0)]
+        engine._last_raw, engine._last_raw_decimated = _field_frame(stars), False
+        engine._last_exposure_mid = datetime(2026, 11, 1, 3, minute, tzinfo=timezone.utc)
+        engine._measure_photometry()
+
+    for minute, dx in enumerate((0.0, 10.0, 20.0, 30.0)):  # the tracker follows the drift
+        sub(minute, dx)
+    assert len(_lc(engine, "V1").points) == 4
+    assert engine.astrometry._resolve_due is False
+
+    # The set changes between solves: one comparison more.
+    xy[(10.05, 20.0)] = (300.0, 250.0)
+    engine.set_target_role(
+        TargetStar(ROLE_COMPARISON, 10.05, 20.0, auid="C9", source="vsp", mags={"V": 10.0})
+    )
+    assert engine.astrometry._resolve_due is True  # in a run, the next sub is solved
+
+    sub(4, 30.0)
+    target_x, target_y = engine.tracked_wcs().world_to_pixel_deg(10.0, 20.0)
+    # True position (180, 100): 154, 103 (26 px off, on blank sky) before the fix.
+    assert math.hypot(target_x - 180.0, target_y - 100.0) < 5.0
+    assert len(_lc(engine, "V1").points) == 5
+    assert engine._tracker.anchors_used >= 3
+
+
+def _land_solution(engine, monkeypatch, wcs, raw) -> None:
+    """A solution of ``raw`` lands through the controller's gates (S50, S54), as an
+    ASTAP result would: ``_start`` recorded the frame, the worker returned."""
+    import argos.workers.astrometry_controller as ac
+    from argos.core.imaging.platesolve import SolveResult
+
+    monkeypatch.setattr(ac, "wcs_from_result", lambda _result, _shape: wcs)
+    monkeypatch.setattr(ac, "overlay_for", lambda *a, **k: None)
+    controller = engine.astrometry
+    controller._green_shape = (raw.shape[0] // 2, raw.shape[1] // 2)
+    controller._pending_raw = raw
+    controller._pending_gate = True
+    controller._on_worker_solved(SolveResult(solved=True, ra_hours=0.667, dec_deg=20.0))
+
+
+def test_a_new_solution_the_anchors_do_not_confirm_is_refused_s54(shot_rig, monkeypatch) -> None:
+    """S54: a new plate solution rebuilt the tracker from the stars seen where it
+    put them, so a wrong match passed S48 (XX Cyg 2026-09-07 045156Z frame 1: 1
+    anchor of 6 seen, the next frame measured 24 px off every star; S50 also
+    refuses that one, by its scale). A camera frame's new solution on which fewer
+    than half the previous tracker's anchors show a star (SNR >= 5) where it puts
+    them is now refused: the previous solution and its tracker stay."""
+    import math
+    from datetime import datetime, timezone
+
+    engine, _session, _form, logs = shot_rig
+    xy, frame_a, _frame_b = _s48_field(engine, monkeypatch)
+    good = _GridWCS(xy)
+    engine.astrometry._wcs = good
+    engine._on_reference_solved(None, None, "")
+
+    def measure(minute: int) -> None:
+        engine._last_raw, engine._last_raw_decimated = frame_a, False
+        engine._last_exposure_mid = datetime(2026, 11, 1, 3, minute, tzinfo=timezone.utc)
+        engine._measure_photometry()
+
+    measure(0)
+    assert engine._tracker.anchors_used == 4
+    wrong = _GridWCS({k: (x + 25.0, y + 10.0) for k, (x, y) in xy.items()})
+    _land_solution(engine, monkeypatch, wrong, frame_a)
+    assert engine.astrometry.wcs is good  # the wrong match replaced it before the fix
+    assert any(
+        level == "ERROR" and "refused" in msg and "0 of the 4 anchor" in msg for level, msg in logs
+    ), logs
+    measure(1)  # the frame stays on its stars
+    x, y = engine.tracked_wcs().world_to_pixel_deg(10.0, 20.0)
+    assert math.hypot(x - 150.0, y - 100.0) < 1.0
+    assert len(_lc(engine, "V1").points) == 2
+
+
+def test_a_good_solution_after_a_jump_or_a_slew_is_accepted_s54(shot_rig, monkeypatch) -> None:
+    """S54 costs no good solution: after a 30 px jump the new solution puts the
+    previous anchors on their stars; after a slew there is no previous tracker."""
+    from datetime import datetime, timezone
+
+    engine, _session, _form, _logs = shot_rig
+    xy, frame_a, _frame_b = _s48_field(engine, monkeypatch)
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+    engine._last_raw, engine._last_raw_decimated = frame_a, False
+    engine._last_exposure_mid = datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc)
+    engine._measure_photometry()
+    moved_xy = {k: (x + 30.0, y) for k, (x, y) in xy.items()}
+    moved = _GridWCS(moved_xy)
+    _land_solution(engine, monkeypatch, moved, _field_frame(list(moved_xy.values())))
+    assert engine.astrometry.wcs is moved
+    engine.invalidate_astrometry()  # a slew: another field, no previous anchors
+    elsewhere = _GridWCS({k: (x + 200.0, y + 120.0) for k, (x, y) in xy.items()})
+    _land_solution(engine, monkeypatch, elsewhere, _field_frame([(10.0, 10.0)]))
+    assert engine.astrometry.wcs is elsewhere
+
+
+def _two_anchor_field(engine, monkeypatch):
+    """Target V1 and two comparisons: a tracker of 2 anchors."""
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+
+    xy = {(10.0, 20.0): (150.0, 100.0), (10.01, 20.0): (60.0, 50.0), (10.02, 20.0): (230.0, 60.0)}
+    stars = [TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1")]
+    stars += [
+        TargetStar(ROLE_COMPARISON, ra, dec, auid=f"C{i}", source="vsp", mags={"V": 10.0})
+        for i, (ra, dec) in enumerate(list(xy)[1:])
+    ]
+    monkeypatch.setattr(engine, "target_set", lambda: TargetSet(object_name="V1", stars=stars))
+    return xy, _field_frame(list(xy.values()))
+
+
+def test_a_lock_on_fewer_than_three_anchors_flags_its_points_s56(shot_rig, monkeypatch) -> None:
+    """S56: with 1 or 2 anchors the S48 check (ceil(n/2) seen) is met by the very
+    anchor that moved the solution, so it verifies nothing (the RR Lyr
+    2026-09-25 replays: 1 or 2 anchors after the VSP backfill). Such a frame's
+    points are now flagged suspect (the CSV's suspect column, kept, left out of
+    the AAVSO export) and a re-solve is due at once, unless the frame is measured
+    within 10 px of a solution of this sub or the previous one (S56 as amended)."""
+    from datetime import datetime, timezone
+
+    from argos.core.photometry.lightcurve import LightCurve
+
+    engine, _session, _form, logs = shot_rig
+    xy, frame = _two_anchor_field(engine, monkeypatch)
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+    for minute in range(2):
+        engine._last_raw, engine._last_raw_decimated = frame, False
+        engine._last_exposure_mid = datetime(2026, 11, 1, 3, minute, tzinfo=timezone.utc)
+        engine._measure_photometry()
+    assert len(engine._tracker_anchor_stars) == 2
+    points = _lc(engine, "V1").points
+    assert len(points) == 2 and all(p.suspect for p in points)  # unflagged before the fix
+    assert engine.astrometry._due(None) is True  # a re-solve is due at once
+    warnings = [m for level, m in logs if level == "WARN" and "cannot be verified" in m]
+    assert len(warnings) == 1  # once per episode, not per frame
+    csv = next(path for key, path in engine._preview_csvs.items() if key.startswith("V1@"))
+    assert [p.suspect for p in LightCurve.from_csv(csv).points] == [True, True]
+
+
+def test_a_run_re_solves_the_sub_whose_lock_is_unverified_s56(shot_rig, monkeypatch) -> None:
+    """In a run the sub in hand is solved at once, as after a lost lock (S48);
+    a lock on 3 anchors or more is verified: no flag, no re-solve."""
+    from datetime import datetime, timezone
+
+    from argos.workers.camera_service import CameraState
+
+    engine, _session, _form, _logs = shot_rig
+    started: list = []
+    monkeypatch.setattr(
+        engine.astrometry, "on_new_frame", lambda raw, shape, *a, **k: started.append(shape)
+    )
+    monkeypatch.setattr(engine._camera_service, "_state", CameraState.SEQUENCE)
+    xy, frame = _two_anchor_field(engine, monkeypatch)
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+    engine._last_raw, engine._last_raw_decimated = frame, False
+    engine._last_exposure_mid = datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc)
+    engine._measure_photometry()
+    assert started == [(200, 300)]
+    assert _lc(engine, "V1").points[-1].suspect
+
+    started.clear()
+    engine.astrometry._resolve_due = False
+    xy4, frame4, _b = _s48_field(engine, monkeypatch)
+    engine.astrometry._wcs = _GridWCS(xy4)
+    engine._on_reference_solved(None, None, "")
+    engine._last_raw = frame4
+    engine._last_exposure_mid = datetime(2026, 11, 1, 3, 1, tzinfo=timezone.utc)
+    engine._measure_photometry()
+    assert len(engine._tracker_anchor_stars) == 4
+    assert started == [] and engine.astrometry._resolve_due is False
+    assert not _lc(engine, "V1").points[-1].suspect
+
+
+def _measure_raw(engine, raw, minute: int) -> None:
+    """A frame becomes the engine's last raw (``_take_raw``) and is measured."""
+    from datetime import datetime, timezone
+
+    engine._take_raw(raw)
+    engine._last_raw_decimated = False
+    engine._last_exposure_mid = datetime(2026, 11, 1, 3, minute, tzinfo=timezone.utc)
+    engine._measure_photometry()
+
+
+def test_a_few_anchor_lock_near_a_fresh_solution_is_verified_s56(shot_rig, monkeypatch) -> None:
+    """S56 as amended (2026-11-15): with 1-2 anchors a frame is verified when it is
+    measured through a solution of this sub or the previous one and the tracker
+    moved no aperture 10 px or more from where that solution puts it (XX Cyg
+    2026-08-29 050148Z: 2 anchors, every point within 2 px of its star, all 22
+    flagged before). No re-solve is made due then. Two subs after the solve, or
+    12 px from it, the frame is flagged and a re-solve is due, as before. The
+    threshold was 2 px until 2026-11-16 (6 px flagged): the converged tracker (S69)
+    sees the owner's fields move 4-7.5 px between subs."""
+    engine, _session, _form, _logs = shot_rig
+    xy, frame = _two_anchor_field(engine, monkeypatch)
+    engine._take_raw(frame)
+    _land_solution(engine, monkeypatch, _GridWCS(xy), frame)
+    _measure_raw(engine, frame, 0)  # through this sub's own solution
+    assert len(engine._tracker_anchor_stars) == 2
+    assert not _lc(engine, "V1").points[-1].suspect  # flagged before the amendment
+    assert engine.astrometry._resolve_due is False
+    _measure_raw(engine, frame.copy(), 1)  # the previous sub's solution
+    assert not _lc(engine, "V1").points[-1].suspect
+    assert engine.astrometry._resolve_due is False
+    _measure_raw(engine, frame.copy(), 2)  # two subs after it: unverified
+    assert _lc(engine, "V1").points[-1].suspect
+    assert engine.astrometry._resolve_due is True
+
+    for minute, (shift, flagged) in enumerate(((1.0, False), (6.0, False), (12.0, True)), start=3):
+        engine.astrometry._resolve_due = False
+        base = frame.copy()
+        engine._take_raw(base)
+        _land_solution(engine, monkeypatch, _GridWCS(xy), base)
+        moved = _field_frame([(x + shift, y) for x, y in xy.values()])
+        _measure_raw(engine, moved, minute)
+        assert _lc(engine, "V1").points[-1].suspect is flagged, shift
+        assert engine.astrometry._resolve_due is flagged
+
+
+def test_the_unverified_lock_warns_once_per_episode_s56(shot_rig, monkeypatch) -> None:
+    """S56 as amended: one Activity line per episode. A solve that lands does not
+    end it (on a field that never reaches 3 anchors it warned on every sub, with
+    'until the next solve', which was false there); a verified frame, a slew or
+    a set change does."""
+    engine, _session, _form, logs = shot_rig
+    xy, frame = _two_anchor_field(engine, monkeypatch)
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+
+    def warnings() -> list[str]:
+        return [m for level, m in logs if level == "WARN" and "cannot be verified" in m]
+
+    _measure_raw(engine, frame, 0)
+    _measure_raw(engine, frame.copy(), 1)
+    old = frame.copy()  # a solve of an older frame lands: still unverified
+    _land_solution(engine, monkeypatch, _GridWCS(xy), old)
+    _measure_raw(engine, frame.copy(), 2)
+    _measure_raw(engine, frame.copy(), 3)
+    assert len(warnings()) == 1, warnings()  # 2 before the amendment
+    assert "while fewer than 3 anchor stars steer the apertures" in warnings()[0]
+    fresh = frame.copy()
+    engine._take_raw(fresh)
+    _land_solution(engine, monkeypatch, _GridWCS(xy), fresh)
+    _measure_raw(engine, fresh, 4)  # verified: the episode ends
+    assert not _lc(engine, "V1").points[-1].suspect
+    _measure_raw(engine, frame.copy(), 5)
+    _measure_raw(engine, frame.copy(), 6)  # stale again: a new episode
+    assert len(warnings()) == 2
+    engine.invalidate_astrometry()  # a slew ends it too
+    assert engine._unverified_logged is False
+
+
+def test_the_lock_check_uses_anchors_chosen_on_the_solved_frame_s56(shot_rig, monkeypatch) -> None:
+    """S56 as amended (2026-11-15, second set): the anchors were chosen on the
+    measured sub through the previous sub's solution. After a jump only the stars
+    that happened to show at the stale positions qualified: here a neighbour 1.1 px
+    from where comparison C0 was, 1 anchor of 1, seen by construction (S48), moving
+    the apertures 1.1 px, so S56 verified it: the target measured on another star,
+    unflagged (real RR Lyr subs moved 500 px: 1 anchor, 2.16 px of tracker motion,
+    the target 496 px off, flagged by a 0.16 px margin). The anchors are now chosen
+    on the frame the solution was solved on, where it is exact: 1 of the 4 shows a
+    star on the moved sub, the lock is lost, no point, a re-solve due."""
+    engine, _session, _form, logs = shot_rig
+    xy, frame_a, _frame_b = _s48_field(engine, monkeypatch)
+    neighbours = [(61.0, 50.5), (151.0, 100.5)]  # by C0's and the target's solved spots
+    moved = _field_frame([(x + 120.0, y) for x, y in xy.values()] + neighbours)
+    engine._take_raw(frame_a)
+    _land_solution(engine, monkeypatch, _GridWCS(xy), frame_a)
+    _measure_raw(engine, moved, 1)  # the next sub, through the previous sub's solution
+    assert len(engine._tracker_anchor_stars) == 4  # 1 (the neighbour) before the fix
+    points = [p for k, c in engine.lightcurves.items() if k.startswith("V1@") for p in c.points]
+    assert points == []  # one unflagged point, off the star, before the fix
+    assert any(level == "WARN" and "fewer than half" in msg for level, msg in logs), logs
+    assert engine.astrometry._resolve_due is True
+
+
+def test_a_run_solves_the_sub_verified_through_the_previous_solution_s56(
+    shot_rig, monkeypatch
+) -> None:
+    """S56 as amended (2026-11-15, second set): a sub of 1-2 anchors verified through
+    the previous sub's solution made no solve due, so the next sub was two subs from
+    a solution: with one solve per run the subs alternated verified and flagged (XX
+    Cyg 2026-08-29 050148Z: 12 of 22 flagged, 11 WARN episodes). In a run the sub in
+    hand is now solved too: every sub is measured through the previous one's
+    solution. Outside a run a live point follows each solve: nothing more is due."""
+    from argos.workers.camera_service import CameraState
+
+    engine, _session, _form, _logs = shot_rig
+    started: list = []
+    monkeypatch.setattr(
+        engine.astrometry, "on_new_frame", lambda raw, shape, *a, **k: started.append(raw)
+    )
+    xy, frame = _two_anchor_field(engine, monkeypatch)
+    for state in (CameraState.LIVE, CameraState.SEQUENCE):
+        monkeypatch.setattr(engine._camera_service, "_state", state)
+        engine.astrometry._resolve_due = False
+        started.clear()
+        engine._take_raw(frame)
+        _land_solution(engine, monkeypatch, _GridWCS(xy), frame)
+        _measure_raw(engine, frame, 0)  # this sub's own solution: nothing more to solve
+        assert started == [] and engine.astrometry._resolve_due is False
+        sub = frame.copy()
+        _measure_raw(engine, sub, 1)  # the previous sub's solution: verified
+        assert not _lc(engine, "V1").points[-1].suspect
+        in_run = state is CameraState.SEQUENCE
+        assert engine.astrometry._resolve_due is in_run  # False before the fix
+        assert [raw is sub for raw in started] == ([True] if in_run else [])
+    for minute in range(2, 6):  # one solve per run: a sub's solve lands when due
+        if engine.astrometry._resolve_due:
+            engine.astrometry._resolve_due = False
+            _land_solution(engine, monkeypatch, _GridWCS(xy), engine._last_raw)
+        _measure_raw(engine, frame.copy(), minute)
+        assert not _lc(engine, "V1").points[-1].suspect, minute  # 2 and 4 before the fix
+
+
+def test_the_anchor_check_needs_half_the_anchors_s54(shot_rig, monkeypatch) -> None:
+    """S54's threshold is ceil(k/2) of the tracker's k anchors: 1 of 4 seen refuses
+    the solution (045156Z frame 1 was 1 of 6), 2 of 4 accept it."""
+    import argos.core.session.acquisition_engine as ae
+
+    engine, _session, _form, _logs = shot_rig
+    xy, frame_a, _frame_b = _s48_field(engine, monkeypatch)
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+    _measure_raw(engine, frame_a, 0)
+    assert len(engine._tracker_anchor_stars) == 4
+    monkeypatch.setattr(ae, "anchors_seen", lambda *a, **k: 1)
+    reason = engine._solution_refusal(_GridWCS(xy), frame_a)
+    assert reason is not None and "only 1 of the 4 anchor stars" in reason
+    assert "(2 needed" in reason
+    monkeypatch.setattr(ae, "anchors_seen", lambda *a, **k: 2)
+    assert engine._solution_refusal(_GridWCS(xy), frame_a) is None
+
+
+class _LinearWCS:
+    """A continuous solve (1 green px per arcsec) shifted by ``dx`` px: S54's
+    agreement is measured at the frame centre, where no set star is."""
+
+    def __init__(self, dx: float) -> None:
+        self.dx = dx
+
+    def world_to_pixel_deg(self, ra: float, dec: float):
+        return 150.0 + (ra - 10.0) * 3600.0 + self.dx, 100.0 + (dec - 20.0) * 3600.0
+
+    def pixel_to_radec(self, x: float, y: float):
+        return (10.0 + (x - 150.0 - self.dx) / 3600.0) / 15.0, 20.0 + (y - 100.0) / 3600.0
+
+
+def test_three_agreeing_refused_solutions_are_a_re_pointing_s54(shot_rig, monkeypatch) -> None:
+    """S54 as amended (2026-11-15): when the field moved without a reported slew
+    (camera only, another app), the previous anchors are off the frame and every
+    correct solution was refused until a slew. 3 consecutive solutions refused by
+    the anchor check that agree within 20 px are now accepted and logged; 3 that
+    disagree stay refused."""
+    import argos.core.session.acquisition_engine as ae
+
+    engine, _session, _form, logs = shot_rig
+    xy, frame_a, _frame_b = _s48_field(engine, monkeypatch)
+    good = _GridWCS(xy)
+    engine.astrometry._wcs = good
+    engine._on_reference_solved(None, None, "")
+    _measure_raw(engine, frame_a, 0)
+    monkeypatch.setattr(ae, "anchors_seen", lambda *a, **k: 0)  # the field moved away
+    for dx in (300.0, 400.0, 500.0):  # disagreeing: wrong matches
+        _land_solution(engine, monkeypatch, _LinearWCS(dx), frame_a)
+        assert engine.astrometry.wcs is good
+    for dx in (600.0, 604.0):
+        _land_solution(engine, monkeypatch, _LinearWCS(dx), frame_a)
+        assert engine.astrometry.wcs is good
+    third = _LinearWCS(608.0)
+    _land_solution(engine, monkeypatch, third, frame_a)
+    assert engine.astrometry.wcs is third  # refused for ever before the amendment
+    assert any(
+        level == "WARN" and "re-pointing the mount did not report" in msg for level, msg in logs
+    ), logs
+    assert engine._repoint_refused == [] and engine._tracker is None
+
+
+def test_a_camera_frame_after_an_opened_fits_drops_its_tracker_s59(shot_rig, monkeypatch) -> None:
+    """S59: an opened FITS is solved and measured (a tracker on the file's field);
+    back to camera frames, that tracker was kept, so the camera's first solution
+    was held to the file's anchors (S54) and refused while the camera points
+    elsewhere. A camera frame after a file now drops it, as the server's
+    source_changed does."""
+    engine, _session, _form, _logs = shot_rig
+    xy, frame_a, _frame_b = _s48_field(engine, monkeypatch)
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+    _measure_raw(engine, frame_a, 0)
+    engine._last_raw_from_file = True  # as open_fits_frame leaves it
+    assert engine._tracker is not None
+    engine.ingest_frame(_field_frame([(20.0, 20.0)]))  # a camera sub elsewhere
+    assert engine._tracker is None and engine._tracker_anchor_stars == []
+    elsewhere = _GridWCS({k: (x + 200.0, y + 120.0) for k, (x, y) in xy.items()})
+    _land_solution(engine, monkeypatch, elsewhere, engine._last_raw)
+    assert engine.astrometry.wcs is elsewhere  # refused before the fix (0 of 4 seen)
+
+
+def test_a_run_after_an_opened_fits_accepts_the_camera_solution_s59(shot_rig, monkeypatch) -> None:
+    """S59 with S56 as amended (2026-11-15, second set): a run's first sub after an
+    opened FITS is measured through the file's solution, kept until the camera's own
+    solve, and its tracker's anchors are chosen on the frame that solution was solved
+    on: the file's. The sub's own solution was then held to the file's anchors (S54)
+    and refused while the camera points elsewhere, the defect S59 fixed. A file's
+    anchors never vet a camera solution now; the sub's lock is still lost, and once
+    the camera's solution is the reference its own anchors vet the next ones."""
+    from datetime import datetime, timezone
+
+    from argos.workers.camera_service import CameraState
+
+    engine, _session, _form, logs = shot_rig
+    xy, frame_a, _frame_b = _s48_field(engine, monkeypatch)
+    engine._take_raw(frame_a)
+    engine._last_raw_from_file = True  # as open_fits_frame leaves it
+    _land_solution(engine, monkeypatch, _GridWCS(xy), frame_a)
+    engine._last_raw_decimated = False
+    engine._last_exposure_mid = datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc)
+    engine._measure_photometry()  # the file is measured
+    assert len(_lc(engine, "V1").points) == 1
+    monkeypatch.setattr(engine._camera_service, "_state", CameraState.SEQUENCE)
+    monkeypatch.setattr(engine.astrometry, "on_new_frame", lambda *a, **k: None)
+    sub = _field_frame([(20.0, 20.0), (280.0, 180.0)])  # a camera sub elsewhere
+    _measure_raw(engine, sub, 1)  # the run's first sub, through the file's solution
+    assert len(engine._tracker_anchor_stars) == 4  # chosen on the file's frame (S56)
+    assert len(_lc(engine, "V1").points) == 1  # none seen where they are: no point
+    elsewhere = _GridWCS({k: (x + 200.0, y + 120.0) for k, (x, y) in xy.items()})
+    _land_solution(engine, monkeypatch, elsewhere, sub)
+    assert engine.astrometry.wcs is elsewhere  # refused before the fix (0 of the 4)
+    assert not any("refused" in msg for _level, msg in logs), logs
+
+    moved = {k: (x + 20.0, y) for k, (x, y) in xy.items()}  # the camera's own field
+    cam = _field_frame(list(moved.values()))
+    _land_solution(engine, monkeypatch, _GridWCS(moved), cam)
+    _measure_raw(engine, cam, 2)
+    assert len(engine._tracker_anchor_stars) == 4 and len(_lc(engine, "V1").points) == 2
+    wrong = _GridWCS({k: (x + 90.0, y + 40.0) for k, (x, y) in moved.items()})
+    _land_solution(engine, monkeypatch, wrong, cam.copy())
+    assert engine.astrometry.wcs is not wrong  # the camera's anchors vet it (S54)
+
+
+def test_every_vetting_file_names_its_filter_s57(shot_rig, tmp_path, monkeypatch) -> None:
+    """S57: ``photometry_quality.json`` vets the run's first filter and did not say
+    which. Every vetting file now carries an additive ``filter`` key (the S49
+    token); Review, which ignores unknown keys, still reads it."""
+    import json
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+
+    engine, _session, _form, _logs = shot_rig
+    comps = [TargetStar(ROLE_COMPARISON, 10.01 * i, 20.0, auid=f"C{i}") for i in (1, 2, 3)]
+    tset = TargetSet(
+        object_name="V1",
+        stars=[TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1"), *comps],
+    )
+    _fake_measure_rig(engine, monkeypatch, tset, [])
+    real_report = type(engine)._write_live_quality_report.__get__(engine)
+    monkeypatch.setattr(engine, "_write_live_quality_report", real_report)
+    run = tmp_path / "20261114T200000Z_V1"
+    (run / "lights").mkdir(parents=True)
+    t0 = datetime(2026, 11, 14, 20, 0, tzinfo=timezone.utc)
+    for i, filt in enumerate(["IR", "LP", "IR"]):
+        record = SimpleNamespace(
+            image_type="Light Frame",
+            timestamp=(t0 + timedelta(minutes=i)).isoformat(),
+            exposure_s=10.0,
+            filter_name=filt,
+        )
+        engine._on_seq_frame_saved(str(run / "lights" / f"f{i}.fit"), record)
+    first = json.loads((run / "photometry_quality.json").read_text())
+    other = json.loads((run / "photometry_quality_lp.json").read_text())
+    assert first["filter"] == "ir" and other["filter"] == "lp"  # no key before the fix
+    assert first["comparison_stars"] and first["schema"] == other["schema"]
+
+
+def test_recommend_with_no_vsp_star_passing_the_gate_keeps_the_ensemble(
+    shot_rig, monkeypatch
+) -> None:
+    """S32 extended: with VSP stars in the field but none passing the pilot gate
+    (all further than 25′, as for the owner's RR Lyr field, where the six
+    comparisons are 27–59′ away), "Recommend from pilot" still removed every
+    VSP comparison, added none and saved the set with no comparison."""
+    from argos.core.catalog.aavso import Band, ComparisonStar
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+
+    engine, _session, _form, _logs = shot_rig
+    tset = TargetSet(
+        object_name="V1",
+        stars=[
+            TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1"),
+            TargetStar(ROLE_COMPARISON, 10.01, 20.0, auid="C1", source="vsp_auto", mags={"V": 9}),
+            TargetStar(ROLE_COMPARISON, 10.02, 20.0, auid="C2", source="vsp", mags={"V": 10}),
+        ],
+    )
+    saved: list = []
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    monkeypatch.setattr(engine, "_save_target_set", saved.append)
+    engine._comparisons = [ComparisonStar("C9", 12.0, 20.0, "90", (Band("V", 9.0),))]  # 1.9° off
+
+    assert engine.reselect_comparison_stars() == 0
+
+    assert [s.auid for s in tset.by_role(ROLE_COMPARISON)] == ["C1", "C2"]  # [] before
+    assert saved == []
+
+
+def test_a_frame_written_before_0_5_is_dated_by_its_start() -> None:
+    """S39: up to 0.4.x a sequence frame's DATE-AVG included half the image
+    download (S36: +5.2 s median, 16.6 s at most on the owner's RR Lyr run), so
+    Open FITS dated those frames late; their live points used DATE-OBS +
+    EXPTIME/2. A frame of 0.5.0 on, or of other software, keeps its DATE-AVG."""
+    from datetime import datetime, timezone
+
+    from argos.core.session.acquisition_engine import fits_exposure_mid
+
+    frame = {
+        "DATE-OBS": "2026-09-25T20:04:57",
+        "DATE-AVG": "2026-09-25T20:05:20.4",
+        "EXPTIME": 30.0,
+    }
+    start_plus_half = datetime(2026, 9, 25, 20, 5, 12, tzinfo=timezone.utc)
+    date_avg = datetime(2026, 9, 25, 20, 5, 20, 400000, tzinfo=timezone.utc)
+    for software in ("Argos v0.4.2", "Argos v0.4.1.dev3+g1a2b3c", "Argos v0.3.0", "Argos"):
+        assert fits_exposure_mid({**frame, "SOFTWARE": software}) == start_plus_half, software
+    assert fits_exposure_mid({**frame, "SWCREATE": "Argos v0.4.2"}) == start_plus_half
+    for software in ("Argos v0.5.0", "Argos v1.0.0", "N.I.N.A. 3.1", "Argos-like 0.1", ""):
+        assert fits_exposure_mid({**frame, "SOFTWARE": software}) == date_avg, software
+    assert fits_exposure_mid(frame) == date_avg  # no SOFTWARE: third-party, as before
+
+
+def test_measuring_an_object_again_never_overwrites_its_preview_csv(
+    shot_rig, tmp_path, monkeypatch
+) -> None:
+    """S40: outside a run, a live curve's CSV (<sessions>/targets/) was rewritten
+    from the in-memory curve, which an object change or a restart clears, so
+    measuring the object again (A → B → A, the next evening) erased the earlier
+    points on disk. Each curve now has its own file, named after its start."""
+    from datetime import datetime, timedelta, timezone
+
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.catalog.targets import ROLE_CHECK, ROLE_TARGET, TargetSet, TargetStar
+    from argos.core.photometry.lightcurve import read_curves_csv
+    from argos.core.session.review import identify_curve_file
+    from argos.ui.pages.analyze_page import _target_set_of_curve
+
+    engine, _session, _form, _logs = shot_rig
+    target = TargetStar(
+        role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, auid="000-BCP-095", name="SS Cyg"
+    )
+    other = TargetStar(role=ROLE_TARGET, ra_deg=11.0, dec_deg=21.0, auid="C1", name="C1")
+    tset = TargetSet(object_name="SS Cyg", stars=[target, other])
+    _fake_measure_rig(engine, monkeypatch, tset, [])
+    clock = {"now": datetime(2026, 11, 9, 20, 15, 0, tzinfo=timezone.utc)}
+    monkeypatch.setattr(ae, "_utcnow", lambda: clock["now"])
+    folder = tmp_path / "sessions" / "targets"
+    t0 = datetime(2026, 11, 9, 20, 15, tzinfo=timezone.utc)
+
+    def measure(count: int) -> None:
+        for i in range(count):
+            engine._last_exposure_mid = t0 + timedelta(minutes=i)
+            engine._measure_photometry()
+
+    measure(3)
+    first = folder / "SS_Cyg_20261109T201500Z_clear_000-BCP-095.csv"
+    assert len(read_curves_csv(first)["target:" + first.stem].points) == 3
+
+    engine.clear_lightcurves()  # another object, then SS Cyg again
+    clock["now"] += timedelta(minutes=40)
+    measure(1)
+    second = folder / "SS_Cyg_20261109T205500Z_clear_000-BCP-095.csv"
+    assert len(read_curves_csv(first)["target:" + first.stem].points) == 3  # 1 before the fix
+    assert len(read_curves_csv(second)["target:" + second.stem].points) == 1
+
+    engine.clear_lightcurves()  # ... within the same second
+    measure(1)
+    assert (folder / "SS_Cyg_20261109T205500Z-2_clear_000-BCP-095.csv").exists()
+    assert len(read_curves_csv(second)["target:" + second.stem].points) == 1
+
+    # A role change starts a new curve (S33), and so a new file.
+    clock["now"] += timedelta(minutes=1)
+    tset.set_role(TargetStar(role=ROLE_CHECK, ra_deg=11.0, dec_deg=21.0, auid="C1", name="C1"))
+    measure(1)
+    assert (folder / "SS_Cyg_20261109T205500Z-2_clear_C1.csv").exists()  # the target-role curve
+    assert (folder / "SS_Cyg_20261109T205600Z_clear_C1.csv").exists()  # the check-role curve
+
+    # Review still finds the object's set and the star (S10).
+    tset.save(folder / "SS_Cyg.json")
+    found = _target_set_of_curve(second)
+    assert found is not None and found.object_name == "SS Cyg"
+    curves, problems = identify_curve_file(second, read_curves_csv(second), found)
+    assert problems == [] and next(iter(curves.values())).name == "SS Cyg"
+
+    # A run's CSVs: {role}_{object}_{filter}_{star} (S49).
+    engine._active_run_root = tmp_path / "run"
+    measure(1)
+    assert (tmp_path / "run" / "photometry" / "target_SS_Cyg_clear_000-BCP-095.csv").exists()
+
+
+def test_an_opened_frame_uses_its_own_gain_for_errors(shot_rig, tmp_path, monkeypatch) -> None:
+    """S41: the e-/ADU of an opened frame's errors came from the Camera form's
+    gain (and the connected driver), not from the frame. It is now the gain
+    table at the frame's GAIN, else the frame's EGAIN; a camera frame keeps the
+    live chain."""
+    engine, session, _form, _logs = shot_rig
+    monkeypatch.setattr(session, "egain_driver", lambda: 2.5)  # the camera, now
+    path = tmp_path / "archived.fit"
+    _write_fits(
+        path, {"DATE-OBS": "2026-09-15T21:00:00", "EXPTIME": 10.0, "GAIN": 200, "EGAIN": 0.31}
+    )
+
+    engine.open_fits_frame(path)
+    assert engine._egain() == pytest.approx(0.31)  # 2.5 (the driver) before the fix
+
+    engine._config.set("camera.egain_table", {"200": 0.29, "80": 1.4})
+    engine.open_fits_frame(path)
+    assert engine._egain() == pytest.approx(
+        0.29
+    )  # the table at the frame's gain, not the form's 80
+
+    _write_fits(tmp_path / "plain.fit", {"DATE-OBS": "2026-09-15T21:00:00", "EXPTIME": 10.0})
+    engine.open_fits_frame(tmp_path / "plain.fit")
+    assert engine._egain() == pytest.approx(1.4)  # no gain recorded: the live chain, as before
+
+    engine.open_fits_frame(path)
+    engine.ingest_frame(_star_frame())  # a camera frame
+    assert engine._egain() == pytest.approx(1.4)
+
+
+def test_the_s30_pros_measured_egain_comes_before_the_driver_s73(
+    shot_rig, tmp_path, monkeypatch
+) -> None:
+    """S73: live, the e-/ADU at the form's gain 80 was the driver's (0.8 on the owner's
+    S30 Pro, 2.5 here), and an opened S30 Pro frame at gain 80 kept its header's 0.8
+    or 1.723; the camera's photon transfer gives 0.228 for both, with its source."""
+    from argos.core.photometry.params import PhotometryParams
+
+    engine, session, form, _logs = shot_rig
+    monkeypatch.setattr(session, "egain_driver", lambda: 2.5)
+    assert form["p"].gain == 80
+    live = engine._egain()
+    assert live == pytest.approx(0.228)  # 2.5 (the driver) before the fix
+    assert live.source == "S30 Pro PTC"
+    path = tmp_path / "old.fit"
+    _write_fits(
+        path,
+        {
+            "DATE-OBS": "2026-09-07T04:07:23",
+            "EXPTIME": 20.0,
+            "GAIN": 80,
+            "EGAIN": 1.723,
+            "TELESCOP": "ZWO Seestar S30 Pro",
+            "AIRMASS": 1.09,
+        },
+    )
+    engine.open_fits_frame(path)
+    assert engine._egain() == pytest.approx(0.228)  # 1.723 (its EGAIN) before the fix
+    params = engine._with_frame_scintillation(
+        PhotometryParams.from_config(engine._cfg, egain=engine._egain())
+    )
+    assert (params.exposure_s, params.airmass) == (20.0, 1.09)  # S74: the frame's own
+    assert params.read_noise_e == pytest.approx(2.6)
+
+
+def test_a_sequence_sub_is_measured_at_its_own_gains_egain_s83(
+    shot_rig, tmp_path, monkeypatch
+) -> None:
+    """S83 (technical review): live and sequence photometry took the e-/ADU at the
+    Camera form's gain, the FITS EGAIN and a later re-run (S70) the sub's own. Since
+    S73 the two differ (0.228 at gain 80, 0.181 at gain 100): a gain-100 step measured
+    with the form at 80 got 0.228. The sub's gain is used."""
+    from types import SimpleNamespace
+
+    from argos.core.catalog.targets import ROLE_TARGET, TargetSet, TargetStar
+
+    engine, _session, form, _logs = shot_rig
+    assert form["p"].gain == 80
+    tset = TargetSet(
+        object_name="V1", stars=[TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0)]
+    )
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    engine.astrometry._wcs = object()
+    used = []
+    monkeypatch.setattr(engine, "_measure_photometry", lambda: used.append(engine._egain()))
+    run = tmp_path / "20261112T200000Z_V1"
+    (run / "lights").mkdir(parents=True)
+    for i, gain in enumerate((100, 80)):
+        record = SimpleNamespace(
+            image_type="Light Frame",
+            timestamp=f"2026-11-12T20:0{i}:00Z",
+            exposure_s=10.0,
+            gain=gain,
+        )
+        engine._on_seq_frame_saved(str(run / "lights" / f"f{i}.fit"), record)
+
+    assert used[0] == pytest.approx(0.181, abs=0.001)  # 0.228 (the form's 80) before
+    assert used[0].source == "S30 Pro PTC scaled"
+    assert used[1] == pytest.approx(0.228) and used[1].source == "S30 Pro PTC"
+
+
+def test_a_sequence_measures_only_its_light_subs(shot_rig, tmp_path, monkeypatch) -> None:
+    """S44: every saved sub of a run was measured, Dark, Flat and Bias included:
+    junk points in the run's CSVs, and the aperture tracker moved on a dark frame,
+    which changed the Light points after it."""
+    from types import SimpleNamespace
+
+    from argos.core.catalog.targets import ROLE_TARGET, TargetSet, TargetStar
+
+    engine, _session, _form, _logs = shot_rig
+    tset = TargetSet(
+        object_name="V1", stars=[TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0)]
+    )
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    engine.astrometry._wcs = object()
+    measured: list[str] = []
+    run = tmp_path / "20261112T200000Z_V1"
+    kinds = ["Light Frame", "Dark Frame", "Flat Frame", "Bias Frame", "Light Frame"]
+    for i, kind in enumerate(kinds):
+        folder = run / kind.split()[0].lower()
+        folder.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(engine, "_measure_photometry", lambda k=kind: measured.append(k))
+        record = SimpleNamespace(
+            image_type=kind, timestamp=f"2026-11-12T20:0{i}:00Z", exposure_s=10.0
+        )
+        engine._on_seq_frame_saved(str(folder / f"f{i}.fit"), record)
+
+    assert measured == ["Light Frame", "Light Frame"]  # all 5 subs before the fix
+
+
+def test_a_finished_run_keeps_its_folder_closed(shot_rig, tmp_path, monkeypatch) -> None:
+    """S45: after a sequence, the next live point was appended to the finished
+    run's CSV and rewrote its photometry_quality.json."""
+    from types import SimpleNamespace
+
+    from argos.core.catalog.targets import ROLE_TARGET, TargetSet, TargetStar
+
+    engine, _session, _form, _logs = shot_rig
+    star = TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, auid="000-AAA-001")
+    tset = TargetSet(object_name="V1", stars=[star])
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    monkeypatch.setattr(engine, "_measure_photometry", lambda: None)
+    run = tmp_path / "20261112T200000Z_V1"
+    (run / "lights").mkdir(parents=True)
+    record = SimpleNamespace(
+        image_type="Light Frame", timestamp="2026-11-12T20:00:00Z", exposure_s=10.0
+    )
+    engine._on_seq_frame_saved(str(run / "lights" / "f0.fit"), record)
+    assert engine._photometry_csv_path(star, "ir").parent == run / "photometry"
+    in_run = engine._diagnostics(tset)
+    engine._phot_fwhm = 3.2
+
+    engine._on_seq_finished(True)
+
+    assert engine._active_run_root is None  # the finished run's folder before the fix
+    assert run not in engine._photometry_csv_path(star, "ir").parents
+    live = engine._diagnostics(tset)
+    assert live is not in_run  # the recorder leaves the run's folder ...
+    assert engine._phot_fwhm == 3.2  # ... and the series keeps its aperture
+    engine._write_live_quality_report(tset)
+    assert not (run / "photometry_quality.json").exists()
+
+
+def test_identifying_the_field_keeps_the_check_star(shot_rig, monkeypatch) -> None:
+    """S46: the VSP proposal carries the check star too; set_role() then
+    replaced the check (same AUID) with a comparison, silently."""
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.catalog.targets import (
+        ROLE_CHECK,
+        ROLE_COMPARISON,
+        ROLE_TARGET,
+        TargetSet,
+        TargetStar,
+    )
+
+    engine, _session, _form, _logs = shot_rig
+    target = TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, auid="000-VAR-000")
+    check = TargetStar(role=ROLE_CHECK, ra_deg=10.1, dec_deg=20.0, auid="000-CHK-001")
+    tset = TargetSet(object_name="V1", stars=[target, check])
+    proposal = [
+        TargetStar(role=ROLE_COMPARISON, ra_deg=10.1, dec_deg=20.0, auid="000-CHK-001"),
+    ] + [
+        TargetStar(role=ROLE_COMPARISON, ra_deg=10.0 + k / 50, dec_deg=20.1, auid=f"000-CMP-{k}")
+        for k in range(1, 6)
+    ]
+    asked: list[int] = []
+
+    def fake_auto(*_a, count, **_k):
+        asked.append(count)
+        return proposal[:count]
+
+    monkeypatch.setattr(ae, "auto_comparison_stars", fake_auto)
+    monkeypatch.setattr(engine, "_pilot_comparison_quality", lambda _t: (None, None))
+    engine._comparisons = [object()]
+    engine._config.set("photometry.auto_comparisons", 3)
+
+    assert engine._auto_select_comparisons(tset, target) == 3
+
+    assert [s.auid for s in tset.by_role(ROLE_CHECK)] == ["000-CHK-001"]  # [] before the fix
+    assert [s.auid for s in tset.by_role(ROLE_COMPARISON)] == [
+        "000-CMP-1",
+        "000-CMP-2",
+        "000-CMP-3",
+    ]
+
+
+def test_a_vsp_answer_names_the_chart_of_comparisons_kept_without_one_s68(
+    shot_rig, tmp_path
+) -> None:
+    """S68: comparisons picked before 0.4.2 kept chart_id None in the object's set,
+    and every run copied it: the AAVSO CHART stayed na. The next VSP answer listing
+    them with the same magnitudes names its chart, in the set and in the running
+    run's targets.json snapshot."""
+    from types import SimpleNamespace
+
+    from argos.core.catalog.aavso import Band, ComparisonStar
+    from argos.core.catalog.targets import ROLE_COMPARISON, TargetSet, TargetStar
+    from argos.workers.catalog_worker import CatalogResult
+
+    engine, _session, _form, _logs = shot_rig
+    old = TargetSet(
+        object_name="V1",
+        stars=[
+            TargetStar("target", 300.0, 22.5, auid="000-AAA-000", name="V1", source="vsx"),
+            TargetStar(
+                "comparison", 300.1, 22.4, auid="000-AAA-001", source="vsp_auto", mags={"V": 11.4}
+            ),
+            TargetStar(
+                "comparison", 299.9, 22.6, auid="000-AAA-002", source="vsp_auto", mags={"V": 12.1}
+            ),
+        ],
+    )
+    old.save(engine._target_path("V1"))
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    old.save(run_root / "targets.json")  # the snapshot of the run's first sub
+    engine._active_run_root = run_root
+    engine._sequence = SimpleNamespace(isRunning=lambda: True)
+    engine._target_set = None
+
+    engine._on_catalog(
+        CatalogResult(
+            comparisons=[
+                ComparisonStar(
+                    "000-AAA-001", 300.1, 22.4, "114", (Band("V", 11.4),), chart_id="X7"
+                ),
+                ComparisonStar(
+                    "000-AAA-002", 299.9, 22.6, "121", (Band("V", 12.1),), chart_id="X7"
+                ),
+            ]
+        )
+    )
+
+    for path in (engine._target_path("V1"), run_root / "targets.json"):
+        charts = {s.chart_id for s in TargetSet.load(path).by_role(ROLE_COMPARISON)}
+        assert charts == {"X7"}, path
+
+
+# ── S69: the tracker on an alt-az run (live and sequence paths) ─────────────
+
+
+def _turned(xy: dict, deg: float, centre=(150.0, 100.0)) -> list:
+    import math
+
+    a = math.radians(deg)
+    out = []
+    for x, y in xy.values():
+        dx, dy = x - centre[0], y - centre[1]
+        out.append(
+            (
+                centre[0] + math.cos(a) * dx - math.sin(a) * dy,
+                centre[1] + math.sin(a) * dx + math.cos(a) * dy,
+            )
+        )
+    return out
+
+
+def test_a_field_turned_more_than_2_deg_since_the_solution_makes_a_solve_due_s69(
+    shot_rig, monkeypatch
+) -> None:
+    """S69 (a): the tracker carried one solution over the whole field rotation as long
+    as its lock held (XX Cyg 2026-09-07: 16.5° in 32 min, outer apertures up to 8.5 px
+    off). A solve is now due once the tracked rotation since the solution exceeds 2°,
+    and, while none lands, again only after 2° more (never on every frame)."""
+    from datetime import datetime, timezone
+
+    engine, _session, _form, _logs = shot_rig
+    xy, frame_a, _b = _s48_field(engine, monkeypatch)
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+    due: list[float] = []
+    for minute, deg in enumerate((0.0, 1.0, 2.5, 3.5, 4.0, 4.7)):
+        engine.astrometry._resolve_due = False
+        engine._last_raw = frame_a if deg == 0.0 else _field_frame(_turned(xy, deg))
+        engine._last_raw_decimated = False
+        engine._last_exposure_mid = datetime(2026, 11, 1, 3, minute, tzinfo=timezone.utc)
+        engine._measure_photometry()
+        if engine.astrometry._resolve_due:
+            due.append(deg)
+    assert due == [2.5, 4.7]  # never before the fix (the lock held on 4 anchors)
+    assert abs(engine._tracker.transform.rotation_deg - 4.7) < 0.1
+    assert not any(p.suspect for p in _lc(engine, "V1").points)
+
+
+def test_an_off_centre_comparison_leaves_the_ensemble_s69(shot_rig, monkeypatch) -> None:
+    """S69 (b): a comparison whose centroid is more than 1 px from its aperture centre
+    is left out of the frame's ensemble and its own point is flagged suspect; the
+    target keeps its point from the other comparisons. C3's star sits 2.5 px from
+    where the solution puts it (the tracker rejects it as an anchor)."""
+    from datetime import datetime, timezone
+
+    engine, _session, _form, logs = shot_rig
+    xy, _a, _b = _s48_field(engine, monkeypatch)
+    stars = list(xy.values())
+    stars[-1] = (stars[-1][0] + 2.5, stars[-1][1])
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+    engine._last_raw, engine._last_raw_decimated = _field_frame(stars), False
+    engine._last_exposure_mid = datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc)
+    engine._measure_photometry()
+    (point,) = _lc(engine, "V1").points
+    assert point.comps_used == 3 and not point.suspect  # 4 comparisons before the fix
+    assert _lc(engine, "C3").points[-1].suspect
+    assert [m for level, m in logs if level == "WARN" and "more than 1 px" in m]
+
+
+def test_live_points_take_the_airmass_of_the_site_fitted_to_the_mount_s78(
+    shot_rig, monkeypatch
+) -> None:
+    """S78: the live path computed every star's airmass for the Settings site, 60° of
+    longitude from the telescope here (X3 only warns): a comparison 1.2° from the
+    target (the check star here) got 1.5 instead of about 1.02. The mount's polled RA/Dec, altitude and
+    azimuth give its own site; once 3 or more span 10 minutes, every star's airmass is
+    computed for it (the target's then agrees with the header AIRMASS)."""
+    from datetime import datetime, timedelta, timezone
+
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.alpaca.telescope import MountPosition
+    from argos.core.catalog.targets import (
+        ROLE_CHECK,
+        ROLE_COMPARISON,
+        ROLE_TARGET,
+        TargetSet,
+        TargetStar,
+    )
+    from argos.core.imaging.sky_geometry import horizontal_at
+    from argos.core.photometry.airmass import airmass_at, airmass_from_altitude, julian_date
+
+    engine, session, _form, _logs = shot_rig
+    true_site, wrong_site = (30.0, 100.0), (30.0, 40.0)
+    engine._config.set("site.name", "Settings")
+    engine._config.set("site.latitude", wrong_site[0])
+    engine._config.set("site.longitude", wrong_site[1])
+    start = datetime(2026, 3, 1, 15, 0, 0, tzinfo=timezone.utc)
+    jd0 = julian_date(start)
+    ra_h = ((18.697374558 + 24.06570982441908 * (jd0 - 2451545.0)) % 24.0 + 100.0 / 15.0) % 24.0
+    coords = [(ra_h * 15.0, 40.0)] + [(ra_h * 15.0 + 0.02 * i, 38.8) for i in range(1, 5)]
+    px = [(150.0, 100.0), (260.0, 160.0), (40.0, 40.0), (260.0, 40.0), (40.0, 160.0)]
+    xy = dict(zip(coords, px))
+    stars = [TargetStar(ROLE_TARGET, *coords[0], name="V1")] + [
+        TargetStar(ROLE_COMPARISON, ra, dec, auid=f"C{i}", source="vsp", mags={"V": 10.0})
+        for i, (ra, dec) in enumerate(coords[2:])
+    ]
+    stars.append(TargetStar(ROLE_CHECK, *coords[1], auid="K1", source="vsp", mags={"V": 10.0}))
+    monkeypatch.setattr(engine, "target_set", lambda: TargetSet(object_name="V1", stars=stars))
+    frame = _field_frame(px)
+    engine._take_raw(frame)
+    _land_solution(engine, monkeypatch, _GridWCS(xy), frame)
+    for minute in range(0, 16, 3):
+        when = start + timedelta(minutes=minute)
+        alt, az = horizontal_at(julian_date(when), ra_h, 40.0, *true_site)
+        session._last_position = MountPosition(ra_h, 40.0, alt, az, True, False)
+        monkeypatch.setattr(ae, "_utcnow", lambda when=when: when)
+        engine._take_raw(frame.copy())
+        engine._last_raw_decimated = False
+        engine._last_exposure_mid = when
+        engine._measure_photometry()
+
+    comp = _lc(engine, "K1")
+    last = comp.points[-1]
+    own = airmass_at(last.jd_utc, coords[1][0], coords[1][1], *true_site)
+    assert abs(last.airmass - own) < 0.0005  # the Settings site's: 1.5 before the fix
+    # The first 10 minutes fit no site, and the Settings site is 60° off (S78 amended,
+    # validation F1): the mount's airmass, the field centre's, never that site's 1.5.
+    first = comp.points[0]
+    alt0, _az0 = horizontal_at(julian_date(start), ra_h, 40.0, *true_site)
+    assert first.airmass == pytest.approx(airmass_from_altitude(alt0), abs=1e-9)
+    assert abs(first.airmass - airmass_at(first.jd_utc, *coords[1], *true_site)) < 0.02
+    target = _lc(engine, "V1").points[-1]
+    assert abs(target.airmass - airmass_at(target.jd_utc, *coords[0], *true_site)) < 0.0005
+
+
+def test_a_frozen_mount_pointing_keeps_the_live_site_fit_s78(shot_rig, monkeypatch) -> None:
+    """S78 amended (technical review): a lost mount repeats its last poll (X1). Added to
+    the fit, those pointings left no site within 0.1° for the rest of the night, and
+    the comparisons fell back to the Settings site (60° off here: 1.5 for 1.02). A
+    pointing that repeats the last is not added: the site fitted before it stays."""
+    from datetime import datetime, timedelta, timezone
+
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.alpaca.telescope import MountPosition
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+    from argos.core.imaging.sky_geometry import horizontal_at
+    from argos.core.photometry.airmass import airmass_at, julian_date
+
+    engine, session, _form, _logs = shot_rig
+    true_site = (30.0, 100.0)
+    engine._config.set("site.name", "Settings")
+    engine._config.set("site.latitude", 30.0)
+    engine._config.set("site.longitude", 40.0)
+    start = datetime(2026, 3, 1, 15, 0, 0, tzinfo=timezone.utc)
+    jd0 = julian_date(start)
+    ra_h = ((18.697374558 + 24.06570982441908 * (jd0 - 2451545.0)) % 24.0 + 100.0 / 15.0) % 24.0
+    coords = [(ra_h * 15.0, 40.0)] + [(ra_h * 15.0 + 0.02 * i, 38.8) for i in range(1, 4)]
+    px = [(150.0, 100.0), (40.0, 40.0), (260.0, 40.0), (40.0, 160.0)]
+    xy = dict(zip(coords, px))
+    stars = [TargetStar(ROLE_TARGET, *coords[0], name="V1")] + [
+        TargetStar(ROLE_COMPARISON, ra, dec, auid=f"C{i}", source="vsp", mags={"V": 10.0})
+        for i, (ra, dec) in enumerate(coords[1:])
+    ]
+    monkeypatch.setattr(engine, "target_set", lambda: TargetSet(object_name="V1", stars=stars))
+    frame = _field_frame(px)
+    engine._take_raw(frame)
+    _land_solution(engine, monkeypatch, _GridWCS(xy), frame)
+    polled = None
+    for minute in range(0, 40, 3):
+        when = start + timedelta(minutes=minute)
+        if minute <= 15:  # then the mount is lost: its last poll repeats
+            alt, az = horizontal_at(julian_date(when), ra_h, 40.0, *true_site)
+            polled = MountPosition(ra_h, 40.0, alt, az, True, False)
+        session._last_position = polled
+        monkeypatch.setattr(ae, "_utcnow", lambda when=when: when)
+        engine._take_raw(frame.copy())
+        engine._last_raw_decimated = False
+        engine._last_exposure_mid = when
+        engine._measure_photometry()
+
+    last = _lc(engine, "C0").points[-1]
+    own = airmass_at(last.jd_utc, *coords[1], *true_site)
+    assert abs(last.airmass - own) < 0.0005  # the Settings site's 1.5 before the fix
+    assert engine._site_fit.site() is not None
+
+
+def _capture_live_measure(shot_rig, monkeypatch, stars, mid, pos):
+    """Run the live path's ``_measure_photometry`` once on a frame exposed at ``mid``
+    with the mount at ``pos``; the set and the params ``measure_frame`` received."""
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.catalog.targets import TargetSet
+
+    engine, session, _form, _logs = shot_rig
+    monkeypatch.setattr(engine, "target_set", lambda: TargetSet(object_name="V1", stars=stars))
+    seen = []
+    monkeypatch.setattr(ae, "measure_frame", lambda g, w, t, p, **k: seen.append((t, p)) or [])
+    monkeypatch.setattr(engine, "_wcs_for_frame", lambda *a: None)
+    monkeypatch.setattr(engine, "_write_live_quality_report", lambda tset: None)
+    monkeypatch.setattr(ae, "_utcnow", lambda: mid)
+    session._last_position = pos
+    engine.astrometry._wcs = object()
+    engine._last_raw, engine._last_raw_decimated = _star_frame(), False
+    engine._last_exposure_mid = mid
+    engine._last_exposure_s = 10.0
+    engine._last_filter = "IR"
+    engine._measure_photometry()
+    (got,) = seen
+    return got
+
+
+def test_the_live_path_measures_a_star_at_the_frames_date_s77(shot_rig, monkeypatch) -> None:
+    """S77 (technical review: no test failed without the live hunk): the live path
+    measures every star with a proper motion at the frame's date; RR Lyr's J2000.0
+    position is 6" off in 2026."""
+    from datetime import datetime, timezone
+
+    from argos.core.alpaca.telescope import MountPosition
+    from argos.core.catalog.targets import ROLE_TARGET, TargetStar
+    from argos.core.photometry.airmass import julian_date
+
+    rr = TargetStar(
+        ROLE_TARGET,
+        291.36629,
+        42.78436,
+        auid="000-BCG-719",
+        pm_ra_mas_yr=-109.6,
+        pm_dec_mas_yr=-195.85,
+        pm_epoch=2016.0,
+        pm_ra_deg=291.36564,
+        pm_dec_deg=42.783489,
+        pm_source="Gaia DR3",
+    )
+    mid = datetime(2026, 9, 25, 20, 5, tzinfo=timezone.utc)
+    pos = MountPosition(291.366 / 15.0, 42.784, 70.0, 280.0, True, False)
+
+    tset, _params = _capture_live_measure(shot_rig, monkeypatch, [rr], mid, pos)
+
+    measured = tset.stars[0]
+    expected = rr.at_jd(julian_date(mid))
+    assert (measured.ra_deg, measured.dec_deg) == (expected.ra_deg, expected.dec_deg)
+    assert abs(measured.dec_deg - rr.dec_deg) * 3600.0 > 5.0  # the J2000.0 one before
+
+
+def test_the_live_path_adds_the_subs_scintillation_s74(shot_rig, monkeypatch) -> None:
+    """S74 (technical review: no test failed without the live hunk): a live frame's
+    errors carry the scintillation of its exposure at the mount's airmass."""
+    from datetime import datetime, timezone
+
+    from argos.core.alpaca.telescope import MountPosition
+    from argos.core.catalog.targets import ROLE_TARGET, TargetStar
+    from argos.core.photometry.airmass import airmass_from_altitude
+
+    mid = datetime(2026, 9, 25, 20, 5, tzinfo=timezone.utc)
+    pos = MountPosition(291.366 / 15.0, 42.784, 50.0, 280.0, True, False)
+    star = TargetStar(ROLE_TARGET, 291.366, 42.784, auid="000-BCG-719")
+
+    _tset, params = _capture_live_measure(shot_rig, monkeypatch, [star], mid, pos)
+
+    assert params.exposure_s == 10.0
+    assert params.airmass == pytest.approx(airmass_from_altitude(50.0))
+    assert params.scint_frac() > 0.005  # 0 before: no exposure, no airmass
+
+
+def _faint_target_field(engine, monkeypatch, faint_peak: float):
+    """Targets V1 (bright) and V2 (``faint_peak`` ADU on the raw plane), four bright
+    comparisons (4 anchors: the lock is verified, S56 flags nothing)."""
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+
+    xy = {(10.0, 20.0): (150.0, 100.0), (10.005, 20.0): (110.0, 60.0)}
+    stars = [
+        TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1"),
+        TargetStar(role=ROLE_TARGET, ra_deg=10.005, dec_deg=20.0, name="V2"),
+    ]
+    for i, pos in enumerate([(60.0, 50.0), (230.0, 60.0), (70.0, 150.0), (220.0, 150.0)]):
+        ra = 10.0 + 0.01 * (i + 1)
+        xy[(ra, 20.0)] = pos
+        stars.append(
+            TargetStar(ROLE_COMPARISON, ra, 20.0, auid=f"C{i}", source="vsp", mags={"V": 10.0})
+        )
+    monkeypatch.setattr(engine, "target_set", lambda: TargetSet(object_name="V1", stars=stars))
+    bright = [pos for key, pos in xy.items() if key != (10.005, 20.0)]
+    frame = _field_frame(bright).astype(np.float64)
+    yy, xx = np.mgrid[0 : frame.shape[0], 0 : frame.shape[1]]
+    frame += faint_peak * np.exp(-((xx - 2 * 110.0) ** 2 + (yy - 2 * 60.0) ** 2) / (2 * 3.0**2))
+    return xy, np.clip(frame, 0, 65535).astype(np.uint16)
+
+
+def test_a_live_target_below_snr_3_is_flagged_no_detection_s85(shot_rig, monkeypatch) -> None:
+    """S85: S67's per-target rule when the point is measured. The live and sequence
+    paths wrote a target measured below SNR 3 unflagged (S76's replay of the cloudy
+    XX Cyg 2026-09-07 ``045626Z`` sub: the target at SNR 0.8, 12.77 ± 1.28, in the live
+    CSV, the curve and its ``sigma_syst``), where Review, the AAVSO export and a re-run
+    leave it out. Its point is now ``suspect`` and ``no_detection`` (the CSV's suspect
+    column) and the recorder says so; a second, bright target and the comparisons on
+    the same frame keep theirs unflagged."""
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.photometry.lightcurve import LightCurve
+
+    engine, _session, _form, _logs = shot_rig
+    xy, frame = _faint_target_field(engine, monkeypatch, faint_peak=14.0)
+    snrs: dict[str, float] = {}
+    measure = ae.measure_frame
+
+    def spy(*args, **kwargs):
+        results = measure(*args, **kwargs)
+        snrs.update({r.star.display_name: r.phot.snr for r in results if r.phot is not None})
+        return results
+
+    monkeypatch.setattr(ae, "measure_frame", spy)
+    events: list[dict] = []
+    record = ae.SessionDiagnostics.record
+
+    def recorded(self, kind, frame=None, **fields):
+        if kind == "event":
+            events.append(dict(fields, frame=frame))
+        return record(self, kind, frame, **fields)
+
+    monkeypatch.setattr(ae.SessionDiagnostics, "record", recorded)
+    engine.astrometry._wcs = _GridWCS(xy)
+    engine._on_reference_solved(None, None, "")
+    _measure_raw(engine, frame, 0)
+
+    assert 0.0 < snrs["V2"] < 3.0 and snrs["V1"] > 100.0  # the frame as intended
+    assert engine._tracker.anchors_used == 4
+    faint, bright = _lc(engine, "V2").points, _lc(engine, "V1").points
+    assert len(faint) == len(bright) == 1
+    assert faint[0].suspect and faint[0].no_detection  # unflagged before the fix
+    assert not bright[0].suspect and not bright[0].no_detection
+    comparisons = [c for c in engine.lightcurves.values() if c.role == "comparison"]
+    assert len(comparisons) == 4 and not any(p.suspect for c in comparisons for p in c.points)
+    csv = next(path for key, path in engine._preview_csvs.items() if key.startswith("V2@"))
+    assert [p.suspect for p in LightCurve.from_csv(csv).points] == [True]
+    assert [e for e in events if e.get("what") == "no_detection"] == [
+        {"what": "no_detection", "low_snr": ["V2"], "frame": 0}
+    ]
+
+
+def test_a_point_without_a_detection_sets_no_live_sigma_syst_s85(shot_rig, monkeypatch) -> None:
+    """S85: the live run-level floor was estimated with the no-detection point, so
+    its 3 mag excursion raised ``sigma_syst`` and every row's ``mag_err`` (S67's
+    complaint about old files, still made by new runs). The floor now leaves it out,
+    as a re-run's does, and still applies to that point's own error."""
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+
+    import argos.core.session.acquisition_engine as ae
+    from argos.core.catalog.targets import ROLE_COMPARISON, ROLE_TARGET, TargetSet, TargetStar
+    from argos.core.photometry.uncertainty import estimate_systematic_floor
+
+    engine, _session, _form, _logs = shot_rig
+    stars = [
+        TargetStar(role=ROLE_TARGET, ra_deg=10.0, dec_deg=20.0, name="V1"),
+        TargetStar(role=ROLE_COMPARISON, ra_deg=10.01, dec_deg=20.0, auid="C1"),
+    ]
+    tset = TargetSet(object_name="V1", stars=stars)
+    scatter = np.random.default_rng(85).normal(0.0, 0.02, 14)
+    blank = 6  # the cloudy sub: the target at SNR 0.8, 3 mag off
+    frame = {"i": 0}
+
+    def measure(*_args, **_kwargs):
+        i = frame["i"]
+        out = []
+        for star in stars:
+            target = star.role == ROLE_TARGET
+            mag = (15.0 if i == blank else 12.0 + scatter[i]) if target else 10.0
+            err = 1.3 if target and i == blank else 0.01
+            diff = SimpleNamespace(
+                mag=mag,
+                mag_err=err,
+                formal_mag_err=err,
+                comps_used=1,
+                zero_point=0.0,
+                zp_rms=0.0,
+                note="",
+            )
+            snr = 0.8 if target and i == blank else 80.0
+            phot = SimpleNamespace(sky_adu=300.0, saturated=False, suspect=False, snr=snr)
+            out.append(SimpleNamespace(star=star, diff=diff, relative=None, phot=phot))
+        return out
+
+    monkeypatch.setattr(engine, "target_set", lambda: tset)
+    monkeypatch.setattr(engine, "_wcs_for_frame", lambda *a: None)
+    monkeypatch.setattr(engine, "_write_live_quality_report", lambda tset: None)
+    monkeypatch.setattr(ae, "measure_frame", measure)
+    monkeypatch.setattr(ae, "bjd_tdb", lambda *a: None)  # no IERS download
+    monkeypatch.setattr(ae, "airmass_at", lambda *a: None)
+    engine.astrometry._wcs = object()
+    engine._last_raw = np.zeros((16, 16), np.uint16)
+    engine._last_raw_decimated = False
+    t0 = datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc)
+    for i in range(14):
+        frame["i"] = i
+        engine._last_exposure_mid = t0 + timedelta(minutes=i)
+        engine._measure_photometry()
+
+    points = _lc(engine, "V1").points
+    assert [k for k, p in enumerate(points) if p.suspect] == [blank]
+    assert points[blank].no_detection
+
+    def floor(rows):
+        return estimate_systematic_floor([(p.jd_utc, p.mag, p.formal_mag_err) for p in rows])
+
+    without = floor(p for k, p in enumerate(points) if k != blank).sigma_systematic
+    assert floor(points).sigma_systematic > without + 0.005  # what the curve carried before
+    assert {p.sigma_syst for p in points} == {without}
+    assert points[blank].mag_err == pytest.approx(float(np.hypot(1.3, without)))
+    assert not any(p.suspect for p in _lc(engine, "C1").points)

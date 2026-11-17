@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.vite/
+screenshots/**/*.png
+screenshots/index.html
+screenshots/**/report.json

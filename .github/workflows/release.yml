@@ -20,16 +20,12 @@ jobs:
             label: macOS DMG
             artifact: argos-macos-dmg
             output: dist/*.dmg
-            spec: packaging/argos.spec
-            package_command: packaging/make_dmg.sh
-            binary: ./dist/Argos.app/Contents/MacOS/Argos
+            bundles: app
           - os: ubuntu-22.04
             label: Debian package
             artifact: argos-linux-deb
             output: dist/*.deb
-            spec: packaging/argos_linux.spec
-            package_command: packaging/make_deb.sh
-            binary: ./dist/Argos/Argos
+            bundles: deb
 
     runs-on: ${{ matrix.os }}
     env:
@@ -46,46 +42,127 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install Linux runtime libraries
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # The runners ship rustup; pin nothing beyond "stable" (Cargo.toml's
+      # rust-version is the floor). The target triple names the sidecar's
+      # platform in the logs.
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version
+          echo "TARGET_TRIPLE=$(rustc --print host-tuple)" >> "$GITHUB_ENV"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            web/src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('web/src-tauri/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # WebKitGTK 4.1 and the other build packages of Tauri v2, then the
+      # libraries the Qt tests need on a headless runner.
+      - name: Install Linux packages
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes libdbus-1-3 libegl1 libfontconfig1 libgl1 libxkbcommon0
-
-      - name: Install dependencies
-        run: uv sync --extra dev --extra package
+          sudo apt-get install --yes \
+            libwebkit2gtk-4.1-dev build-essential file libxdo-dev libssl-dev librsvg2-dev \
+            libdbus-1-3 libegl1 libfontconfig1 libgl1 libxkbcommon0
 
       # Tests run on the exact OS and wheel set that will be packaged. The
-      # photometry window remains isolated because PyQt can abort when it is
-      # constructed alongside the simulator fixtures in one process.
+      # parity tests still drive the Qt engine: the `qt` extra. The photometry
+      # window remains isolated because PyQt can abort when it is constructed
+      # alongside the simulator fixtures in one process.
+      - name: Install test dependencies
+        run: uv sync --extra dev --extra qt --extra server
+
       - name: Tests
         run: |
-          uv run --extra dev pytest -q --deselect tests/ui/test_photometry_window.py
-          uv run --extra dev pytest -q tests/ui/test_photometry_window.py
+          uv run --extra dev --extra qt --extra server pytest -q --deselect tests/ui/test_photometry_window.py
+          uv run --extra dev --extra qt --extra server pytest -q tests/ui/test_photometry_window.py
 
-      - name: Build PyInstaller bundle
-        run: uv run --extra package pyinstaller ${{ matrix.spec }} --noconfirm
+      # An exact sync drops Qt and the test tools: the freeze sees only what
+      # the server ships with (the spec also fails if any Qt module is
+      # collected).
+      - name: Qt-free build environment
+        run: uv sync --extra server --extra package
 
-      # Building is not proof that the frozen app starts. It must reach the
-      # real Shell's "UI ready" checkpoint before an installer is generated.
-      - name: Smoke-test bundle
-        env:
-          ARGOS_NO_SPLASH: "1"
+      - name: Freeze the server sidecar (one-dir, ${{ env.TARGET_TRIPLE }})
         run: |
-          ${{ matrix.binary }} > boot.log 2>&1 &
-          pid=$!
-          ready=0
-          for _ in $(seq 1 60); do
-            if grep -q "UI ready" boot.log; then ready=1; break; fi
-            sleep 1
-          done
-          kill "$pid" 2>/dev/null || true
-          wait "$pid" 2>/dev/null || true
-          cat boot.log
-          test "$ready" -eq 1 || { echo "::error::bundle failed to start"; exit 1; }
+          uv run --no-sync python -m PyInstaller packaging/argos_server.spec --noconfirm \
+            --distpath web/src-tauri/binaries --workpath build/argos-server
+          file web/src-tauri/binaries/argos-server/argos-server
+          du -sh web/src-tauri/binaries/argos-server
 
-      - name: Build installer
-        run: ${{ matrix.package_command }}
+      # Building is not proof that the frozen server starts: it must print its
+      # ready line, answer with this tree's version and end when its stdin
+      # closes (the shell gone) before an installer is made.
+      - name: Smoke-test the frozen server
+        run: python packaging/smoke_sidecar.py web/src-tauri/binaries/argos-server/argos-server
+
+      - name: Install the web UI's packages
+        working-directory: web
+        run: npm ci
+
+      # The gates of ci.yml, on the exact tree and OS being packaged: the web UI's
+      # type check and tests, then the shell's (they compile against web/dist).
+      - name: Check the web UI and the desktop shell
+        working-directory: web
+        run: |
+          npm run check
+          npm test
+          npm run build
+          cd src-tauri
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+
+      # beforeBuildCommand builds the web UI (npm run build); build.rs refuses
+      # a Cargo.toml version other than argos/__init__.py's.
+      - name: Build the desktop app
+        working-directory: web
+        run: npx tauri build --ci --bundles ${{ matrix.bundles }}
+
+      # The Popover API needs an app linked on the macOS 14 SDK or newer
+      # (web/lab/PROPOSAL.md section 9).
+      - name: Check and wrap the macOS app
+        if: runner.os == 'macOS'
+        run: |
+          APP=web/src-tauri/target/release/bundle/macos/ARGOS.app
+          vtool -show-build "$APP/Contents/MacOS/argos-desktop"
+          SDK="$(vtool -show-build "$APP/Contents/MacOS/argos-desktop" | awk '$1 == "sdk" {print $2; exit}')"
+          test "${SDK%%.*}" -ge 14 || { echo "::error::linked on macOS SDK $SDK, 14 or newer needed"; exit 1; }
+          codesign --verify --deep --strict "$APP"
+          test -x "$APP/Contents/Resources/argos-server/argos-server"
+          packaging/make_dmg.sh "$APP" dist
+
+      - name: Check the Debian package
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist
+          cp web/src-tauri/target/release/bundle/deb/*.deb dist/
+          DEB="$(ls dist/*.deb)"
+          dpkg-deb --info "$DEB"
+          dpkg-deb --contents "$DEB" > contents.txt
+          grep -E ' (\./)?usr/bin/[^/]+$' contents.txt
+          grep -E ' (\./)?usr/lib/argos/argos-server/argos-server$' contents.txt
+          # The one-dir sidecar: its executable keeps its x bit, its _internal/ came along
+          # (Tauri's deb `files` copies the folder; never built before W8's first run).
+          grep -E '^-rwx.* (\./)?usr/lib/argos/argos-server/argos-server$' contents.txt
+          grep -qE ' (\./)?usr/lib/argos/argos-server/_internal/' contents.txt \
+            || { echo "::error::usr/lib/argos/argos-server/_internal/ is missing"; exit 1; }
+          grep -E ' (\./)?usr/share/doc/argos/copyright$' contents.txt
+          dpkg-deb --fsys-tarfile "$DEB" | tar -xO --wildcards '*usr/share/applications/*.desktop' | tee entry.desktop
+          grep -qx 'Categories=Science;Astronomy;' entry.desktop
 
       - uses: actions/upload-artifact@v4
         with:
@@ -117,12 +194,17 @@ jobs:
             dist/*.dmg
             dist/*.deb
           body: |
-            ## Argos ${{ github.ref_name }}
+            ## ARGOS ${{ github.ref_name }}
 
-            - **macOS:** the `.dmg` is currently unsigned. On first launch,
-              right-click Argos and choose **Open**.
+            - **macOS (Apple silicon):** the `.dmg` holds the ARGOS app, signed
+              ad hoc and not notarised, so macOS blocks its first launch. On
+              macOS 15 or later: open ARGOS once, click **Done**, then System
+              Settings › Privacy & Security › **Open Anyway**. On macOS 11-14:
+              right-click ARGOS and choose **Open**. `READ ME FIRST.txt` in the
+              image has the steps.
             - **Linux:** the `.deb` is an x86_64 Debian/Ubuntu technical
-              preview. It is built and smoke-tested in CI, but needs field
-              validation before it is recommended for production observing.
+              preview (WebKitGTK 4.1). It is built and its server smoke-tested
+              in CI, but needs field validation before it is recommended for
+              production observing.
             - Plate solving requires a separately installed [ASTAP](https://www.hnsky.org/astap.htm)
               executable and star database.

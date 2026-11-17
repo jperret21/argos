@@ -1,0 +1,248 @@
+{
+ "search_px": 6.0,
+ "proper_motions_applied": [
+  "000-BCG-719"
+ ],
+ "runs": {
+  "20260829T050148Z_XX_Cyg": {
+   "target": {
+    "catalogue": {
+     "n": 22,
+     "median_px": 0.29,
+     "p95_px": 0.59,
+     "max_px": 0.6
+    },
+    "truth": {
+     "n": 22,
+     "median_px": 0.29,
+     "p95_px": 0.59,
+     "max_px": 0.6
+    }
+   },
+   "comparison": {
+    "catalogue": {
+     "n": 110,
+     "median_px": 0.3,
+     "p95_px": 1.0,
+     "max_px": 1.36
+    },
+    "truth": {
+     "n": 110,
+     "median_px": 0.3,
+     "p95_px": 1.0,
+     "max_px": 1.36
+    }
+   }
+  },
+  "20260829T052943Z_XX_Cyg": {
+   "target": {
+    "catalogue": {
+     "n": 4,
+     "median_px": 0.32,
+     "p95_px": 0.47,
+     "max_px": 0.47
+    },
+    "truth": {
+     "n": 4,
+     "median_px": 0.32,
+     "p95_px": 0.47,
+     "max_px": 0.47
+    }
+   },
+   "comparison": {
+    "catalogue": {
+     "n": 24,
+     "median_px": 0.2,
+     "p95_px": 0.61,
+     "max_px": 0.67
+    },
+    "truth": {
+     "n": 24,
+     "median_px": 0.2,
+     "p95_px": 0.61,
+     "max_px": 0.67
+    }
+   }
+  },
+  "20260829T053540Z_XX_Cyg": {
+   "target": {
+    "catalogue": {
+     "n": 4,
+     "median_px": 0.24,
+     "p95_px": 0.3,
+     "max_px": 0.3
+    },
+    "truth": {
+     "n": 4,
+     "median_px": 0.24,
+     "p95_px": 0.3,
+     "max_px": 0.3
+    }
+   },
+   "comparison": {
+    "catalogue": {
+     "n": 48,
+     "median_px": 0.28,
+     "p95_px": 0.89,
+     "max_px": 1.13
+    },
+    "truth": {
+     "n": 48,
+     "median_px": 0.28,
+     "p95_px": 0.89,
+     "max_px": 1.13
+    }
+   }
+  },
+  "20260907T040723Z_XX_Cyg": {
+   "target": {
+    "catalogue": {
+     "n": 24,
+     "median_px": 0.38,
+     "p95_px": 0.75,
+     "max_px": 0.83
+    },
+    "truth": {
+     "n": 24,
+     "median_px": 0.38,
+     "p95_px": 0.75,
+     "max_px": 0.83
+    }
+   },
+   "comparison": {
+    "catalogue": {
+     "n": 192,
+     "median_px": 0.14,
+     "p95_px": 0.97,
+     "max_px": 1.66
+    },
+    "truth": {
+     "n": 192,
+     "median_px": 0.14,
+     "p95_px": 0.97,
+     "max_px": 1.66
+    }
+   }
+  },
+  "20260907T044527Z_XX_Cyg": {
+   "target": {
+    "catalogue": {
+     "n": 2,
+     "median_px": 0.27,
+     "p95_px": 0.36,
+     "max_px": 0.36
+    },
+    "truth": {
+     "n": 2,
+     "median_px": 0.27,
+     "p95_px": 0.36,
+     "max_px": 0.36
+    }
+   },
+   "comparison": {
+    "catalogue": {
+     "n": 16,
+     "median_px": 0.13,
+     "p95_px": 0.72,
+     "max_px": 0.75
+    },
+    "truth": {
+     "n": 16,
+     "median_px": 0.13,
+     "p95_px": 0.72,
+     "max_px": 0.75
+    }
+   }
+  },
+  "20260907T045156Z_XX_Cyg": {
+   "target": {
+    "catalogue": {
+     "n": 2,
+     "median_px": 0.24,
+     "p95_px": 0.29,
+     "max_px": 0.29
+    },
+    "truth": {
+     "n": 2,
+     "median_px": 0.24,
+     "p95_px": 0.29,
+     "max_px": 0.29
+    }
+   },
+   "comparison": {
+    "catalogue": {
+     "n": 12,
+     "median_px": 0.22,
+     "p95_px": 0.32,
+     "max_px": 0.43
+    },
+    "truth": {
+     "n": 12,
+     "median_px": 0.22,
+     "p95_px": 0.32,
+     "max_px": 0.43
+    }
+   }
+  },
+  "20260907T045626Z_XX_Cyg": {
+   "target": {
+    "catalogue": {
+     "n": 3,
+     "median_px": 0.39,
+     "p95_px": 0.41,
+     "max_px": 0.41
+    },
+    "truth": {
+     "n": 3,
+     "median_px": 0.39,
+     "p95_px": 0.41,
+     "max_px": 0.41
+    }
+   },
+   "comparison": {
+    "catalogue": {
+     "n": 24,
+     "median_px": 0.29,
+     "p95_px": 0.6,
+     "max_px": 0.88
+    },
+    "truth": {
+     "n": 24,
+     "median_px": 0.29,
+     "p95_px": 0.6,
+     "max_px": 0.88
+    }
+   }
+  },
+  "20260925T200453Z_RR_Lyr": {
+   "target": {
+    "catalogue": {
+     "n": 184,
+     "median_px": 0.96,
+     "p95_px": 1.13,
+     "max_px": 1.3
+    },
+    "truth": {
+     "n": 184,
+     "median_px": 0.2,
+     "p95_px": 0.92,
+     "max_px": 1.07
+    }
+   },
+   "comparison": {
+    "catalogue": {
+     "n": 1032,
+     "median_px": 0.33,
+     "p95_px": 0.91,
+     "max_px": 1.33
+    },
+    "truth": {
+     "n": 1032,
+     "median_px": 0.33,
+     "p95_px": 0.91,
+     "max_px": 1.33
+    }
+   }
+  }
+ }
+}

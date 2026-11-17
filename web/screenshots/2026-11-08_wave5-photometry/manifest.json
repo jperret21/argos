@@ -1,0 +1,622 @@
+{
+ "title": "Wave 5: Live photometry",
+ "date": "2026-11-08",
+ "summary": "Wave 5 of web/spec/README.md section 7 at integration: live photometry in Observe against copies of real Seestar raw frames replayed through Open FITS and Identify field (one point per field solution, as Qt outside a sequence; XX Cyg 2026-09-07 and 2026-08-29, RR Lyr 2026-09-25, a check star assigned on the copies). The Photometry rail card, the drawer tabs Light curve (one LightCurvePlot: target, check as check − catalogue V with the trailing 15-point ±1σ band, the target's ensemble zero point; flags by shape; newest point ringed; Whole run / Following / Zoom kept; UTC / JD / BJD), Variables and Ensemble (leave-one-out), Recommend comparisons, the Field band live status, the empty state, the palette and the keys. The values on screen equal the fixed Qt engine's on the same frames (progress.md, Wave 5). Captured at device scale 2 (2 880 x 1 800 files for 1 440 x 900): 12 scenes in the three themes at 1 440 x 900 and in Observatory at 1 280 x 800, plus the palette, the shortcuts sheet and the context menu (Observatory, and Night Red for the context menu). The 13 Night Red originals pass the audit. Scenes 01-12 were re-captured after the design, technical and science reviews (their fixes: progress.md, Wave 5, section 7).",
+ "scale": 2,
+ "shots": [
+  {
+   "file": "charcoal-1440x900-01-photometry-card.png",
+   "caption": "Field mode, drawer closed, after a sequence-free live replay of 24 copies of real raw frames of XX Cyg (2026-09-07, Open FITS then Identify field per frame; check star 000-BCK-396 assigned on the copy). Re-captured after the review fixes. Rail: the Photometry card: the set (target circle, 7 comparisons folded into one row with their source, check triangle; values only in the readouts, never twice), the target's newest magnitude 11.967 ± 0.325 with the band and unit in the key (TG · mag) and the frame it comes from, the check scatter 0.088 mag (3 decimals, as the plot) over the last 15 points with the mean check − V, Comparisons 4 / 7 (in the newest zero point / in the set), the aperture in green px, the verdict with its count first ('5 of 7 stable · consistent in live preview', wrapping rather than cut), Recommend… and the three drawer-tab buttons. Numbers in notes are in Plex Mono. The live status is said once, by the Field band. The 'No equipment connected' prompt now sits above the cursor readout. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "card",
+    "band",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-02-light-curve.png",
+   "caption": "Drawer › Light curve at its default height (216 px), re-captured after the review fixes: facet titles in the plot's top margin, the caption row gone (the last tick says UTC, the last facet's title the date), a 32 px tool row; the target facet (XX Cyg, TG · differential mag) with four labelled ticks on a 1-2-5 step, the check facet on a symmetric ±0.2 mag scale (check − V 10.800 · ±0.2 mag) with the trailing 15-point ±1σ band and dashed mean (D10), points beyond the rung would be carets on the edge; markers and the newest ring are never cut (pixel margins). The readout keeps its items whole: ring glyph, target, σ15, check − V, time. The tab row carries the ensemble verdict with its word ('5 of 7 stable · consistent'). (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "light-curve",
+    "facets",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-03-light-curve-ensemble.png",
+   "caption": "Drawer › Light curve at 330 px: the third facet is now the target's ensemble zero point ± its rms per frame (DiffResult.zero_point / zp_rms from the server, A54: the night's transparency, up = more light; '4 of 7 comparisons' in the newest zero point), as the science review asked (the mean of the leave-one-out residuals was 0 by construction). The pointer on frame 18 shows one readout for every series: UTC, JD and BJD_TDB to 5 decimals (the target's 2461290.69105 and the check star's own 2461290.69113), target 12.178 ± 0.344 TG, check − V +0.031 ± 0.084, ZP 20.139 · σ 0.039 (6 of 7 comparisons), airmass 1.077. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "light-curve",
+    "ensemble-facet",
+    "readout",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-04-zoom-kept.png",
+   "caption": "Drawer › Light curve after + + and Shift+← on the focused plot: 'Zoom kept' is a label (no box), and '8 newer ›' says how many frames lie after the kept view (a click, or End, follows them); new frames never move the view. Key focus is a line under the plot's tools, not a ring round the whole plot (accent pixels 21 232 against 13 894 without focus in Charcoal; 32 474 before the fix). (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "light-curve",
+    "zoom",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-05-bjd-axis.png",
+   "caption": "Drawer › Light curve with the BJD axis chosen: ticks in BJD_TDB − 2461290 from the server's per-point BJD_TDB (now computed with astropy's bundled IERS tables, never downloaded: release S37); the readout of frame 10 gives JD 2461290.68082, BJD 2461290.68320 for the target and 2461290.68328 for the check star (its own direction), the fixed Qt engine's values. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "light-curve",
+    "bjd",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-06-ensemble.png",
+   "caption": "Drawer › Ensemble: the leave-one-out report (A57) per comparison (V, B−V, N, scatter, median formal error, the newest leave-one-out magnitude, O − C, the status in Qt's words, the field's flags); the verdict line with Qt's scientific note on its own wrapped line (no longer cut); the check star's row is filled from its curve (N 24, scatter of all its points, newest magnitude, O − C = mean check − V of the last 15). Scroll for the check row at this height. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "ensemble",
+    "leave-one-out",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-07-variables.png",
+   "caption": "Drawer › Variables (A50): the 136 VSX variables of the solved field with Qt's filter and count, type, magnitude range (now in Plex Mono, like Period and Sep), period and separation; Set as target (with Undo) on the selected row. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "variables",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-08-recommend.png",
+   "caption": "Recommend… open from the Photometry card (A58): the comparison count, the pilot gate in words (SNR ≥ 10 · Δmag ≤ 1.5 · ≤ 25′, numbers in Plex Mono), and each action's effect in numbers from the current set: 'Complete: +0' (unavailable: the set already has 7 calibrated comparisons) and 'Replace 7 VSP picks with up to 5' (in the deliberate style during a run, after a confirmation). When no VSP star passes the gate, Replace now leaves the set unchanged (release S32 extended). (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "recommend",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-09-band-summary.png",
+   "caption": "Field band dragged below 150 px: its one-row summary, a divider between the ensemble group and Candidates, and at the right the live photometry status ('Measuring: 24 points. #24 · 04:40:11', numbers in Plex Mono). (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "band",
+    "live-status",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-10-saturated.png",
+   "caption": "Saturated points drawn as crosses: 40 copies of real RR Lyr frames (2026-09-25), check 000-BJW-666, replayed with the linearity limit lowered to 30 000 ADU (web hardware.overrides.linearity_max_adu) to exercise the flag on real data: 15 of 40 target points flagged ('saturated 15'), the same 15 as the fixed Qt engine; saturated points stay on the curve and are left out of the check band. The card's badge reads 'Waiting · n of 10 pts' and the tab row 'waiting for 10 points' (the verdict's word always shown). (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "flags",
+    "saturated",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-11-suspect.png",
+   "caption": "Suspect points drawn hollow: 22 copies of real XX Cyg frames (2026-08-29), check star 000-BJV-176, default settings: its 2 suspect points are the fixed Qt engine's 2 ('suspect 2'). The faint check (σ15 0.624 mag) now gets a ±1 mag scale, so its scatter shows in the facet's height (it looked as flat as a good check before); the card's verdict wraps: '0 of 4 stable · not ready: fewer than 3 stable comparisons'. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "flags",
+    "suspect",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-12-empty.png",
+   "caption": "Empty state: a solved frame, every star removed from the set. One instruction, the same words in the card and the Light curve tab ('Pick a target: click its circle on the image, or Set as target in Variables.'); the Field band says 'No target'; no Ensemble row in the card and no verdict in the tab row; Recommend… looks unavailable but still opens with its reason. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "empty",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-01-photometry-card.png",
+   "caption": "Field mode, drawer closed, after a sequence-free live replay of 24 copies of real raw frames of XX Cyg (2026-09-07, Open FITS then Identify field per frame; check star 000-BCK-396 assigned on the copy). Re-captured after the review fixes. Rail: the Photometry card: the set (target circle, 7 comparisons folded into one row with their source, check triangle; values only in the readouts, never twice), the target's newest magnitude 11.967 ± 0.325 with the band and unit in the key (TG · mag) and the frame it comes from, the check scatter 0.088 mag (3 decimals, as the plot) over the last 15 points with the mean check − V, Comparisons 4 / 7 (in the newest zero point / in the set), the aperture in green px, the verdict with its count first ('5 of 7 stable · consistent in live preview', wrapping rather than cut), Recommend… and the three drawer-tab buttons. Numbers in notes are in Plex Mono. The live status is said once, by the Field band. The 'No equipment connected' prompt now sits above the cursor readout. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "card",
+    "band",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-02-light-curve.png",
+   "caption": "Drawer › Light curve at its default height (216 px), re-captured after the review fixes: facet titles in the plot's top margin, the caption row gone (the last tick says UTC, the last facet's title the date), a 32 px tool row; the target facet (XX Cyg, TG · differential mag) with four labelled ticks on a 1-2-5 step, the check facet on a symmetric ±0.2 mag scale (check − V 10.800 · ±0.2 mag) with the trailing 15-point ±1σ band and dashed mean (D10), points beyond the rung would be carets on the edge; markers and the newest ring are never cut (pixel margins). The readout keeps its items whole: ring glyph, target, σ15, check − V, time. The tab row carries the ensemble verdict with its word ('5 of 7 stable · consistent'). (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "light-curve",
+    "facets",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-03-light-curve-ensemble.png",
+   "caption": "Drawer › Light curve at 330 px: the third facet is now the target's ensemble zero point ± its rms per frame (DiffResult.zero_point / zp_rms from the server, A54: the night's transparency, up = more light; '4 of 7 comparisons' in the newest zero point), as the science review asked (the mean of the leave-one-out residuals was 0 by construction). The pointer on frame 18 shows one readout for every series: UTC, JD and BJD_TDB to 5 decimals (the target's 2461290.69105 and the check star's own 2461290.69113), target 12.178 ± 0.344 TG, check − V +0.031 ± 0.084, ZP 20.139 · σ 0.039 (6 of 7 comparisons), airmass 1.077. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "light-curve",
+    "ensemble-facet",
+    "readout",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-04-zoom-kept.png",
+   "caption": "Drawer › Light curve after + + and Shift+← on the focused plot: 'Zoom kept' is a label (no box), and '8 newer ›' says how many frames lie after the kept view (a click, or End, follows them); new frames never move the view. Key focus is a line under the plot's tools, not a ring round the whole plot (accent pixels 21 232 against 13 894 without focus in Charcoal; 32 474 before the fix). (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "light-curve",
+    "zoom",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-05-bjd-axis.png",
+   "caption": "Drawer › Light curve with the BJD axis chosen: ticks in BJD_TDB − 2461290 from the server's per-point BJD_TDB (now computed with astropy's bundled IERS tables, never downloaded: release S37); the readout of frame 10 gives JD 2461290.68082, BJD 2461290.68320 for the target and 2461290.68328 for the check star (its own direction), the fixed Qt engine's values. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "light-curve",
+    "bjd",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-06-ensemble.png",
+   "caption": "Drawer › Ensemble: the leave-one-out report (A57) per comparison (V, B−V, N, scatter, median formal error, the newest leave-one-out magnitude, O − C, the status in Qt's words, the field's flags); the verdict line with Qt's scientific note on its own wrapped line (no longer cut); the check star's row is filled from its curve (N 24, scatter of all its points, newest magnitude, O − C = mean check − V of the last 15). Scroll for the check row at this height. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "ensemble",
+    "leave-one-out",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-07-variables.png",
+   "caption": "Drawer › Variables (A50): the 136 VSX variables of the solved field with Qt's filter and count, type, magnitude range (now in Plex Mono, like Period and Sep), period and separation; Set as target (with Undo) on the selected row. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "variables",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-08-recommend.png",
+   "caption": "Recommend… open from the Photometry card (A58): the comparison count, the pilot gate in words (SNR ≥ 10 · Δmag ≤ 1.5 · ≤ 25′, numbers in Plex Mono), and each action's effect in numbers from the current set: 'Complete: +0' (unavailable: the set already has 7 calibrated comparisons) and 'Replace 7 VSP picks with up to 5' (in the deliberate style during a run, after a confirmation). When no VSP star passes the gate, Replace now leaves the set unchanged (release S32 extended). (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "recommend",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-09-band-summary.png",
+   "caption": "Field band dragged below 150 px: its one-row summary, a divider between the ensemble group and Candidates, and at the right the live photometry status ('Measuring: 24 points. #24 · 04:40:11', numbers in Plex Mono). (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "band",
+    "live-status",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-10-saturated.png",
+   "caption": "Saturated points drawn as crosses: 40 copies of real RR Lyr frames (2026-09-25), check 000-BJW-666, replayed with the linearity limit lowered to 30 000 ADU (web hardware.overrides.linearity_max_adu) to exercise the flag on real data: 15 of 40 target points flagged ('saturated 15'), the same 15 as the fixed Qt engine; saturated points stay on the curve and are left out of the check band. The card's badge reads 'Waiting · n of 10 pts' and the tab row 'waiting for 10 points' (the verdict's word always shown). (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "flags",
+    "saturated",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-11-suspect.png",
+   "caption": "Suspect points drawn hollow: 22 copies of real XX Cyg frames (2026-08-29), check star 000-BJV-176, default settings: its 2 suspect points are the fixed Qt engine's 2 ('suspect 2'). The faint check (σ15 0.624 mag) now gets a ±1 mag scale, so its scatter shows in the facet's height (it looked as flat as a good check before); the card's verdict wraps: '0 of 4 stable · not ready: fewer than 3 stable comparisons'. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "flags",
+    "suspect",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-12-empty.png",
+   "caption": "Empty state: a solved frame, every star removed from the set. One instruction, the same words in the card and the Light curve tab ('Pick a target: click its circle on the image, or Set as target in Variables.'); the Field band says 'No target'; no Ensemble row in the card and no verdict in the tab row; Recommend… looks unavailable but still opens with its reason. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "empty",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-15-context-menu.png",
+   "caption": "Viewer context menu over the solved XX Cyg field with object labels on (N): re-captured for the wave 4 leftover (one Night Red rule-B pixel on an anti-aliased label edge); the Night Red original now passes both audit rules. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "context-menu",
+    "night-red-check",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-01-photometry-card.png",
+   "caption": "Field mode, drawer closed, after a sequence-free live replay of 24 copies of real raw frames of XX Cyg (2026-09-07, Open FITS then Identify field per frame; check star 000-BCK-396 assigned on the copy). Re-captured after the review fixes. Rail: the Photometry card: the set (target circle, 7 comparisons folded into one row with their source, check triangle; values only in the readouts, never twice), the target's newest magnitude 11.967 ± 0.325 with the band and unit in the key (TG · mag) and the frame it comes from, the check scatter 0.088 mag (3 decimals, as the plot) over the last 15 points with the mean check − V, Comparisons 4 / 7 (in the newest zero point / in the set), the aperture in green px, the verdict with its count first ('5 of 7 stable · consistent in live preview', wrapping rather than cut), Recommend… and the three drawer-tab buttons. Numbers in notes are in Plex Mono. The live status is said once, by the Field band. The 'No equipment connected' prompt now sits above the cursor readout. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "card",
+    "band",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-02-light-curve.png",
+   "caption": "Drawer › Light curve at its default height (216 px), re-captured after the review fixes: facet titles in the plot's top margin, the caption row gone (the last tick says UTC, the last facet's title the date), a 32 px tool row; the target facet (XX Cyg, TG · differential mag) with four labelled ticks on a 1-2-5 step, the check facet on a symmetric ±0.2 mag scale (check − V 10.800 · ±0.2 mag) with the trailing 15-point ±1σ band and dashed mean (D10), points beyond the rung would be carets on the edge; markers and the newest ring are never cut (pixel margins). The readout keeps its items whole: ring glyph, target, σ15, check − V, time. The tab row carries the ensemble verdict with its word ('5 of 7 stable · consistent'). (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "light-curve",
+    "facets",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-03-light-curve-ensemble.png",
+   "caption": "Drawer › Light curve at 330 px: the third facet is now the target's ensemble zero point ± its rms per frame (DiffResult.zero_point / zp_rms from the server, A54: the night's transparency, up = more light; '4 of 7 comparisons' in the newest zero point), as the science review asked (the mean of the leave-one-out residuals was 0 by construction). The pointer on frame 18 shows one readout for every series: UTC, JD and BJD_TDB to 5 decimals (the target's 2461290.69105 and the check star's own 2461290.69113), target 12.178 ± 0.344 TG, check − V +0.031 ± 0.084, ZP 20.139 · σ 0.039 (6 of 7 comparisons), airmass 1.077. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "light-curve",
+    "ensemble-facet",
+    "readout",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-04-zoom-kept.png",
+   "caption": "Drawer › Light curve after + + and Shift+← on the focused plot: 'Zoom kept' is a label (no box), and '8 newer ›' says how many frames lie after the kept view (a click, or End, follows them); new frames never move the view. Key focus is a line under the plot's tools, not a ring round the whole plot (accent pixels 21 232 against 13 894 without focus in Charcoal; 32 474 before the fix). (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "light-curve",
+    "zoom",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-05-bjd-axis.png",
+   "caption": "Drawer › Light curve with the BJD axis chosen: ticks in BJD_TDB − 2461290 from the server's per-point BJD_TDB (now computed with astropy's bundled IERS tables, never downloaded: release S37); the readout of frame 10 gives JD 2461290.68082, BJD 2461290.68320 for the target and 2461290.68328 for the check star (its own direction), the fixed Qt engine's values. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "light-curve",
+    "bjd",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-06-ensemble.png",
+   "caption": "Drawer › Ensemble: the leave-one-out report (A57) per comparison (V, B−V, N, scatter, median formal error, the newest leave-one-out magnitude, O − C, the status in Qt's words, the field's flags); the verdict line with Qt's scientific note on its own wrapped line (no longer cut); the check star's row is filled from its curve (N 24, scatter of all its points, newest magnitude, O − C = mean check − V of the last 15). Scroll for the check row at this height. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "ensemble",
+    "leave-one-out",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-07-variables.png",
+   "caption": "Drawer › Variables (A50): the 136 VSX variables of the solved field with Qt's filter and count, type, magnitude range (now in Plex Mono, like Period and Sep), period and separation; Set as target (with Undo) on the selected row. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "variables",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-08-recommend.png",
+   "caption": "Recommend… open from the Photometry card (A58): the comparison count, the pilot gate in words (SNR ≥ 10 · Δmag ≤ 1.5 · ≤ 25′, numbers in Plex Mono), and each action's effect in numbers from the current set: 'Complete: +0' (unavailable: the set already has 7 calibrated comparisons) and 'Replace 7 VSP picks with up to 5' (in the deliberate style during a run, after a confirmation). When no VSP star passes the gate, Replace now leaves the set unchanged (release S32 extended). (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "recommend",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-09-band-summary.png",
+   "caption": "Field band dragged below 150 px: its one-row summary, a divider between the ensemble group and Candidates, and at the right the live photometry status ('Measuring: 24 points. #24 · 04:40:11', numbers in Plex Mono). (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "band",
+    "live-status",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-10-saturated.png",
+   "caption": "Saturated points drawn as crosses: 40 copies of real RR Lyr frames (2026-09-25), check 000-BJW-666, replayed with the linearity limit lowered to 30 000 ADU (web hardware.overrides.linearity_max_adu) to exercise the flag on real data: 15 of 40 target points flagged ('saturated 15'), the same 15 as the fixed Qt engine; saturated points stay on the curve and are left out of the check band. The card's badge reads 'Waiting · n of 10 pts' and the tab row 'waiting for 10 points' (the verdict's word always shown). (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "flags",
+    "saturated",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-11-suspect.png",
+   "caption": "Suspect points drawn hollow: 22 copies of real XX Cyg frames (2026-08-29), check star 000-BJV-176, default settings: its 2 suspect points are the fixed Qt engine's 2 ('suspect 2'). The faint check (σ15 0.624 mag) now gets a ±1 mag scale, so its scatter shows in the facet's height (it looked as flat as a good check before); the card's verdict wraps: '0 of 4 stable · not ready: fewer than 3 stable comparisons'. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "flags",
+    "suspect",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-12-empty.png",
+   "caption": "Empty state: a solved frame, every star removed from the set. One instruction, the same words in the card and the Light curve tab ('Pick a target: click its circle on the image, or Set as target in Variables.'); the Field band says 'No target'; no Ensemble row in the card and no verdict in the tab row; Recommend… looks unavailable but still opens with its reason. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "empty",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-01-photometry-card.png",
+   "caption": "Field mode, drawer closed, after a sequence-free live replay of 24 copies of real raw frames of XX Cyg (2026-09-07, Open FITS then Identify field per frame; check star 000-BCK-396 assigned on the copy). Re-captured after the review fixes. Rail: the Photometry card: the set (target circle, 7 comparisons folded into one row with their source, check triangle; values only in the readouts, never twice), the target's newest magnitude 11.967 ± 0.325 with the band and unit in the key (TG · mag) and the frame it comes from, the check scatter 0.088 mag (3 decimals, as the plot) over the last 15 points with the mean check − V, Comparisons 4 / 7 (in the newest zero point / in the set), the aperture in green px, the verdict with its count first ('5 of 7 stable · consistent in live preview', wrapping rather than cut), Recommend… and the three drawer-tab buttons. Numbers in notes are in Plex Mono. The live status is said once, by the Field band. The 'No equipment connected' prompt now sits above the cursor readout. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "card",
+    "band",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-02-light-curve.png",
+   "caption": "Drawer › Light curve at its default height (216 px), re-captured after the review fixes: facet titles in the plot's top margin, the caption row gone (the last tick says UTC, the last facet's title the date), a 32 px tool row; the target facet (XX Cyg, TG · differential mag) with four labelled ticks on a 1-2-5 step, the check facet on a symmetric ±0.2 mag scale (check − V 10.800 · ±0.2 mag) with the trailing 15-point ±1σ band and dashed mean (D10), points beyond the rung would be carets on the edge; markers and the newest ring are never cut (pixel margins). The readout keeps its items whole: ring glyph, target, σ15, check − V, time. The tab row carries the ensemble verdict with its word ('5 of 7 stable · consistent'). (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "light-curve",
+    "facets",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-03-light-curve-ensemble.png",
+   "caption": "Drawer › Light curve at 330 px: the third facet is now the target's ensemble zero point ± its rms per frame (DiffResult.zero_point / zp_rms from the server, A54: the night's transparency, up = more light; '4 of 7 comparisons' in the newest zero point), as the science review asked (the mean of the leave-one-out residuals was 0 by construction). The pointer on frame 18 shows one readout for every series: UTC, JD and BJD_TDB to 5 decimals (the target's 2461290.69105 and the check star's own 2461290.69113), target 12.178 ± 0.344 TG, check − V +0.031 ± 0.084, ZP 20.139 · σ 0.039 (6 of 7 comparisons), airmass 1.077. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "light-curve",
+    "ensemble-facet",
+    "readout",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-04-zoom-kept.png",
+   "caption": "Drawer › Light curve after + + and Shift+← on the focused plot: 'Zoom kept' is a label (no box), and '8 newer ›' says how many frames lie after the kept view (a click, or End, follows them); new frames never move the view. Key focus is a line under the plot's tools, not a ring round the whole plot (accent pixels 21 232 against 13 894 without focus in Charcoal; 32 474 before the fix). (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "light-curve",
+    "zoom",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-05-bjd-axis.png",
+   "caption": "Drawer › Light curve with the BJD axis chosen: ticks in BJD_TDB − 2461290 from the server's per-point BJD_TDB (now computed with astropy's bundled IERS tables, never downloaded: release S37); the readout of frame 10 gives JD 2461290.68082, BJD 2461290.68320 for the target and 2461290.68328 for the check star (its own direction), the fixed Qt engine's values. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "light-curve",
+    "bjd",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-06-ensemble.png",
+   "caption": "Drawer › Ensemble: the leave-one-out report (A57) per comparison (V, B−V, N, scatter, median formal error, the newest leave-one-out magnitude, O − C, the status in Qt's words, the field's flags); the verdict line with Qt's scientific note on its own wrapped line (no longer cut); the check star's row is filled from its curve (N 24, scatter of all its points, newest magnitude, O − C = mean check − V of the last 15). Scroll for the check row at this height. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "ensemble",
+    "leave-one-out",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-07-variables.png",
+   "caption": "Drawer › Variables (A50): the 136 VSX variables of the solved field with Qt's filter and count, type, magnitude range (now in Plex Mono, like Period and Sep), period and separation; Set as target (with Undo) on the selected row. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "variables",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-08-recommend.png",
+   "caption": "Recommend… open from the Photometry card (A58): the comparison count, the pilot gate in words (SNR ≥ 10 · Δmag ≤ 1.5 · ≤ 25′, numbers in Plex Mono), and each action's effect in numbers from the current set: 'Complete: +0' (unavailable: the set already has 7 calibrated comparisons) and 'Replace 7 VSP picks with up to 5' (in the deliberate style during a run, after a confirmation). When no VSP star passes the gate, Replace now leaves the set unchanged (release S32 extended). (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "recommend",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-09-band-summary.png",
+   "caption": "Field band dragged below 150 px: its one-row summary, a divider between the ensemble group and Candidates, and at the right the live photometry status ('Measuring: 24 points. #24 · 04:40:11', numbers in Plex Mono). (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "band",
+    "live-status",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-10-saturated.png",
+   "caption": "Saturated points drawn as crosses: 40 copies of real RR Lyr frames (2026-09-25), check 000-BJW-666, replayed with the linearity limit lowered to 30 000 ADU (web hardware.overrides.linearity_max_adu) to exercise the flag on real data: 15 of 40 target points flagged ('saturated 15'), the same 15 as the fixed Qt engine; saturated points stay on the curve and are left out of the check band. The card's badge reads 'Waiting · n of 10 pts' and the tab row 'waiting for 10 points' (the verdict's word always shown). (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "flags",
+    "saturated",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-11-suspect.png",
+   "caption": "Suspect points drawn hollow: 22 copies of real XX Cyg frames (2026-08-29), check star 000-BJV-176, default settings: its 2 suspect points are the fixed Qt engine's 2 ('suspect 2'). The faint check (σ15 0.624 mag) now gets a ±1 mag scale, so its scatter shows in the facet's height (it looked as flat as a good check before); the card's verdict wraps: '0 of 4 stable · not ready: fewer than 3 stable comparisons'. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "flags",
+    "suspect",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-12-empty.png",
+   "caption": "Empty state: a solved frame, every star removed from the set. One instruction, the same words in the card and the Light curve tab ('Pick a target: click its circle on the image, or Set as target in Variables.'); the Field band says 'No target'; no Ensemble row in the card and no verdict in the tab row; Recommend… looks unavailable but still opens with its reason. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "empty",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-13-palette.png",
+   "caption": "Command palette (Mod+K) 'comparison': the wave 5 actions (Show the comparison ensemble, Complete the comparison ensemble (up to 5), Replace the VSP comparisons) before the Settings › Photometry keys; 'Show the light curve' and 'Show the variable stars of the field' come up for their own words. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "palette",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-14-shortcuts.png",
+   "caption": "Keyboard shortcuts sheet (?): the new group 'Light curve (when it has the focus)': F, + / −, End, Shift+← →, ← →, U, M, handled by the focused plot (Escape stays the app's). (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "keys",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-15-context-menu.png",
+   "caption": "Viewer context menu over the solved XX Cyg field with object labels on (N): re-captured for the wave 4 leftover (one Night Red rule-B pixel on an anti-aliased label edge); the Night Red original now passes both audit rules. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave5",
+    "photometry",
+    "context-menu",
+    "night-red-check",
+    "observatory",
+    "1440x900"
+   ]
+  }
+ ]
+}

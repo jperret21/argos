@@ -112,10 +112,12 @@ class MountDock(design.Card):
 
         outer.addWidget(design.horizontal_divider())
 
-        # Tracking row — toggle + rate combo
-        self._tracking_btn = design.SuccessButton("Tracking ON")
+        # Tracking row — toggle + rate combo. Neutral until the first poll
+        # says whether the mount tracks (set_position).
+        self._tracking_btn = design.SuccessButton("Tracking")
         self._tracking_btn.setCheckable(True)
         self._tracking_btn.toggled.connect(self._on_tracking_toggle)
+        self._show_tracking(None)
         self._rate_combo = QComboBox()
         for label in _TRACKING_RATES:
             self._rate_combo.addItem(label)
@@ -299,6 +301,8 @@ class MountDock(design.Card):
         ):
             w.setEnabled(connected)
         self._connected = connected
+        if not connected:
+            self._show_tracking(None)  # the last poll no longer describes the mount
         self._center_btn.setEnabled(connected and self._center_available)
         self._resolved_slew_btn.setEnabled(connected and self._resolved_object is not None)
 
@@ -320,17 +324,25 @@ class MountDock(design.Card):
         self._dec_lbl.setText(_format_dec(dec_d))
         self._alt_lbl.setText(f"{alt_d:.2f}°")
         self._az_lbl.setText(f"{az_d:.2f}°")
-        self._tracking_btn.blockSignals(True)
-        self._tracking_btn.setChecked(tracking)
-        self._tracking_btn.setText("Tracking ON" if tracking else "Tracking OFF")
-        self._tracking_btn.setProperty("class", "success" if tracking else "")
-        self._tracking_btn.style().unpolish(self._tracking_btn)
-        self._tracking_btn.style().polish(self._tracking_btn)
-        self._tracking_btn.blockSignals(False)
+        self._show_tracking(bool(tracking))
         # Cosmetic: slew-in-progress highlights the abort button.
         self._abort_btn.setProperty("class", "danger" if slewing else "")
         self._abort_btn.style().unpolish(self._abort_btn)
         self._abort_btn.style().polish(self._abort_btn)
+
+    def _show_tracking(self, tracking: bool | None) -> None:
+        """Show the polled tracking state; ``None`` (not known) is neutral.
+        Never emits ``tracking_toggled``: a display update sends no command."""
+        btn = self._tracking_btn
+        btn.blockSignals(True)
+        btn.setChecked(bool(tracking))
+        btn.setText(
+            "Tracking" if tracking is None else ("Tracking ON" if tracking else "Tracking OFF")
+        )
+        btn.setProperty("class", "success" if tracking else "")
+        btn.style().unpolish(btn)
+        btn.style().polish(btn)
+        btn.blockSignals(False)
 
     def set_goto_fields(self, ra_h: float, dec_d: float) -> None:
         self._goto_ra.setValue(float(ra_h))

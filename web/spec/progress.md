@@ -1,0 +1,3404 @@
+# ARGOS web UI: implementation progress
+
+Status of the waves of [README.md section 7](README.md#7-implementation-plan-in-waves),
+row by row. "Done" means built, wired to the server and checked in the running UI (scripted
+checks and screenshots at 1440 x 900 in the three themes and at 1280 x 800); "partial" says
+what is missing; nothing here is claimed from code reading alone.
+
+## Wave 1: Shell and Connection (2026-11-01)
+
+Scope: API rows A1-A4, A8-A10, A13-A18, A80, and A19 (the Stellarium bridge, brought
+forward from W3 by the review round so that the exit criterion holds) (server,
+`argos/server/protocol.md`, API 2); the shared components of the W1 row; the Connection
+screen; the Observe changes D10 and D15.
+Screenshots: `web/screenshots/2026-11-01_wave1-connection/` (final state after the review
+fixes, 13 shots with captions) and `web/screenshots/2026-11-01_wave1-integration/` (the
+integration state the reviews looked at, 36 shots).
+
+**Status: wave 1 is complete.** Every row of section 1 below is done or partial for a
+reason that belongs to a later wave, and every Qt Connection control of 02 section 2.2 has
+its working web control (section 2). The review round (design and technical reviews,
+section 4) was applied on 2026-11-01.
+
+Verification (2026-11-01, server on port 8742 with a temporary `--config-dir`, `--log-dir`
+and `HOME`; `~/.argos/config.json` untouched):
+
+- 57 / 57 scripted UI checks in Observatory, Charcoal, Night Red at 1440 x 900 and
+  Observatory at 1280 x 800, plus 6 link-loss checks (server stopped and restarted under the
+  page). No console error except the browser's own line for the expected `502` of the
+  closed-port test; no request left the machine.
+- Discovery: a local fake responder answered the Alpaca broadcast with two ports, so the job
+  ended at the broadcast stage (no subnet sweep of the LAN). Longest gap between animation
+  frames while it ran: 17 ms. Cancel: "Cancelled" on screen about 160 ms after the click.
+- Closed port (127.0.0.1:9): the camera row shows "Cannot reach 127.0.0.1:9 — Connection
+  refused" in full, with Retry; toast and ERROR log line.
+- Black-hole address (192.0.2.1): Connect all failed in 3.1 s (one 3 s address check for the
+  four devices), four rows in error with the full reason; meanwhile the longest frame gap was
+  17 ms, F2 switched section in 20 ms and `GET /api/status` answered in at most 3 ms.
+- Night Red: 0 pixels that are neither black nor red-dominant in the six Night Red
+  screenshots (1 296 000 pixels each).
+- `npm run check`, `npm test`, `npm run build`, `.venv/bin/python -m pytest tests/server -q`:
+  see the final report of the wave (all passing at the time of writing).
+
+### 1. Mapping rows closed by the wave
+
+| Row | Qt element | Web | Status |
+|---|---|---|---|
+| M1 | Start-up sequence `main.main` | `StartupScreen` over the shell (`App.svelte`): honest stage "Connecting to the ARGOS server…" until `GET /api/health` answers and `/ws/events` sends its first `status`; failure (server unreachable after 3 tries, token rejected 4401, page refused 4403, no status within 10 s) stays with the exact cause, Copy details, Retry; log folder from `GET /api/app/info` when known | Done (browser). The desktop sidecar stage ("Starting the ARGOS server…") and "Open log folder" wait for the Tauri shell (W8). |
+| M2 | Splash | Same screen, themed before first paint (`index.html`), mark from `brand/argos-mark.svg` (never redrawn), wordmark in Plex Sans 600 | Done |
+| M3 | `Shell` main window | `App.svelte`: NavRail + section + StatusBar, Toasts, start-up overlay | Done |
+| M9 | `Sidebar` | `NavRail`: five entries, F1-F5 through the registry, revised state dots (Connection ready / active / attention, Observe ready / active, Settings attention while the observer code or the site is missing, Q-G11); footer: Help menu and theme button | Done. Plan and Review dots wait for their waves (nothing to report yet). |
+| M10 | Rail context menu "Modes" | Dropped: the rail is always visible | Done (nothing to build) |
+| M11 | `TopStatusBar` | StatusBar global segments: server link when down, device cluster (four marks, shape = state, link to Connection), Seestar / Net (three states each; "not in use" for an unreachable Seestar the simulator link does not use), mount state and RA / Dec from the mount's own device record (+ angle to go and Abort during a slew), run chip (LIVE, exposure), activity text (`activity` event: the last action **or its outcome**, UTC time, full text in the tooltip, muted once nothing runs), Log with unseen problems; priority folding (Rate / Latency fold first, the Log button never hides) | Partial: Alt-Az / EQ chip needs `MountState.alignment` (A29, W3); the sequence run chip comes with W6; tracking is shown through the mount state badge, not as its own segment. |
+| M12 | `LogPanel` dock | One log store (`app.log`, 5 000 lines): `log` v2 events, replay on (re)connection, gaps and history from `GET /api/logs`, server restarts told by the server's `boot_id` (exact, whatever the ring size; a marker line in every view); windowed views (300 lines in the page, 300 more at the top), one notification per animation frame; Log tab in the drawer of Observe and the placeholders (`L`); on Connection `L` widens the screen's own log to every topic: level filter, debug toggle, search, copy, save, clear (view), follow / pause (paused only by the observer's own scrolling) | Done. Observe's drawer keeps a fixed height (its grid sets 216 px). |
+| M13 | Dock mechanism | Panel host: foldable rail cards, drawer tabs, Panels popover (`arrange`) with Reset layout on Observe | Done for Observe (Camera, Mount, levels strip, Log). Plan and Review get theirs with their waves. |
+| M17 | Implicit window status bar | Toasts (merged repeats, timed) + log lines; every failed request is a toast and a line | Done |
+| M19 | Cross-page wiring | Server events consumed: `status`, `camera`, `mount`, `devices`, `network`, `activity`, `config`, `job`, `log` | Partial: `observation`, `stellarium`, `target_suggestions`, `sequence` arrive with W3-W6. |
+| M21 | `ConnectionPage` | Connection screen: toolbar + two columns + filtered log, nothing scrolls but the log at 1440 x 900 and 1280 x 800 | Done |
+| M22 | Start card | Instrument card (profile Select, specs, validated badge, Q-C2 wording and caveats, profile-mismatch warnings, site summary with a Settings link), Link card, toolbar Connect all / Disconnect all | Done |
+| M23 | Device cards + bulk row | Devices table: four rows always visible, state word + mark, full reason, warnings, per-row Connect / Disconnect / Retry / Stop retrying / Cancel; bulk actions merged into the toolbar | Done ("Stop retrying" is wired and unit-tested; the mount auto-retry itself was not reproduced live: the simulator cannot lose its mount) |
+| M24 | Details disclosure | Dropped: nothing is hidden | Done (nothing to build) |
+| M25 | `StellariumCard` | Planetarium card on the server bridge (A19): Start / Stop bridge, state badge (Stopped / Listening · port / Error), the bind error in full, Stellarium clients, the last GoTo (RA / Dec, UTC time, outcome), host shown (read-only), port (disabled while the bridge runs) and online lookup saved to the config, help disclosure | Done. The target-name suggestion after a Stellarium GoTo (`target_suggestions`, shell.py:346-353) comes with W3, with the Observe GoTo work. |
+| M26 | Network reachability | Status bar Seestar / Net + Link card lines with the time of the last check; Seestar probed by the server every 10 s, the internet only on request ("Check the internet") | Done |
+
+Also delivered in this wave (README section 1.3 decisions): D10 (Connection card removed
+from the Observe rail; the toolbar's equipment button connects or disconnects everything and
+asks first while something runs), D15 (theme button moved to the rail footer, removed from
+the Observe toolbar), D17 (one log store, Log tab everywhere), D21 (Escape aborts a slew from
+any section, then closes the top layer), D22 (keymap), D28 (profile edited on Connection,
+locked while a device holds the link).
+
+### 2. Exit criterion: every Qt Connection control of 02 section 2.2 and its web control
+
+| Qt ref | Qt control | Web control | Status |
+|---|---|---|---|
+| 1.2 #1 | Telescope model `QComboBox` | Instrument card `Select` "Telescope" (token-drawn), options with sensor and plate scale; locked with "Disconnect the equipment before changing the telescope: it sets plate scale, sensor geometry and FITS metadata." while a device is connected, connecting, busy or retrying; the server's `409` is shown verbatim if it refuses | Done |
+| 1.2 #2 | IP address `QLineEdit` | Link card "Seestar address" (mono), saved to `alpaca.host` on Enter or leaving the field (never per keystroke), Esc reverts, server refusal shown under the field | Done |
+| 1.2 #3 | Port `QSpinBox` | Link card "Alpaca port" 1-65535, integers, saved to `alpaca.port` on Enter or blur; range message under the field | Done |
+| 1.2 #4 | Discover | Link card [discover Discover]: server job (A16) with JobProgress (stage, n of 3, elapsed, Cancel); one device fills the address, several open the "Devices found" popover (02 W2), none gives the warning line; address read-only while it runs | Done |
+| 1.2 #5 | Connect equipment | Toolbar [connect Connect all] (primary), connects only what is not connected (A15) with the chosen link; the server claims the devices at once ("Queued" rows, profile locked, summary "checking the address…" then "connecting camera…"); "Equipment ready" (disabled) when the four are; disabled with "enter the Seestar address in the Link card" when empty (fixes the silent Qt return) | Done |
+| 1.2 #6 | Disconnect equipment | Toolbar [disconnect Disconnect all] (danger); confirmation only while an exposure, live view or a slew runs (Q-C5, 02 W10b); also cancels a Connect all in progress, from its first moment (the address check included) | Done |
+| 1.2 #7 | Show / hide details | Dropped: the device table is always visible | Done (dropped by decision) |
+| 1.3 #1 | Telescope card button | Devices table, Mount row: Connect / Disconnect / Retry / Stop retrying / Cancel; disconnecting a slewing mount asks first | Done |
+| 1.3 #2 | Camera card button | Camera row, same actions; disconnecting during an exposure or live view asks first | Done |
+| 1.3 #3 | Filter Wheel card button | Filter wheel row, same actions | Done |
+| 1.3 #4 | Focuser card button | Focuser row, same actions | Done |
+| 1.3 #5 | Connect all (bulk row) | Merged into the toolbar Connect all | Done |
+| 1.3 #6 | Disconnect all (bulk row) | Merged into the toolbar Disconnect all | Done |
+| 1.4 #1 | Stellarium TCP port | Planetarium card "Port" 1024-65535, saved to `stellarium.port` on commit (Qt saved it only when the server started); disabled while the bridge runs, as in Qt | Done |
+| 1.4 #2 | Start / Stop server | Planetarium card [planetarium Start bridge] / [stop Stop bridge] on `POST` / `DELETE /api/stellarium` (A19); state, clients, last GoTo and bind error on the card | Done (checked with a scripted Stellarium client: a GoTo slews the simulator's mount, a port in use is shown on the card) |
+| 1.4 #3 | Online lookup `QCheckBox` | Planetarium card checkbox "Look up target names online after a GoTo" with the Qt tooltip as caption, saved to `stellarium.online_target_lookup` at once | Done (the Settings › Privacy mirror comes with W2) |
+| (web) | Simulator / Seestar | Link card `Segmented` "Equipment"; follows the link the devices hold, locked while they hold it | Done |
+| (web) | Retry server | Link card [refresh Retry server] while the event link is down; the start-up screen has its own Retry | Done |
+| (new) | Stellarium host | Planetarium card "Host 127.0.0.1" (read-only, `stellarium.host`) | Done |
+| (new) | Site summary | Instrument card "Site": name, signed coordinates (5 decimals), elevation, or the missing-site warning; [site Change in Settings] | Done (Settings itself is W2) |
+| (new) | Connection log | `LogPanel` filtered on the topics connection, discovery, planetarium, with level filter, search, copy, save, clear, and [log] to open the full Log drawer (`L`) | Done |
+
+Qt readouts of the same page: specs line (Instrument "Optics"), unvalidated warning (one Q-C2
+wording + the profile's caveats), 2 x 2 summary ("n of 4 devices ready" in the toolbar and the
+table states), device card status lines (table State + Detail, full text), Stellarium status
+(badge), client count ("Clients") and GoTo flash ("Last GoTo", which no longer reverts to a
+stale label).
+
+### 3. Known gaps and issues (before wave 2)
+
+- **Stellarium target names**: a GoTo from Stellarium slews the mount; the target-name
+  suggestion (`target_suggestions`, local catalogue then the optional online lookup the
+  card's checkbox enables) comes with W3. The checkbox is saved but not used yet.
+- **Status bar**: no Alt-Az / EQ chip (A29, W3) and no sequence run chip (W6).
+- **Help menu**: "Create support bundle…" and "About ARGOS" are listed disabled ("not
+  available in this version yet"; they come with Settings, W2); Quit is desktop-only (W8).
+- **Mount auto-retry** ("Lost · retrying every 10 s", Stop retrying) was not reproduced live:
+  the simulator never loses its mount. Covered by the server tests and the UI model tests.
+- **Real Seestar**: never connected in this wave; Alpaca was exercised against a closed port,
+  a black-hole address and fake devices in the server tests only.
+- **Library lock** (from the backend report): alpyca holds one process-wide lock per HTTP
+  request; a device that accepts TCP and then hangs at the HTTP level can stall the other
+  devices' requests for up to 5 s. The UI stays responsive (the event loop is free) but the
+  other rows may wait.
+- **Clear on a log view** clears the view of the one log store, so every log view is cleared
+  (the server keeps its log; nothing is lost).
+- **Reconnection delay**: after a server restart the event socket retries with a backoff
+  capped at 10 s; "Retry server" reconnects at once.
+- **Observe drawer height** is fixed (216 px).
+- **Settings attention mark** (Q-G11) shows on a fresh configuration, while the observer code
+  and the site can only be set in the Qt app until Settings ships (W2).
+- **`--log-info` token** (INFO tags muted instead of brass, design review): applied in
+  `design/tokens.css` and BRAND 4.1; it departs from the Qt colour mapping, so it needs the
+  owner's sign-off (two lines to revert).
+- **Toolbar wording**: spec 02 section 2.2 keeps the disabled "Equipment ready" button; the
+  summary beside it now only counts ("4 of 4 devices ready"). The owner may prefer the
+  other option of the design review (button "Connect all" with the reason in its tooltip).
+- **WebKit** (the future Tauri webview) is untested; only headless Chrome was used.
+- **Plan**: README section 7 lists A19 and the Planetarium card in W3; they shipped in W1
+  (this section). W3 keeps the Stellarium target-name suggestion.
+
+Fixed during the integration, before the review round (with tests): Disconnect all did not
+stop a running Connect all, which went on connecting the remaining devices
+(`argos/server/hub.py`, `tests/server/test_devices.py`); the log store dropped every line of a
+restarted server as a duplicate, because the new process numbers its lines from 1 again (a
+marker line now separates the two processes); a log view that followed the newest line lost
+it when a drawer shrank the region.
+
+### 4. Review round (2026-11-01): what was fixed
+
+Design review (3 high, 11 medium, 9 low) and technical review (1 high, 4 medium, 3 low).
+Every high and medium finding was fixed; every low one too, except the toolbar wording,
+left to the owner (above).
+
+| Finding | Fix |
+|---|---|
+| Log stopped following when a card above grew (H) | `LogView`: `overflow-anchor: none`; only a scroll the observer makes (wheel, touch, keys, scrollbar) pauses; a scroll caused by layout re-pins a following view. Checked: profile changed by mouse, discovery started, log still at the bottom. |
+| Activity text stuck on "Connecting…" (H) | Server: every outcome sets the activity (connected, the failure, "Equipment ready" / "3 of 4 devices ready · camera failed", discovery found / none / cancelled / failed, frame received, slew finished / stopped, mount lost / reconnected); "Slewing" only while slewing. UI: muted and without "…" once nothing runs. Tests in `test_devices.py`. |
+| Server link lost: screen still claimed "Equipment ready" (H) | Connection: "Last known: n of 4 ready" with a neutral ring, rows without state colours under "Last known · server link lost", Planetarium "No link". Observe prompt reworded to what is drawn ("last frame and readouts received, commands paused"). |
+| Observe used the v1 connection for the mount and the camera (technical H) | `deviceUsable()` per device record: the Mount card, the status bar and `slewing` need the mount connected, capture / live / E / V the camera. Camera only: Mount "—", Tracking and Park disabled; mount only: capture disabled, E sends nothing, prompt "Camera not connected". `protocol.md` corrected. Tests in `model.test.ts`. |
+| Restarted server's lines hidden after a long session (technical M) | Server `boot_id` in `/api/health`, `status` and LogPage; the client restarts its seq space on a new id; fallback heuristic (a lower, unheld seq with a later time) for servers without it. Tests in `log.test.ts`, `test_logs_activity.py`; checked live. |
+| Log views not virtualised (technical M) | Windowed `LogView` (300 lines, 300 more at the top, the line under the eyes kept), version bumps once per frame, one filtered result per (version, filter). Full 5 000-line ring with about 60 lines arriving: 60 fps, longest frame gap 17 ms, about 2 700 DOM nodes (review: 6 fps, 160 000+ nodes). |
+| Connect all left the devices "disconnected" during its address check (technical M) | The server claims every device first (`connecting`, `info: "queued"`): profile locked, events sent, Disconnect all and the row Cancel work from the first moment; queued devices released unopened. Tests: 4 in `test_devices.py`. |
+| Exit criterion: Stellarium Start / Stop missing (technical M) | A19 implemented (`argos/server/stellarium.py`, port of `stellarium_worker.py`; hub, routes, `stellarium` event, 7 tests in `test_stellarium.py`) and the Planetarium card wired. |
+| Status bar overflow on Observe with the link lost (M) | Priority folding (`crowded`), no reserved widths for "—", shorter "Server link lost". Log button inside the bar at 1440 and 1280. |
+| Row action selected the row, brass over the error edge (M) | `Table`: clicks on controls never select; `selectable={false}` for the Devices table; danger edge outermost when a row is both. |
+| Rail dots by colour only (M) | Shapes: filled ready, half running, ring needs attention; the word in the tooltip too. |
+| Warning noise on a fresh config (M) | One "Setup" line (observer code and ASTAP) with one Settings link; the site only in the Instrument card; one Settings link style. |
+| INFO tags in brass (M) | `--log-info: var(--text-muted)` (owner sign-off pending, see gaps). |
+| Compact Segmented cramped (M) | Size `s`: segments sized to their words, 2 px gaps. |
+| L stacked a second log on Connection (M) | Connection has no drawer: `L` (and its [log] switch, and the status-bar Log button there) widens its own log to every topic. |
+| Discovery popover: three brass marks; "host : port" (M) | Radios in `--fg`; addresses "host:port". |
+| Layout moved by discovery and Connect all (M) | The Search row is always there (hint before the first search; compact JobProgress); queued rows are one line. |
+| Seestar red while the simulator is the link (M) | "not in use", idle. |
+| Select brass ring after a mouse pick (M) | 2 px ring with a 2 px offset, border untouched, keyboard only. |
+| Low ones | No roadmap words in reasons; busy Button keeps its label; profile details in mono; LogPanel title in the card style; Devices table aligned with the card; one "check now" glyph next to its caption; spinner stroke 1.5; start-up mark at a fixed height; job snapshot and config answers never overwrite newer events; publish order of log lines fixed under one lock; F1-F5 swallowed under an open menu or dialog. |
+
+Verification of the round (server on port 8742 with temporary `--config-dir`, `--log-dir`
+and `HOME`; vite on 5173; `~/.argos/config.json` untouched):
+
+- `pytest tests/server` 295 passed, `tests/core` 389 passed and 45 skipped; ruff and black
+  clean; `npm run check` 0 errors 0 warnings, `npm test` all passing (282 in `src/lib`),
+  `npm run build` OK.
+- 46 scripted checks in the running UI, all passing (each finding above, the final shots in
+  the three themes at 1440 x 900 and Observatory at 1280 x 800, the server stopped and
+  restarted under the page at both sizes). No request left the machine; the console held
+  only the expected 502s (closed port, port in use) and the socket retries while the server
+  was stopped.
+- Night Red: 0 pixels where green or blue exceeds 72 % of red in the three Night Red shots
+  (the highest ratio, 0.67, is the palette's own `--fg`).
+- Discovery was answered by a local fake responder: it stopped at the broadcast stage, the
+  LAN was never swept.
+
+## Wave 2: Settings (2026-11-02)
+
+Scope (README section 7, row W2): API rows A5, A6, A11, A67 (list only), A81-A84 and the
+site-against-mount check of `web/lab/PROPOSAL.md` section 7 (server, `argos/server/protocol.md`
+"API 2 routes, wave 2"); the shared components SettingsForm, FilePicker, Sheet, Undo toast,
+SupportBundleDialog; the Settings screen with its nine categories, the Help menu items and
+About; the W2 promotions of PROPOSAL section 6 and the BRAND / token amendments of its
+sections 4 and 5 (owner decisions D1-D11, section 10).
+Screenshots: `web/screenshots/2026-11-02_wave2-settings/` (51 shots with captions, taken
+after the review round of section 6: Settings in several categories, the site mismatch, the
+FilePicker, the palette, the support bundle, About, the Help menu, Connection and Observe,
+key hints and the Undo toast; 1440 x 900 in the three themes and 1280 x 800 Observatory).
+
+**Status: wave 2 is complete for its exit criterion, and its design and technical reviews
+are applied (section 6, 2026-11-02).** Every key of 02 appendix A is
+editable in the web UI or deliberately read-only with its reason (section 2 below, checked
+in the running UI), and configuration changes sync live between two open clients (checked
+with two browsers at once). The rows left partial wait for a later wave (the Settings sheets
+over the image need the W4 Catalogue layers popover).
+
+Verification (2026-11-02, server on port 8743 with a temporary `--config-dir`, `--log-dir`,
+`HOME` and sessions folder; vite on 5174; `~/.argos/config.json` (last modified Sep 28) and
+`~/Argos/sessions` untouched). Scripted checks with real input in headless Chrome, all
+passing on the final code:
+
+- Edit every category (23 checks): one value per category written through the UI and read
+  back from `GET /api/config`; refusals shown with the server's words under the field and
+  reverted by Esc (an observer code with "-" "contains characters that are not allowed", a
+  relative ASTAP path "must be an absolute path", a sessions folder in `/System` "not
+  writable", a bad Stellarium host "must be an IP address or a host name"); latitude 95
+  refused, never clamped; comma decimal and grouped input ("58 000") accepted; "does not
+  exist, it will be created" kept under the field; Gaia off makes its depth unavailable
+  with the reason; Comfortable density sets `data-density` and `--row-h` 28 px.
+- Two clients (9 checks, two browsers): a commit in one appears in the other without reload
+  and its header says "Changed in another window: Site name"; a field holding a draft is not
+  overwritten ("Changed elsewhere" + Reload, which then shows the other value); a switch
+  follows; both converge on the server's values.
+- Site against mount (15 checks): the simulator mount (its own site: APC Paris) slewed to
+  RR Lyr, the Settings site set to Berkeley in the UI: the server says mismatch (84.0° between
+  the directions, altitude +22.5°, driver site 8 941 km away); Settings shows both altitudes
+  and azimuths, the difference against the 5° limit and when it was checked; the Connection
+  Instrument card shows the warning line, the status bar "Site ≠ mount", the rail's Settings
+  entry and the Observer & site category need attention, the server logged a WARN; Check now
+  re-checks (trigger manual); the right site agrees (0.0° apart) and the marks go away.
+- Support bundle (9 checks + 8 on the ZIP): opened from the Help menu, it proposes the
+  temporary Desktop with the UTC time in the name, session metadata off and site coordinates
+  out by default; the ZIP is written there; a second one with one session's metadata on the
+  same name asks "Replace?" (409 file_exists) and replaces it. In the ZIP: README, manifest,
+  `logs/argos.log`, `session/session.json`; no token, no home path, no Paris or Berkeley
+  coordinates (the site-check lines read `<redacted-site>`), `ra`, `dec`, `observer`, `site`
+  redacted in the session file, no FITS.
+- Command palette (17 checks): Mod+K opens it (119 commands); "park" ranks Park first,
+  marked CONFIRM; Enter opens the confirmation and the mount does not move; Esc cancels the
+  confirmation only; a second Enter parks; Park then reads "the mount is parked already";
+  "elevation" opens Settings › Observer & site with Elevation focused and the help column on
+  its key; Density: Comfortable applies; "Crosshair" (a key of Observe) opens Observe and
+  toggles it.
+- FilePicker (6 checks): [browse] opens it with the server's places; a place navigates;
+  Choose folder commits the key; `/etc` typed is refused with the server's words.
+- Find a place (9 checks): the job's two browser requests answered by the test (Nominatim
+  and Open-Meteo never contacted): empty query refused before any request; stage and Cancel
+  while it runs; editing the query abandons it (DELETE of the job); the matches with their
+  values; Use as default site writes the four keys in one commit; Undo restores the site.
+- Restore defaults, Reset and Reset all layouts (9 checks): confirmation listing the changes,
+  one commit, Undo; a field's Reset with Undo; Reset all layouts clears the layout keys and
+  keeps the theme, Undo puts them back.
+- Catalogue cache (5 checks): a temporary Gaia cache of 3 files is counted, Clear… asks
+  first (what, where, "nothing is downloaded now"), the files are deleted, the row reads
+  "empty" and a toast gives the count.
+- Coverage walk (exit criterion): every category opened in the UI, Advanced disclosures
+  expanded: 74 keys of the config meta, each editable or read-only with its reason, none
+  without a home; 17 keys `omitted` by the server, each with its reason.
+- No console error except the browser's own lines for the expected 400 / 403 / 404 / 409
+  answers; no request left the machine in any check.
+- Night Red: the 11 Night Red shots pass `scripts/audit-png.mjs` (rules A and B, 0 px).
+  Brass (`--accent` px, Observatory 1440 x 900): Settings categories 291 (rail selection and
+  mark), the palette 0, About 1 734 (the mark), the FilePicker 5 467 (its primary button and
+  the list's focus ring), Connection 3 384 (the enabled Connect all), Observe 2 804 with the
+  mount tracking (the Mount card's Slew primary and Tracking toggle; 847 in the design-system
+  capture with the mount parked; not changed by this wave).
+- `npm run check` 0 errors 0 warnings (499 files, `src/lab` included, unchanged), `npm test`
+  495 passed (44 files), `npm run build` OK (548 kB JS, 177 kB gzip: over Vite's 500 kB
+  warning), `pytest tests/server` 362 passed, `tests/core` 389 passed and 45 skipped, ruff and
+  black clean.
+
+### 1. Mapping rows closed by the wave
+
+| Row | Qt element | Web | Status |
+|---|---|---|---|
+| M5 | Menu More: Documentation & website, Create local support bundle…, About & credits | Help menu of the rail footer: version and API line, Documentation & website (opens the browser, on request), Keyboard shortcuts (?), Command palette (⌘K), Create support bundle… (the shared dialog), About ARGOS (Settings › About, D14) | Done (Quit is desktop only, W8) |
+| M6 | Menu View: sections F1-F5, Reset Window Layout | NavRail F1-F5 (W1); Panels popover Reset layout (W1, Observe); Settings › Appearance Reset all layouts (every section's panels, drawer, rail and card folds, levels strip; theme, density, rotation and settings stay), with Undo (D16) | Done |
+| M14 | About dialog | Settings › About: the mark from `brand/argos-mark.svg` (never redrawn), ARGOS in Plex Sans 600, version · API · Python · platform, description, credits (the server's list from `GET /api/app/info` plus IBM Plex under the OFL, Svelte, uPlot; Tauri in the desktop app, Q-G15), copyright and licence, folders in use, Copy version info (no path, no address), Documentation & website, Source code | Done |
+| M15 | Support bundle flow (5 modal boxes) | One dialog (Help menu, Privacy & diagnostics, palette): what the ZIP holds and what is replaced, crash reports in, site coordinates out, one session's metadata off by default (Q-G17) with a session chooser fed by `GET /api/sessions`; the server writes the ZIP at the chosen path (Desktop by default, UTC time in the name, FilePicker in save mode); existing file: inline "Replace?"; failure inline with the server's words; success toast "ARGOS did not upload it" | Done. "Reveal" (desktop) waits for W8; the browser-download path (`destination: null`, `GET /api/jobs/{id}/download`) is wired in `createSupportBundle` but the dialog always lets the local server write the file, so it was not exercised. |
+| M16 | Theme / appearance | Settings › Appearance: theme (live), Comfortable density (owner D7: `data-density` on `<html>`, tokens only, applied before the first paint, per viewer), image rotation (per viewer), Reset all layouts; the rail footer's quick toggle (W1); theme and rotation seeded once from the Qt keys (Q-G6) | Done |
+| M27 | `ConfigurationPage` | Settings screen: category list (208 px, `↑ ↓ Home End`, attention ring), filter over every category (`/`; label, help, key, unit, use; mirrored keys shown once), form (max 880 px) with a 44 px header ("Saved · Latitude" for 2 s, "Changed in another window: …"), Restore defaults… (Q-C6, confirmation + Undo), "About this setting" column at ≥ 1440 px (Q-C8: key, default, now, range, used by) | Done. The header shows "Saved" and remote changes; a refusal stays under its field only (02 2.4 also asks for it in the header). |
+| M28 | Settings › Observatory | Observer & site: observer name, AAVSO code (upper-cased); default site (signed 5 decimals, comma or point decimal); the site-against-mount panel; Find a place (cancellable `site_search` job, matches as a radio list with their values, Use as default site = one commit, Undo); Saved sites table (Default chip, Set as default, Remove with Undo, Save current replaces a site of the same name) | Done. The real Nominatim / Open-Meteo path was never contacted (the UI was checked with the job answered by the test, the server with a fake HTTP getter). |
+| M29 | Settings › Equipment · camera | Instrument: the profile as a read-only mirror with the server's lock reason and "Change on Connection" (D28); specs with ADC depth; Sensor limits as overrides with the profile's values as placeholders (Q-C1); calibration folder; Advanced: access-point address, ADC depth (read-only, shows what is in effect), the electron gain table editor; the two legacy Qt keys (read-only mirrors) in a closed "Qt app compatibility" disclosure | Done |
+| M30 | Settings › Astrometry | Plate solving: ASTAP status from A81 (program, database, `-D` / `-d` flags; re-read after every change of the ASTAP keys, from any client), executable (FilePicker, executable mode), database folder, database set (unavailable while a folder is set, Q-C9), radius, downsample, scale hint, grid spacing; Advanced: the four live-solve keys | Done |
+| M31 | Settings › Catalogues · data | Catalogues (bundled catalogue A84, budget, VSX, Gaia with the depth presets bound both ways, context layers, SIMBAD, NASA); Instrument (calibration folder); Data & storage (presets, the five caches); Privacy & diagnostics (diagnostic records) | Done |
+| M32 | Settings › Files · application | Data & storage (sessions folder), Appearance (theme), Privacy & diagnostics (log level, applied live by the server), About; Language dropped (Q-G12) | Done |
+| M33 | Cache clear `QMessageBox.question` | ConfirmDialog "Clear the … cache?" (what and where, "nothing is downloaded now"), Cancel / Clear cache (danger); `DELETE /api/caches/{kind}`; toast with the file count | Done (checked on a temporary Gaia cache of 3 files: counted, confirmed, deleted, the row reads "empty"; Clear… is unavailable with "the cache is empty" on an empty cache) |
+| M34 | Settings file pickers (10 sites) | In-app FilePicker on every path key (folder, executable modes) and on the cache locations (a file cache keeps its file name: the folder is chosen, never a save dialog, 02 1.10 #7) | Done |
+| M35 | `AstrometrySettingsDialog`, tab Plate solving | Settings › Plate solving | Partial: "also opened as a sheet from Observe / R2" needs the Catalogue layers popover (W4); the Sheet component is ready |
+| M36 | Same dialog, tab Field catalogue + Save / Cancel | Settings › Catalogues (+ Photometry for the automatic comparison count); immediate apply | Partial: same sheet entry point (W4) |
+| M37 | ASTAP binary picker | FilePicker, executable mode | Done |
+
+API rows wired by the UI: A5 (dialog), A6 (Privacy › crash reports line), A11 (FilePicker),
+A67 (support-bundle session chooser), A81 (Plate solving, the Connection Setup line), A82
+(Find a place), A83 (caches table), A84 (bundled catalogue); the site check
+(`status.site_check`, `site_check` events, `GET` / `POST /api/site/check`).
+
+### 2. Exit criterion: every key of 02 appendix A and its web control
+
+"Editable" = a working control that commits one `PATCH /api/config` (refusals in the
+server's words); "read-only" = shown with the reason; "omitted" = not in the server's meta,
+listed in `ConfigSnapshot.omitted` with the reason (`argos/server/config_meta.py` OMITTED).
+Checked by walking every category in the running UI (section above, coverage walk).
+
+| Key | Web control | Status |
+|---|---|---|
+| `alpaca.host` | Connection › Link "Seestar address" (W1); in the Settings filter: shown, "Set on the Connection screen (F1)" | Editable (Connection) |
+| `alpaca.port` | Connection › Link "Alpaca port" | Editable (Connection) |
+| `sessions_path` | Data & storage › Folders "Sessions folder" (FilePicker; "will be created" / "not writable") | Editable |
+| `data_paths.sequence_presets_directory` | Data & storage › "Sequence presets" | Editable |
+| `data_paths.camera_calibration_directory` | Instrument › "Photon-transfer calibrations" | Editable |
+| `data_paths.object_catalogue_cache` | Data & storage › Catalogue caches "Target names cache": location (folder picker, file name kept), Reset, Clear… | Editable |
+| `data_paths.exoplanet_cache` | same, "Transit ephemerides cache" | Editable |
+| `data_paths.aavso_cache_directory` | same, "Variables cache" | Editable |
+| `data_paths.gaia_cache_directory` | same, "Field stars cache" | Editable |
+| `data_paths.field_catalogue_cache_directory` | same, "Field identities cache" | Editable |
+| `observer.name` | Observer & site › "Observer name" | Editable; personal (no Reset, not restored) |
+| `observer.obscode` | Observer & site › "AAVSO observer code" (upper-cased; letters and digits) | Editable; personal (no Reset, not restored) |
+| `observer.latitude`, `.longitude`, `.elevation` | — | Omitted: legacy keys, migrated to `site.*` on load |
+| `site.name`, `site.latitude`, `site.longitude`, `site.elevation` | Observer & site › Default site: Site name, then one Position row (+ site check, Find a place, Saved sites › Set as default) | Editable; personal (no Reset, not restored) |
+| `site.favorites` | Observer & site › Saved sites table | Editable |
+| `ui.log_level` | Privacy & diagnostics › "Log level" (applied live) | Editable |
+| `ui.window_state`, `ui.window_geometry` | — | Omitted: dead defaults (Q-C7) |
+| `ui.theme.preset` | Appearance › Qt app compatibility "Qt app theme"; the web theme is per viewer (Appearance › Theme, rail toggle), seeded once from it (Q-G6) | Editable |
+| `ui.language` | — | Omitted: no translation (Q-G12) |
+| `ui.display.rotation` | Appearance › Qt app compatibility "Qt app image rotation"; the web rotation is per viewer (Appearance › Image rotation, Observe levels strip), seeded once | Editable |
+| `ui.shell.geometry`, `ui.shell.state`, `ui.shell.mode` | — | Omitted: Qt window state |
+| `ui.imaging.layout`, `ui.sequencer.layout`, `ui.review.layout` | — | Omitted: Qt dock layouts |
+| `hardware.profile` | Connection › Instrument "Telescope" (locked while equipment holds the link, D28); Settings › Instrument mirror | Editable (Connection); read-only in Settings with "Disconnect the equipment before changing the telescope…" / "Changed on the Connection screen…" |
+| `hardware.overrides` (`full_well_adu`, `linearity_max_adu`) | Instrument › Sensor limits (empty = the profile's value, shown as the placeholder) | Editable |
+| `hardware.overrides.ap_host` | Instrument › Advanced "Access-point address" | Editable |
+| `hardware.overrides.adc_bits` | Instrument › Advanced "ADC depth" | Read-only: "The ADC depth is the sensor's, set by the telescope profile." (Q-C1) |
+| `camera.adc_bits` | — | Omitted: deprecated, no reader (Q-C7) |
+| `camera.full_well_adu`, `camera.linearity_max_adu` | Instrument › Qt app compatibility ("Qt app saturation", "Qt app linearity limit") | Read-only: they follow the overrides so the Qt app reads the same value (Q-C1) |
+| `camera.egain_table` | Instrument › Advanced "Electron gain table" (add a gain / e⁻/ADU pair, remove with Undo) | Editable |
+| `astrometry.astap_path` | Plate solving › "ASTAP executable" (FilePicker, executable; empty = auto-detect) | Editable |
+| `astrometry.database` | Plate solving › "Database set" | Editable; unavailable while a database folder is set (Q-C9) |
+| `astrometry.database_path` | Plate solving › "Star database folder" | Editable |
+| `astrometry.downsample`, `.search_radius_deg`, `.use_scale_hint`, `.grid_spacing_arcmin` | Plate solving › Solving | Editable |
+| `astrometry.live_search_radius_deg`, `.live_resolve_s`, `.live_resolve_arcmin`, `.live_timeout_s` | Plate solving › Advanced (Q-C4) | Editable |
+| `catalog.mag_limit`, `.max_results`, `.include_suspected` | Catalogues › Variable stars · AAVSO VSX | Editable |
+| `catalog.field_stars_enabled`, `.field_stars_mag_limit`, `.field_stars_detected_only` | Catalogues › Field stars · Gaia DR3 (+ depth presets) | Editable; depth and detected-only unavailable while Gaia is off |
+| `catalog.field_stars_max_results` | — | Omitted: dead (Q-C7) |
+| `catalog.identification_max_objects` | Catalogues › Identification budget (segmented 100 … 1 600) | Editable |
+| `catalog.display_mag_limit` | Appearance › Observe display "Display depth" (the Observe overlay slider is W4) | Editable |
+| `catalog.display_limit_version` | — | Omitted: internal migration marker |
+| `catalog.show_essential_objects`, `.show_cached_exoplanets` | Catalogues › Context layers | Editable |
+| `catalog.named_objects_enabled` | Catalogues › Named objects · SIMBAD | Editable |
+| `catalog.named_objects_max_results` | — | Omitted: dead (Q-C7) |
+| `catalog.named_objects_allow_network` | Catalogues (+ Privacy › Online services mirror) | Editable; unavailable while SIMBAD is off |
+| `catalog.exoplanet_hosts_enabled` | Catalogues › Exoplanet hosts · NASA | Editable |
+| `catalog.exoplanet_hosts_allow_network` | Catalogues (+ Privacy mirror) | Editable; unavailable while hosts are off |
+| `photometry.aperture_fwhm_mult`, `.aperture_min_px`, `.annulus_in_px`, `.annulus_out_px` | Photometry › Apertures | Editable |
+| `photometry.auto_comparisons`, `.comparison_min_snr`, `.comparison_max_delta_mag`, `.comparison_max_separation_arcmin` | Photometry › Comparison stars | Editable |
+| `photometry.default_band` (a list of AAVSO codes), `.systematic_floor_mag` (empty = derived), `.track_apertures` | Photometry › Reports and errors | Editable |
+| `photometry.read_noise_e`, `.min_comparisons`, `.comparison_validation_min_points`, `.comparison_validation_max_scatter_mag`, `.comparison_validation_max_formal_error_mag` | Photometry › Advanced (Q-C4) | Editable |
+| `diagnostics.enabled` | Privacy & diagnostics › Local records | Editable |
+| `diagnostics.local_opt_in_v1` | — | Omitted: internal marker, written by the server with `diagnostics.enabled` |
+| `stellarium.host` | Connection › Planetarium "Host" (shown); Privacy & diagnostics › Network exposure (editable, with the server's warning for a non-loopback address, Q-C3) | Editable |
+| `stellarium.port` | Connection › Planetarium "Port" | Editable (Connection) |
+| `stellarium.online_target_lookup` | Connection › Planetarium checkbox (+ Privacy › Online services mirror) | Editable |
+| `imaging.star_radius_px` (new, not in appendix A) | Appearance › Observe display "Star aperture" | Editable |
+
+### 3. PROPOSAL section 6, W2 promotions
+
+| Lab source | In `web/src/lib` | Status |
+|---|---|---|
+| three `format.ts` | `format/number.ts` (+ `time.ts`) | Done (design-system role); used by every screen (D5) |
+| `research/tokens.ts`, `charts/core/palette.ts` | `charts/ink.ts` (+ `charts/text.ts`) | Done (design-system role) |
+| `Ctl.svelte`, `Ring.svelte` | `components/Control.svelte`, `Ring.svelte`; `IconButton` / `Button` as thin wrappers | Done (components role) |
+| `tip.ts`, `TipStatic.svelte` | `components/tooltip.ts` v2, `TooltipStatic.svelte` | Done (components role) |
+| `hints.svelte.ts` | `app/keyhints.svelte.ts` | Done (components role) |
+| `Chip.svelte` | `components/StatusBadge.svelte` (badge, hud, bar, alert; levels) | Done (components role); the status bar's "Site ≠ mount" uses the bar variant |
+| `ScrubField`, `Stepper`, `Slider`, `values.ts` | `components/NumberField.svelte` v2, `Stepper`, `Slider`, `values.ts` | Done (components role); scrubbing by the label only (dial tape and Pointer Lock: W3) |
+| `workspace/ui/Readouts.svelte` + density tokens | `components/Readouts.svelte`; Comfortable density in Appearance | Done; the component is promoted but no screen uses it yet (the Mount card keeps its own grid on `--readout`) |
+| `CommandPalette.svelte`, `commandIndex.ts`, `model/commands.ts` | `shell/CommandPalette.svelte`, `shell/commandIndex.ts`, `shell/commands.ts` | Done (this role): the app's registry (new `canTrigger` / `trigger`), sections, Settings categories and every config key, the hardware actions with their confirmation and reasons, Appearance, Help; tighter ranking (scattered subsequences dropped); `palette.open` (Mod+K) is no longer `planned` |
+| capture scripts, `audit-png.mjs`, `behave.mjs` | `web/scripts/audit-png.mjs` (CI gate, tests), `capture-lab.mjs` | Partial (design-system role): the lab capture scripts are wrapped, not merged into one shot format; `behave.mjs` keeps its hard-coded port |
+| small changes | `Card` summary slot, canvas text helpers, W / Mod+K / Alt+1-4 in `keymap.ts` | Done |
+| sections 4 and 5 | BRAND.md amendments, PROPOSAL tokens, D8 sizes | Done (design-system role). This wave changed the stacking tokens (`--z-modal` 100 under `--z-popover` 200 and `--z-tooltip` 300) so that a Select, menu or tooltip opened from a dialog or a sheet shows above it |
+
+### 4. Fixed during the integration (found in the running UI)
+
+- A Select (the support bundle's session chooser) opened behind its dialog: list boxes,
+  menus, popovers and tooltips were stacked under the modal layer (`tokens.css`).
+- Two places naming the same folder (the presets folder set to the Desktop) crashed the
+  FilePicker (Svelte `each_key_duplicate`): places are now deduplicated (`filepicker.ts`,
+  test).
+- A visually hidden label inside the Settings form grew the document by 112 px, so a
+  `scrollIntoView` scrolled the whole shell 32 px up: the form's scroller is now positioned.
+- The unit of a number field ("× FWHM") overlapped the value: the field keeps room for the
+  unit's length (`NumberField`).
+- Tables ignored Comfortable density (`Table` set its own `--row-h`).
+- Switch rows reserved an empty status line: their "Saved" now sits beside the label
+  (`SettingField`), so a switch row is one line plus its help.
+- The Connection Setup line said "ASTAP is not set" while ASTAP was found on PATH (A81 is
+  now read at every connection and after a change of the ASTAP keys).
+- Levels black / white values were not grouped (`1721` beside `1 662–2 008`).
+- Info toasts spent brass; the Undo queue now shares the toasts' column (no overlap).
+- Server (with tests and `protocol.md`): `KeyMeta.path_kind` is sent, so the picker opens in
+  the mode the server validates (`exe`, `file`, `dir`); the observer-facing read-only reasons
+  no longer name a route or a decision code; the two Qt-app appearance keys are labelled
+  "Qt app theme" / "Qt app image rotation" (they sat beside the web's own Theme and Image
+  rotation); the identification budget option reads "1 600" (U+202F, BRAND 5), not "1,600".
+
+### 5. Known gaps and issues (before wave 3)
+
+Updated after the review round (section 6). Closed by it: the transient site-check WARN while
+a site is typed (the server now waits until the site is unchanged for 2 s), paths cut at the
+end (middle cut), Restore defaults clearing the observer code and the site (personal keys),
+the Observe brass with the mount tracking (2 804 -> 1 151 `--accent` px).
+
+- **Settings sheets over the image** (D12; M35, M36): the Sheet component exists, the
+  entry point (Catalogue layers popover) comes with W4.
+- **Online services never contacted**: place search was checked with its job answered by the
+  test and the server's fake HTTP getter; the real Nominatim / Open-Meteo requests, their
+  timings and error texts are untested.
+- **Real Seestar**: whether its Alpaca driver exposes `SiteLatitude` / `SiteLongitude` is not
+  verified; the simulator does.
+- **Observer & site at 1 280 x 800** with a mismatch shown scrolls about 90 px (fits at
+  1 440 x 900, the reference of 02 2.4); Catalogues and Photometry scroll at both sizes, as
+  02 2.4 allows. Only the site got a compound row; the Photometry apertures could take one
+  too ("r 2.50× FWHM · floor 4.0 px · sky 8.0-12.0 px").
+- **Settings header**: shows "Saved" and changes made elsewhere; a refusal stays under its
+  field only (02 2.4 also asks for the header).
+- **Comfortable density**: Mount readouts, card values, frame statistics, table rows and log
+  lines follow it; the levels' number fields, the Devices table rows and `--readout-key`
+  (no screen uses Readouts.svelte yet) do not.
+- **Brass**: FilePicker 2 548 and support bundle 2 721 `--accent` px (their primary buttons
+  and the first checkbox's focus ring), Connection 3 384 (the enabled Connect all); the
+  mismatch adds 637 `--warning` px on Settings (bar, chip, rail and list marks), close to the
+  review's 600 target.
+- **Support bundle**: the browser-download path is implemented but not exercised; "Reveal"
+  waits for the desktop app (W8). Redaction of free text is best effort (1-decimal and
+  degrees-minutes-seconds writings are not recognised).
+- **Documentation**: no local offline copy (Q-G8 asks for one).
+- **Keyboard table** of README 3.10 not updated: ⌘K (palette) and `/` (Settings filter) are
+  now active; Undo has no Mod+Z.
+- **Bundle size**: 561 kB of JS (181 kB gzip), over Vite's 500 kB warning; Settings could be
+  split into its own chunk.
+- **Parsing**: "60,000" is read as 60 000 in a whole-number field and refused as ambiguous in
+  a decimal one ("Write 60 000 or 60.000"); a French observer typing "2,500" for 2.5 in a
+  decimal field gets that refusal too (by design: never a silent factor of 1 000).
+- **WebKit** (the future Tauri webview) and screen readers untested; headless Chrome only.
+- The status bar's "Site ≠ mount" item is a stand-in until the attention system (W6).
+
+### 6. Review round (2026-11-02): what was fixed
+
+Design review (22 findings) and technical review (11 findings), all applied; nothing
+skipped. High first.
+
+- **Command palette ran another command than the one highlighted** (high): the highlight,
+  `aria-activedescendant`, hover and Enter now share one index in display order
+  (`layoutGroups`, `shell/commands.ts`); the empty field opens on the first row that moves no
+  hardware. Tests: `commands.test.ts` (highlight == executed for an empty field, a query,
+  recent rows); live: 3 x ArrowDown highlights Review and Enter opens Review.
+- **Reset moved the site to 0°, 0°** (high): the server's meta has `personal` (observer name
+  and code, site name, latitude, longitude, elevation); those rows have no Reset and no
+  "changed" mark, Restore defaults leaves them alone, the help column says "Default: None:
+  your own value" (`test_personal_keys_are_the_observer_and_the_site`).
+- **Commit model lost commits made while a value was in flight** (medium): one request at a
+  time, the newer commit queued and sent after the answer, a draft typed meanwhile kept
+  (`commit.svelte.ts`; the reviewer's three cases plus supersede and Esc in
+  `commit.test.ts`).
+- **"60,000" saved as 60** (medium): `parseNumber(text, { integer })` reads it as 60 000 in a
+  whole-number field; a decimal field refuses it as ambiguous (`ambiguousComma`); Stepper
+  parses as integers (`number.test.ts`; live: Saturation "60,000" saves 60 000).
+- **Observer & site scrolled at 1 440 x 900** (medium): one Position row (latitude,
+  longitude, elevation side by side, `SitePosition.svelte`), one line of help per row where the
+  help column shows it in full, compact row padding, the mismatch verdict in one paragraph:
+  773 / 773 px. Privacy at 1 280 x 800 fits too.
+- **Forms read as a database dump** (medium): controls sized by content (numbers about 12 ch
+  plus the unit, codes 12 ch, names 280 px, paths full width), no rule per row (rules between
+  groups), Reset on row hover or focus (keyboard reachable), a small neutral dot after the
+  label for "changed" instead of the left bar (also PrefRow).
+- **One alert, four looks** (medium): the mismatch uses the upright Attention mark everywhere
+  (category list, intro list via StatusBadge, rail Settings entry, Connection callout, status
+  bar); the ring stays for info (no AAVSO code). The site panel lost its brass-looking
+  `--warning` frame (3 101 -> 996 brass-family px on Settings).
+- **Device and server words cut off** (medium): refusals, reasons and warnings wrap to three
+  lines in NumberField, Stepper, CommitTextField and SettingField.
+- **D5 grouping and range notation** (medium): NumberField groups by default (ports opt out),
+  every numeric key groups from 1 000, saved-site elevations too; `formatRange` / `betweenText`
+  give "−90° … +90°", "1 … 3 600 s"; refusals read "Latitude must be between −90° and +90°";
+  ° ′ ″ sit against the number in values, ranges and unit slots; the Dec echo is signed.
+- **Help leaked config keys, Qt clutter** (medium): help in the observer's words (no key, no
+  JSON, no route: `test_no_observer_facing_text_names_an_api_route`), the read-only refusal
+  reuses the reason; the Qt copies and the Qt theme / rotation in one closed "Qt app
+  compatibility" disclosure; ADC depth reads "12 bit · from the telescope profile".
+- **Comfortable density barely applied** (medium): new tokens `--readout-s` (13 / 16 px) and
+  `--log-row-h` (20 / 24 px) for the Camera facts, the frame statistics and log lines (BRAND
+  amended); the Appearance help says exactly what changes.
+- **Slew always brass** (medium): primary only for a target farther than 0.01° from the
+  pointing (Observe 2 804 -> 1 151 `--accent` px).
+- **Paths cut at the end** (medium): `middleEllipsis` (`format/path.ts`, tested) through a
+  `middlePath` action on path fields, the support bundle's Save to and the FilePicker's path;
+  the full path in the token tooltip, raw on focus.
+- **Key hints only on Observe** (medium): `KeyHint.svelte` caps on the rail entries, the Help
+  button, the Settings filter; `KeyHintBanner.svelte` shows ⌘K and ? above the status bar.
+- **FilePicker brass ring** (medium): no region ring; the active row carries the focus, a
+  neutral edge when none is active (5 467 -> 2 548 px).
+- **Undo toast over the row actions** (medium): on Settings the toasts' column sits at the
+  bottom left of the form.
+- Low: draft words by context ("Not saved · ↵ saves" in Settings, "Not sent · ↵ sends" on
+  devices); site check alt / az with 2 decimals and the mount's site with 5; "ARGOS" in all
+  copy; AAVSO band a list of AAVSO codes (server `options`); About actions equal secondary
+  buttons and "macOS 26.5"; "Restore the Catalogues defaults?"; the palette's confirm button
+  shows Enter as a key cap; the identification budget a segmented 100 … 1 600.
+- Server, technical review (low): the site-check log never says "agrees" when the verdict is a
+  mismatch through the driver site; numeric JSON coordinates are redacted in session files;
+  a NUL byte in a path is 400, not 500; a folder destination is refused and ".zip" appended,
+  never swapped (server and client); the accuracy claim reads 0.01° for coordinates of date,
+  about 0.4° for J2000, with a 120-direction astropy sweep in the tests; a path typed in another
+  letter case on macOS is respelled from the disk (`samefile`-checked, never widens the
+  roots); cache Clear deletes only the hash-named files each cache writes (the field
+  identities only in `simbad/` and `nasa/`); `compactCount`, `seconds` and grouping of
+  exponent forms fixed. Also: the site check runs once the site is unchanged for 2 s.
+
+Verification of the round (server on 8744 and vite on 5175 with temporary `--config-dir`,
+`--log-dir`, `HOME`, `TMPDIR` and sessions folder; stopped afterwards; `~/.argos/config.json`
+still last modified Sep 28, `~/Argos/sessions` untouched):
+
+- `npm run check` 0 errors 0 warnings (506 files, `src/lab` compiles unchanged), `npm test`
+  515 passed (45 files), `npm run build` OK; `pytest tests/server` 375 passed, `tests/core`
+  389 passed and 45 skipped; ruff and black clean.
+- Fix checks in headless Chrome (`check-fix.cjs`, 32 of 33 pass; the one failure is Observer
+  & site at 1 280 x 800, section 5): palette highlight == Enter (empty field, arrows, hover),
+  Park confirmation, no Reset on personal keys, every category's height, Restore defaults,
+  the help column, "60,000" in both kinds of field, the range refusal, the path middle cut,
+  key hints, the attention marks. The integration's sync (9/9), edit (23/23, adapted to the
+  band list) and restore (9/9, new dialog title) checks pass again.
+- 51 screenshots read; 9 Night Red shots pass `scripts/audit-png.mjs` (rules A and B, 0 px);
+  no console error and no request off the machine in any capture.
+
+## Wave 3: Observe, acquisition (2026-11-08)
+
+Scope (README section 7, row W3): API rows A19-A31 and A34-A41 (server,
+`argos/server/protocol.md` "API 2 routes, wave 3"); the shared components of the row
+(segmented filter control, jog pad, `VCurvePlot`, `ConditionsTimeline`, HUD chips); the
+Camera, Mount and Focuser cards, the Conditions drawer tab, the Open FITS dialog, the
+status-bar frame and HFD segments, the Planetarium card's target-name suggestions; the
+mapping rows M4, M38-M43, M48-M49, M59-M67; the W3 rows of `web/lab/PROPOSAL.md` section 6
+and its "before W3" icon row; the owner decisions D1 (task modes, Framing and Focus), D4
+(Park by hold), D6 (cursor readout on the image), D8 (sizes), D9 (queued focuser taps) and
+D11 (data ramps, hatching).
+The wave was built by four roles (server, controls and instruments, workspace and charts,
+integration) after a first start was stopped; the integration wired the screen end to end.
+Screenshots: `web/screenshots/2026-11-08_wave3-observe/` (40 shots with a manifest:
+10 scenes at 1 440 x 900 in the three themes and at 1 280 x 800 Observatory), retaken
+after the review round (section 6).
+
+**Status: wave 3 is complete for its exit criterion and reviewed** (section 2, checked
+through the real UI against the simulator; the design, technical and science reviews were
+applied, section 6). Rows left partial wait for a later wave or a core change (section 5).
+Not committed: the owner reviews it first.
+
+Verification after the review round (2026-11-08, server on port 8746 and vite on 5177 with
+a temporary `--config-dir`, `--log-dir`, sessions folder, `HOME` and `TMPDIR`, simulator;
+`~/.argos/config.json` untouched, nothing written to `~/Argos/sessions`; `argos/ui`,
+`argos/workers`, `argos/core` unchanged):
+
+- End-to-end through the UI (`e2e.mjs`, the integration's checks plus three for the fixes:
+  a Light refused on the Dark slot, plain Stop unavailable during autofocus, the jog after
+  closing and reopening its section): **64 of 64 pass**, no page error.
+- FITS headers of the four frames saved through the UI: **80 of 80 checks pass** against
+  `FITSWriter` fed the same inputs (`fits_compare.py`).
+- `.venv/bin/python -m pytest -q`: **1 171 passed, 71 skipped** (1 154 before the review
+  round; 17 new server tests); ruff and black clean.
+- `npm run check` 0 errors, 0 warnings (579 files); `npm test` **646 passed** (59 files);
+  `npm run build` OK (JS 750 kB, 244 kB gzip).
+- Night Red audit: the 10 Night Red originals pass rules A and B with 0 px. Brass, accent
+  px at DPR 2, 1 440 Observatory: Framing live 4 382 (was 5 848), Park hold 4 028 (5 343),
+  wheel moving 3 878, AF progress 2 515, AF done 2 859, Conditions 2 873, Dark refused
+  5 397 (focus ring and tooltip), GoTo suggestions 7 689 (focused field), Open FITS 7 266
+  (the dialog's primary button), jog active 9 368 (17 629: the armed pad edge and the held
+  key remain, Slew no longer turns primary).
+
+The integration's verification follows (it is kept as the record of that phase).
+
+Verification (2026-11-08, server on port 8745 with a temporary `--config-dir`, `--log-dir`,
+sessions folder, `HOME` and `TMPDIR`, simulator; vite on 5176; `~/.argos/config.json`
+untouched, `~/Argos/sessions` only read: one raw frame copied into the temporary HOME for
+Open FITS, no personal metadata printed):
+
+- End-to-end, real keyboard and pointer input in headless Chrome (`e2e.mjs`): **61 of 61
+  checks pass**, no page error. GoTo by name, Take shot (Light, Dark, during live view),
+  the Dark-slot refusal, autofocus run / stop / halt, focuser Go to refusals, the
+  Conditions tab, jog (key-up, diagonal, blur, lost renewals, Escape, closed socket), Open
+  FITS (refused calibrated frame, opened raw frame), Park (tap, keyboard confirmation,
+  700 ms hold), the Stellarium suggestion on both cards, the command palette.
+- FITS headers: **80 of 80 checks pass** on the four files of the run (two Lights, one taken
+  during live view, two Darks), against what was asked and against a header rebuilt with
+  `argos.core.imaging.fits_writer.FITSWriter` from the same inputs (section 2).
+- `npm run check` 0 errors, 0 warnings (576 files, `src/lab` included); `npm test` 629
+  passed (58 files); `npm run build` OK (JS 740 kB, 241 kB gzip: still over Vite's 500 kB
+  warning; the frame-statistics worker is its own 2 kB chunk, no lab code in `dist`);
+  `.venv/bin/python -m pytest -q` (temporary HOME and TMPDIR): 1 154 passed, 71 skipped
+  (1 039 before the wave; the integration added one focuser test); ruff and black clean on
+  `argos/server` and `tests/server`.
+- 40 screenshots read; Night Red and brass audits in section 4.
+
+### 1. Mapping rows closed by the wave
+
+| Row | Qt element | Web | Status |
+|---|---|---|---|
+| M4 | File menu: Open FITS image… (⌘O) | Toolbar `open-image` and ⌘O from any section open the in-app FilePicker (FITS types first); the file opens into Observe | Done for Open FITS. ⌘⇧O (Review R0) is W7, Quit (desktop) W8. |
+| M38 | `ImagingPage` | Observe screen with the task modes (D1): Framing and Focus; Field and Run listed, unavailable, and say which wave brings them | Done for Framing and Focus; Field W4, Run W5-W6 |
+| M39 | `ImageToolbar` (Open image, Preview, Palette, caption) | `open-image` in the toolbar; caption in the tooltip | Partial: Preview (Colour / Raw / R / G / B) and Palette go to the Display options with the W4 palettes |
+| M40 | Panel-toggle strip | Arrange popover per mode (cards Open / Folded / Hidden, band, drawer, rail width) + card fold | Done |
+| M41 | "Panels ▾" menu | Arrange popover | Done |
+| M42 | "Arrange ▾" + Reset layout | Reset per mode and for all modes, with Undo; Float / Dock dropped (D27) | Done |
+| M43 | 8 docks | Rail cards Camera, Mount, Focuser; band Levels + exposure check (Framing) and V-curve + HFD trend (Focus); drawer tabs Conditions, Log | Done for wave 3; Statistics card W4, Light curve W5 |
+| M48 | Context bar under the image | Status-bar Frame segment (number, saved or opened file name) and run chip (LIVE, AF n/N, Wheel → Dark, exposing) | Done |
+| M49 | Open FITS `QFileDialog` | FilePicker "Open FITS image": raw 16-bit frames only; a refusal stays in the dialog in the server's words; live view stops first (Q-O11) | Done |
+| M59 | `CameraDock` | Camera card: exposure and gain within the driver's limits (one `PUT /api/camera/settings` per commit, never clamped), frame type, filter (wheel or metadata only), Sensor disclosure (offset, binning), sensor °C, the frame in progress vs the next frame, the owner in one line | Done except Preview quality (Q-O14: replaced by a client stream decimation that is not built). HFD and stars are in the status bar and the band (D18, one home per value). |
+| M60 | `MountDock` | Mount card: readouts, tracking + rate (read back), Park by hold, Object field (offline names, resolve, Slew sends the object with its name), coordinates, Abort, the clock guard, the Stellarium suggestion, the Jog section | Done except the Solved-field row (Centre, Sync: W4) |
+| M61 | Park confirmation box | HoldButton (700 ms ring) + inline confirmation from the keyboard (D4) | Done |
+| M62 | `FocuserDock` | Focuser card: gauge, queued taps (D9), Go to bounded by MaxStep, Autofocus / Stop AF (returns to the start), Halt always; unfolds when autofocus starts | Done |
+| M63 | `VCurveWidget` | `VCurvePlot` in the Focus band, and in the Focuser card when the band does not show it | Done |
+| M64 | `HfdHistoryDock` | Conditions drawer tab | Done; "Copy data (TSV)" and the lab's time pan are not promoted (section 5) |
+| M65 | `MetricsPanel` | Conditions tab (Observe) | Done for Observe; the Review facet is W7 |
+| M66 | `ManualControlDialog` | Jog section of the Mount card + J arms the arrow keys + server dead-man (D23) | Done |
+| M67 | Dock chrome | Card fold per mode, P, D, drawer tabs | Done |
+
+API rows A19-A31 and A34-A41 are all used by the UI (A32-A33, Centre and Sync, are W4).
+Wave 1 gaps closed: the Alt-Az / EQ chip of the status bar (A29), the Stellarium
+target-name suggestion (A20), the `observation`, `stellarium` suggestion and wave-3
+snapshot events (M19).
+
+### 2. Exit criterion and its evidence
+
+**Take shot writes correct FITS metadata (S1-S3 fixed).** Four frames written through the
+UI (Take shot button, E during live view), each compared by `fits_compare.py` with what
+was asked and with a reference header built by `FITSWriter.write` from the same inputs, as
+`AcquisitionEngine._save_fits_async` does (`acquisition_engine.py:1811-1898`): pointing and
+camera reads taken from the file, everything else from the request; QA values recomputed
+on the saved array. Same keys in the same order and same values for all four (time-derived
+MJD and Moon keys within 1 ms, DATE-OBS being stored to the millisecond).
+
+| Check | Light | Dark | Dark (wheel was on LP) | Light during live view |
+|---|---|---|---|---|
+| EXPTIME / GAIN / OFFSET | 2.0 / 80 / 10 | 2.0 / 80 / 10 | 2.0 / 80 / 10 | 2.0 / 80 / 10 |
+| IMAGETYP | Light Frame | Dark Frame | Dark Frame | Light Frame |
+| FILTER (read back, S3) | IR | Dark | Dark | IR |
+| OBJECT (D11) | M 13 | M 13 | M 13 | M 13 |
+| DATE-AVG − DATE-OBS | 1.001 s | 1.000 s | 1.004 s | 1.003 s |
+| RA / DEC / ALT / AZ / AIRMASS (X1) | present | present | present | present |
+| TARGRA / TARGDEC | the GoTo target (16.695 h, +36.46667°) | same | same | same |
+| SITE* (X2, no site set) | absent | absent | absent | absent |
+| HFD, NSTARS, SKYLEVEL, FWHM, ECCENTR (S20) | = recomputed | = recomputed (FWHM, ECCENTR absent: no star) | same | = recomputed |
+| Median (light blocked?) | 2 000 | 1 600 (pedestal) | 1 600 | 2 000 |
+
+S1 in the UI: with Dark chosen, the Camera card says the wheel turns to Dark first; a Take
+shot then shows `waiting_for: filterwheel` ("Wheel → Dark" run chip) and the server logs
+"Filter → Dark for the Dark Frame (the Seestar has no shutter)." While the wheel turns to LP
+the server refuses a Dark (409 "The filter wheel is moving to 'LP' — wait for it, then take
+the Dark Frame."), and the UI says so before the press (Take shot unavailable, the card's
+line) and on the press (tooltip reason); once the wheel has settled on LP the same Take
+shot is accepted: the wheel turns LP → Dark, then the frame is exposed and saved with
+FILTER Dark. S2 (settings frozen per frame) and the frame-exposed-while-the-wheel-turned
+rule are covered by the server tests (`tests/server/test_take_shot.py`).
+
+**Autofocus runs, cancels and halts cleanly** (simulator V-curve minimum 5 300 steps):
+
+- Run: Autofocus in the toolbar (Focus mode) → the button becomes "Stop AF" with the
+  sweep's ring (the count "3/14" was on its face before the review round; it is now in the
+  Focus band and the status bar), the Focuser card unfolds with "Autofocus", the Camera fields wait with one
+  line ("autofocus owns the camera until it ends"), Go to and Out / In are refused ("Autofocus
+  owns the focuser.", 409 from the server too). A full run ended "Autofocus complete — best
+  pos=5188 HFD=5.7", parabola, focuser left at 5 188 (the previous runs: 5 253, 5 325, 5 349);
+  the V-curve shows the worker's points,
+  the hyperbola display fit, the provisional vertex during the run and the best line after.
+- Stop AF (toolbar): "Returned to 5333." with the focuser read back at its start (5 333) and
+  the camera released after the return (S23).
+- Halt (Focuser card) during a run: "Halted at 3959: focus left there.", focuser idle,
+  camera released (Q-O6).
+- Go to 120 000: refused in words ("Go to must be between 0 and 10 000"), never clamped,
+  the focuser does not move (H10).
+
+**Jog stops on key-up, blur and socket loss** (J armed, simulator mount, `jog` record polled
+from the server):
+
+| Event | Server stopped the axis after | Server's reason |
+|---|---|---|
+| ArrowRight released | 6 ms | client stop |
+| Diagonal (↑ + ←), ← released | only the primary axis stops (H3) | client stop |
+| Window blur | 6 ms | `jog_stop` on the socket ("the client left the window") |
+| Renewals blocked (requests aborted) | 1 094 ms | "no renewal for 1.0 s"; the held key turns dashed (stalled) |
+| Escape | immediate | client stop |
+| Page closed (event socket gone) | 39 ms | "the client left the window" |
+
+Held for 1.5 s with renewals, the axis keeps moving (no false dead-man stop). Times are from
+the final run; the earlier runs gave the same picture (key-up 7-38 ms, blur 3-10 ms, dead-man
+1 048-1 067 ms, socket 27-41 ms).
+
+### 3. PROPOSAL section 6, W3 promotions
+
+| Lab source | In `web/src/lib` | Status |
+|---|---|---|
+| `Seg.svelte` | `components/Segmented.svelte` (manual activation, busy segment, sliding block) | Done (controls role); the filter wheel and the tracking rate use it |
+| `SplitButton.svelte` | `components/SplitButton.svelte` | Done; Take shot and Autofocus. Added in the integration: `stoppable` (a running action whose button stops it: Stop AF) |
+| `Toolbar.svelte`, `overflow.ts` | `components/Toolbar.svelte` (+ `toolbar.ts`) | Done: the Observe toolbar is built from data (`embedded` mode between the mode bar and Arrange); counted overflow; one tab stop |
+| `HoldButton.svelte` | `components/HoldButton.svelte` | Done: Park |
+| `FocuserControl`, `FocuserGauge` | `imaging/instruments/*` + `imaging/FocuserCard.svelte` | Done |
+| `JogPad.svelte`, `jog.ts` | `imaging/instruments/JogPad.svelte`, `jog.ts` | Done, in the Mount card's Jog section |
+| `layout.ts`, `ModeBar`, `ArrangePopover`, `Band` | `imaging/modes/*` | Done for Framing and Focus |
+| `splitter.ts`, frame gestures | `app/attachments/*` | Splitters done; the pan / zoom / pinch attachment is promoted and tested but not wired (FitsViewer keeps its own) |
+| `Viewer.svelte` HUD parts | `viewer/Hud.svelte` | Done for W3 (chips, cursor readout, mini histogram); compass and scale bar W4 |
+| `FramingBand` exposure check | `imaging/modes/ExposureCheck.svelte` | Done |
+| `VCurve.svelte`, `core/fit.ts` | `charts/VCurvePlot.svelte`, `charts/fit.ts`, `vcurve.ts` | Done |
+| `ConditionsTimeline`, `Trend` | `charts/ConditionsTimeline.svelte` (one implementation) | Done |
+| `HistogramStretch.svelte` | `imaging/Histogram.svelte` | Done (keyboard handles, clipped fractions, ramp, D11) |
+| `research/frame/*` statistics | `viewer/framestats*` (worker) | Done (stats); palettes and R16UI are W4 |
+| `charts/mini/*` | `charts/mini/*` | Done for Conditions; run progress W6 |
+| `workspace/model/frame.worker.ts` | dev only | Not in the production bundle |
+| `LabIcon` glyphs | `icons/watch.svg`, `attention.svg`, `inspector.svg` | Done (before W3); watch and inspector redrawn, inspector needs the owner's sign-off (BRAND 6.10) |
+
+### 4. Fixed during the integration (found in the running UI)
+
+- The mode-switch View Transition held every pointer input for 3.5 s on a software renderer
+  (clicks hit the document root): capped at 400 ms with `skipTransition()`, 180 ms
+  animations (`modes/workspace.svelte.ts`, `app.css`).
+- Stop AF could not be pressed in the toolbar (a split button ignored presses while it
+  showed progress): `stoppable`.
+- A press on the image left the focus in a field, so E, V, D, J and the arrows typed into it:
+  the image now ends typing (the field commits on blur).
+- E during live view did nothing; it is now Take shot (the next live frame is saved).
+- Server (with a test): the focuser record kept the last manual target while autofocus drove
+  the focuser (the card read "Target 4 500" at 5 349): autofocus now reports each move it
+  sends (`FocuserService.note_target`, `tests/server/test_autofocus.py`).
+- The FilePicker closed before the server answered: `onchoose` may return a promise, and its
+  refusal stays in the dialog (Open FITS).
+- Layout: the Tracking row overflowed (Unpark cut) and the mount geometry word overflowed
+  the Target line: Park / Unpark have their own row, the geometry is in the status bar; the
+  status bar's Log button was cut during autofocus (rate and latency now fold for a non-live
+  run chip); the activity time read ":34:02" at 1 280 px (no longer cut on its left);
+  disclosure chevrons pointed left when open; the exposure read "2" instead of "2.0 s"; an
+  empty reserved line under Frame for Light frames; the ownership reason repeated under
+  each field (one line now); "5 300/ 10 000" in the folded Focuser header.
+
+### 5. Known gaps and issues (before wave 4)
+
+- **Online lookups not exercised**: this machine had no internet during the run. A name
+  outside the bundled catalogue is refused in the resolver's words ("Catalogue unavailable.
+  Connect to the internet or use a previously searched target."). The bundled catalogue has
+  no variable stars, so the variable-star photometry target (Q-P8) was not exercised through
+  the UI (server tests cover it).
+- **Preview quality** (Q-O14): no stream decimation yet; frames always travel at full size.
+- **Autofocus settings** (Q-O9): the `autofocus.*` keys need defaults in
+  `argos/core/config.py`, which this wave does not change; the sweep range and positions are
+  options of the Autofocus split button, remembered per viewer, sent with each start.
+- **Binning**: segments above 1× are unavailable with the reason (the server refuses a
+  binned Take shot: `fits_writer` writes XBINNING = 1).
+- **Each Take shot gets its own session folder** `<start UTC>_<OBJECT>`: the Qt engine does
+  the same (`acquisition_engine.py:1845`, run id = exposure start); sequences (W6) group
+  frames.
+- **Real Seestar**: never connected; Alpaca additions (MoveAxis, TrackingRates, wheel,
+  focuser, offset, binning) are tested against the simulator and fakes only.
+- **Engines**: headless Chrome with SwiftShader only (WebKit, Tauri, touch and trackpad
+  untested). Time-bound screenshots (wheel turning, Park hold) depend on capture speed; the
+  Park hold scene cancels the hold from the page before it completes.
+- **Autofocus from an off-focus start**: one run starting at 3 962 ended at 5 462 with the
+  raw minimum (the parabola was not accepted); others ended at 5 253-5 349 with the
+  parabola. That is the core algorithm on the simulator's curve, unchanged by this wave.
+- **Conditions**: the lab's time pan and +/− and "Copy data (TSV)" are not promoted; rows are
+  not yet recorded with a session folder (W6).
+- **Jog `last_stop`** has no client field: the pad tells a server stop from its own echo by
+  timing (1 s window).
+- **Bundle** 750 kB (244 kB gzip) after the review round, up from 649 kB before the wave.
+- **Version string**: FITS SOFTWARE reads "Argos v0.4.2" (`argos/__init__.py`, core,
+  unchanged by this wave; the next release is 0.5.0).
+
+### 6. Review round (2026-11-08): what was fixed
+
+Three reviews ran on the integrated wave: design (19 findings), technical (12) and science
+(12). Every high and medium finding was applied; the low ones were applied when cheap, and
+the few left are listed with the reason. Science first.
+
+**Science (FITS truthfulness).**
+
+- **The gain is sent before every exposure** (medium): the Alpaca adapter sent it once per
+  change, so one failed `set_gain` or a gain changed by another client (the Seestar app, a
+  driver restart) left every later frame at the old gain while GAIN / EGAIN recorded the
+  requested one. It is now sent before each frame as `LivePreviewWorker` does
+  (`exposure_worker.py:145-149`), a refusal logged once per streak. The wave-1 test that
+  asserted "once per change" now asserts the Qt behaviour, plus a retry after a refusal
+  and a restore after an outside change (`test_alpaca_adapter.py`).
+- **OFFSET always describes the frame** (medium): FITS OFFSET is read from the camera at
+  save time. Offset and binning changes are now `409 busy` while a Take shot waits or is
+  being written, and a frame exposed across an offset or binning change is never saved
+  (the next one is, INFO says why). Tests: `test_offset_and_binning_cannot_change_while_a_
+  take_shot_waits`, `test_a_frame_exposed_across_an_offset_change_is_not_saved`.
+- **No Light or Flat behind the Dark slot** (medium): the server turns the wheel to Dark for
+  darks and nothing turns it back, so "darks, then a light" saved a pure-pedestal frame as
+  a Light Frame (median 1 600). Now `409 dark_slot` with the reason, and the Camera card and
+  Take shot say it before the press (`darkGuard`). Checked through the UI too.
+- **Stop AF never claims a return it did not read back** (medium, also technical): a
+  focuser lost during the return, an unreadable position or a return slower than the 30 s
+  wait now end `failed` with what is known ("Stopped — focuser at 4972 and still moving,
+  not yet back at its start (5000).") and an ERROR line; "Returned to 5000." only after a
+  read-back at the start, idle. Two tests (lost focuser, slow return).
+- Low: binning cannot change while a shot waits, and a binned frame arriving anyway is
+  dropped; autofocus is `409 dark_slot` behind the Dark slot (and `409 busy` while the
+  wheel turns); a live Take shot that saves the frame in progress says when its exposure or
+  gain differ from the request (the S2 rule and its test are kept: Qt parity); an Open FITS
+  `DATE-OBS` without a time is no longer read as midnight, and its WARN says "no usable
+  DATE-OBS time".
+
+**Technical.**
+
+- **Jog after the pad is reopened** (high): each pad restarted its command numbers at 0
+  while the server remembered the page's highest, so every key was silently ignored. The
+  numbers now come from one counter per page (`AppState.jogTransport.nextSeq`), and every
+  answer says how the command was handled (`jog_command`: started, renewed, pending,
+  ignored with stale / stopped / late). Checked through the UI (close and reopen the Jog
+  section, then hold an arrow) and in `instruments.test.ts`.
+- **A slow MoveAxis starved the server** (high): renewals now never wait on device I/O
+  (answered under the state lock; `pending` while that axis's start is in its MoveAxis), a
+  start that waited longer than the dead-man for the device lock is dropped, a start sent
+  before its client's socket closed or blurred is dropped, a renewal (`renew: true`) never
+  restarts an axis the server stopped, and the client never sends a renewal while its
+  previous request for that axis is unanswered. Tests: `test_renewals_never_wait_behind_a_
+  slow_moveaxis`, `test_a_start_that_waited_longer_than_the_dead_man_is_dropped`,
+  `test_a_renewal_never_restarts_an_axis_the_server_stopped`.
+- Medium: **a stop is never dropped as stale** (numbers compared per client and per axis; a
+  key-up overtaken by the other axis's renewal still stops its axis); **a stop that keeps
+  failing stays pending** (`stop_failed`, retried every 5 s, no false dead-man stop, OK
+  "Stop confirmed" when it goes through); **the conditions history survives a reload while
+  frames arrive** (live rows are held during the REST read and merged after it); **a Light
+  shot waiting for the wheel snapshots its settings once the wheel has settled** (frame
+  header, HUD and conditions row name the new slot); the AF return (above).
+- Low: the settings PUT checks the wheel before any device call (one commit); a second
+  window cannot reverse an axis another window jogs (`409 busy`, owner `jog`); Cmd on macOS
+  releases the arrow holds (no stuck key); each event message is parsed once.
+
+**Design.**
+
+- **Conditions plots no longer invent data** (high): an interval with no frame longer than
+  max(2 × cadence, cadence + 60 s) breaks every series and is a neutral hatched period
+  named by its cause ("autofocus 13:36–13:38", else "no frame").
+- **The exposure check never blinks** (high): the last measured peaks stay (up to 10 frames
+  behind) at one emphasis with a stamp ("#34 · 1 frame behind"), the list keeps its height,
+  two or more clipped stars are one line drawn as a solid full bar with an end cap (no
+  hatching).
+- **V-curve** (medium): when the worker's few samples give no hyperbola the display fit
+  uses every coarse and fine sample, so the decided state keeps its evidence; the legend
+  lists only what is drawn (or says "no hyperbola: …"); the band title says "this
+  autofocus" while it runs and "last autofocus · HH:MM UTC" after.
+- **One home per value in Focus mode** (medium): the band owns the AF numbers (no Focuser
+  column), the Focuser card says in words what the focuser does and its Stop AF has no
+  count, the toolbar's Stop AF has the ring only, the status-bar chip keeps the count; the
+  Camera card's filter control no longer repeats "Autofocus owns the camera".
+- **Toolbar** (medium): the Take shot face reserves the width of its widest value (no
+  reflow), the zoom % is kept at 1 440 (priority raised); plain Stop is unavailable while
+  autofocus owns the camera, with the reason (Stop AF returns, Halt stops where it is), and
+  `stopAll` never ends a sweep half-way.
+- **Brass** (medium): Slew is primary only while the fields hold a new target (never
+  because a jog moved the mount away, never while the jog is armed); Tracking is drawn as a
+  neutral toggle (fill, `--fg` glyph). This departs from the BRAND 8 table's "(tracking)"
+  example of an outlined toggled-on secondary: to confirm with the owner.
+- **Numbers in Mono** (medium): `NumText` sets the numbers of a Sans sentence in Plex Mono
+  (Hold caption, NumberField messages, menu labels, the Focuser line, the Focus band line);
+  server sentences get the U+202F grouping ("Returned to 5 000.").
+- **Key hints** (medium): the task modes show their Alt+1 / Alt+2 caps while ⌘ is held.
+- **Framing band** (medium): the level handles carry only their letter (the fields hold the
+  values), the "display only" sentence is the Levels header's tooltip, the freed height
+  shows the share of pixels shown black and white (the ADC's clipped count keeps its one
+  home in the exposure check), and the
+  histogram's beyond-range count is in its header row, never over the data.
+- **Status bar** (medium): below about 16 characters the activity segment is left empty
+  (never "13:36:19 C…") and the Log button's tooltip says the last action.
+- **Jog pad** (medium): the offset readout and scope follow the key words' frame (ΔRA as
+  time and ΔDec in arcmin on an equatorial mount) and the scope's scale grows (±2°, ±10°,
+  ±45°, ±180°) instead of pinning the dot on the rim.
+- Low, applied: natural order of the name suggestions (M 1, M 10 … M 19, then M 100); the
+  Camera card's reserved progress row is gone (the toolbar ring and the HUD own the
+  progress), a turning wheel spins on its slot without inserting a line, NEXT FRAME says
+  "filter LP (turning)", the facts read Sensor (°C) and Format; the Focus trend shows
+  min(30 min, the session) and says which; the Open FITS breadcrumb draws the root once
+  and keeps the last three folders ("/ … / home / fits"); the HUD hint shows only until the
+  first pointing (then the last values, muted), the AF chip loses its dot once the sweep
+  has ended, the type chip reads "Dark frame"; the drawer and H no longer light the
+  "layout changed" mark; the Focuser readouts put "steps" inline.
+
+**Not applied (reason).**
+
+- OBJECT vs TARGRA / TARGDEC and the pointing sampled at frame arrival (science, low):
+  both are Qt parity; changing them changes the FITS headers the parity tests check. They
+  are documented in `protocol.md` for the owner to decide.
+- Simulator frames carry the active profile's instrument (science, low): simulator only;
+  a marker in the header would break the header parity with `FITSWriter`. Owner decision.
+- SOFTWARE "Argos v0.4.2" (science, low): `argos/__init__.py` is core; the release bump to
+  0.5.0 is on the release checklist.
+- Exposure check rows linked to stars on the image (design, medium, part of the finding):
+  the collapse and the bar style are done; marking a star on hover needs a viewer overlay
+  and the roles of wave 4.
+- Name suggestions with type, magnitude and altitude (design, low): the offline suggest
+  route returns names only; it needs a server change of the catalogue lookup (W4).
+- TARGET line reduced to its state (design, low): the fields can hold a typed target not
+  yet slewed to, so the line is the only place that shows the mount's own target.
+- Key caps on the drawer tabs and a registry-wide cap test (design, medium, part): the
+  drawer's D / L have no visible control while the drawer is closed; the modes, the
+  toolbar, the rail and J show their caps.
+- The Focus band's one-row summary when the drawer is open at 1 280 (design, low): the
+  size rule allows it; left for the owner's layout review.
+
+## Wave 4: Field identification and image tools (2026-11-08)
+
+Scope (README section 7, row W4): API rows A32-A33, A43-A49 and A51-A53 (server,
+`argos/server/protocol.md` "API 2 routes, wave 4"); the overlay layer, star card, viewer
+context menu, loupe, region tool, CFA preview and palettes, Statistics card, Catalogue
+layers popover and the Settings sheet reuse; the Observe Field group, popover, star card,
+Statistics card and View options; mapping rows M7, M44-M47, M50 (pre-checks only),
+M51-M58; the W4 rows of `web/lab/PROPOSAL.md` section 6 and the candidate fields of its
+section 7; the wave 3 leftover "hovering an exposure-check row marks its star".
+Built by four roles (server, field and overlay front end, viewer tools, integration).
+Screenshots: `web/screenshots/2026-11-08_wave4-field/` (13 scenes at 1 440 x 900 in the
+three themes and at 1 280 x 800 Observatory, plus the Settings sheet, the command palette's
+Centre target, Sync and Labels on in Observatory and Labels on in Night Red: 57 shots at
+device scale 2, re-captured after the reviews, with a manifest).
+
+**Status: done, reviews applied (section 6); the owner's commit pending.** The exit
+criterion is met: roles and Night Red through the UI; "overlays follow the tracked field"
+through the UI on an opened real frame and, frame to frame, by the server on 195
+consecutive real frames of the RR Lyr session against star-matching truth (0.2-0.9 frame px
+median, no loss; section 6). Rows left partial are listed in sections 5 and 6.
+
+Verification (2026-11-08, server on port 8743 and vite on 5143 with a temporary
+`--config-dir`, `--log-dir`, sessions folder, `HOME` and `TMPDIR`, simulator, ASTAP as
+installed; the catalogue cache was copied read-only into the temporary HOME, the network
+was used for VizieR / AAVSO, where Gaia, SIMBAD and NASA did not answer; copies of real raw
+frames of the RR Lyr field opened through the Open FITS dialog; `~/.argos/config.json`
+untouched, nothing written to `~/Argos/sessions`; `argos/ui`, `argos/workers`,
+`argos/core` unchanged):
+
+- End-to-end through the UI (`verify.mjs`, real keyboard and pointer input in headless
+  Chrome, run twice): Open FITS, S, the field chip, the overlay against the viewer's own
+  frame-to-screen map, a click on RR Lyr, Target / Comparison / Check from the card, the
+  file on disk, Undo, Escape, Centre target, a GoTo: all pass, no page error (section 2).
+  Sync through its inline confirmation passed in a separate run (the mount read 19.0000 h
+  +40.00° before, the solved centre 19.4384 h +41.506° after, field still valid); in the
+  second `verify.mjs` run the confirm click landed on the stacked Undo toasts, which cover
+  the bottom of the rail for 6 s (section 5).
+- `.venv/bin/python -m pytest -q` (temporary HOME and TMPDIR): **1 215 passed, 72 skipped**
+  (1 171 / 71 before the wave); ruff and black clean on `argos/server` and `tests/server`.
+- `npm run check` 0 errors, 0 warnings (621 files, `src/lab` included); `npm test` **754
+  passed** (66 files); `npm run build` OK (JS 891 kB, 292 kB gzip; was 750 / 244);
+  `src/lib` imports nothing from `src/lab`.
+- Screenshots: 55 in the gallery folder, all read. `npm run audit:night-red`: the 13 Night
+  Red originals pass (rule A 0 px, rule B 0-17 px raw, 0 with rounding). `npm run
+  audit:brass` at DPR 1 on the 13 Observatory 1 440 shots: 431 to 1 484 accent-family px
+  per scene, 2 289 for the invalidated field (the Slew button turns primary once the GoTo
+  fields differ from the mount's target, wave 3 behaviour).
+
+### 1. Mapping rows closed by the wave
+
+| Row | Qt element | Web | Status |
+|---|---|---|---|
+| M7 | Field menu: Identify field, Keep field identified automatically, Configure field identification…, Configure catalogues… | Toolbar Field group: `plate-solve` (S; while ASTAP runs the same place cancels it), `plate-solve-auto` (no key); the Catalogue layers popover footer opens Settings › Catalogues or › Plate solving in a Sheet over Observe (D12) | Done |
+| M44 | `OverlayBar` (10 chips, Gaia G slider) | Toolbar `sky-grid` (G), `target-star`, `labels` (N: L is the activity log), `catalogue` (O) + Catalogue layers popover (layer rows with counts, unavailable before a solve with the reason, Gaia G depth saved once on release) | Done; at 1 440 the Selected stars and Labels tools sit in the overflow menu outside Field mode (section 5) |
+| M45 | "Catalogues / depth…" | Popover footer → Settings › Catalogues sheet; a `catalog.*` change refetches (server, debounced) | Done |
+| M46 | Viewer click / marker hover | FieldOverlay: a click (≤ 4 px travel) sends A49 with 10 screen px of tolerance; a newer click supersedes the lookup; hover thickens the marker and shows its identity after 500 ms | Done |
+| M47 | `StarInfoCard` | Star card beside the star (drag docks it in a corner), role shapes as buttons, Remove, Details in the Inspector, Escape / × close it; the card follows the set after any role change (P20) | Done; Dismiss and the resize grip dropped as specified |
+| M50 | Batch re-run pre-checks (boxes 2262, 2268, 2273) | `photometryProblem()` (`imaging/field/present.ts`, tested): "identify the field first", "assign a target star first", "the target set has no comparison stars: …", in the Qt order | Pre-checks only, as planned; the Re-run button itself is W5 / W7 |
+| M51 | Marker tooltips | Overlay hover popover (tokens, mono, the Qt texts sent by the server) | Done |
+| M52 | `FitsViewer` | Shared `FitsViewer.svelte` extended (palette, preview, saturation, loupe, geometry, snapshot) | Done for Observe; R2 `mode="inspect"` is W7 |
+| M53 | pyqtgraph context menu + Export | ARGOS viewer context menu: Fit, 1:1, Measure / identify here, Copy pixel position, Copy RA / Dec, Region statistics here, Clear selection, Save view as PNG | Done |
+| M54 | In-image readouts, loupe, selection label | Cursor readout with RA / Dec once solved; HUD frame-centre chip shown with the grid; loupe (Z) top right under the compass; selection label dropped (the card carries it) | Done |
+| M55 | Region `RectROI` | Region tool (R): box with handles, Shift+drag draws, arrows move it; chip on the image and the Statistics card's Region block | Done |
+| M56 | `HistogramDock` | Band View options (Preview, Palette, Rotation, Crosshair, Loupe, Clipping); Inspect toolbar group (crosshair, loupe, region, saturation, statistics); WCS checkbox merged into `sky-grid`; star aperture in the Statistics card | Done |
+| M57 | Histogram pyqtgraph menu | Dropped as specified | Done |
+| M58 | `StatisticsDock` | Statistics rail card, hidden by default, I shows it (D9) | Done |
+
+API rows A32-A33, A43-A49 and A51-A53 are all used by the UI. A33 (Sync) is kept as "Sync to
+plate solution" without slewing, with an inline confirmation (Q-O3).
+
+### 2. Exit criterion and its evidence
+
+**Clicking a star assigns a role and writes `targets/<object>.json`.** Through the UI
+(`verify.mjs`): the frame opened through the Open FITS dialog, S, a click on RR Lyr on
+the image (card "Target · RR Lyr", A49 `resolved`), Set as target, then two detected VSP
+candidates clicked and given Comparison and Check from their cards. The server's set
+(A51) and the file both read `target RR Lyr (vsx), comparison 000-BCG-653 (vsp_auto: the
+automatic VSP choice of a new target), comparison 000-BJW-666 (vsp), check 000-BCG-523
+(vsp)`, written by core `TargetSet.save` in the Qt format (`schema 1`, RA / Dec in degrees,
+AUID, VSP magnitudes, chart id). The Undo toast names the file; Undo puts the set back and the server rewrites the file
+(first run: the comparison's Undo took it out; second run: the target's Undo took the
+target out, and the file read back equals the set). The empty object name took the star's
+name (D11).
+
+**Overlays follow the tracked field.** On the solved real frame:
+- the target's marker drawn by the overlay sits **0.05 px** from where the viewer's own
+  frame-to-screen transform (the frame outline's SVG matrix) puts the same frame pixel;
+- the overlay positions sit on the stars of the frame: background-subtracted centroids at
+  15 markers on detected stars (target set and detected VSP candidates) are **0.57 px**
+  from the marker positions (median; 90th percentile 0.81 px, max 2.1 px on the bright
+  target), at 3.67″ per frame px (`align.py`);
+- frame-to-frame motion: the overlay applies the A48 transform exactly as core
+  `RigidTransform` (unit tests in `viewer/overlay/overlay.test.ts`; the gallery's live
+  section draws a synthetic field through a non-identity transform and lines up only when
+  it is applied), and the server's per-frame fit is covered by `tests/server/test_field.py`
+  with shifted synthetic frames. **Not shown live**: simulator frames cannot be solved and
+  every Open FITS invalidates the field, so no run here moved a solved field.
+
+**Night Red shows no non-red pixel.** `npm run audit:night-red` on the 13 Night Red
+originals of the gallery: **13 of 13 pass** (rule A 0 px; rule B 0 px with rounding):
+overlays, grid, compass, scale bar, star card, popover, context menu, loupe, Statistics
+card, region chip and View options included. Fire and Ice are unavailable in Night Red with
+the reason "false colour is off in Night Red"; the image stays neutral red.
+
+Other flows checked through the UI: Escape closes the star card and clears the server
+selection (a slew is still aborted by the same key); Sync asks inline with the focus on
+Cancel, then the mount reads the solved centre and the field stays valid; Centre target
+syncs, slews to RR Lyr and invalidates the field (reason `center`, chip "Field moved:
+identify again"); a GoTo invalidates it (reason `slew`); Cancel on a running solve stops
+ASTAP at once ("Field identification cancelled."); the command palette offers Identify
+field (S), Coordinate grid (G), Object labels (N), Catalogue layers (O), Keep the field
+identified automatically, Cancel the field identification, and Centre target / Sync as
+Hardware commands with their confirmation and the buttons' reasons (unit-tested).
+
+### 3. PROPOSAL section 6, W4 promotions
+
+| Lab source | In `web/src/lib` | Status |
+|---|---|---|
+| Observe Field mode (`layout.ts`, `ModeBar`) | `imaging/modes/*` | Done: Field enabled (Alt+3); its preset opens the Inspector and the Mount card |
+| `bands/FieldBand.svelte` | `imaging/field/FieldBand.svelte` | Done: Candidates, Ensemble, Variables, Stars; rows linked to the image both ways; a Variables / Stars row picked selects its star (A49) |
+| `cards/InspectorCard.svelte` | `imaging/field/InspectorCard.svelte`, in a new `inspector` rail card | Done (shows VSP candidates and set members; see section 5) |
+| `StarCard.svelte` | `imaging/field/StarCard.svelte` | Done |
+| Viewer HUD compass and arcminute scale bar | `viewer/hud/SkyHud.svelte`, `wcs.ts` | Done (tracked WCS, display rotation respected) |
+| `research/frame/gl.ts` OKLCH palettes | `viewer/palettes/lut.ts`, shaders | Done: Neutral, Negative, Fire, Ice; Night Red draws Neutral only |
+| `research/table/*` (row window) | `components/VirtualTable.svelte`, `virtual.ts` | Done for the Variables and Stars lists |
+| Section 7 candidate fields | server `b_minus_v`, `neighbours_in_aperture` | Done (null without Gaia, as here) |
+
+### 4. Fixed during the integration (found in the running UI)
+
+- The star card kept its old role after a role change (the server does not re-send the
+  selection): the card now reads its role and Remove from the target set (by key, else
+  within 2″ of its catalogue position), so it follows changes made here or elsewhere (P20).
+- The exposure check of a frame shown in another mode (an opened file solved in Field mode)
+  stayed at "Measuring the star peaks…": the frame on screen is measured when the Framing
+  band comes back.
+- RA / Dec grid labels at the image edge were cut in half (centred on the edge): anchored
+  inward.
+- The Undo toast named the file from the object name ("targets/RR Lyr.json"); it now shows
+  the server's path (`targets/RR_Lyr.json`).
+- The Catalogue layers popover gave L for Labels (L is the activity log): it shows the
+  registry's keys (G, N).
+- HUD chips could run under the compass: the chip row wraps before it. The frame-centre
+  chip (04 2.1 E3) was missing: added, shown with the grid.
+
+### 5. Known gaps and issues (before the reviews)
+
+- **Toolbar width**: 25 tools; at 1 440 and 1 280 the counted overflow holds 13. Field mode
+  keeps Identify, Automatic, Grid and Catalogue layers in the row (Inspect tools leave
+  first); Framing keeps the zoom and display tools (Field tools leave first). Selected
+  stars and Labels are also in the popover. A design-review decision.
+- **Δtarget and the reticle** follow the last GoTo target (Qt `target_radec`), also for an
+  opened file (the solution of the RR Lyr frame reads Δtarget 77.3′ against RR Lyr, the
+  Seestar pointing being 1.3° off); for the science review.
+- **Inspector** shows VSP candidates and set members; a clicked VSX variable or Gaia star
+  opens the card but not the Inspector.
+- **Gaia / SIMBAD / NASA** did not answer from this network: the Stars layer and list were
+  empty, `neighbours_in_aperture` null; covered by server tests with injected catalogues.
+- **`frame_metrics` is not replayed** to a client that connects after a frame: the
+  Statistics card and status bar show "—" until the next frame (wave 3 behaviour).
+- **Open FITS by typed path**: the FilePicker first lists the file as a folder (a 400 in the
+  console) before opening it (wave 2 component).
+- **Engines**: headless Chrome with SwiftShader only; the WebGL2 R16UI check on WebKitGTK
+  (PROPOSAL 9) and the second WebGL context of the loupe on WebKit are untested.
+- **Sequences**: `arm_for_sequence()` is not wired (W6); `409 decimated` is never sent
+  (Q-O14).
+- **Undo toasts** stack at the bottom right over the rail for 6 s and cover the Mount card's
+  lowest controls (Sync confirmation, Slew) at 1 440 x 900 (toast placement of wave 2).
+- **Undo of a new target** removes the target only; the VSP comparisons the server chose
+  for it stay in the set.
+- **Hit order**: a VSP star that VSX also lists (000-BJW-666 = KIC 7201168) opens the
+  variable's card first (Qt order), so a role given there is stored with the VSX identity.
+- The selection lives on the server: a reloaded page shows the last star card again.
+
+### 6. Review round (2026-11-08): what was fixed
+
+Three reviews (design, technical, science) ran on the integrated wave; every high and
+medium finding was fixed except where noted, and most low ones. Evidence: server 8748 and
+vite 5148 with temporary folders, `HOME` and `TMPDIR`, the catalogue cache copied
+read-only, copies of the real RR Lyr frames; the reviews' scripts re-run against the fixed
+code.
+
+**Science (tracking, A48; candidates, PROPOSAL 7)**
+- **A role change kept the identity transform** (overlays 90-120 px off, Centre / Sync 7′
+  off): the constellation is now rebuilt from the current pose, anchors and baselines are
+  chosen on the solved frame. Re-run of the review's `s14_role_reset.py` (the field
+  drifting ~10 frame px per frame, RR Lyr made the target on frame 8): 0.1-0.2 px before
+  the role change, 0.5 px after it (was 90-120 px).
+- **A lost lock was permanent and silent, single-anchor re-locks false**: new
+  `argos/server/field_track.py` (`FieldTracker` on core's `ApertureTracker`, core
+  untouched): an update needs two anchors whose separations agree with the reference
+  (three or more anchors), a lost lock is re-acquired by a translation vote between the
+  frame's detected stars and the solved frame's, `field_transform.tracking` says
+  `ok | degraded | lost`, WARN once per loss, INFO when found again; the HUD chip says
+  "Identified · tracking lost" and the overlay dims what the reference solve places. Whole
+  session (`s7_track_full.py`, 195 frames, detected and roles anchors): median error
+  0.22-0.87 px (detected), 0.48-0.95 px (roles), no loss (was lost from frame 53 for
+  good); every tenth frame only (jumps of ~45 green px, beyond the windows): re-acquired
+  each time, 0.19-0.86 px.
+- **The saturation test read the moving frame**: it reads the solved frame (3×3 peak).
+  Each anchor is centroided twice (the second window centred on the first): the ~1 px lag
+  of a window centred on the prediction goes, 0.13-0.28 px against 0.85-1.36 px on frames
+  2-12 with the owner's 15 green px search radius. This second pass is the web tracker's
+  (it places overlays and Centre / Sync); W5 decides whether live photometry uses it
+  (owner, it is not Qt's).
+- **`neighbours_in_aperture`** is null unless the held Gaia list is complete to `m + 3`
+  (`limits.gaia_depth_g`: the query's limit, or its faintest source when the budget cut
+  it); the counterpart is matched within max(3″, FWHM/2) and 1.5 mag of V; a source within
+  1 frame px is the star itself (000-BJW-666 no longer a false "blend risk").
+- **"far" used a client constant of 25′**: the server sends the observer's photometry
+  limits with `field_layers` (`limits`); the band flags with them.
+- Low: the detected-only rules use up to 2 000 solved-frame sources (Qt's 120 hid
+  measurable comparisons); `Solution.mirrored` is the wire's parity (det CD < 0), not
+  ASTAP's FITS flag (the RR Lyr frame now reads `false`, as the compass); candidates carry
+  `vsx` (a VSX entry within 3″: the band says "variable?", e.g. 000-BCG-953 = NSV 24798);
+  Fire and Ice start at the darkest 8-bit grey and stay monotone after rounding (256
+  distinct entries, was 242 / 247).
+
+**Technical**
+- **NaN in `target_reticle`** dropped every `field` event in the browser: the reticle is
+  null when the target has no TAN projection, and `/ws/events` frames are strict JSON
+  (non-finite numbers → null, as REST).
+- **Sync / Centre on an opened file's solution** synced the real mount to another night's
+  pointing: `409 file_solution`, `center_available: false`, and the UI says why.
+- **A stuck `solving`** after an exception past ASTAP: the attempt ends `failed`
+  (`not_solved`), an invalidation releases a running solve, a late end never takes a newer
+  claim.
+- **Superseded selection ids across a server restart**: forgotten when `boot_id` changes.
+- **Overlay cost while panning**: the catalogue layers are drawn on a canvas under the SVG
+  (roles, grid, labels and marks stay SVG); a pan moves both with a CSS translate and
+  rebuilds them once it settles (250 ms); the grid's round caps are gone; catalogue labels
+  are capped at fit zoom. The review's `perf3.mjs` re-run (headless Chrome, SwiftShader,
+  1 440 x 900, live frames every 0.5 s, 543 Gaia stars and 241 variables on screen):
+  120 pointer moves of panning 8.3 s, frame p50 67 ms (18.4 s / 167 ms with the SVG
+  layers in the same harness, 22.0 s / 200 ms in the review; 3.5 s / 33 ms with every
+  layer hidden); at rest with live frames 59 fps, worst frame 67 ms (52 fps, 150 ms
+  before). `will-change: transform` on the SVG was tried and made it worse under
+  SwiftShader (34 s).
+- Low: the virtual table re-reads `--row-h` when the density changes (checked: 28 px rows,
+  End reaches row 5 001); failed Gaia / SIMBAD / NASA queries are `catalog.warnings`
+  (shown in the popover, two lines, full text in the tooltip); README 4.2 lists
+  `field_solve`; protocol.md documents `404` for an unknown `variable_index` and the
+  `queued` stage.
+
+**Design**
+- Overlay hierarchy: role floors 17 px (target) and 15 px (comparison, check) at 2.5 px;
+  catalogue layers 1 px at fit zoom, 1.5 px from 50 %; variables r 9 when more than 60
+  are on screen; a set star is drawn only as its role mark (same key or within 2″).
+- Star card: the identity as the title (252-340 px, never cut), facts from the fields
+  ("V 7.90 · B−V 0.69 · 27.4′ from target · VSP comparison", VSX types in words), a star in
+  two catalogues named twice ("KIC 7201168 · VSP 000-BJW-666").
+- Candidates band: the target, its B−V, the aperture and the rules in words on a note
+  line; a flag shared by more than a third of the rows is stated there once instead of
+  underlined on every row; sorted by Sep when the target's B−V is unknown; a row click or
+  Enter selects the star on the image (card, brackets, Inspector agree); a set member
+  stored under another identity shows its role on its VSP row (same position).
+- Symbols: the selection is four brass corner brackets; every list hover (candidates,
+  exposure check) is foreground brackets over a black halo; nebulae and clusters are a
+  circle with four ticks in `--overlay-nebula` = `--cyan` (no more amber).
+- Labels: Qt's 18-character rule, the HUD boxes are obstacles, the set's labels in --fg and
+  the catalogue's in --text-muted, at most 40 at fit zoom. Grid labels in the UI format
+  ("19h 28m", "+42° 30′"), 11 px, the dotted line broken under them, dropped where the HUD
+  is.
+- Settings sheet: the Gaia depth preset stacks below 640 px. Undo toasts: one grouped toast
+  ("2 changes") at the bottom left of the image. Field mode: the Solved field row under
+  the readouts, the target entry behind "GoTo…". Framing and Focus remember their own
+  layers (the grid and the set by default).
+- Low: the chip says "Identified" and "PA" with what the angle is measured from; the
+  Inspector's separation reads "3.6′" under "From target", its history chips "BJW-673" with
+  the role glyph; the popover's swatches are the overlay's marks in their tokens; the
+  marker popover has the name as title and a key / value grid; Fire / Ice over the colour
+  preview say "Colour (luminance)"; Selected stars and Labels left the toolbar (the
+  popover and N keep them: 23 tools).
+- The gallery was re-captured at device scale 2.
+
+**Verification after the fixes** (server 8748 and vite 5148, temporary folders, `HOME` and
+`TMPDIR`; both stopped, ports free; `~/.argos/config.json` untouched, Qt untouched):
+- `.venv/bin/python -m pytest -q`: **1 228 passed, 71 skipped** (the real-frame ASTAP test
+  ran on a copy); ruff and black (100) clean. New tests: Sync / Centre refused for a
+  file's solution, the NaN reticle and strict socket JSON, an error after ASTAP, an
+  invalidation releasing a solve, a role change keeping the pose, a loss reported once and
+  re-acquired past the windows, the tracker's consistency rule and vote, the neighbour
+  count's completeness and counterpart, the VSX cross-match.
+- `npm run check` 0 / 0 (621 files, lab included); `npm test` **768 passed**; `npm run
+  build` OK (JS 909 kB, 299 kB gzip); no `src/lab` import in `src/lib`.
+- `npm run audit:night-red` on the 17 Night Red originals: 16 pass; **06-context-menu
+  fails rule B by one pixel**, rgb(13, 10, 10) at (1 870, 771): the anti-aliased edge of
+  the "0" of the set label "000-BCG-653" (--fg over its black halo) at device scale 2. The
+  same glyph pixel is (14, 10, 10) in the other scenes and passes by 0.4 level; rule A (no
+  G or B above R) holds in every file. Open for the design team (section 7).
+- `npm run audit:brass` (Observatory 1 440, device scale 2, so about 4x the 1x counts):
+  field solved 3 938 px, of which warning 279 (about 70 at 1x, was 565: the "far"
+  underlines are gone).
+- Read: every re-captured scene of the four sets and the extras.
+
+**Skipped, with the reason**
+- A stronger Automatic glyph (design low): BRAND 6 lists `plate-solve` /
+  `plate-solve-auto` as intentional near-twins with a label or tooltip; a redraw goes
+  through the icon process (BRAND 6, `icon-sheet.html`), not a fixer's edit.
+- Excluding VSX-listed comparisons from the automatic ensemble (science low): it changes
+  Qt's rule; the band flags them ("variable?"); owner decision.
+- A deep Gaia cone per candidate for a definite neighbour count (science medium, second
+  half): it is a network lookup per star; `null` ("—") is shown instead of a wrong 0.
+
+### 7. Known gaps and issues (before wave 5)
+
+- **WebKitGTK** untested (R16UI, the loupe's second WebGL context, overlay rasterising
+  cost); all measurements are headless Chrome with SwiftShader.
+- **Night Red audit, one pixel**: the --fg set labels' anti-aliased glyph edges sit at the
+  rule B bound at device scale 2 (Skia's per-channel text pre-blend); one pixel of
+  06-context-menu crosses it (section 6). A label ink with less green in Night Red, or the
+  audit's tolerance for text edges, is a design-team decision.
+- **The second centroid pass** of the web tracker is not Qt's: W5 must decide whether live
+  photometry places apertures with it (owner).
+- **Simulator frames cannot be solved**: the UI evidence of frame-to-frame tracking is the
+  server's run on real frames; a live solved field in the browser waits for a real night.
+- **Gaia, SIMBAD and NASA** did not answer from this network during the captures (Stars 0;
+  the popover says why); the review's run used a cached Gaia list.
+- Still open from section 5: `frame_metrics` not replayed to a new client, the FilePicker's
+  400 on a typed file path, `arm_for_sequence()` not wired (W6), the selection kept by the
+  server across a page reload, Undo of a new target leaving its automatic comparisons, the
+  Qt hit order (a VSX variable before the VSP star at the same place; the card now names
+  both and the table shows the role, the stored identity stays the VSX one).
+
+## Wave 5: Live photometry (2026-11-08)
+
+Scope (README section 7, row W5): API rows A50 and A54-A58 (server, `argos/server/protocol.md`
+"API 2 routes, wave 5"); the components `LightCurvePlot` (with `charts/uplot/*`),
+`TargetSetList` and the Ensemble table; the Photometry card, the drawer tabs Light curve /
+Variables / Ensemble and the Field band live status; mapping rows M8 (live parts), M78-M79,
+M95 (live tabs), M96-M99; the W5 rows of `web/lab/PROPOSAL.md` section 6 and the BJD_TDB and
+leave-one-out items of its section 7; the wave 4 leftovers. Built by four roles (server, light
+curve, photometry front end, integration); the owner's decisions of the wave: apertures placed
+by core's `ApertureTracker` as Qt (the web tracker measured, not adopted), VSX-variable
+comparisons stay eligible and flagged "variable?", no per-star Gaia query.
+Screenshots: `web/screenshots/2026-11-08_wave5-photometry/` (12 scenes at 1 440 x 900 in the
+three themes and at 1 280 x 800 Observatory, plus the palette, the shortcuts sheet and the
+context menu: 52 shots at device scale 2, with a manifest).
+
+**Status: integrated, exit criterion met through the UI; the design, technical and science
+reviews are still to run; the owner's commit pending.** Qt defects found while porting are
+fixed in the release worktree (`notes/release_0_5_0.md` S31-S34, uncommitted there).
+
+Verification (2026-11-08, server on port 8753 and vite on 5153 with a temporary
+`--config-dir`, `--log-dir`, sessions folder, `HOME` and `TMPDIR`, no simulator (as the Qt
+reference, no mount), ASTAP as installed; the catalogue cache copied read-only into the
+temporary HOME; copies of real raw frames hard-linked under the temporary HOME;
+`~/.argos/config.json` untouched, nothing written to `~/Argos/sessions`; `argos/ui`,
+`argos/workers`, `argos/core` of this tree unchanged):
+
+- Four live replays through the UI against the fixed Qt engine: **1 748 values, 0
+  differences, compared exactly** (section 2). The first replay was run again after the last
+  code change, with the check star's own BJD_TDB added to the copied table: 360 values, 0
+  differences. No console error, no request off the machine.
+- `.venv/bin/python -m pytest -q` (temporary HOME and TMPDIR): **1 243 passed, 72 skipped**
+  (1 228 / 71 before the wave); ruff and black clean on `argos/server` and `tests/server`.
+  Release worktree (`.worktrees/release-0.5.0`): **627 passed, 45 skipped**.
+- `npm run check` 0 errors, 0 warnings (647 files, `src/lab` included); `npm test` **815
+  passed** (69 files); `npm run build` OK (JS 1 007 kB, 332 kB gzip; was 891 / 292);
+  `src/lib` imports nothing from `src/lab`.
+- Screenshots: 52, all read (Observatory one by one, the other variants as contact sheets).
+  `npm run audit:night-red`: the 13 Night Red originals pass (rule A 0 px, rule B 0 px).
+  `npm run audit:brass` on the Observatory 1 440 shots (device scale 2, so about 4 x the
+  DPR 1 counts): 13 700-16 300 accent-family px per scene, most of it the "Connect all"
+  primary button of the no-equipment notice (wave 3); 37 800 in 04-zoom-kept, where the
+  focused plot shows its focus ring.
+
+### 1. Mapping rows closed by the wave
+
+| Row | Qt element | Web | Status |
+|---|---|---|---|
+| M8 | Menu Photometry: Photometry setup…, Live curves & diagnostics…, Re-run subs… | Photometry card (set, verdict, geometry, Recommend…, the three drawer tabs) + Settings › Photometry (W2); drawer Light curve; palette entries "Show the light curve / the variable stars of the field / the comparison ensemble", "Complete the comparison ensemble", "Replace the VSP comparisons" | Live parts done; Re-run subs is Review R1 (D2, W7) |
+| M78 | `VariableTable` | Drawer › Variables (D7): Qt's filter and "n of N stars" count, virtual table, role as its shape, Set as target with Undo (also Enter / double-click); the filter filters the variable markers on the image | Done |
+| M79 | `TargetTable` | `TargetSetList` in the Photometry card: role shapes, AUID, newest value per row, Remove with Undo (asked first during a run), rows linked to the image | Done for Observe; the Plan Target set card is W6 |
+| M95 | `PhotometryWindow` | Dissolved: Variables, Light curve, Ensemble drawer tabs; Targets → `TargetSetList`; Metrics → Conditions (W3); Aperture · references → Settings › Photometry (W2) | Live tabs done; exports and the R1 banner are W7 |
+| M96 | `LightCurvePanel` | `LightCurvePlot` (one implementation, `charts/lightcurve/*`): facets, U / M toggles, legend keys hide a series, F fits | Done |
+| M97 | `ComparisonEnsembleTable` | Drawer › Ensemble (leave-one-out per comparison, O − C, status, flags in words, the check last) + Photometry card actions; Recommend with the count (A58), Refresh catalogue, Copy TSV | Done; the read-only Review copy is W7 |
+| M98 | `PhotometrySetupPanel` | Settings › Photometry (W2) + the effective geometry, read-only, on the card (aperture and annulus in green px, where the FWHM comes from) | Done |
+| M99 | "Differential photometry" dock | Drawer › Light curve: target + check (D25), the ensemble facet from 300 px | Done |
+
+API rows A50 and A54-A58 are all used by the UI: the snapshot (A54) after each
+(re)connection and after a gap, the point stream (A55) and resets (A56) in `seq` order, the
+leave-one-out report (A57) in the Ensemble tab and the card, the `photometry` status in the
+Field band, the variables (A50) in the Variables tab, the recommendation (A58) in the card,
+the Ensemble tab and the palette.
+
+### 2. Exit criterion and its evidence
+
+**A sequence-free live run shows target and check curves identical to the Qt values (same
+points, same errors, same flags).**
+
+- *Qt reference*: the fixed 0.5.0 engine from the release worktree, driven offscreen with
+  fake devices (`AcquisitionEngine.open_fits_frame`, the frame's ASTAP solution,
+  `measure_photometry_if_idle`, as `tests/workers/test_acquisition_engine.py` does), on the
+  same frames, with the same target-set file (the owner's set with one comparison turned
+  into the check star), the same site (the frames' FITS header) and the same settings.
+- *Web*: the real server and page. Frame 1 through the Open FITS dialog (a typed file path),
+  the next frames opened through the API; each frame identified with **S** in the page, and
+  the next frame only once the Photometry card names the frame's point. At the end, **Copy
+  data (TSV)** from the plot's toolbar: the values the plot holds.
+- *Compared exactly* (float equality, no tolerance), point by point: target magnitude,
+  error (final, with the run's systematic floor), formal error, σ_syst, relative flux and
+  its error, BJD_TDB, airmass, comparisons used, flags; check magnitude, error, check −
+  catalogue V and flags.
+
+| Replay (copies of real frames) | Frames | Check star | Settings | Target / check points | Values | Differences | Flags |
+|---|---|---|---|---|---|---|---|
+| XX Cyg 2026-09-07 | 24 | 000-BCK-396 | as installed | 24 / 24 | 336 | 0 | none |
+| RR Lyr 2026-09-25 | first 40 | 000-BJW-666 | as installed | 40 / 40 | 560 | 0 | none |
+| XX Cyg 2026-08-29 | 22 | 000-BJV-176 | as installed | 22 / 18 | 292 | 0 | 2 suspect check points |
+| RR Lyr 2026-09-25 | first 40 | 000-BJW-666 | linearity limit 30 000 ADU on both sides | 40 / 40 | 560 | 0 | 15 saturated target points |
+
+The 4th replay lowers the linearity limit on both sides (web `hardware.overrides.
+linearity_max_adu`, Qt `camera.linearity_max_adu`) only to exercise the saturated flag on
+real data; the four replays have no other setting changed. Readouts at display precision
+agree too (RR Lyr frame 20 in the tooltip: JD 2461309.34946, BJD 2461309.35173, 7.363 ±
+0.081, check − V −0.026 ± 0.082, airmass 3.467, as Qt rounded). The check star's own
+BJD_TDB (6.4 s after XX Cyg's on 2026-09-07, another direction on the sky) is on screen and
+in the copied table since the last change, and equals Qt's on the 24 frames of the re-run.
+Limits: the RR Lyr replays used 40 of the 80 frames; the RR Lyr site in Settings was wrong
+that night, so both sides used the FITS header site: the airmass is identical on both sides,
+not physically right. The server-side parity (every field of every point, the CSV files and
+the leave-one-out report, 890 points on three sessions) is the server role's report;
+`tests/server/test_photometry.py` keeps an in-suite parity test.
+
+Other flows checked through the UI (scripted, headless Chrome):
+- **Zoom states**: + on the focused plot at frame 12 gives "Zoom kept"; the 12 following
+  frames leave the view range identical (`data-lc-view`, to the millisecond); End gives
+  "Following · 10m 52s", F "Whole run".
+- **Undo of a new target**: on the RR Lyr field with an empty set, Set as target from the
+  filtered Variables tab gave `target RR Lyr (vsx)` and `comparison 000-BCG-653
+  (vsp_auto)`; Undo emptied the set and `targets/RR_Lyr.json` holds 0 stars.
+- **Typed file path** in the Open FITS dialog: the file is selected in its folder and Open
+  opens it (all four replays).
+- **Palette and keys**: "ensemble" lists Show the comparison ensemble and Complete the
+  comparison ensemble (up to 5); the ? sheet has the "Light curve (when it has the focus)"
+  group.
+- From Open FITS to the point on screen, ASTAP included: median 1.3 s, at most 2.5 s per
+  frame.
+
+### 3. PROPOSAL section 6, W5 promotions
+
+| Lab source | In `web/src/lib` | Status |
+|---|---|---|
+| charts, workspace and research light curves, `core/uplot/*` | one `charts/lightcurve/LightCurvePlot.svelte` + `charts/uplot/{axes,markers,zoom}.ts` | Done |
+| Linked facets on one time axis | target, check, ensemble (drawer ≥ 300 px) | Done |
+| Check as check − catalogue V with a trailing 15-point mean ± 1σ (D10) | check facet, its legend and σ15 in the toolbar; the card shows the same σ | Done |
+| Flags by shape | saturated cross, suspect hollow, counted in the legend (real flags, section 2) | Done |
+| Newest point with a static ring | all facets | Done |
+| Zoom states named by a chip, never moved by new data | Whole run / Following / Zoom kept | Done (section 2) |
+| UTC / JD / BJD axis | BJD_TDB from the server; disabled with the reason when a point has none | Done |
+| Copy TSV | full precision, one row per frame, `frame_seq` | Done |
+| Field band live status | the tab row and the one-row summary | Done |
+| The Run band uses the same component | `variant="band"` built and in the gallery | Not wired: Run mode is wave 6 |
+| Section 7: BJD_TDB per frame in the stream | `bjd_tdb` on every point with a site, `null` without (X2) | Done |
+| Section 7: leave-one-out status per comparison | A57 entries, Ensemble tab, card verdict | Done |
+
+### 4. Fixed during the integration (found in the running UI)
+
+- **The plot had no catalogue magnitudes**: the check was drawn as measured ("no catalogue
+  magnitude") and the ensemble facet was empty ("used 0 of 7"). The feed effect read the
+  photometry store's curves, so it re-ran on every point and reloaded the whole plot store
+  (O(N²), Qt's S19 again) from curves the stream had created without magnitudes, erasing
+  the target set's offsets. The plot now subscribes once and a reload keeps a known offset.
+  Tests in `lightcurve.test.ts`.
+- **A plot mounted after points arrived froze**: it was loaded with the snapshot's old `seq`,
+  so every next point was a gap; and a reset reached it without its `seq`, so the points
+  after a reset were dropped until the next snapshot. The feed now passes the position held
+  and the reset's `seq` / `revision`; a reset clears the curves even after a gap. Test in
+  `photometry.test.ts`.
+- **The two wire types drifted** (`t` of a point); the `as unknown as` casts between the
+  photometry store and the plot store are gone, so svelte-check now covers that contract.
+- **The check star's BJD was the target's**: the tooltip and the copied table gave one BJD
+  per frame, the target's (6.4 s off for the XX Cyg check). The tooltip now adds the check's
+  own BJD when it differs at 5 decimals, and the table a last column `check_bjd_tdb`.
+- **A typed file path in the file picker** listed its folder without choosing the file (the
+  client ignored the server's new `selected`).
+- **The check facet was 35-45 px tall** at the drawer's default height: target 3 : check 2
+  (: ensemble 2), and the last facet gets the time axis' 22 px on top of its share.
+- **Palette and keys**: the live photometry commands (show each tab, Complete, Replace with
+  its reason during a run); the plot's keys registered as local rows of a `chart` scope (the
+  ? sheet lists them; no conflict with the Observe keys). Recommend moved to `ArgosApp`
+  (card, Ensemble tab and palette share it). The plot's time axis, error bars and flux view
+  are remembered per viewer.
+
+### 5. Wave 4 leftovers
+
+| Leftover | Closed by | Checked |
+|---|---|---|
+| `frame_metrics` replayed to a client that connects mid-run | server | the server role's live smoke (a late client receives `photometry`, `comparison_quality`, `frame_metrics`, `targets`, `field`); not re-run in the browser |
+| The file picker refused a typed file path | server (`selected`) and client (section 4) | through the UI, four replays |
+| Undo of a new target left its automatic comparisons | server (`auto_selected`, `?also=`) and client | through the UI (section 2) |
+| The star selection survived a page reload | client (`FieldStore.pageLoaded()`) | by the photometry front-end role in the running app; not re-run by the integration |
+| One Night Red rule-B pixel on a label edge | Night Red label ink 25 % towards `--viewer-tint` | night-red 15-context-menu (labels on, XX Cyg field) passes, rule A 0, rule B 0 |
+
+### 6. Known gaps and issues (before the reviews)
+
+- **Reviews not run**: design, technical and science reviews of the wave are next.
+- **Run mode and the Run band** wait for wave 6, as does the sequence path of the server
+  (measuring every saved sub, the run folder, `photometry_quality.json` in a run, locked
+  geometry): built, not exercised end to end.
+- **Ensemble facet definition** (light-curve role): per frame, mean ± 1σ of the comparisons'
+  leave-one-out magnitude − catalogue magnitude. The mean is close to 0 by construction
+  (1e-15 on the first XX Cyg frame); the spread carries the information. The science review
+  should confirm it or ask the server for the zero point and its rms.
+- **No weight column** in the Ensemble tab (no server field); the leave-one-out effect is
+  shown as O − C.
+- **Field band**: with the drawer open at its default height, a band between 36 and 150 px
+  shows the one-row summary with an empty strip above it (wave 4 band layout).
+- **No-equipment notice** under the cursor readout at 1 280 px and over the image (wave 3).
+- **Catalogue refetch per Open FITS** (server, wave 4 behaviour): Variables and Recommend are
+  unavailable for tens of seconds after each replayed frame.
+- **Owner decisions reported by the server role** (QT DEFECT): CSV overwrite outside a run,
+  e-/ADU from the Camera form's gain, the ApertureTracker over many frames (wave 6).
+- **Bundle** 1 007 kB (332 kB gzip).
+- **Capture note**: in headless Chrome a hover readout reached the screenshot only after two
+  animation frames were forced before the shot (a stale frame of the capture, not of the app).
+- **WebKitGTK** untested; Gaia, SIMBAD and NASA unreachable from this network (Stars 0).
+
+
+### 7. Review round (2026-11-08): what was fixed
+
+Three reviews (design, technical, science) ran on the integrated wave. Every high and medium
+finding was fixed except where noted; most low ones too. Evidence: server 8758 and vite 5158
+with temporary folders, `HOME` and `TMPDIR`; copies of the real XX Cyg (2026-08-29,
+2026-09-07) and RR Lyr (2026-09-25) frames; the Qt fixes in the release worktree with a test
+each that fails before the fix (`notes/release_0_5_0.md` S32 extended, S35-S38).
+
+**Science**
+- **A frame on which the field had moved since the solve was measured on blank sky** (Qt and
+  server: `_build_live_tracker` fell back to every star of the set, unseen; noise centroids
+  passed for anchors): the fallback now takes only stars seen where the solution places them
+  (SNR ≥ 5), an empty tracker is rebuilt on the next frame, and a frame with no anchor gets
+  no point (WARN, status `skipped` / `field_lost`, a `frame_skipped` record). Release S35.
+  The review's replays through the fixed release engine (RR Lyr frames 46-60 and 168-180,
+  each measured through the previous frame's solution): only the two jump frames lose
+  their point, every other magnitude is unchanged; identical to the review's patched run.
+- **Recommend emptied the ensemble when VSP stars existed but none passed the gate** (Qt
+  `reselect_comparison_stars`, server A58 `replace`): chosen on a copy, saved only when a
+  comparison was picked (`added 0`, `removed []`); the WARN no longer says "solve a
+  full-resolution frame first" for a solved field. Release S32 extended.
+- **Sequence frames' `DATE-AVG` included half the download time** (Qt sequence worker; the
+  server has no sequence writer yet): the clock starts just before StartExposure and stops
+  at ImageReady. Release S36.
+- **The ensemble facet showed nothing** (mean of the leave-one-out residuals, 0 by
+  construction): the server now sends each point's `zero_point` and `zp_rms`
+  (`DiffResult`, A54 / A55) and the facet draws the target's zero point ± rms (the night's
+  transparency, up = more light; in the flux view the transmission against the run median).
+- **The card and the plot disagreed on the check's σ with two points**: one rule (no σ
+  under 3 points) in both.
+
+**Technical**
+- **The plot froze after a frame was measured twice** (two solutions on one opened frame):
+  rows at the same time are kept, as Qt keeps both points; the index check counts the
+  points received per curve; a sink that answers `gap` makes the store re-read A54. Copy
+  data (TSV) gives a frame measured twice two rows.
+- **Error bars were wrong for frames measured out of time order, and each point resent its
+  curve's whole error column** (traffic in N²): A55 no longer has `mag_errs`; both client
+  stores recompute every bar as hypot(max(0, formal), sigma_syst) row by row (pyHypot, the
+  Python bits), in any measurement order.
+- **BJD_TDB needed the internet** (core `bjd_tdb` let astropy download IERS tables; offline
+  every BJD was lost and each frame took 2.3 s, 18 s on a hanging network): astropy's
+  bundled tables, never a download, same value to the bit (release S37; the server sets the
+  same before measuring).
+- **The curve CSVs were rewritten in place** (a reader saw a partial file): written beside
+  the file and renamed over it (release S38; the server writes through
+  `write_csv_atomic`, the same bytes).
+- **A54 `star_key`** is `null` once the star left the set; **the status** waits after a
+  change of the set's stars instead of reporting the previous set's measurement.
+
+**Design**
+- **Plot height at the drawer's default 216 px**: facet titles sit in the plot's top margin
+  (no header rows), the caption row is gone (the last tick says UTC, the last facet's title
+  the date), the tool row is 32 px; a facet that would fall under its floor (target 48 px,
+  check 32 px) is left out and the target's title then carries the check's σ and check − V.
+  Measured in the page (the plot area of each facet): at 216 px the target gets 54 px and
+  the check 33 px (27 and 13 before), at 1 280 × 800 the same; at 330 px 81, 47 and 51 px
+  for the target, the check and the ensemble.
+- **Y scales**: ticks on a 1-2-5 step, three or more labelled values from 26 px of data
+  (two below), magnitudes with two decimals at least; the check on a symmetric ±rung scale
+  (±0.05 … ±5 mag) that holds its band and 90 % of the visible points, named in its title,
+  the rest drawn as carets on the edge: a noisy check (σ15 0.62 mag, 11-suspect) now looks
+  noisy.
+- **Clipping**: the y range is padded in pixels; markers and rings are no longer clipped to
+  the plot box (only bars and bands are).
+- **Readout**: the items wrap out of sight whole (never cut inside a number), in priority
+  order (ring glyph for Latest / Selected, target, σ15, check − V, time); the toolbar's
+  overdue words are dropped (the now-line says them).
+- **Card**: values only in the readouts (not in the set rows), the unit in the key, σ to 3
+  decimals, Comparisons "4 / 7" (in the newest zero point / in the set), the verdict count
+  first and wrapping, the live status said once (by the Field band when it is shown).
+- **Words**: one phrase "check − V" (card, facet, tooltip), the ensemble spread written σ,
+  the verdict's word always in the tab row, the badge "Waiting · n of 10 pts", the Ensemble
+  tab's note on its own wrapped line, numbers in Plex Mono in notes, verdicts, the set row,
+  facet titles, the recommend gate, the status line, the Variables Mag column.
+- **Dense runs**: the check's band edges drawn as 1 px lines over the markers.
+- **No-equipment prompt** above the cursor readout (it was under it at 1 280 px).
+- **Low ones**: "n newer ›" after a kept zoom; the zoom chip is a label; Conditions says
+  "Whole run" too; the tooltip opens away from the newest points in live views; key focus is
+  a line under the tools (accent pixels in 04-zoom-kept 21 232 against 32 474 before, 13 894
+  without focus); the Ensemble tab's check row is filled from its curve; one empty-state
+  sentence, "No target" in the band, no verdict without a target, Recommend… dimmed with
+  its reason; Recommend's buttons say their effect ("Complete: +0", "Replace 7 VSP picks
+  with up to 5", Replace in the deliberate style during a run); no single-series legend
+  keys; a divider in the band summary.
+
+**Not done, and why**
+- **Plot tools in the drawer's tab row** and **the Field band's leftover height given to the
+  drawer** (design, high, parts 1 and 2): moving the tools needs the plot's zoom state
+  outside the plot, and giving the band's leftover to the drawer makes the drawer's
+  separator drag dead over that range; both belong with the wave 6 Run band layout.
+- **Error bars off by default in dense views** and **a chevron where a bar leaves the
+  range** (design, medium and low): not done.
+- **"star(s)"** in the Ensemble footer: Qt's count line word for word (tested), kept.
+- **Batch re-run after a pointing jump** (science, Qt): an owner decision, reported, not
+  fixed.
+
+**Checks after the fixes**
+- **Exit criterion again, through the UI**: XX Cyg 2026-09-07, 24 copies replayed through
+  the page (the first frame by the Open FITS dialog with a typed path, every frame
+  identified with S), Copy data (TSV) against the fixed Qt engine's values: 24 target and
+  24 check points, 360 values, 0 differences; a kept zoom unchanged over 12 new frames.
+  The RR Lyr (40 frames, linearity 30 000 ADU) and XX Cyg 2026-08-29 (22 frames) replays
+  give the integration's 15 saturated and 2 suspect points.
+- Whole Python suite (main tree, temporary `HOME` and `TMPDIR`): 1 248 passed, 72 skipped.
+  Release worktree: 632 passed, 45 skipped. ruff and black clean in both.
+- `npm run check` 0 errors 0 warnings; `npm test` 821 passed; `npm run build` OK (JS
+  1 010 kB, 330 kB gzip).
+- Night Red audit: 13 of 13 originals pass both rules.
+
+### 8. Known gaps and issues (before wave 6)
+
+- **Run mode and the Run band** (LightCurvePlot `variant="band"`) wait for wave 6, as does
+  the server's sequence path (one point per saved sub, the run folder,
+  `photometry_quality.json` in a run, locked geometry): built, not exercised end to end.
+- **Drawer and band layout**: the plot tools stay in the plot's own 32 px row, and a Field
+  band between 36 and 150 px keeps its empty strip above the one-row summary (wave 4 band
+  layout); both with the wave 6 Run band.
+- **Qt defects reported, owner decisions**: the batch re-run never recovers after a pointing
+  jump larger than the search radius (blank-sky points, then none, reported as tracked);
+  whether `fits_exposure_mid` should date Argos sequence frames by `DATE-OBS + EXPTIME/2`
+  (their `DATE-AVG` was late by half the download before S36); live CSVs outside a run
+  overwritten from memory; the e-/ADU from the Camera form's gain; the ApertureTracker over
+  many frames of one solution.
+- **Photometry queue**: unbounded; with BJD offline it keeps up (40-50 ms per frame), but a
+  burst of opened frames is measured in order, none dropped.
+- **No weight column** in the Ensemble tab (core's zero point is a plain mean).
+- **Catalogue refetch per Open FITS** (server, wave 4 behaviour): Variables and Recommend
+  are unavailable for tens of seconds after each replayed frame.
+- **Bundle** 1 010 kB (330 kB gzip). **WebKitGTK** untested. Gaia, SIMBAD and NASA
+  unreachable from this network (Stars 0).
+
+## Wave 6a: Plan and sequences (2026-11-12)
+
+Scope (README section 7, row W6; waves.md §5 W6, owner decisions of 2026-11-09: wave 6 in
+two halves, this is 6a): API rows A42 and A59-A66 (server, `argos/server/protocol.md` "API 2
+routes, wave 6a (Plan)" and "wave 6a: sequences"); the mount-motion interlock with "Pause
+the run and slew" (PROPOSAL §7, D2); the preflight; the server sequence path (one point per
+saved sub through `measure_saved_frame`, apertures by Qt's ApertureTracker plus S35 as
+decision 2 asks, `photometry_quality.json` in the run, geometry locked, identification
+armed, camera owner `sequence`); the Plan screen (mapping rows M68-M77), VisibilityTimeline,
+the Steps table editors, the run strip with transport and readiness chip, RunCard in
+Observe, TargetSetList in Plan (D24), charts/mini RunProgress. Built by five roles
+(sequences backend, plan backend, Qt fix and tracker study, Plan UI, run UI) and integrated
+here. Screenshots: `web/screenshots/2026-11-12_wave6a-plan/` (12 scenes in the three themes
+at 1 440 x 900 and in Observatory at 1 280 x 800, plus the palette: 49 shots at device
+scale 2, with a manifest).
+
+**Status: integrated, exit criterion met through the UI; the design, technical and science
+reviews are still to run; the owner's commit pending.** Wave 6b (Run mode with the live
+curve under the image, Watch, attention with sound, keep-awake, the wrap-up, the W5
+carry-overs) is not built; its hooks are (section 6).
+
+Verification (2026-11-12, server on port 8763 with `--simulator --sim-replay` on 51 copies
+of real raw frames of RR Lyr 2026-09-25 (session `20260925T200453Z_RR_Lyr`, frames 1-51,
+APFS clones, read-only), vite on 5163; temporary `--config-dir`, `--log-dir`, sessions
+folder, `HOME` and `TMPDIR`; the owner's photometry settings and e-/ADU table copied, the
+Settings site replaced by public Paris coordinates (the frames' own site was wrong that
+night), ASTAP as installed, the catalogue and exoplanet caches copied into the temporary
+HOME; `~/.argos/config.json` only read, nothing written to `~/Argos/sessions`;
+`argos/ui`, `argos/workers`, `argos/core` of this tree unchanged; no server file changed by
+the integration):
+
+- Python, whole suite (temporary HOME and TMPDIR): **1 384 passed, 72 skipped** (1 267 / 71
+  at the base `d254b08`).
+- `npm run check` 0 errors, 0 warnings (689 files, `src/lab` included); `npm test` **910
+  passed** (76 files; 821 at the base); `npm run build` OK (JS 1 150 kB, 377 kB gzip; was
+  1 010 / 330); `src/lib` imports nothing from `src/lab`.
+- Screenshots: 49, all read (Observatory one by one, the other variants as contact
+  sheets); `npm run audit:night-red`: the 12 Night Red originals pass (rule A 0 px, rule B
+  0 px). `npm run audit:brass` (Observatory 1 440, device scale 2): 0-4 200 accent px per
+  scene except the focused search field and the brass Start (02: 22 300), the focused row
+  of the issues scene (04: 13 100) and the interlock dialog's primary button with its focus
+  ring (11: 17 700).
+- No console error in any capture except the browser's own "Failed to load resource: 409"
+  line for each refused GoTo (the interlock test, expected); no request left the machine.
+
+### 1. Mapping rows closed by the wave
+
+| Row | Qt element | Web | Status |
+|---|---|---|---|
+| M68 | `SequencerPage` (heading 47) | Plan screen in the rail (F3), built like Observe; heading row dropped | Done |
+| M69 | Panel toolbar (5 chips, Reset panels) | Card folds (remembered per viewer) + Panels popover (`arrange`) + Settings "Reset all layouts" | Done |
+| M70 | Five docks | Fixed regions (Steps, Visibility) and right-rail cards (Source, Run options, Target set); floating dropped | Done |
+| M71 | Steps table + edit row | Steps region: inline editors, Cadence and Duration columns (Dither hidden by default, Q-P5), explicit selection, keys (Insert, Mod+D, Delete, Alt+↑↓, Space), drag reorder, totals, estimate and end time from the server, per-cell issues, locked with per-row progress during a run (Q-P9) | Done |
+| M72 | Scientific source dock (Variable / Exoplanet pages, two completers) | Source card: programme segmented, one search field with token-drawn suggestions, catalogue resolve or exoplanet lookup, transit sub-form (night, baseline, exposure, cadence, gain, filter), prediction with BJD_TDB, coverage, altitudes and skipped transits, Prepare | Done |
+| M73 | Acquisition options dock | Run options card (object shared with Observe, repeat, autofocus every N and on filter change, end of run); each issue under its field | Done |
+| M74 | `TargetVisibilityPlot` (+ pyqtgraph menu) | VisibilityTimeline, centre, full width: twilight washes, altitude dashed below the limit, limit line, planned run band with the neutral coverage fill of the subs, transit hatched with dotted coverage edges, now line, UTC and local rows, hover readout; menu dropped | Done |
+| M75 | Presets dock | Toolbar Presets popover (the server's list, filter, unreadable files with their reason, delete with Undo) + Save popover (Replace? on 409 `file_exists`) | Done |
+| M76 | Sequence control dock | Toolbar transport (Start with "Start at a time…", Pause / Resume, Stop… confirmed) + readiness chip → Preflight popover + run strip | Done |
+| M77 | Save / Load preset dialogs | Presets popover + FilePicker for "Open file…" (A61 import) and "Save as file…" (export) | Done (the FilePicker flows exercised by the Plan UI role; not re-run here) |
+
+API rows A42, A59-A66 are all used by the UI: the draft and its derived totals (A59) on
+every edit (one whole-plan PUT each, strict bodies), presets and files (A60, A61), the
+transport with `start_at_utc` (A62), the `sequence` record from the socket and from
+`GET /api/sequence` after a (re)connection (A63), the preflight (A64) on open and after each
+accepted plan revision, device change and run state change (debounced), visibility (A65),
+exoplanet lookup and suggest (A42), transit predict and plan (A66).
+
+### 2. Exit criterion and its evidence
+
+**A transit plan written by the web UI produces `observation.json` (S5) with the same
+content as Qt's for the same inputs; Start, Pause, Resume, Stop and the outcome are visible;
+no silent clamp; a sequence on replayed real frames gives per-sub points identical to the
+fixed Qt sequence path.**
+
+**(1) Transit plan and `observation.json`.** Through the UI: programme Exoplanet,
+HD 189733 b (from the copied exoplanet cache), night 2027-07-31, baseline 45 min, Prepare
+(the "Replace the current plan?" question answered). The draft: object HD 189733, one Light
+step IR 10 s × 921 at 13 s, 13 metadata keys, start 2027-07-31T21:52:35.188Z (the coverage
+start; mid-transit BJD_TDB 2461618.48592, E = 3454; the server's next observable transit from
+the test site, 117 earlier ones skipped, Q-P10). Start in the UI is correctly blocked: the
+start time is more than 24 h ahead (preflight `start_at` block), and the test disk is short
+of the 15 GB of 921 frames. The count was set to 3 in the Steps table (the metadata kept,
+13 keys) and the draft started through `POST /api/sequence/start` with a start time of now
+(a passed time starts at once); 3 subs, completed. Its `observation.json` (553 bytes) is
+**byte-identical** to (a) the fixed Qt `SequenceWorker._write_observation_metadata` on
+`plan_from_dict` of the same draft and (b) Qt's own editor path on the same inputs
+(`lookup_exoplanet` from the same cache, `predict_next_transit`, `make_transit_sequence`
+with 10 s, gain 80, IR, 13 s cadence, 45 min baseline; Qt plans the same 921 frames).
+Scripts: `scratchpad/w6a/integ/obs_compare.py`, `obs_qt_editor.py`.
+
+**(2) A variable-star sequence on replayed frames, through the UI.** Plan RR Lyr, Light IR
+10 s × 40; target set from the owner's run with the check star 000-BJW-666 assigned on the
+copy; one field identification before the run (real ASTAP). Start in Plan; a new client
+opened mid-run showed within 2 s the Run card (3 / 40, last-frame age, end), "Run 3/40" in
+the status bar, the run strip and the locked table. Pause on the Run card (held after the
+sub in progress: frame 14, paused by the observer), Resume in Plan, Stop… on the Run card
+(the dialog: "The current 10.00 s exposure is discarded. 19 of 40 frames are saved in
+20261112T165841Z_RR_Lyr."), outcome "Stopped by the observer after 19 frames". Qt
+reference: the fixed Qt sequence path (`AcquisitionEngine.start_sequence`, its
+`SequenceWorker` and `_on_seq_frame_saved`) offscreen on the **server's 19 saved subs**,
+with the mount at each original frame's pointing (matched by pixel hash), the server's
+reference solution (`GET /api/field` WCS inverted to green px), the run's own
+`targets.json`, the same settings and a clock returning the server's exposure starts
+(`session.json`, microseconds). Result (`scratchpad/w6a/integ/parity_runB.json`):
+
+| Compared | Result |
+|---|---|
+| Points (7 curves × 19 subs) | 133 points, **2 527 values, 0 differences** (exact) |
+| Photometry CSVs (target, check, 5 comparisons) | 7 of 7 byte-identical |
+| `session.json`, `targets.json` | byte-identical |
+| `photometry_quality.json` | equal except `generated_utc` |
+| Flags | 0 saturated, 0 suspect on both sides; 0 sub skipped by S35 on both |
+
+Numeric sample (web = Qt to the last digit): target first sub 7.3356 ± 0.010035,
+BJD_TDB 2461357.2077108333; last 7.3741 ± 0.016608, 2461357.210521485; check first
+7.8689 ± 0.010245, 2461357.207749374; last 7.8866 ± 0.016804, 2461357.2105600247. The subs
+are dated by today's server clock, so BJD and airmass are not physical (replay).
+
+**(3) No silent clamp** (`scratchpad/w6a/integ/clamp.json`). Typed in the editors:
+exposure 5000 s, count 0, gain 5000, interval −5 s, cadence 5 s (exposure 30 s), dither −1,
+Repeat 0, Autofocus every −2, and the Dark slot on a Light step. Every value is shown and
+stored exactly as typed; the server reports 9 error issues (out_of_range × 7,
+cadence_short, dark_slot), each on its cell, under its row and in the list; Start is
+disabled ("Blocked · plan"). Transit form: a baseline of 300 min is refused in the field
+("must be between 0 and 240 min"), nothing sent; exposure 0 and a cadence shorter than the
+exposure are refused at Prepare with the core's words (400); gain 5000 becomes the plan's
+issue, never changed.
+
+**(4) Interlock.** During a run, GoTo from the Mount card: `409 run_active`, the dialog
+with the server's sentence; "Pause the run and slew" paused the run after the sub in
+progress (frames_done 20, `paused_by: "motion"`, 10.7 s) and the GoTo ran (logged after the
+pause). Jog pad held during a run: refused, the pad says "Jog refused: …" and the dialog
+offers "Pause the run" only (a dead-man jog is never resent after a dialog). Park, Unpark,
+tracking off, tracking rate, Centre and Sync go through the same interlock (unit-tested
+client paths; the server refuses them, protocol.md). Stellarium: the server refuses and
+logs; the client adds a toast on a fresh refused bridge GoTo (not exercised live: no
+Stellarium client here).
+
+**(5) Preflight, scheduling, joining.** The Preflight popover shows ok, note and block
+(scene 06: disk block, calibration note). "Start at a time…" scheduled 17:45 UTC
+(`waiting`; Pause answers `409 not_running`); Cancel start… on the Run card → "Scheduled
+start cancelled". A second schedule (17:34) started by itself at 17:34:00 UTC.
+
+### 3. PROPOSAL section 6, W6 promotions (6a part)
+
+| Promotion | Where |
+|---|---|
+| RunCard: state, n / N, last-frame age vs observed cadence, end time, next autofocus, end-of-run action, Pause, Stop (D2) | `imaging/RunCard.svelte`, head of the Observe rail while a run is engaged or its outcome shown |
+| VisibilityTimeline with the neutral coverage fill | `charts/VisibilityTimeline.svelte` in Plan |
+| Night checklist → Preflight popover (disk, calibration counts per night, lid note) | `run/ReadinessChip.svelte`, `PreflightList.svelte` |
+| Mini chart of the run | `charts/mini/RunProgress.svelte` (Run card) |
+| Interlock with "Pause the run and slew" (D2) | `run/interlock.svelte.ts`, one `InterlockDialog` in `App.svelte` |
+| TargetSetList in Plan (D24) | `plan/TargetSetCard.svelte` |
+| Run mode, Run band, Watch, attention (D3), wrap-up, keep-awake | wave 6b |
+
+### 4. Fixed during the integration (found in the running UI)
+
+- **Wiring**: one `SequenceStore` on the app (`app.sequence`), refreshed with the preflight
+  after each (re)connection; Plan, the Run card, the status bar and the palette read it.
+- **Interlock on every mount control**: GoTo, Park, Unpark, tracking, tracking rate, Centre
+  target and Sync go through `app.interlock`; the jog transport raises the question itself
+  and keeps the pad's own refusal line; the client calls carry `pause_run`.
+- **Status bar** (P26): the run is the run chip, shown once on every section ("Run 7/40",
+  "Paused 16/40", "Run AF n/N", "Run at 17:34", "Run stopping"); a click opens Observe (from
+  Observe, Plan). Sequence subs no longer raise one "Frame saved" toast each.
+- **Observe**: the toolbar Stop (and Escape) never stops a sequence ("the sequence owns the
+  camera: Pause or Stop it on the Run card"); the image HUD tags a sequence sub "Run" (it
+  read "Shot"); the Run card gained Open Plan and Dismiss on its outcome.
+- **Palette**: Start the sequence (asks first), Pause, Resume, Stop (asks first, or Cancel
+  the scheduled start), Open a sequence preset…, Check the run before starting
+  (preflight); no single key starts, pauses or stops a run.
+- **Readiness chip during a run** read "Blocked · run" in the danger tone: it now speaks of
+  the run ("Run · 1 note", "Run checks OK", "Run · camera") and leaves out the run's own line.
+- **Run strip of a scheduled run** showed the last file of the previous run: the store no
+  longer adopts saves of an older run while waiting or idle, nor before the run started.
+- **Visibility**: a run scheduled with "Start at…" is drawn at its start time (it was drawn
+  from now); the peak label moves under the curve, on the plot's surface, when the planned
+  run and "now" labels are above it; tick labels next to the row names ("UTC", the zone)
+  are left out instead of overprinting.
+- **Steps table**: an out-of-range gain or count ("5000") was clipped to "500(" (unit room
+  kept in unitless cells); the issue list grows to 40 % of the region before it scrolls.
+- **Preflight** re-checked after each accepted plan revision, device change and run state
+  change (600 ms debounce); Start shows the draft's own start time ("at 21:52 UTC").
+
+### 5. Qt defect found (reported here; fixed in the review round as S46, section 7)
+
+The automatic completion of the comparison ensemble turns the **check star into a
+comparison** (Qt `acquisition_engine.py` `_auto_select_comparisons`, about lines 1420-1495;
+the server's `targets.py` mirrors it). Seen on the server: with 5 calibrated comparisons and
+`photometry.auto_comparisons` 6 (the owner's value), the field solve before the run logged
+"Photometry: 1 pilot-qualified comparison(s) selected for RR Lyr" and 000-BJW-666 lost its
+check role (`set_role` replaces the star with the same AUID key; `already_present` only
+looks at comparisons). The parity runs used `auto_comparisons` 5 on both sides to keep the
+check. Reported to the fixer as QT DEFECT (fix: skip a candidate that is already in the set
+under another role, by AUID or within 1″; then the same in `argos/server/targets.py`).
+
+### 6. Known gaps and what is left for 6b
+
+- **6b, not built** (owner decision 1): Observe Run mode with the live curve under the
+  image, Watch, the attention system with sound, keep-awake, the end-of-night wrap-up, and
+  the W5 carry-overs (plot tools in the drawer's tab row, the Field band's empty strip).
+  Hooks in place: the `sequence` record carries `last_frame_utc`, `cadence_s`,
+  `observed_cadence_s`, `end_utc`, `next_autofocus`, `autofocus_runs`, `paused_by`,
+  `end_action`; `app.sequence` holds the subs' times and the newest save; the Run card takes
+  autofocus marks (from the app's autofocus periods); the status-bar run chip is the place of
+  the attention chip.
+- **A transit prepared for a night more than 24 h ahead** can only be started on that day:
+  the draft's start time has no editor (re-preparing or "Start at a time…" within 24 h is
+  the way); by design of the preflight, said in the chip.
+- **No sweep progress** for a mid-run autofocus in the run strip (`afStep`); not exercised
+  live (no focuser motion on the replay).
+- ~~**Ends** does not move while paused~~ fixed in the review round (section 7).
+- ~~**Preflight "Output folder"** prints the full path~~ fixed in the review round.
+- **Stellarium refusal toast** not exercised live; **WebKitGTK** untested; NASA, Gaia and
+  SIMBAD not used (caches only).
+- **Bundle** 1 150 kB (377 kB gzip).
+- The tracker study (`notes/tracker_comparison.md`) waits for the owner's choice; the
+  QT DEFECT reports were fixed in the review round (S44-S47, section 7), except the wrong
+  plate solution, an owner decision.
+
+### 7. Review round (2026-11-12): what was fixed
+
+Design, technical and science reviews of 6a, then one fixer (two sessions: the first was
+stopped by a usage limit after its Qt fixes). Nothing committed. Re-captured: scenes 01-12
+in the four variants and three new states (14 Plan paused, 15 the Stop dialog, 16 a failed
+outcome) in `web/screenshots/2026-11-12_wave6a-plan/` (61 shots, manifest updated); the
+palette (13) is the integrator's.
+
+**Science.**
+- Qt fixes in the release worktree, each with a test failing before it (`notes/
+  release_0_5_0.md`): **S44** a run measured its Dark, Flat and Bias subs, and the Light
+  points after them (the server measured Light subs only already: parity now holds for
+  mixed plans too); **S45** a finished run's folder stayed the live photometry's (the
+  server passes the run folder per measurement: not affected); **S46** identifying the field
+  turned the check star into a comparison (ported to `argos/server/targets.py` with a test);
+  **S47** the Plan editor clamped count, interval and dither silently and a transit over
+  9 999 frames was cut (the web already reported them as issues). The S35 "check your old
+  files" advice now also catches a frame measured through a wrong solution.
+- **Tracker study corrected** (`notes/tracker_comparison.md`): the truth now moves each star
+  to the frame's date by its proper motion (`proper_motions.json`, RR Lyr only; checked on
+  the image by `truth_check.py`: 0.96 px catalogue to centroid, 0.20 px moved). The RR Lyr
+  target comparison reverses (Qt 0.59 px, web 0.79 px against the real star; on the
+  comparison stars web 0.26 px, Qt 0.59 px): Qt's apertures carry a +0.50 px y bias on every
+  star that happens to oppose RR Lyr's proper motion. The lag analysis moved to the
+  comparison stars (slope 0.131 Qt, 0.077 web). XX Cyg unchanged. Figures, tables,
+  `results.json` and `details.json` regenerated; the S43 note's RR Lyr numbers updated.
+- Not fixed, owner decisions (open issues of the fixer's report): blank-sky points after a
+  field jump in the sequence path; light curves mixing filters; measuring through a wrong
+  plate solution; Q-P10 strict against Qt. Precession in `sky_geometry` (0.3° in 2026) is
+  stated in its docstrings (release worktree), not changed.
+
+**Technical (server).** Two Starts at once are serialised (the loser 409s, the camera stays
+the run's, and no longer stuck in "exposing"); a failure after the run is registered frees
+the engine (`500`, `last_result.reason "refused"`); the run never exposes while the mount
+slews or a jog moves (scheduled start, Resume after "Pause the run and slew"; waits, logs,
+pauses itself after 300 s); Resume during a mid-run autofocus cancels the pending pause
+(`paused_by` now sent in `autofocus`); transit prediction computes the BJD corrections of
+48 candidates per astropy call (no event-loop stall); preflight ids are unique
+(`plan:<code>:<step>`); plan files get a plain file's mode and export needs an existing
+folder; a `~unknown_user` path is a 400, not a 500. The client waits as long as the server
+may hold a `pause_run` motion (sub + 75 s, 400 s in autofocus) and loads the preflight once
+per change. The wheel-disconnect rule is documented (ends the run). Tests: 9 new server
+tests (the start race checked failing without the reservation), 4 new web test groups.
+
+**Design.** Status bar at 1 280 px with a run: the Log button and the star count stay (file
+name folds, frame number '#n', tighter gaps). Visibility header: the run verdict on its own
+row, never cut; labels with a halo, not a box; "highest at night … (dusk)" when the source
+culminates outside the night. Interlock dialog: hold-to-confirm 'Pause the run and slew'
+(40 px, secondary, no brass fill), 'Keep running', words that do not quote the button
+(brass 17 899 px → 2 248, the focus ring). Steps: narrow columns and no Duration while
+locked (Run column fits at 1 280), an out-of-range interval stays editable under a cadence,
+a hidden column's issue shows the column. Warnings drawn with the attention mark in 4
+components. Numbers: true minus and grouped thousands in the server's issue words, grouped
+sensor size, stars and gain; HFD two decimals; exposures as the HUD in the run UI. One clock:
+UTC first everywhere in Plan. Plan layout: Steps sized to content, the timeline takes the
+rest; empty states with buttons. Preflight: 'Dark frames' (the telescope's lid), a
+'Computer sleep' row, the folder elided, wording. Run card: the end moves while paused,
+word values in the UI font, enabled steps counted, 'Last sub started'. Readiness chip:
+the run's state word ('Paused · 2 notes'), 'Blocked · x and 1 more'. Plan rail dot (active;
+attention on a failed outcome). Lock wording 'Locked while a run is scheduled or running';
+'Scheduled' chip; transit card UTC first, named altitudes; transit notes in words; Run mode
+tooltip; no 'Set of Unknown'; Stop dialog with nothing saved.
+Skipped: the issue list keeps the step issues it also shows under their rows (it is the
+click-to-focus index; it scrolls); a separate Visibility caps header (the timeline's own
+header names the source); a lock glyph (no lock icon in the design set).
+
+**Checks.** Python 1 393 passed / 72 skipped (main tree), 646 / 46 (release worktree);
+ruff and black clean in both; `npm run check` 0 / 0; `npm test` 914 passed; build OK;
+Night Red audit 15 / 15 (rules A and B, 0 px); brass audit pass.
+
+### 8. Known gaps and issues (before 6b)
+
+- Owner decisions (fixer's report): blank-sky points after a field jump in the sequence
+  path (Qt and server, decision 2); filters mixed in one curve; a wrong plate solution
+  measured; the tracker options (study §7).
+- 6b inherits: Run mode, Watch, attention with sound, keep-awake (the preflight's 'Computer
+  sleep' row says it is not there yet), the wrap-up, the W5 carry-overs; the
+  `sequence` record's fields listed in section 6.
+- A wheel disconnected during a run ends it even when no move is needed (documented).
+- Not exercised live: the Stellarium refusal toast, a mid-run autofocus's sweep progress,
+  NASA / Gaia / SIMBAD (caches only).
+
+
+## Wave 6b: The night (2026-11-13)
+
+Scope (README section 7, row W6; waves.md §5 W6 with the owner decisions of 2026-11-09 and
+2026-11-12; PROPOSAL §2.3, §3.1, §6 W6 rows, §7): Observe Run mode with the Run band (the
+live LightCurvePlot `variant="band"` under the image, the run's mini charts); the W5
+carry-overs (plot tools in the drawer's tab row with the zoom state lifted out of the plot,
+the Field band's empty strip removed); Watch (`shell/Watch.svelte`, W, wake lock); the
+attention system (server rules per frame with hysteresis, WS `attention`, acknowledgement
+shared by every client, the list and history replayed to a client joining mid-run,
+thresholds and sound level in Settings › Alerts; status-bar chip and list, Run card items,
+Watch row, Web Audio tones Off / Soft / Normal armed by a gesture); keep-awake held by the
+server only during a run; the end-of-night wrap-up; the 6a leftovers (mid-run autofocus
+times and sweep progress in the `sequence` record, the draft's start time editable, the
+Stellarium refusal toast); the owner decisions S48-S51 fixed in Qt (release worktree) and
+ported to the server. Built by four roles (night backend, decisions S48-S51, Run mode UI,
+Watch / attention / wrap-up UI) and integrated here. Screenshots:
+`web/screenshots/2026-11-13_wave6b-night/` (23 scenes in the three themes at 1 440 x 900
+and Observatory at 1 280 x 800, the Stellarium toast and the LP curve in Observatory 1 440
+only: 86 shots at device scale 1, with a manifest).
+
+**Status: done, exit criterion met through the UI (section 2); the design, technical and
+science reviews ran on 2026-11-13 and their findings are fixed or answered (section 7,
+with the Qt fixes S52 and S53); the owner's commit pending; S48-S53 reach this tree's
+`argos/core` with the release/0.5.0 merge (the GUARD list, section 6); the attention
+thresholds wait for the owner's marks in `wave6b-attention-replay.md`.**
+
+Verification (2026-11-13, server on port 8763 with `--simulator --sim-replay` on 27 APFS
+clones of real raw frames of RR Lyr 2026-09-25 (session `20260925T200453Z_RR_Lyr`, frames
+1-20 then 146-152, so the replay crosses the night's HFD rise; read-only sources), vite on
+5163, one headless Chrome; temporary `--config-dir`, `--log-dir`, sessions folder, `HOME`
+and `TMPDIR`; the Settings site replaced by public Paris coordinates; the owner's saved
+RR Lyr target set copied with 000-BJW-666 made the check star; `~/.argos/config.json` only
+read; nothing written to `~/Argos/sessions` or `~/.argos`; each replay's run folder deleted
+after its numbers were read):
+
+- Python, whole suite (temporary HOME and TMPDIR, `ARGOS_TEST_REAL_FRAME` on a clone):
+  **1 460 passed, 76 skipped** (1 401 / 73 at the base `212e1a4`); the skips are the
+  absent Alpaca and seestar_alp simulators, `ARGOS_S43_SESSION`, and the 4 S49 guards of
+  section 6 (they run after the merge). ruff and black clean on the touched server files.
+- `npm run check` 0 errors, 0 warnings (724 files, `src/lab` included); `npm test` **992
+  passed** (82 files; 916 at the base); `npm run build` OK (JS 1 233 kB, 404 kB gzip; was
+  1 150 / 377); `src/lib` imports nothing from `src/lab` outside tests.
+- Screenshots: 86, every scene read (2 x 2 contact sheets and originals); the findings
+  were re-captured (focus tooltips, the 1 280 px status bar, a window-sized first shot); `npm run audit:night-red`: the 21 Night Red originals pass
+  (rule A 0 px, rule B 0 px); `npm run audit:brass` (Observatory 1 440): 0-4 640 accent px
+  per scene except Watch's Attention row (8 116 px: its warning-toned border and the mark
+  at 2 m size, intended).
+- No console error in any capture; no request left the machine.
+
+### 1. Rows closed by the wave
+
+| Row | Web | Status |
+|---|---|---|
+| Run mode (D1) | ModeBar Run enabled, Alt+4, palette "Run mode"; a run that starts proposes Run with a chip on the image (`imaging/modes/ModeSuggestion.svelte`), never switches; `imaging/run/RunBand.svelte` (live curve, target and check facets, rules drawn read-only with "Change rule…") and `RunMinis.svelte` (RunProgress with autofocus marks and afStep, AgeMeter, HFD / stars / sky sparklines) | Done |
+| W5 carry-overs | Curve tools in the drawer's tab row (`imaging/photometry/LightCurveTools.svelte`, one `CurveDisplay` and a `CurveView` per plot, `charts/lightcurve/view.svelte.ts`); a band dragged below 150 px is one 36 px summary row (Field and Run) | Done |
+| Watch (D3) | `shell/Watch.svelte` promoted with the pulse fix, `WatchHost.svelte` on the app's stores, W (Observe) and the palette (any section), wake lock while shown, Dim 100 / 60 / 30 %, Pause by hold, only W, Esc, ?, Mod+K act; attention row keeps the last-frame age and n / N | Done |
+| Attention (D3, PROPOSAL §7) | Server `argos/server/attention.py` (rules, hysteresis, history of 200, snapshot to a joining client); `shell/attention/*` (chip, list popover with Off / Soft / Normal and Acknowledge all, Run card items, Watch row, tones); Settings › Alerts (`settings/pages/Alerts.svelte`); palette "Acknowledge all alerts", "Alert sound: Off / Soft / Normal" | Done |
+| Keep-awake (PROPOSAL §3.1) | Server `keepawake.py` (caffeinate / systemd-inhibit / SetThreadExecutionState), `status.keep_awake`, preflight "Computer sleep" row; Watch footer; a Run card line when it failed or is off during a run | Done (macOS checked live; Linux and Windows with fakes) |
+| Wrap-up (D2) | Server `wrapup.py`, `sequence.wrapup`, `POST /api/sequence/calibration-plan`; `run/wrapup/WrapUp.svelte` in the Run card's outcome (tracking state, darks and biases with a time estimate, Prepare in Plan with Undo, Park by hold, the session folder) | Done |
+| S49 in the UI | One curve per (star, filter) in the store; Filter control in the curve tools; the card, the Light curve tab, the Run band and Watch follow the newest frame's filter; the plan's `light_filters` warning (a press selects the second filter's Light step) | Done |
+| 6a leftovers | Run strip and Run card take the server's `af_step` and `autofocus_passes`; Run options "Start (UTC)" edits the draft's start time (any day; passed refused in words; more than 24 h ahead says when Start opens); the Stellarium refusal toast exercised live | Done (afStep not exercised live, section 6) |
+
+### 2. Exit criterion and its evidence
+
+**During a replayed run, Run mode shows the live curve under the image with values
+identical to the server's points; Watch shows state, n / N and the last-frame age; the
+attention rules fire on the owner's session as the science review's replay says, are
+acknowledged and heard at the chosen level; the computer stays awake during a run; the
+wrap-up appears at the end; S48-S51 are fixed in Qt with tests and ported to the server.**
+
+**(1) Run mode equals the server.** Run of 40 subs (Light IR 1 s, 9 s interval) on the 27
+clones: Alt+4 from the "Run started · RR Lyr · 40 frames" chip (the chip then left). At
+frame 13 the band read target 7.394 ± 0.025 and check −0.032 ± 0.021 (σ 12 0.023);
+`GET /api/photometry/live` gave 7.3944 ± 0.0251 for the same frame. Copy data (the drawer's
+Light curve tab, the same store) against the server's points: **108 values, 0 difference**
+(mag, error, formal error, relative flux, zero point, airmass, BJD_TDB, check mag and
+error); the first replay of the day: 117 values, 0 difference.
+
+**(2) Watch.** W in Observe: "RUNNING · RR Lyr · 17 / 40 frames · 6 s last frame · every
+10 s", the target 7.386 ± 0.025 ir, the check σ, the end time, the curve and the tiles;
+headline type 56 / 48 px at 1 440 x 900 (the clamp of the 88 / 66 / 48 / 30 scale);
+"Computer awake (caffeinate) · screen on"; W closes it.
+
+**(3) Attention.** The HFD rise of the 2026-09-25 night fired at run frame 25 = original
+frame 150, "HFD 23.6 px = 2.7× the first 20 frames", baseline 8.65 px, factor 1.5, as in
+`web/lab/research/functional-spaces.md` §4.10; the client heard it at Soft (two tones 660
+and 880 Hz, peak gain 0.06, logged from the page's Web Audio calls after a key armed the
+sound); it cleared by itself ("resolved") three frames after the replay went back to good
+frames. Then at Normal the mount was disconnected mid-run: Critical "Mount lost during the
+run", three descending tones 880 / 740 / 587 Hz at 0.16, **repeated 35 s later** (30 s
+repeat, 5 s check) while open; acknowledged from another client (HTTP, `acked_by`
+"client-b"): the page's chip went to "nothing needs you" at once, the Run card item left,
+and **no tone in the next 35 s**. Acknowledged from Watch in a later run: `acked_by` "web",
+Watch's first row moved to the next open item. Status bar at 1 280 px with the run chip
+and an open item: no overflow (scroll width 1 280 = client width, measured in three states).
+
+**(4) Keep-awake.** During the run `pmset -g assertions` listed
+"PreventUserIdleSystemSleep named: caffeinate command-line tool … caffeinate asserting on
+behalf of Process ID <the server's pid>" and `status.keep_awake` was `held` (reason "A
+sequence is running (RR Lyr)."); after the run, nothing in `pmset` and `keep_awake.state`
+`off`; after each server stop, 0 caffeinate assertions. The preflight row read "Computer
+sleep — OK: … (caffeinate). Keep its lid open: a closed lid still sleeps most laptops."
+
+**(5) Wrap-up.** At the end the Run card showed "Sequence complete · 40 frames", 37 target
+points and "frames without a point: 2 lock lost" (the replay's jump back to frame 1, S48
+working as decided), "1 critical, 1 attention during the run", "Tracking is still on", 20
+darks of 1 s and 30 biases of 0.01 s at gain 80 through the Dark slot (about 3 min at the
+night's 10 s cadence). "Prepare in Plan" replaced the draft by Dark 1 s × 20 and Bias
+0.01 s × 30 with an Undo toast; nothing started.
+
+**(6) Two filters (S49).** Plan Light IR × 4 then LP × 4: the plan warns "Light steps use 2
+filters (IR and LP): each star gets one light curve and one CSV per filter." After the run
+the server held 16 curves (8 stars × 2 filters, 4 points each), wrote
+`target_RR_Lyr_ir_000-BCG-719.csv` and `target_RR_Lyr_lp_000-BCG-719.csv` (and so on for
+each star), `photometry_quality.json` and `photometry_quality_lp.json`; the Filter control
+draws either.
+
+**(7) S48-S51** in Qt with tests failing before the fix (release worktree: 659 passed, 45
+skipped) and ported to the server; server ≡ fixed Qt on 8 runs × 2 schedules (3 464
+points, every CSV byte-identical): the decisions role's report (notes/release_0_5_0.md
+S48-S51). The guarded tests of this tree pass on a post-merge snapshot (section 6).
+
+**Stellarium.** A GoTo sent to the bridge (127.0.0.1:10763, started and stopped for the
+check) during a run: `last_goto.outcome` "a sequence is running — pause it first" and the
+toast "Stellarium GoTo refused · A sequence is running: pause it (Run card or Plan), then
+send the GoTo again from Stellarium."
+
+### 3. PROPOSAL section 6, W6 promotions (6b part)
+
+| Promotion | Where |
+|---|---|
+| WatchView with the pulse fix | `shell/Watch.svelte`, `WatchHost.svelte`, `wakelock.ts` |
+| AttentionPopover, `model/sound.ts` (`model/rules.ts` the server's oracle) | `shell/attention/*`; rules in `argos/server/attention.py` (tests against the lab's cases) |
+| `charts/mini/*` for the run | `imaging/run/RunMinis.svelte` (RunProgress, AgeMeter, Sparkline) |
+| LightCurve band variant | `imaging/run/RunBand.svelte` on `charts/lightcurve/LightCurvePlot.svelte` |
+
+### 4. Fixed during the integration (found in the running UI)
+
+- **Wiring**: the Run mode role's ImagingScreen patch and the night role's six-file patch
+  (its ImagingScreen hunks applied by hand over the first). The Run card takes the
+  server's autofocus passes; Plan's run strip gets `af_step` and the marks; the Run card's
+  "n more" opens the status bar's list.
+- **Palette**: Watch from any section (key W shown), "Acknowledge all alerts (n open)",
+  "Alert sound: Off / Soft / Normal"; Run mode and Watch get their icons.
+- **Run band rule line** (the Run role's open issue): drawn from the server's item
+  (`baseline_px` × `factor` for the HFD rise, `baseline` × `factor` for the star drop), not
+  recomputed from the client's columns.
+- **The draft's start time** had no editor: Run options "Start (UTC)" (`parseDraftStart`);
+  a `start_at_utc` issue is titled "Start (UTC)"; the `light_filters` warning selects the
+  second filter's first Light step.
+- **S49 in the views**: the Photometry card, the Light curve tab and Watch showed the first
+  filter's curve after a filter change; they follow the newest frame's filter.
+- **Status bar at 1 280 px** overflowed by 46 px with the run chip and an open attention
+  item ("Log" cut): the star count folds into the HFD tooltip then; the chip keeps its
+  word and count and shows its headline only when the bar is not crowded.
+- **Server (integration bugs, with tests)**: (a) a run's last sub whose field solve ended
+  after "Run ended" was measured again by the live path under no filter (a one-point
+  `@clear` curve and CSV, the Run role's report): `PhotometryService.on_solved` never
+  measures a sequence sub (`test_a_run_sub_solved_after_the_run_ended_is_not_measured_again`,
+  fails before); (b) the run's sub costs for the wrap-up used one more call of the
+  injectable clock per sub, which would have broken the guarded Qt parity test after the
+  merge: timed with `time.monotonic()` (the parity test passes on the post-merge snapshot).
+
+### 5. Owner decisions reported by the roles, decided on 2026-11-14 and 2026-11-15
+
+The owner took every recommendation below (2026-11-14), then the recommendations of that
+run's reports (2026-11-15). Qt fixes are in `release/0.5.0` (worktree, uncommitted, notes
+`notes/release_0_5_0.md`), the server's in this tree; `argos/core` here gets S54-S59 at the
+next merge of release/0.5.0 (section 6). Replays on the 8 runs of the tracker study (257
+frames, Argos's live solves) with a solve before every sub ("every sub") and with one solve
+per run plus re-solves when due ("per run").
+
+- **A second guard against a wrong plate solution: S54** (option B; refined 2026-11-15). A
+  new camera solution on which fewer than ceil(k/2) of the tracker's k anchors show a star
+  (SNR ≥ 5) where it puts them is refused, the previous solution kept; 3 consecutive
+  refused solutions that agree within 20 green px are accepted as a re-pointing the mount
+  did not report (the owner's 3 consecutive good solves span at most 10.4 px). Every sub:
+  265 solves, one refusal (XX Cyg 2026-09-07 045156Z frame 1, by S50; with S50 off, S54
+  alone: 1 of 6 anchors seen), 0 false; per run: 34 solves, none refused; no re-pointing
+  accepted on the owner's runs. Real RR Lyr subs moved 500 px without a slew: refused for
+  ever before, the third solution accepted after (they agree within 9.4 px). Boundary tests
+  pin ceil(k/2) (1 of 4 refused, 2 of 4 accepted) in both trees.
+- **S50's reference moves: S55.** When the last 3 camera solves agree within 0.3 %, the
+  reference becomes their mean. The owner's 270 solves: no decision changes; a wrong first
+  solve (3.4 % low) put before each night: 32, 33 and 204 good solves refused before, 2, 3
+  and 2 after (the third agreeing one is accepted; 2026-09-07's 3 include its own wrong
+  solve).
+- **A lock on fewer than 3 anchors: S56** (refined 2026-11-15). Such a frame is verified
+  only when measured through a solution of this sub or the previous one with the tracker
+  moving no aperture 2 px or more from it (no re-solve then); otherwise its points are
+  flagged `suspect` (the stream's existing flag, drawn hollow) and a re-solve is due. One
+  WARN per episode (a verified frame, a slew or invalidation, a set change ends it; a landed
+  solve does not); status `lock.verified`. Cost on the owner's runs: every sub, 3 of 255
+  target points flagged (XX Cyg 2026-08-29 050148Z frames 0 and 13, 052943Z frame 0;
+  25 before the refinement; frame 13 is the one 3.4 px off the star, the 22 verified
+  2-anchor frames are 0.24-1.83 px from it); per run, 14 flagged (every other sub of those
+  two runs) and 24 re-solves (34 before). The dangerous case stays flagged: RR Lyr
+  2026-09-25 frames 4, 7, 8, 10, 11 of the set-change replay (S52 off, 1 anchor, 29.5-35.8
+  px off the star, solution 3-10 subs old). Server and fixed Qt in one process on a
+  post-merge snapshot: 050148Z every sub and per run (118 points, 12 and 66 suspect), RR
+  Lyr 0-39 (272 points, 42 suspect) and 40-79 with an injected wrong solve (306 points,
+  S54 refusal text identical): 0 differences.
+- **S56, second set** (2026-11-15; S56 amended in place, no new S number). (1) The anchors
+  are chosen on the frame the solution was solved on, through it (exact there), not on the
+  measured sub: the S48/S56 checks count them on the measured sub. Real RR Lyr subs moved
+  500 px without a slew: before, 1 anchor (a field star), 2.16 px of tracker motion, the
+  target 496 px off, flagged by a 0.16 px margin; after, 1 of 6 seen, lock lost, no point, a
+  re-solve due (subs 44-46 skipped, 47-48 flagged as before: 2 anchors in the moved frame,
+  4.3 px drift per sub). (2) In a run a 1-2 anchor sub verified through the previous sub's
+  solution is solved too (server: `resolve_due(seq, now=True)`); outside a run nothing more.
+  (3) The 2 px threshold stays. Cost on the 8 runs: every sub, unchanged (255 target
+  points, 3 flagged, 265 solves, 2 skipped: RR Lyr 52 and 175 now by `lock_lost`); per run,
+  3 flagged (14 before), 35 solves (24), 3 WARN episodes (13): 050148Z 2 of 22 flagged
+  (12), 23 solves (13). 050148Z keeps 2 anchors on 20 of 22 subs (subs 9 and 11: 1, its
+  first comparison at SNR 9.9 on the solved subs 8 and 10; still verified, 1.01 and 0.57
+  px from the star) and all its verified frames. The RR Lyr 0-39 set-change case with S52
+  off: the rebuilt tracker's 6 anchors come from frame 0, every target point within 1.12
+  px, none flagged (frames 4, 7, 8, 10 and 11 were 29.5-35.8 px off, flagged; 2 and 3
+  skipped). Decision 2 needs the sub's solve to land before the next sub: slower solves
+  leave such subs flagged and solve every other sub (no loop or stall). The batch re-run
+  (S58) needs neither rule (it builds trackers on the frame it just solved and re-solves
+  before measuring). The sequence reads the solution and its frame in one call
+  (`FieldService.reference_with_frame()`, review finding); the field and sequence tests
+  check that `solved_raw` and `solved_seq` reach the photometry. Qt only: a run's first sub
+  after an opened FITS took the file's anchors (decision 1) and S54 refused the camera's
+  own solution against them; a file's anchors no longer vet a camera solution (S59
+  amended; the server drops the file's solution on `source_changed`). Server and fixed Qt in one process on a post-merge snapshot: 050148Z every
+  sub and per run (118 points, 12 suspect each), RR Lyr 0-39 with and without S52 (318
+  points, 0 suspect), the 500 px jump (27 points, 6 suspect, the same skips and S54
+  refusals): 0 differences. No GUARD: the server tests need no new core.
+- **S58** (2026-11-15): the batch re-run's S43 check gets S56's rule (a frame of 1-2
+  anchors is re-solved when no solution of it or the previous frame verifies it, else
+  flagged). Re-running 050148Z: before, 4 unflagged target points 2.5-4.5 px off the star;
+  after, 12 re-solves, none flagged, all within 1.89 px (no solver: all 22 flagged). The
+  server has no batch re-run.
+- **S59** (review finding): a camera frame after an opened FITS drops the file's tracker
+  (else S54 held the camera's solutions to the file's anchors).
+- **The vetting file's filter: S57.** Every `photometry_quality*.json` gets an additive
+  last key `"filter"` (the token), Qt and server; Qt Review and the session list read it.
+- **Attention baselines carried over runs** (option A; refined 2026-11-15, server only).
+  The HFD baseline is carried over the runs of one server session on object and filter, the
+  star baseline on object, filter, exposure and gain, none after 12 h without a sub of its
+  setup; a restart starts fresh. Replay of the three nights: two new HFD alerts, 2026-08-29
+  053540Z sub 4 (05:39:38 UTC, 11.1 px = 1.7× 6.55 px) and the degraded 2026-09-07 045626Z
+  run at sub 3 (05:00:02 UTC, 39.2 px = 5.2× 7.60 px); no star alert, no other change, the
+  same with one server for the three nights (without the 12 h rule 040723Z would have been
+  judged on 08-29's 6.55 px). Rows D1, D2, W2 appended to `wave6b-attention-replay.md`
+  for the owner's marks; `functional-spaces.md` §4.10 says the same.
+- **Web**: the readout says "suspect (hot pixel, or unverified lock)"; the Run band and
+  Watch draw a filter's server baseline only for that filter (another filter's line was
+  drawn on LP subs before).
+- **Still open**: the AAVSO export with two filters (Qt refuses them, S53; W7's Review
+  needs the same rule); the alert thresholds (the owner marks `wave6b-attention-replay.md`);
+  the S56 second set's report (an anchor at the SNR 10 edge: 050148Z subs 9 and 11) and
+  its fixer's (Qt keeps an opened FITS's solution until the camera's own solve, S59; the
+  server drops it on `source_changed`).
+
+### 6. Known gaps, and the guards to check after the merge
+
+GUARD (tests that need the fixed core; they skip before the release/0.5.0 merge and run
+after it; all 114 tests of these four files passed on a post-merge snapshot built in the
+integration scratch, release worktree core over this tree, and again with the review fixes
+on a new snapshot, section 7; no guard was added by the fixes):
+
+- `tests/server/test_photometry.py::test_live_points_csvs_and_report_are_identical_to_the_qt_engine`
+  (`requires_s49_core`: `argos.core.photometry.lightcurve.curve_key`).
+- `tests/server/test_photometry.py::test_the_filter_token_is_the_cores_s49`
+  (`argos.core.imaging.fits_writer.filter_token`).
+- `tests/server/test_sequence_parity.py::test_a_sequence_gives_the_qt_files_and_points`
+  (`requires_s49_core`; passes after the merge with fix (b) of section 4). Since S57 it also
+  branches on `core_has_s57()` (`save_comparison_quality_report` takes `filter_token`):
+  before the merge it drops the server's `"filter"` key before comparing the vetting file
+  with Qt's, after it compares the whole file.
+- `tests/server/test_sequence_plan.py::test_the_two_filter_warning_is_the_qt_editors_s49`
+  (`argos.core.imaging.sequencer.light_filters_warning`).
+- `tests/server/test_site_check.py::test_horizontal_at_sweep_against_astropy` and the
+  `PARIS_APART` tests (branch on `sky_geometry.precess_j2000_to_date`: of-date before the
+  merge, J2000 after; pass both ways).
+
+Gaps:
+
+- Not exercised live: a mid-run autofocus's sweep progress (afStep; unit-tested), the
+  `no_frame`, `comps_low`, `tracker_lost` and altitude rules (unit-tested; the backend's
+  offline pass of the whole 195-frame night fires only the HFD rise), Linux and Windows
+  keep-awake, the wake lock in WKWebView / WebKitGTK / Safari, audible output (the Web
+  Audio calls are logged, headless Chrome plays nothing).
+- Run mode draws one filter at a time with a selector (design choice of the Run role, for
+  the reviews); a two-filter Watch shows the newest frame's filter.
+- The attention list keeps the server's last 200 items across runs (earlier runs' items
+  stay listed).
+- The preflight's Altitude row says "No target coordinates" when the plan has no source
+  even though the target set has the target's coordinates (6a behaviour, for the reviews).
+- Screenshots at device scale 1 (6a used 2).
+- Bundle 1 233 kB (404 kB gzip) at integration; see section 7 for the final build.
+
+### 7. Reviews and fixes (2026-11-13 and 2026-11-14)
+
+Three reviews read the integrated wave: design (every shared shot, Watch measured from
+2 m), technical (two whole suites, the protocol, an in-process attack on the attention
+service, keep-awake under SIGTERM / SIGKILL, live runs) and science (each claim re-run on
+clones of the owner's frames with the fixed Qt code; the attention rules replayed on the
+owner's nine Qt runs: `wave6b-attention-replay.md`, for the owner to mark). One fixer
+applied the findings in two attempts (the first stopped by an API error before it
+reported; its edits were kept and checked again). Science first.
+
+**Qt fixes in the release worktree** (`notes/release_0_5_0.md`, tests failing before the
+fix, ported to the server where it applies):
+
+- **S52, a target-set change between two solves re-anchored the tracker on a stale
+  solution** (science review): the VSP backfill after a run's first solve, a role edit or
+  Recommend dropped the tracker and the next sub rebuilt it on the last raw solve; one
+  coincidental anchor passed the S48 check (ceil(1/2) = 1) and every aperture sat on blank
+  sky until the next solve (RR Lyr 0-79 through the server: 5 unflagged target points,
+  SNR 0-2.6, 30-37 px off; the same frames in fixed Qt). Now a set change freezes the
+  solution as tracked so far, the next tracker is built on it, and in a run the next sub's
+  solve is due at once. Tests: release
+  `test_acquisition_engine.py::test_a_set_change_never_re_anchors_on_a_stale_solution_s52`,
+  server `test_photometry.py::test_a_set_change_never_re_anchors_on_a_stale_solution_s52`.
+  "Check your old files" in the notes (zero point more than 1 mag off the run's median
+  after a "comparison(s) selected").
+- **S53, the AAVSO export wrote two filters under one `FILT`**: refused with what to do
+  (`test_photometry_window.py::test_aavso_export_refuses_curves_of_two_filters_s53`); the
+  web Review (W7) takes the same rule.
+- Notes: S51's summary row and "check your old files" say the old airmass was off by up
+  to ±0.08 at 10-15°, of either sign elsewhere (the owner's runs: low).
+
+**Server, attention and keep-awake** (tests in `tests/server/test_attention.py` and
+`test_night.py`):
+
+- "No new frame" counts from the newest **save** and takes the cadence from save-to-save
+  intervals (before the second save, F × floor + M): the false critical alarm at the start
+  of all nine of the owner's runs is gone, the real freeze still fires (the replay table's
+  last section).
+- A reopened item needs a new acknowledgement (an acknowledged "Mount lost" that came back
+  was silent); a non-critical item flapping within 15 min of its last tone neither sounds
+  nor logs again (its count says how often).
+- Altitude: only for a run with Light frames; "now" is the mount's altitude when it points
+  at the target, and with the X3 site check in disagreement the Settings site gives no
+  verdict (the RR Lyr night's two false altitude items).
+- Disk: the run's remaining frames when they need less than 30 min.
+- Alert texts follow `format/number.ts` (U+202F groups, U+2212, ranges "23 … 25"), checked
+  against the web's formatter; "Run stopped: Run stopped:" is logged once.
+- Keep-awake: a close during the OS acquire keeps no assertion; switching
+  `alerts.keep_awake` applies to the run in progress.
+- The S50 reset on a camera disconnect sits in its own block (the focuser's `run.halt()`
+  no longer hangs off it).
+- The start-time refusal and preflight name the day of a start more than 24 h ahead
+  (`test_sequence.py::test_a_start_days_ahead_names_its_day`).
+
+**Web** (tests beside each module):
+
+- Watch: a `watch` variant of the curve (22 px ticks, 30 px names, the newest point's ring
+  kept clear, no secondary header text); the attention row keeps the age and n / N side by
+  side at 48 px, the state word when not running and "+n more"; the footer names the links
+  that are down and folds the others ("2 linked", the names in the tooltip), Pause at
+  18 px, and shows the sound level (a click cycles Off / Soft / Normal; "not armed"
+  otherwise); a run that ended reads COMPLETE / STOPPED / FAILED with its end time (the
+  ENDS tile says "ended", never "after the first frames"); the HFD rule drawn as the Run
+  band draws it; HFD at 2 decimals with a space before "px"; ALT "—" with "mount not
+  connected"; the wake lock asks once at a time; W follows the layout (Z on AZERTY no
+  longer closes Watch).
+- Status bar during a run: the crowded rules hold at every width and the frame number is
+  never squeezed; the attention headline is measured: drawn whole when it fits, cut with an
+  ellipsis when at least 96 px are left (1 440 px with the run chip and the site chip),
+  else folded into the chip's tooltip (1 280 px). Measured on the live page: scroll width
+  = client width at 1 440 and 1 280 with the run chip, the site chip and an Attention
+  item, and with a Critical and an Attention item.
+- Filters (S49): every label names the filter as the wheel does (IR, LP), never the file
+  token (`format/filter.ts`); the Photometry card names the filter of its magnitude; the
+  Run band follows the newest frame's filter unless the observer picked one.
+- The image chip's stale state uses the run's limit (max(2 × cadence, cadence + 60 s)) for
+  a run's sub: no "Last frame" between the subs of a healthy run.
+- Run band: the "now" label and the rule episode label are placed clear of the points
+  (halo, free side), the newest point's ring has its room, and an episode that began near
+  the now-line leaves the free side to the "now" label (they were drawn over each other in
+  the fixer's first re-capture of shot 13); with the drawer open (60-150 px)
+  the summary row is on top and the target's newest points fill the rest.
+- Plan: a start more than 24 h ahead is "Scheduled · opens 16 Nov 21:30 UTC" (a note, not a
+  block); Start and the steps header carry the date.
+- Wrap-up: the frame line adds up ("39 target points · 1 not measured" for 40 frames); the
+  darks and biases show the Plan's own durations and "3 s readout and save per frame,
+  measured tonight"; the gallery fixture uses the measured overhead (11.4 s), and
+  functional-spaces T12 and §4.14 say about 7 min, not 17.
+- Run card: "Last frame" is the age's one name; when the server's end estimate has passed
+  with frames to go, the end is the frames left × the cadence ("in ≈ 32 s · from cadence").
+- Rail: Connection carries the attention mark while a "Device lost" item is open (not for
+  a deliberate disconnect); toasts draw their level with the attention marks (disc, bar
+  over dot, ring); the sound plays only on a running audio context (a suspended one is
+  asked to resume and the tone is tried again).
+- Capture artefacts re-captured (a rail tooltip over the image, focus boxes on clicked
+  controls).
+
+**Skipped, with the reason:**
+
+- HFD in the server's alert texts stays at 1 decimal ("HFD 23.6 px = 2.7×"): the strings
+  follow the lab oracle `src/lab/workspace/model/rules.ts`, whose cases the server's tests
+  pin; the readouts (status bar, Run band, Watch) use the 2 decimals of `frame_metrics`.
+- "One home per value in Run mode" (design, low): the age has one name; folding the Run
+  card's progress and age rows into its header in Run mode is a layout change of the card
+  in every mode, left for the owner's look at the shots.
+- The `attention` event still carries the history (technical, low): the 15 min quiet
+  window removes the flapping storm; sending the history only on connect would change the
+  event's contract mid-wave.
+
+**Verification of the fixes** (2026-11-14, server on port 8768 with `--simulator
+--sim-replay` on 40 APFS clones of RR Lyr 2026-09-25, frames 1-20 and 146-165, same
+temporary folders and Paris site as section 2; vite on 5168; one headless Chrome): the HFD
+rise fired again at run frame 25 (original frame 150), "HFD 23.6 px = 2.7× the first 20
+frames", baseline 8.65 px; the mount lost mid-run raised the Critical and the rail's
+Connection read "needs attention"; the wrap-up read 40 of 40 = 39 points + 1 not measured,
+≈ 1m 20s + 1m 30s = ≈ 2m 50s, and Prepare in Plan gave "≈ 2m 50s" in the Plan; the
+two-filter run gave 16 curves (`@ir` 3 points, `@lp` 4) and the labels IR / LP; the
+Stellarium GoTo was refused with the toast (bridge on 127.0.0.1:10768, stopped after);
+`pmset -g assertions` showed no caffeinate assertion after the server stopped.
+Suites after the fixes: Python whole suite **1 472 passed, 76 skipped** (temporary HOME and
+TMPDIR, `ARGOS_TEST_REAL_FRAME` on a clone; the skips are the absent Alpaca and
+seestar_alp simulators, `ARGOS_S43_SESSION` and the 4 S49 guards); release worktree **660
+passed, 46 skipped** (646 / 46 at the base); ruff and black clean in both trees;
+`npm run check` 0 errors, 0 warnings (726 files); `npm test` **999 passed** (83 files);
+`npm run build` OK (JS 1 241.5 kB, 407 kB gzip; the existing > 500 kB chunk warning). On a
+post-merge snapshot (the release worktree's `argos/core`, `workers`, `ui` and their tests
+over this tree), `test_photometry.py`, `test_sequence_parity.py`, `test_sequence_plan.py`,
+`test_site_check.py`, `test_field.py`, `test_attention.py` and `test_sequence.py`: 229
+passed, 1 skipped (no real frame in that run), the S49 guards included.
+
+Screenshots: the scenes the fixes changed were re-captured into
+`web/screenshots/2026-11-13_wave6b-night/` under the same names (01, 02, 02b, 03, 05, 06,
+07, 07b, 08, 10-15, 17-20; 04, 04b, 09 and 16 are unchanged), the captions updated in
+`manifest.json`, the gallery rebuilt; every re-captured scene was read. Night Red audit:
+21 of 21 pass (rule A 0 px, rule B 0 px); brass audit (Observatory 1 440): 23 of 23 pass.
+
+### 8. What W7 (Review) inherits
+
+- **S49 file names** (one curve and one CSV per star and filter): a run's CSV is
+  `{role}_{object}_{filter}_{star}.csv` (`target_RR_Lyr_ir_000-BCG-719.csv`), the live
+  preview's `<object>_<start>_<filter>_<star>.csv`; the vetting is
+  `photometry_quality.json` for the run's first filter and `photometry_quality_<filter>.json`
+  for the others, each naming its filter in a last key `"filter"` (S57; a file without it was
+  written before 0.5.0: one-filter runs only, else both bands mixed). The filter token is the
+  core's `fits_writer.filter_token` ("ir", "lp", "irc", "clear"); curves are keyed
+  `<AUID or name>@<token>`. Review reads both names: a new name's curve is the star's in
+  that filter, an old name has no filter (Qt `review._curve_filter`). Label a series
+  "Name [filter]" only when more than one filter is loaded, with the wheel's name
+  (`format/filter.ts`).
+- **AAVSO export**: one filter at a time (S53); `FILT` and `KMAG` from that filter's
+  target and check curves.
+- **S52 "check your old files"**: target rows whose zero point departs by more than 1 mag
+  from the run's median after a set change, until the next solve; Review could flag them.
+- **The attention history**: the server keeps 200 items and the items of the last 20 runs
+  (`run_summary`), which a run's review can show beside its curve.
+- **Suspect points** (S56, S58): `suspect` also marks a point whose lock rested on 1-2
+  anchors with no solution of its sub or the previous one within 2 px; a Review re-run
+  must carry S43 and S58 (re-solve such a frame, else flag it), and keep them out of the
+  AAVSO export as Qt does.
+- **Attention baselines** (section 5): carried within one server session only; a Review of
+  a past run shows the items as raised, with `values.baseline_origin`.
+- The open owner decisions of section 5 and the replay marks.
+
+## Wave 7: Review (2026-11-15)
+
+Scope (README section 7, row W7; waves.md §5 W7; PROPOSAL §6 W7 rows; 07 and 08): the
+Review section: R0 sessions landing (A67 list, recent items, Open folder, Import CSV
+(A70), Open FITS, the live run while a sequence runs), R1 a session, an imported CSV or
+the live run (plot wall with one linked time axis, health strip, cell menu, expand pane;
+Selected point, Ensemble, Session and AAVSO export rail cards; drawer Frames, Ensemble
+and Log tabs), R2 the frame inspector (previous / next, FITS header, measure star,
+Identify field, catalogue layers with Settings › Catalogues inside), the Re-run dialog
+(M50), the Export AAVSO and Export CSV dialogs, the job strip; NavRail Review (F4),
+Mod+Shift+O to R0, Mod+O into R2 while in Review; the palette's Review entries. Server
+A67-A79 on the job machinery (A80). Built by four roles (sessions backend A67-A75,
+exports and re-run backend A76-A79 with the Qt fixes S60-S63, plot wall UI, inspector /
+dialogs UI) and integrated here (`lib/review/ReviewScreen.svelte` hosts R0 / R1 / R2, the
+dialogs and the job strip; `ArgosApp` holds the stores). Screenshots:
+`web/screenshots/2026-11-15_wave7-review/` (44 shots: 26 scenes in Observatory 1 440 x
+900, 6 main scenes in Charcoal and Night Red 1 440 x 900 and Observatory 1 280 x 800, with
+a manifest).
+
+**Status: done 2026-11-15 (integrated, reviewed, fixed); exit criterion (a) and (b)
+checked through the UI on clones of the owner's three sessions (section 2; the
+independent checks in `spec/wave7-independent-checks.md`); the design, technical and
+science reviews' findings fixed or answered (section 7); six owner decisions and two Qt
+defects open (section 5); nothing committed (release/0.5.0 holds S60-S65 uncommitted).**
+
+Verification (2026-11-15, server on port 8773 with temporary `HOME`, `TMPDIR`,
+`--config-dir` and `--log-dir`; the sessions folder holds APFS clones of
+`20260829T050148Z_XX_Cyg`, `20260907T040723Z_XX_Cyg` and `20260925T200453Z_RR_Lyr`;
+the observer code replaced by a fake one (XYZ); the Settings site copied from the owner's
+configuration and never printed; vite on 5173, one headless Chrome; the live run is a
+`--simulator --sim-replay` run on 14 clones of RR Lyr lights 1-14 with the owner's
+saved RR Lyr target set copied; Gaia DR3, SIMBAD and NASA unreachable, VSX and VSP from
+a clone of the cache; every run, re-run and replay folder deleted after its numbers were
+read):
+
+- Python, whole suite (temporary HOME and TMPDIR, `QT_QPA_PLATFORM=offscreen`):
+  **1 613 passed, 75 skipped** (1 537 / 73 at the base `04ae0cb`). ruff and black clean on
+  the server files touched here.
+- `npm run check` 0 errors, 0 warnings (772 files, `src/lab` included); `npm test` **1 090
+  passed** (89 files; 1 001 at the base); `npm run build` OK (JS 1 445 kB, 470 kB gzip);
+  `src/lib` imports nothing from `src/lab`.
+- Screenshots: 44, every scene read (2 x 2 contact sheets and originals for the scenes
+  fixed); `npm run audit:night-red`: 6 of 6 Night Red originals pass (rule A 0 px, rule
+  B 0 px); `npm run audit:brass`: 0-770 accent px per screen outside dialogs, about
+  2 200 in a dialog (its primary button), the rest is the target's own colour on the plots.
+- No page error in any capture; Chrome logs the expected `404` of `GET
+  /api/files/solution` for a frame never solved and the `409 file_exists` behind
+  "Replace?".
+
+### 1. Rows closed by the wave
+
+| Row | Web | Status |
+|---|---|---|
+| R0, M94, M103 | `review/landing/SessionsLanding.svelte` + `LandingStore`: the list (A67), Recent, Open folder / Import CSV / Open FITS through the FilePicker, the live run row; a failed open stays on R0 with the server's words; F4, Mod+Shift+O (`review.sessions`, global), Mod+O opens R0's FITS picker while in Review | Done |
+| R1, M80-M92, M96, M97 | `review/SessionReview.svelte` + `PlotWall`, `HealthStrip`, `ConditionsCell`, the four rail cards, the drawer (Frames: `frames/FramesTable` on `VirtualTable`; Ensemble; Log with the L key); a session opens through its `session_open` job (A68) then A69; the toolbar's U, M, F, + / −, ← / →, Enter, D, P bound in scope `analyze.r1` | Done |
+| R2, M100-M102 | `review/inspector/FrameInspector.svelte` + `InspectorStore` (A71-A75): from a Frames row, a point's Open frame or Open FITS; PageUp / PageDown through the session's lights, Alt+← back to R1; keys in scope `analyze.r2` (fill, levels, statistics and labels stay `planned`: R2 has no handler) | Done |
+| M8 (re-run), M50, D2 | Re-run dialog (A76 plan, then the job) from R1's toolbar and the palette ("Re-run photometry…", found by "re-run subs"); the job strip with Cancel; the result's "Open the new run"; a warning in the dialog when the session's site check said mismatch | Done |
+| M92, A77-A79 | Export AAVSO (preview, refusals, one filter, Replace?) and Export CSV from the toolbar, the AAVSO card and the palette; a download starts by itself; a toast names the file | Done |
+| M93, M95, M98, M99 | Floating windows dropped (D27); PhotometryWindow dissolved (D8); Settings › Photometry; Observe drawer | Done (as decided) |
+| D3 live run | `ArgosApp.openReviewLive()`: R1 on its own curve store fed by the live stream, the target set's catalogue magnitudes, Preview chip, read-only | Done (replay) |
+
+### 2. Exit criterion and its evidence
+
+Evidence files (scratch, kept small): `w7/integration/evidence/` (`r1_vs_a69.json`,
+`ui_exports*.json`, `ui_exports_check*.json`, `rerun_check_rrlyr.json`,
+`siril_photometry_rerun_*.json`, `ui_rerun_*.json`, `r2_*.json`, `live_observatory.json`)
+and the roles' `w7/backend-exports/evidence/` and `w7/backend-sessions/`.
+
+**(a) Correctness against references that do not depend on Qt.**
+
+- **R1 shows what A69 serves.** The Selected point card (each cell's value at that time)
+  read at 7 points per session (first, second, third, a third, half, last two) against
+  A69: JD to the 5 decimals shown, magnitude and error to 0.001, airmass to 0.001, all
+  equal on the three sessions (21 of 21); the airmass is the FITS header's on RR Lyr
+  (A68 `airmass_source: header`, e.g. 1.033 with "CSV 4.088" beside it) and the CSV's on
+  both XX Cyg runs. The live run: the UI's 4th point (7.357 ± 0.005) is A69 live's
+  (7.3573, 0.0051).
+- **Times** (the sessions role and the exports role, astropy from DATE-OBS + EXPTIME/2):
+  `jd_utc` at mid-exposure to 1 ms on the three sessions, BJD_TDB to 1 ms for the site
+  ARGOS used. The re-run started from the dialog here: `jd_utc` and `bjd_tdb` minus
+  astropy ≤ 0.00004 s on 195 points.
+- **Airmass.** RR Lyr 2026-09-25: the CSV airmass (and so the AAVSO AMASS) is 1.514-4.088
+  where the truth is 1.033-1.364 (the Settings site was not the run's; the header AIRMASS
+  agrees with astropy at the mount's site to ≤ 0.0004). **New:** the owner's current
+  Settings site is still not that run's site, so a re-run started from the dialog writes
+  airmass 1.518-4.112 (Pickering at the Settings site to 0.0006; up to 3.08 from the
+  header): same cause, same open decision (section 5); the dialog now says so before
+  Start. XX Cyg: the CSV airmass is the mount's (≤ 0.0004), 2.1° from the Settings site.
+- **AAVSO files written through the UI** (`check_ui_exports.py`, the exports role's
+  checker written from the Extended File Format field list; the aavso.org page answered
+  403, so the rules are the published ones as known offline): **0 errors** on 4 files
+  (RR Lyr 195 rows, XX Cyg 09-07 24, XX Cyg 08-29 22, and an RR Lyr copy with a check
+  star 195); warnings: ENSEMBLE without a check star (the owner's runs have none), CHART
+  na (targets.json written before chart recording). Fields: `#TYPE=EXTENDED`,
+  `#OBSCODE`, `#SOFTWARE=Argos`, `#DELIM=,`, `#DATE=JD`, `#OBSTYPE=CCD`, JD at
+  mid-exposure, FILT TG, TRANS NO, MTYPE STD, CNAME ENSEMBLE, GROUP na, no JD 0. RR Lyr's
+  AMASS and its 2 blank-sky rows (_00053, _00176) are wrong: owner decisions (section 5).
+- **Check star** (the RR Lyr copy with comparison 000-BCG-523 relabelled check: its
+  leave-one-out curve gives KMAG): mean 7.0216 (median 7.0246) against VSP V 7.015,
+  offset +0.007 ± 0.004 (median +0.010); robust scatter 0.0255 against a median error
+  0.0208 (χ² ≈ 1.5). The exports role's re-run with it as a true check: +0.017 ± 0.002,
+  the colour term predicting +0.009; XX Cyg 09-07 (000-BJV-169): −0.061 ± 0.017, the
+  tracker defect of section 5.
+- **Magnitudes against the Siril reductions** (the re-run started from the dialog, the
+  session's 1 target + 6 comparisons, 195 of 195 matched by time, worst 0.043 s): against
+  `RR_Lyr_green_argos_2comps` median offset −0.0112, robust scatter 0.0173 (std 0.0235)
+  for a median combined error 0.0283 (χ² 0.67: both measure the same photons), drift
+  −0.002; against `RR_Lyr_argos_2comps` −0.0187 / 0.0304; against `RR_Lyr_apass_5comps`
+  −0.0497 / 0.032, drift −0.021. The −0.011 is the comparison set (6 against the
+  reference's 2: −0.0097 between the exports role's 6- and 2-comparison re-runs, the colour
+  term predicting +0.007 of it, the rest the four extra comparisons' catalogue zero
+  points); the other two offsets add the channel and the comparison set; the APASS drift
+  is colour and differential extinction over airmass 1.03-1.36. The re-run minus the live
+  CSV: −0.0001 (robust 0.0012) apart from the two blank-sky frames, which the re-run
+  re-solved (S43). The template fit (`rrlyrae_template_fit.json`) was not compared (the
+  template library is offline).
+
+**(b) Non-regression where (a) found nothing wrong: byte identity with the fixed Qt.**
+
+- AAVSO through the UI = Qt's Photometry window Export AAVSO after Analyze's Open curve
+  CSV on the target CSV (obscode and band as Settings): RR Lyr, XX Cyg 09-07, XX Cyg
+  08-29 identical (on 08-29 against `target_XX_Cyg_000-BCK-301.csv`, the file the session
+  reader keeps; its alias `target_XX_Cyg_XX_Cyg.csv` has another σ_sys, 0.1145 against
+  0.1121, so Qt opening that one writes other MERR values). The copy with a check star =
+  Qt's Export measurements → Open → Export AAVSO (KNAME / KMAG filled), identical.
+  RR Lyr's identity covers the AMASS and blank-sky rows that (a) found wrong.
+- CSV through the UI (every curve of the filter) = `load_session_curves` +
+  `write_curves_csv`: 4 of 4 identical (1 285, 214, 115 and 1 285 rows).
+- Re-run through the dialog (195 frames, 15-17 s) = Qt's `PhotometryBatchWorker` on the
+  same frames, reference solve and base gain: 7 of 7 CSVs and `targets.json` identical
+  (ASTAP solved for real on both sides, 2 frames re-solved by S43 on both). It wrote
+  `photometry_rerun_<UTC>/` inside the session clone; the strip showed "Re-run · 57 / 195
+  frames · ETA … · Cancel"; a second run cancelled from the strip after 25 frames ended
+  `cancelled` with no curve (its per-frame notes kept, diagnostics being on, see section 3).
+- The exports role's level (b) on the other sources (imported CSV, target-only CSV, the
+  XX Cyg re-run with a check) and the sessions role's A67-A75 smoke stand as reported.
+
+**R0, R1, R2 through the UI** on the three sessions: opened from R0 (RR Lyr in about 1 s
+with its 195 header reads), the wall, cards and both drawer tabs; R2 from a Frames
+double-click on light 10, PageDown / PageUp (10 → 11 → 10 of 195), the FITS header (64
+cards), Identify field (ASTAP about 0.1 s: RA 19h 25m 42.2s, Dec +42° 36′ 43″, 3.67″/px),
+the catalogue layers (VSX 127, VSP 55 detected, 7 selected; Gaia, SIMBAD and NASA said
+unreachable), RR Lyr measured (FWHM 3.46 px, 12.71″, SNR 792), Alt+← back to R1.
+
+### 3. Fixed during the integration (found in the running UI)
+
+- **A cancelled re-run said "nothing saved" and showed the last frame's name** while its
+  per-frame notes stay when diagnostics are on (`_discard` keeps the flight recorder):
+  the job's last message and the log now say "Cancelled after n/N frame(s): no curve
+  saved; the per-frame notes are kept in <folder>/" (`argos/server/rerun.py`,
+  `protocol.md`; tests `test_rerun_cancel_writes_nothing` extended and
+  `test_rerun_cancel_keeps_only_the_flight_recorder_and_says_so`, both failing before);
+  the dialog's line says "a cancelled run saves no curve (only its per-frame notes)".
+- **The job strip did not fit R1's toolbar** (Cancel and Dismiss clipped at 1 440 px): the
+  strip is its own size container (the running stage goes below 440 px, the ETA below
+  360 px, the title shortens last), takes the room of the zoom name and the spacer, the
+  titles are short (Re-run, Export, Opening), "Open the new run" is an icon with its
+  tooltip, an export's result names the file only.
+- A `session_open` outcome hid R1's identity after every open: the strip shows it only
+  while it runs.
+- The palette could not run R1's keys (scope `analyze.r1` under `analyze`): in its section
+  a key is checked against the active scopes; the palette gained Re-run photometry…,
+  Export AAVSO… and Export CSV… with their reasons.
+- The re-run plan's S63 counts (`outside_lights`, `duplicates`) were dropped by the client:
+  typed, and the dialog says "390 outside lights/" on RR Lyr.
+- The Re-run dialog now warns when the session's site check said mismatch (above).
+- The live run as a source carries the target set (the Ensemble's catalogue magnitudes).
+- Keymap: the Review keys are live; `drawer.toggle.other` is R1's only (Plan has no
+  drawer), `rail.toggle.other` R1's and R2's; R0's Enter is the table's (`local`).
+
+### 4. PROPOSAL section 6, W7 promotions
+
+| Lab | Promoted to | Status |
+|---|---|---|
+| `charts/charts/PlotWall.svelte` (health strip, cell menu) | `review/PlotWall.svelte`, `review/HealthStrip.svelte`, `review/ConditionsCell.svelte` | Done |
+| `core/export.ts` | `charts/export.ts` (copy TSV, PNG at the device scale) | Done; the Tauri save route is W8 |
+| `research/table/*` for Frames | `review/frames/FramesTable.svelte` on `components/VirtualTable.svelte` | Done |
+
+### 5. Open: owner decisions, Qt defects, guards
+
+Reported by the roles, not implemented (they change science results or file formats):
+
+- **OWNER DECISION, AMASS of a run whose Settings site was wrong** (RR Lyr 2026-09-25):
+  (a) use the header AIRMASS when the session's site check says mismatch, (b) write na,
+  (c) keep the wrong values with the warning (now). Recommended (a), with the matching
+  Qt fix. **Extended here:** a re-run uses the Settings site too, so with the owner's
+  current Settings its airmass is wrong for that run; the dialog warns.
+- **OWNER DECISION, the two blank-sky target points** (_00053, _00176, SNR 1.5 and 1.9):
+  (a) leave low_snr / zp_outlier target points out of the AAVSO file with a note,
+  (b) warn only (now), (c) a per-point opt-out. Recommended (a).
+- **OWNER DECISION / QT DEFECT, the tracker under-rotates on an alt-az run** (XX Cyg
+  2026-09-07: −15.37° tracked against −16.49° solved; outer apertures 5.7-8.5 green px off
+  by the last frame, unflagged; the check star 0.061 mag low). Recommended: centroid every
+  measured star each frame and drop a comparison off by more than 1 px, plus a re-solve
+  past about 2° of rotation.
+- **QT DEFECT (with the tracker): the batch worker anchors with the Camera's e-/ADU**, not
+  the frame's (S41 residue); fix given in the exports role's report.
+- **OWNER DECISION (minor), `#OBSTYPE=CCD` for a CMOS one-shot-colour camera.**
+  (`#SOFTWARE=Argos` without a version is fixed: S64, section 7.)
+- **GUARD** (exports role, feature checks): `exports.py` treats the core as having S60 when
+  `AavsoExportSummary` has `undated_excluded`, else drops undated points itself;
+  `MIN_AAVSO_JD` from the core when present, else 2 400 000. No guard from the
+  integration.
+- **Qt fixes S60-S65** sit uncommitted in `release/0.5.0` (S60 undated points, S61 Export
+  measurements refuses two filters, S62 the batch keeps the target's object, S63 a
+  session's frames are its lights/ only, S64 the AAVSO `#SOFTWARE` line names the
+  version, S65 the Frame Viewer measures a [0, 1] float frame in counts).
+- The science review's further findings (section 7) add three owner decisions: the S56
+  old-file rule in the export, the unweighted ensemble zero point, the noise model.
+
+### 6. Known gaps
+
+- "Open the new run" opens the re-run's target CSV as an import: a re-run folder has no
+  `session.json`, so R1 shows that one curve and an AAVSO export from it has no KNAME /
+  KMAG. A Source for a re-run folder (server) would open all its curves.
+- ~~RR Lyr's two blank-sky points stretch the magnitude range of every cell~~ (fixed,
+  section 7: robust range, edge chevrons).
+- R0 counts curve files: XX Cyg 2026-08-29 reads "2 T" (the alias target file), R1 one
+  target (the reader keeps one per star).
+- A session open's progress shows only as R0's row spinner (the strip lives in R1).
+- ~~R2: the next frame is not identified until S again; catalogue failures show the
+  server's raw exception text~~ (fixed, section 7).
+- The live run in R1 has no vetting report (the live leave-one-out is Observe's Ensemble).
+- Not checked live: Gaia, SIMBAD, NASA (unreachable); the RR Lyr template fit; the
+  desktop save dialog (W8).
+
+### 7. Reviews and fixes (2026-11-15)
+
+Three reviews ran on the integrated wave (design: 3 high, 10 medium, 7 low; technical:
+5 medium, 6 low; science: 3 high, 1 medium, 3 low). The fixer applied every high and
+medium finding that does not change a science result or a file format, the cheap lows,
+and fixed the two Qt defects that are safe (S64, S65); the rest is section 5.
+
+Verification (2026-11-15, server on 8778 and vite on 5178 with temporary `HOME`,
+`TMPDIR`, config and log folders; APFS clones of the three sessions; a fake observer code
+and a fake site; the live run a `--simulator --sim-replay` run of 14 RR Lyr light clones
+with the session's target set; every run, re-run and replay folder deleted):
+
+- Python, main tree: **1 625 passed, 75 skipped** (1 613 / 75 before the fixes; 12 new
+  tests). release/0.5.0: **688 passed, 46 skipped** (685 / 46; S64 and S65 tests fail on
+  the code before). ruff and black clean on `argos` and `tests` in both trees (the
+  release tree's `legacy/`, `scripts/`, `tools/` findings are older and untouched).
+- `npm run check` 0 / 0 (774 files); `npm test` **1 096 passed** (1 090; 6 new); `npm run
+  build` OK (JS 1 462 kB, 475 kB gzip).
+- Screenshots: the 44 of `2026-11-15_wave7-review` re-captured (every scene changed),
+  captions updated, gallery rebuilt; `audit:night-red` 6 of 6 pass (rule A 0 px, rule
+  B 0 px); `audit:brass` 44 of 44 pass (accent 0-785 px outside dialogs; R2's strip adds
+  the target's own colour, about 3 100 px).
+
+**Science** (`spec/wave7-independent-checks.md`, section 9):
+
+- The release notes' S56 old-file rule is applied in Review: A69 flag `few_anchors`
+  (fewer than 3 comparison or check records at SNR 10, unsaturated), readiness
+  `unverified_lock`, the AAVSO preview's `unverified_lock` warning. On the owner's
+  files: all 22 frames of XX Cyg 2026-08-29, RR Lyr frames 52 and 175 (the notes' own
+  counts, asserted by a test). Display and warnings only: the file is unchanged.
+- The AAVSO preview carries `warnings` (AMASS at a wrong site, recorder-flagged rows,
+  unverified-lock rows) shown with the warning glyph, and `flagged_points` naming each
+  row (time, value); the rail card lists AMASS and the flagged rows.
+- **QT FIX S64**: the AAVSO `#SOFTWARE` line names the version (`argos.SOFTWARE_ID`) in
+  the core writer; the server and Qt stay byte-identical in each tree.
+- **QT FIX S65**: the Frame Viewer reads a float frame in [0, 1] in counts; A73 does the
+  same (`scale: "converted"`); R2 labels `snr` "Peak/σ" (it is not the curves' SNR).
+
+**Technical**:
+
+- A68: points link to their frame by bisection (same answers as the linear `min()`,
+  tested on 2 000 random times with ties; 33 s → milliseconds on 6 000 frames); the
+  cancel flag is honoured while the curves are linked; the `session_open` job's result is
+  a short summary (the record is read with `GET /api/review/session`).
+- `read_fits_2d` picks the image HDU from the headers and checks the size before reading
+  pixels; the re-run's reference frame and every measured frame too.
+- A74: a truncated file is `invalid_fits`, not `internal_error`.
+- A76: the frame scan is kept while no FITS below changes (one scan for the plan and the
+  start); a file as `session` and a non-FITS `reference_frame` are `400`; the output
+  folder goes inside the session even when the frames are elsewhere; a cancel during the
+  reference solve says so.
+- A78 / A79: `409 protected_path` for the export's own sources and a session's data
+  folders and records; the file is written beside and renamed.
+- Client: a job awaited across a server restart settles as lost (404 or the reconnect's
+  snapshot) instead of polling for ever; the re-run plan, start and the AAVSO preview wait
+  60 s.
+
+**Design**:
+
+- Wall cells: Expand and the menu never cut (the numbers give way; a status dot in a
+  narrow cell; no "n 195" prefix); robust y range on good points (0.5-99.5 %), recorder-
+  flagged frames hollow with half-ink error bars, off-range points as open chevrons; the
+  "newest" ring on live sources only; Conditions beside the target, titled by its metric
+  picker ("HFD (px) ⌄"), hollow diamonds, the median and 1.5 × lines labelled; the
+  health strip's HFD episodes hatched, lanes named at the 10 px micro-label size.
+- Rail: Selected point compact (comparisons folded), the AAVSO export card second (in
+  the first screen at 1 440 x 900), Session card summary as labelled rows with units;
+  Ensemble tab without the duplicate AUID and "From" columns, σ at 3 decimals.
+- R0: Issues agree with R1 (site check on the first light's header, recorder counts);
+  Quality shows the vetting verdict ("6/6 stable", "3/8", with a dot).
+- R1 toolbar: the job strip takes the spacer's room beside the identity and badge (the
+  job name never cut; Re-run and Export CSV keep only their icons meanwhile); no toast
+  for a job finished while in Review; Re-run drops its label at 1 280 px before the
+  identity is cut.
+- Frames tab: a leading flag column (sortable), Comps, a Flagged quick filter.
+- R2: the band rule (the session strip under the frame: the target's curve, this frame
+  marked, a click opens a frame; a summary row under 120 px), the rail at 25 % at most so
+  the image keeps 75 % of the width; the HUD forgets the previous frame's readout; the
+  next frame is identified automatically after S; catalogue failures in one line each;
+  file names cut in the middle; the counter on one line; coordinates grouped.
+- Dialogs: path fields show the file name; the re-run parameters as a key / value grid;
+  plurals spelled out in the W7 server strings.
+
+**Skipped, with the reason**:
+
+- Design: the initial focus on Cancel while a science warning stands (the design review
+  itself defers it to the AMASS decision); the done strip folding into the Log after
+  10 s (the strip no longer hides anything); the cell tooltip's "2 off scale" count
+  (the chevrons show them).
+- Technical: discovery inside the re-run job (the cache and the 60 s timeout remove the
+  failure; a cold 6 000-frame folder still takes about 23 s to plan).
+- Science: everything that changes a written value (section 5).
+
+**GUARD**: none new. The exports role's two stand (S60 by `AavsoExportSummary.
+undated_excluded`, `MIN_AAVSO_JD` from the core when present). S64 needs none (the
+server passes no `software=`).
+
+### 8. What W8 inherits
+
+- The owner decisions of section 5: AMASS of a wrong-site run (recommended: the header
+  AIRMASS on a site mismatch, Qt first), the flagged rows in the AAVSO file (recommended:
+  leave `low_snr` / `zp_outlier` rows out with a note; the S56 rule is conservative, so
+  confirm it separately), the tracker (centroid each measured star, a re-solve past 2°),
+  the ensemble weighting (inverse-variance with clipping on normalised residuals), the
+  noise model (green-plane gain, black level), `#OBSTYPE`. The QT DEFECT of the batch
+  worker's e-/ADU goes with the tracker.
+- Commit release/0.5.0's S60-S65 and merge it: `#SOFTWARE` then names the version in
+  both writers; the S60 guard then reads the core.
+- Gaps: a Source for a re-run folder ("Open the new run" opens one CSV); R0 counts curve
+  files (the alias target of XX Cyg 2026-08-29); a session open's progress only in R0's
+  row; the live run has no vetting report; the desktop save route.
+- Not checked live: Gaia DR3, SIMBAD, NASA (unreachable here); the RR Lyr template fit
+  (no reference); `OBSTYPE=CMOS` against the live AAVSO list (aavso.org answered 403).
+
+### 9. Science decisions S66-S72 (2026-11-15)
+
+The owner accepted the W7 reviews' recommendations as release/0.5.0 items S66-S72, each
+fixed in Qt first (`notes/release_0_5_0.md`) and ported here behind a feature GUARD until
+the merge.
+
+- **S66, S67, S68 (Review and exports).** The core reader's old-file rules
+  (`argos/core/session/review.py`: `apply_old_file_rules`, `apply_old_file_rules_to_file`)
+  run in A68/A69 and A70 through `review.core_rules()` (GUARD): a wrong-site run's airmass
+  is each frame's header AIRMASS (`CurveSet.airmass_column: "header"`, the preview's
+  `airmass.source`), a no-detection frame of the flight recorder flags every star's point
+  `suspect` (`no_detection` flag; `excluded.no_detection` in A77/A78, "N suspect (no
+  detection)"), `sigma_syst` recomputed without them; the S56 `few_anchors` rows stay
+  written and the preview points to a re-run (S58). The re-run (A76) checks each frame's
+  header against the Settings site (S66, `frames_header_airmass`, a note). S68: a VSP answer
+  names the chart of comparisons kept without one (`field.backfill_chart_ids`, GUARD);
+  `#OBSTYPE` stays CCD. Level (a), on the release core overlaid (scratch, not this tree):
+  RR Lyr AMASS 1.033 on row 1, 1.033-1.364, at most 0.0007 from astropy (3.055 before);
+  193 rows (2 no-detection left out), target `sigma_syst` 0.01657 → 0.01497; XX Cyg 09-07
+  23 rows, 0.2918 → 0.2365; XX Cyg 08-29 22 rows; the AAVSO validator finds no error in
+  the 9 files. Level (b): A78 session and import, A79 session and import equal Qt's Review
+  and Analyze files byte for byte on the three sessions (12/12), and the re-runs equal the
+  fixed Qt worker's (RR Lyr 7 CSVs, XX Cyg 9 and 6, each with `targets.json`). A re-run of
+  XX Cyg 08-29 `050148Z` verifies 22/22 frames (12 ASTAP re-solves; 13 with S69-S71), none flagged. The web
+  card counts "suspect (no detection)" apart and drops the AMASS warning once
+  `airmass_column` is `header`.
+- **S71, S72 (the photometric model).** Core only (`differential.py`, `aperture.py`, the
+  S30 Pro profile's `black_level_adu`); the server calls the same functions, so a re-run,
+  the live points and A54 follow after the merge with no server change but two: the
+  comparison-quality aperture in `field.py` passes the profile's black level (GUARD
+  `_APERTURE_TAKES_BLACK`), and `targets.py`'s pilot-quality aperture should too (not this
+  wave's file: open). Readiness `faint_comparisons` (S71, warn, `median_snr` < 10 of the
+  recorder's comparisons; no guard): XX Cyg 08-29 1.7 warns, XX Cyg 09-07 20 and RR Lyr
+  101 do not. S71 alone on the study re-runs (fixed Qt worker): XX Cyg 08-29 check
+  000-BJV-171 +0.155 ± 0.079 → +0.055 ± 0.027 (within its VSP and comparison errors),
+  XX Cyg 09-07 check 000-BJV-169 −0.061 ± 0.017 → −0.036 ± 0.013, RR Lyr check 000-BCG-523
+  +0.0174 → +0.0166 ± 0.0016, RR Lyr 2 comps − Siril green 2 comps +0.0020 → +0.0004
+  (robust σ 0.0099), 6 comps −0.0112 → −0.0083 (0.0173 → 0.0157); no count changes. S72
+  is in the core but off by default (`photometry.noise_model`: `pixel`; `green_plane` = S72):
+  as decided (2 × the frame's EGAIN, rn/√2, black level 1024 ADU) it fails its own test:
+  model sky σ −54 %, −67 %, −66 % of the measured green-plane σ, because the frames' EGAIN
+  (0.8 driver, 1.723 reference, gain 80) is 3-9× the photon transfer's 0.20-0.25 e-/ADU;
+  with 0.20 it passes (−4 %, −1 %, +1 %). With the frames' EGAIN the S43, S58 and low-SNR
+  gates loosen (RR Lyr frames 52-53 measured off the stars unflagged; XX Cyg 08-29's 12
+  verify solves gone); with 0.20 in every path the counts are unchanged and the star-pair
+  scatter / formal error goes 2.64 → 2.31 (XX Cyg 09-07) and 1.37 → 1.22 (XX Cyg 08-29).
+  Owner decision open (`notes/release_0_5_0.md` S72, S73): which e-/ADU S72 uses.
+  Level (b): the server's re-run (HEAD `rerun.py`, release core overlaid) equals the fixed
+  Qt worker byte for byte on RR Lyr 2 comps, XX Cyg 09-07 and 08-29, with S72 off and on
+  (44/44 files).
+- **S69, S70 (the tracker on alt-az runs; the re-run's frame gain).** Root cause of the
+  under-rotation (XX Cyg 09-07 `040723Z`: 15.37° found, ASTAP 16.49°): core
+  `ApertureTracker.update` centroided each anchor once in a 15 px window centred on its
+  prediction; the clipped sky noise and the cut wings kept the centroid 30-80 % of the way
+  to the window's centre (every anchor of the 24 frames against each frame's ASTAP
+  solution), a lag of 0.4-1.2° on a field turning 0.7° per sub. Fixed in the core
+  (`tracking.py`: re-centred until it converges, then in a 4 px window): within 0.07° of
+  ASTAP on all frames. The safety nets are ported behind `photometry.s69_core()` (GUARD):
+  (a) a solve due past 2° of tracked rotation since the solution (`TrackedWCS.rotation_deg`;
+  live and sequence: `FieldService.resolve_due`, once per 2° while none lands; re-run: the
+  frame re-solved, `frames_rotation_solved`), (b) each comparison and check star seen at
+  SNR ≥ 5 more than 1 px from its aperture centre left out of the frame's ensemble
+  (`measure_frame(exclude=…)`), its point `suspect`, `stars_off_centre`, the recorder's
+  `centroid_offset_px` / `off_centre`, and the anchors S56/S58 count are the centred ones.
+  S70 (the re-run's tracker and lock checks with the frame's own e-/ADU) is ported behind
+  the same GUARD (applied with S69 only). The web re-run summary says "N re-solved for
+  rotation", "N off-centre (suspect)". Level (a), release worktree's batch worker with
+  ASTAP: XX Cyg 09-07 apertures 0.01-0.22 px from each frame's solution on frames 1-3 and
+  the last (0.2-4.5 px before; 8.5 px with S70 alone), check 000-BJV-169 −0.045 ± 0.017 →
+  −0.071 ± 0.010 (scatter 0.084 → 0.046; 1.4σ from VSP with VSP's ± 0.051; 000-BJV-173
+  adds 1.0 % of light), 7 re-solves for rotation; XX Cyg 08-29 check +0.060 either way,
+  apertures 0.5 → 0.1 px (median), 10 → 13 verify solves; RR Lyr 2 comps − Siril green
+  +0.0004 → +0.0013, robust σ 0.0099 → 0.0096, check +0.0166 → +0.0162. No point flagged,
+  no frame skipped on the three re-runs. Live replays of the owner's runs: the same points
+  in Qt and here; XX Cyg 08-29 gains 3 frames flagged by S56's 2 px freshness rule (the
+  field moved 2.5-3.7 px between subs, which the lagging tracker under-reported; owner
+  decision open). Level (b): re-run CSVs, `targets.json` and recorder records equal the
+  fixed Qt worker's on the three sessions (19/19 CSVs), and the HTTP job's on XX Cyg 09-07
+  (9/9).
+- **Fixer round: the owner's calls on the reviews' open items (2026-11-15).** Qt first in
+  release/0.5.0, then here (same GUARDs). S66 option (b): an Argos frame's header AIRMASS
+  whatever the site check (a warning now), unless its pointing is frozen (X1: RA, DEC,
+  ALTITUDE, AZIMUTH, AIRMASS those of a light 60 s or more before), in Review, Open curve
+  CSV and the re-run (`frames_header_airmass`, `frames_site_wrong`); `airmass_column` is
+  `header` whenever a point took it; `OldFileRules.airmass_computed` replaces
+  `airmass_unknown`. S67 option (b): the zero-point rule frame-wide, SNR < 3 per target
+  (`no_detection_frames[].low_snr` lists the targets), and the re-run applies it to its own
+  frames (`frames_no_detection`). S71: a comparison holding over half the weight that two
+  others or more contradict (2.5 combined σ) flags the point suspect (release
+  `DiffResult.suspect`); `faint_comparisons` now comes from the core, which Qt's Review warns
+  on too. S69, both reviews: a star beside a set star of a quarter of its core flux or more,
+  within the search radius + 8 px, is no anchor; the centring centroid stays within 0.45 ×
+  that distance and is re-centred in 3 px; the anchor the fit rejects is not a verifying one;
+  failed re-solves for rotation (`frames_rotation_unsolved`) and frames without a target
+  point (`frames_no_target_point`) are counted and said, and a failed rotation re-solve no
+  longer says "its points are flagged". Web: Reveal on the export and re-run toasts
+  (desktop), the airmass pre-check as a pure helper with its test, the new re-run counts in
+  the summary. Level (a), final re-runs (ASTAP, each night's Settings site) and the
+  sessions' own files: target airmass within 0.00035 (RR Lyr), 0.00044 (XX Cyg 09-07) and
+  0.00009 (08-29) of astropy at the fitted site in Review, 0.0003 / 0.0004 / 0.0001 in the
+  re-runs (header AIRMASS on 195/195, 24/24, 22/22 frames; RR Lyr warns of its wrong site);
+  AAVSO AMASS 1.033 on row 1, 1.033-1.364; RR Lyr 2 comps − Siril green 2 comps +0.0013,
+  robust σ 0.0096; 6 comps −0.0076, 0.0153; times within 0.1 ms of astropy; checks 000-BCG-523
+  +0.0155 ± 0.0017, 000-BJV-169 −0.074 ± 0.009 (1.4σ with VSP's error), 000-BJV-171
+  +0.051 ± 0.023 (1.35σ); `040723Z` 0 off-centre (15 before; 000-BJV-173 no anchor, at most
+  0.23 px from its aperture), frames 1-3 within 0.27 px of every star; `050148Z` 13 verify
+  solves, 0 flagged, 0 off-centre (000-BJV-178's false flag gone), 1 frame flagged by S71's
+  heavy-comparison rule; RR Lyr 193 rows, `sigma_syst` 0.01657 → 0.01497; `040723Z` frame
+  20's target point only (SNR 1.6), 23 rows, 0.2918 → 0.2365. Level (b): the four re-runs
+  (RR Lyr 2 and 6 comps, XX Cyg 09-07, 08-29) equal the fixed Qt worker's (counts, solver
+  calls, every CSV, `targets.json`, every recorder record); the 12 export files equal Qt's
+  Review and Analyze files; the AAVSO validator finds no error. The independent checks:
+  `web/spec/decisions-s66-s72-independent-checks.md`. Owner decisions still open: the
+  e-/ADU at gain 80 (S73) and enabling S72, a scintillation term, the annulus-median error
+  term, the sky estimator, S56's 2 px freshness with the converged tracker, proper motion,
+  000-BJV-173 in `040723Z`'s set, the header AIRMASS of off-centre stars (check 000-BCG-523
+  0.0071 from its own airmass).
+
+### 10. Noise model and geometry (S73-S80)
+
+The owner's decisions of 2026-11-16 (S73-S80, S56/S71/S72 amended) and the follow-up of
+their validation, science and technical reviews (S81-S83, the owner's calls on F1-F8), in
+the release worktree first (`notes/release_0_5_0.md` S72-S83), ported to the server behind
+feature GUARDs (none of it is live until the main session merges release/0.5.0). Level (a)
+is checked against references independent of ARGOS; the details, scripts and every number's
+source are in `web/spec/decisions-s73-s80-independent-checks.md`.
+
+- **S73** the S30 Pro's e-/ADU at gain 80 is its photon transfer, 0.228 ± 0.005
+  (+0.010/−0.001; read noise 2.6 e-), scaled at 0.1 dB/step over gains 0-251 (checked at
+  100: 0.183 measured, 0.181 scaled); every other scaled gain is logged "scaled, not
+  measured" and carries the measured read noise; one chain (table, profile, driver,
+  reference) for the photometry, `EGAIN`/`RDNOISE` and old frames (their 0.8 or 1.723
+  replaced). **S72** the green-plane model is the default (its Settings row added to the
+  web Photometry page). **S74** scintillation (Young, Osborn C_Y = 1.5, kept:
+  conservative), each star at its row's airmass in a re-run. **S75** the sky estimate's
+  error. **S76** the median stays (an owner decision, with new evidence: the median's 8-ADU
+  quantisation; adopted the same day, section 11).
+- **S77** proper motions (Gaia DR3) at each frame's date; the re-run's lookup gives up
+  after 5 s per star, reads the cache after a failure and takes the cancel. **S78** each
+  comparison's own airmass at the fitted site; without one, the Settings site only when it
+  reproduces the mount's pointing within 0.1°, else the header AIRMASS (F1). **S79**
+  crowded comparisons named (and logged by the server). **S80** every inconsistent anchor
+  rejected. **S56** freshness 10 px; the anchors keep SNR ≥ 10 (the owner).
+- **S81** an aperture or annulus partly off the frame is not measured; **S82** a re-run
+  reads an OBJECT in SIMBAD's form; **S83** live and sequence points take the e-/ADU at the
+  frame's own gain.
+
+Final numbers (Qt batch re-runs with ASTAP, each night's Settings site; before =
+`3e48d78`, after = every S72-S83 change):
+
+| Check | Before | After |
+|---|---|---|
+| Pair scatter / formal error, median (robust): RR Lyr 6 comparisons | 1.89 (1.63) | 0.95 (0.80) |
+| same, RR Lyr 2 comparisons + check | 2.27 (2.06) | 0.89 (0.77) |
+| same, XX Cyg `040723Z` | 1.48 (1.41) | 1.11 (1.01) |
+| same, XX Cyg `050148Z` (3 pairs) | 0.94 (1.03) | 0.71 (0.60) |
+| 000-BCG-523 − VSP V (VSP ± 0.100) | +0.0162 ± 0.0016 | +0.0167 ± 0.0016 |
+| 000-BJV-169 − VSP V (± 0.051) | −0.0735 ± 0.0090 | −0.0647 ± 0.0091 |
+| 000-BJV-171 − VSP V (± 0.030) | +0.0507 ± 0.0227 | +0.0447 ± 0.0223 |
+| RR Lyr − Siril green 2 comps, offset / robust σ | +0.0013 / 0.0096 | +0.0013 / 0.0101 |
+| RR Lyr 6 comps − Siril, offset / robust σ | −0.0076 / 0.0153 | −0.0110 / 0.0147 |
+| Model / measured sky σ: the three sessions (9 frames); gains 80 and 100 (31) | 0.34-0.48 | 0.959-1.035; 0.959-1.049 (gain 65: 0.889) |
+| RR Lyr aperture − centroid, median (90th pct) | 0.990 (1.111) px | 0.077 (0.157) px |
+| Comparison airmass − astropy at the fitted site, max: long runs; `195307Z`; `052943Z`, `053540Z` | 0.0204; 0.0017; 0.0012 (S78 as first built: 3.85; 0.013) | 0.00007; 0.0017; 0.0012 |
+| RR Lyr target `sigma_syst` (2 comparisons) | 0.0182 | 0 (the formal errors carry the scatter) |
+
+The 6-comparison offset moves 3.4 mmag because S71's weights follow the corrected errors
+(not Siril's ensemble); the 2-comparison σ moves within its own uncertainty (±0.0005). Bright
+stars' formal errors are now 1.2-1.4 times their scatter (C_Y = 1.5 kept, measured
+1.1-1.4; a refit needs more nights); faint stars' are honest (`040723Z` robust 1.01). Gates
+on every study run: no frame skipped and no S43 re-solve gained or lost; anchors fall on the
+XX Cyg 15 s subs (the true SNR), S58 verify solves `050148Z` 13 → 9, `053540Z` 4 → 2,
+`040723Z` 0 → 1; 000-BJV-172 found off-centre on `052943Z`/`053540Z` (real); `045626Z`'s
+cloud sub unanchored and its comparisons warned faint; `050148Z` sub 19 flagged with one
+solve per run (0.10 px from its star); no blank-sky frame kept; S81 removes 12 edge rows of
+RR Lyr (live replay: 000-BJW-667/668 no anchor on 19 frames). Level (b): the server's
+re-run equals the fixed Qt worker byte for byte on the owner's frames (see the decisions
+file). Open: the owner decisions listed there (S76's estimator, the ensemble's `zp_err`
+branch, the user photon-transfer file's rank, `noise_model` in the S15 lock, Review of a
+re-run folder, `site.min_altitude_deg` on the Settings page), and every GUARD until the
+merge. The first, third and fourth were decided on 2026-11-16: section 11.
+
+### 11. Sky estimator and run lock (S76, S73 order, S84)
+
+The owner's calls of 2026-11-16 on the S73-S80 science and technical reviews, made in the
+release worktree first (`notes/release_0_5_0.md` S73, S75, S76, S84), then on this branch
+(server, web Settings, protocol.md); checked by a validation and an adversarial review with
+their own code, then completed by a fixer pass (their findings). Nothing of it is live on
+this branch until the main session merges release/0.5.0, except the server's run lock.
+Details, scripts and every number's source: `web/spec/decisions-s73-s80-independent-checks.md`
+part D.
+
+- **S76 adopted**: the sky under every aperture is the annulus' 3σ-clipped mean
+  (`aperture.sky_level`: median centre, standard deviation, bounds inclusive, repeated
+  until nothing is rejected, at most 10 passes, astropy's `sigma_clipped_stats(sigma=3,
+  maxiters=10)`), S75's sky-estimate term at a mean's factor 1; the median sat on the
+  8-ADU-stepped plane's 4-8 ADU grid (median − clipped mean 2.4-3.0 ADU rms on the
+  study runs, in no error term).
+- **S73's order**: the observer's photon-transfer file (`camera_calibration*.json`) second,
+  after `camera.egain_table`, before the profile's measurement and the driver; source
+  "<sensor> PTC file". The fixer: a new frame's `RDNOISE` names the file when the e-/ADU
+  has no read noise of its own (it said "IMX585 reference"), a frame whose `EGAIN` the file
+  wrote keeps the `RDNOISE` it wrote, an entry without `rdnoise` is logged.
+- **S84**: the noise model, the read noise and (the fixer, validation F1) the camera's
+  e-/ADU inputs, `camera.egain_table` and `data_paths.camera_calibration_directory`, join
+  S15's run lock: Qt refuses them (the photon-transfer folder field disabled in a run),
+  `PATCH /api/config` answers `409 run_active` "The noise model and the camera's e-/ADU are
+  locked while a sequence runs (one curve, one error model).", the web Settings pages
+  (Photometry, Instrument) show them unavailable with that sentence (`settings/runlock.ts`,
+  `EgainTable.svelte`'s `locked`). Checked live on the simulator (all four keys 409 during a
+  run, 200 after; both pages in the three themes, Night Red audit pass; screenshots
+  `web/screenshots/2026-11-16_settings-run-lock/`).
+
+Final numbers (Qt batch re-runs with ASTAP, each night's Settings site; before = release
+`4e6493d` + this branch's `37a67ac` server, after = this pass):
+
+| Check | Before | After |
+|---|---|---|
+| RR Lyr − Siril green 2 comps, offset / robust σ | +0.0013 / 0.0101 | +0.0021 / 0.0083 |
+| RR Lyr 6 comps − Siril, offset / robust σ | −0.0110 / 0.0147 | −0.0098 / 0.0130 |
+| 000-BCG-523 − VSP V (VSP ± 0.100) | +0.0167 ± 0.0016 | +0.0166 ± 0.0015 |
+| 000-BJV-169 − VSP V (± 0.051) | −0.0647 ± 0.0091 | −0.0645 ± 0.0085 |
+| 000-BJV-171 − VSP V (± 0.030) | +0.0447 ± 0.0223 | +0.0436 ± 0.0204 |
+| Pair scatter / formal error, median (robust): RR Lyr 6 comps; 2 comps + check | 0.95 (0.80); 0.89 (0.77) | 0.94 (0.77); 0.86 (0.75) |
+| same, XX Cyg `040723Z`; `050148Z` (3 pairs) | 1.11 (1.01); 0.71 (0.60) | 1.12 (0.95); 0.92 (0.94) |
+| Blank apertures, bias (ADU): RR Lyr; `040723Z`; `050148Z` | +28; +44; +52 | +10; +32; +25 |
+| same, scatter / the code's error | 1.42; 1.31; 1.25 | 1.17; 1.19; 1.14 |
+| Model / measured sky σ, 31 frames at gains 80 and 100 | 0.959-1.049 | 0.960-1.039 |
+| `040723Z` target `sigma_syst` | 0.170 | 0 |
+| RR Lyr aperture − centroid, median | 0.077 px | 0.077 px (same centres) |
+
+The 2-comparison offset moves +0.8 mmag, within its own error (0.0007-0.0009); bright
+pairs drift below 1 because their scatter falls while their errors (S74's conservative
+C_Y = 1.5) stay; `050148Z`'s three pairs move toward 1 because the median sat at
+1400 ADU on 17 of 22 frames (a bias no error counted). Times and airmass are unchanged.
+The higher SNR moves faint stars across the gates' thresholds (anchors, verification
+solves and three flags on the XX Cyg runs, each explained in part D). Level (b): the
+server's re-run equals the fixed Qt worker byte for byte on six cases (validation); the
+fixer's later changes leave the four main study runs identical key by key.
+
+Decided after part D.8 (the owner, 2026-11-16): S67's per-target no-detection rule on the
+live path, option (a), is **S85** (the cloudy `045626Z` sub, measured live on one anchor with
+the target at SNR 0.8, is now flagged when it is measured; release worktree first, then
+`photometry.py` behind the GUARD `no_detection_rule`, the core review's `flag_no_detection`;
+`tests/server/test_photometry.py::*_s85` skip until the merge). Resolving the e-/ADU once per
+gain at a run's start and `site.elevation` (S74's scintillation) in the lock are deferred to
+0.5.x (S84's known limits). Not decided now: splitting the formal
+error into a random part and a per-run calibration part (bright stars' `MERR` 1.3-1.6 times
+their scatter) and refitting C_Y, deferred to 0.5.x with more nights. GUARDs:
+`config_meta._CALIBRATION_FIRST` (the Settings help follows the core's order) and
+`test_the_server_locks_the_cores_noise_model_keys_s84` (the server's locked keys are the
+core's).
+
+## Wave 8: Desktop app and Qt retirement (2026-11-15)
+
+Scope (README section 7, row W8; waves.md §5 W8; rows M18, M20; A7, A12): the Tauri v2
+shell around the web UI with the frozen server as its one-dir sidecar, the UI's desktop
+side (`lib/shell/desktop/`: title bar, start-up stage, Quit dialog and shutdown scrim, crash
+notice, Reveal, app menu), the server's A7 / A12 / stdin-EOF, the macOS dmg and the CI
+release jobs, PyQt6 and pyqtgraph out of the runtime. Built by three roles (backend,
+front-end, desktop shell and packaging) on the groundwork `b97129f`, integrated here.
+Screenshots: `web/screenshots/2026-11-15_wave8-desktop/` (25 window captures of the
+fixer's final DEV build, replacing the integration's 22: Observatory 1 440 x 900, Charcoal
+1 440 x 900, Observatory 1 280 x 800, and every W8 surface in Night Red in WKWebView;
+manifest; converted from Display P3 to sRGB, Night Red and brass audits run on them).
+
+**Status: integrated, reviewed (design and technical) and fixed 2026-11-15 (section 7).
+Exit criterion met on the macOS DEV build except two points: start to a connected UI is
+about 1.5 s (was 1.7-1.9 s; the server's own imports, in `argos/core`, take 1.1-1.2 s
+before its ready line), and release.yml is not yet validated by a workflow_dispatch run.
+Nothing committed.**
+
+Verification: every launch is the DEV build ("ARGOS Dev", `org.argos.argos.dev`) with
+temporary `HOME`, `TMPDIR`, `ARGOS_CONFIG_DIR`, `ARGOS_LOG_DIR`, the simulator, and a
+scratch driver script injected into the scratch UI build only (it records CSP violations,
+errors, unhandled rejections and `console.error`, and runs untrusted DOM events: keys,
+clicks, the hold button's keyboard confirmation); the release app was built and packed,
+never launched.
+
+### 1. Rows closed by the wave
+
+| Row | Web | Status |
+|---|---|---|
+| M18, A7 | Quit from ⌘Q (the UI's key and the app menu), the Dock / AppleScript `quit app` (`terminate:` routed to the UI), the title bar's close, the Help menu and the command palette (`Quit ARGOS ⌘Q`, desktop only): `POST /api/app/shutdown`; `409 busy` gives the Quit dialog in the server's words (confirmed by dialog, 01 2.4.3: text buttons, Cancel focused, Quit ARGOS destructive) and forcing gives the stages, then the window closes; a server stopping unasked gives the crash notice (Restart server, Open log folder, Quit ARGOS) | Done |
+| M20 | Text fields keep the webview's own menu; Night Red suppresses the native context menu everywhere (`theme.ts` `nativeMenuGuard`, browser and app) | Done |
+| A12 | Reveal in Finder: Settings › About and Privacy, the support-bundle toast, the new "Saved in Downloads" toast | Done (route live-checked for 403 / 404 only: a real reveal opens Finder) |
+| W8 components | Title bar (Q-G14, three themes), start-up stage, native menu (Q-G10, `menu.rs`), Mod+1-5 (desktop-only keys), Reset all layouts resets the window | Done |
+| Qt retirement | `PyQt6`, `PyQt6-Qt6`, `pyqtgraph` and now `pytest-qt` in the `qt` extra; `uv lock` (no sync) | Done |
+
+All 103 mapping rows of README §2 are now done or dropped by a decision (20 dropped:
+M10, M13, M24, M32, M42, M47, M53, M54, M57, M63, M64, M68, M70, M74, M82, M84, M86-M88,
+M93): M1-M17, M19, M21-M103 closed by W1-W7 (their "Rows closed" tables, M80-M92 as R1's
+range), M18 and M20 here.
+
+### 2. Exit criterion and its evidence
+
+- **Qt inventory re-run** (Appendix A's method, scratch `inventory.py`): the constructions
+  of `argos/ui` at the inventory's tree `9fa561a` (302) against the final tree (312): 13
+  new or changed, 3 removed or changed. Two are renames of inventoried controls
+  (`focuser_dock.py:105` Move, `mount_dock.py:117` Tracking). Ten are message boxes the
+  0.5.0 fixes added, each with a web home: `shell.py:365` `_confirm` (602f199: ask before
+  a disconnect ends a run or an autofocus; also the close), batch re-run refusals
+  `imaging_page.py:2304, 2315, 2333` (RerunDialog's refusals: no live solution, no
+  comparison, no frames of the object), `photometry_window.py:349-435` export messages
+  (the Export CSV / AAVSO dialogs: disabled with no data, one filter per export, inline
+  write errors), `analyze_page.py:777` "Light curve not identified" (Export AAVSO refuses
+  an unidentified curve). **One was new to the web**: the disconnect confirmation said
+  nothing of a running sequence or autofocus (`disconnectRisk` knew live view, exposure
+  and slew only, while 02 W10b asks for both): fixed (section 3).
+- **Runtime without Qt**: a venv from `uv export --no-extra qt --extra server --extra dev`
+  (158 requirements, no PyQt6, pyqtgraph or pytest-qt): `import argos.server` loads no Qt
+  module; `python -m argos.server --simulator` answers `/api/health` (0.4.2, API 2) and
+  stops on SIGTERM; `tests/server` and `tests/packaging`: 914 passed, 25 skipped, 1 failed
+  (`test_photometry.py::test_live_points_csvs_and_report_are_identical_to_the_qt_engine`
+  drives the Qt engine without `pytest.importorskip("PyQt6")`; that file belongs to the
+  science workflow, so it is section 5's item). Before the move, pytest did not even
+  start in such an environment: pytest-qt refuses without a Qt binding and the
+  `-p no:qt` of `pyproject.toml` does not block its entry point (`pytest-qt`).
+- **Sidecar** frozen one-dir from the final tree (groundwork's Qt-free build venv): 97 MB,
+  no Qt entry; ready line 1.04-1.3 s standalone, 22.3 s on the very first run of freshly
+  written binaries (macOS scans them once; READ ME FIRST warns).
+- **Start-up** (`open` to …, 6 warm launches): the UI's start-up screen attached 0.42-0.58 s
+  (shell log); server ready line 1.16-1.30 s after spawn (1.32-1.51 s after launch); UI
+  connected (start-up screen gone) 1.73-1.86 s. First launch of a rebuilt app binary:
+  2.3-2.8 s.
+- **Every screen under the CSP**: 8 launches, 19 page loads (Connection, Observe, Plan,
+  Review R0 and R1 on a cloned XX Cyg session, Settings › About and Appearance, the
+  palette, the Quit dialog, the crash notice, Export CSV, three themes): 0 CSP violations,
+  0 errors, 0 unhandled rejections, 0 `console.error`. The listener was proved live by a
+  probe image outside `img-src` (one violation, the probe's).
+- **Downloads (exports)**: Save log → `~/Downloads/argos-log-20261115T233922Z.txt` (the log
+  line); Review Export CSV "Download" → `XX_Cyg_ir_photometry.csv` (3 315 bytes), saved
+  again as `… (1).csv`, `… (2).csv`, byte-identical; the toast "Saved in Downloads" with
+  Reveal in Finder. Before the fix every download was cancelled (section 3).
+- **Quit with a run active**: AppleScript `quit app` during a 10-frame simulator run →
+  `409` → the Quit dialog ("A sequence is running: no object name, 0 of 10 frames.");
+  Cancel → the run still `running`, caffeinate 1, 3 assertions; ⌘Q → the dialog (1 of
+  10) → forced → `202` → server exit 0, gone 531 ms after the UI's quit, app gone 0.55 s;
+  then 0 sidecar, 0 caffeinate, 0 assertion. Idle quit: palette 0.49 s, ⌘Q 0.62 s,
+  AppleScript 0.52 s.
+- **No orphan, no assertion** after: SIGTERM of the shell during a run (app 0.19 s,
+  server 0.21 s); SIGKILL of the shell during a run (stdin EOF: server gone 0.11 s, its log
+  "Standard input closed … shutting down", "The computer may sleep again: the run ended");
+  a server crash (kill -9 → crash notice "signal 9" → Restart server, UI back 1.77 s);
+  a shutdown from another client (the stages, then "The ARGOS server was shut down") →
+  Quit ARGOS; a failed start (`--port 99999` → the UI's failure with exit status 2 and
+  the server's usage lines) → quit. Every case: 0 `argos-server`, 0 caffeinate, 0
+  `pmset` assertion naming caffeinate or argos.
+- **dmg**: the RELEASE app (`org.argos.argos`, 0.4.2, never launched) from a plain UI build
+  and the same sidecar: `codesign --verify --deep --strict` passes, minos 11.0, sdk 26.5
+  (Popover API: macOS 14+ SDK), 104 MB; `ARGOS-0.4.2-macOS-arm64.dmg` 51 MB holds
+  `ARGOS.app`, `READ ME FIRST.txt`, `LICENSE.txt`, `Applications -> /Applications`.
+- **Checks**: whole Python suite (dev env, temporary HOME / TMPDIR, offscreen) 1623
+  passed, 81 skipped + 38 passed; black, ruff clean; `npm run check` 0 / 0, `npm test`
+  1161 passed, `npm run build`; `cargo fmt --check`, `cargo clippy --all-targets`, `cargo test` (8);
+  audits on the 22 shots: Night Red pass (rule A 0, rule B 0 after rounding), brass
+  0-16 906 px per 1 440 x 900 shot (mostly the mark and the primary button).
+
+### 3. Fixed during the integration (found in the running app)
+
+- **Downloads did nothing in the app**: WKWebView cancels a download when the app has no
+  download handler (wry `navigation.rs`), so Export CSV / AAVSO downloads, Save log, plot
+  and view images were lost silently. The shell's `on_download` keeps wry's free name in
+  Downloads and sends `argos://download` {status, path, name}; the UI toasts "Saved in
+  Downloads" with Reveal in Finder (Rust and vitest tests).
+- **Review failed in the frozen server**: `argos/server/review.py` loads
+  `argos/core/session/review.py` from its file (its package imports PyQt6) and the freeze
+  did not ship the source ("No such file … _internal/argos/core/session/review.py").
+  `packaging/argos_server.spec` now ships it and its three imports; a packaging test
+  checks the pair.
+- **Disconnect during a run** (inventory re-run): `disconnectRisk` now names a running
+  sequence (ends when the camera or the wheel goes, as the server does) and autofocus;
+  checked in the app: Disconnect all during a run asks first, Cancel leaves it running.
+- **Quit in the waiting UI** would have asked the default address (maybe another server):
+  it now asks the shell only. The palette listed Connection … Settings twice in the app
+  (Mod+1-5 under Actions): skipped. A toast's action wrapped Dismiss to a second row.
+- `pytest-qt` moved to the `qt` extra (above); `pyproject.toml`'s version checked against
+  `__version__`; README and CONTRIBUTING install the `qt` and `server` extras.
+
+### 4. Wiring
+
+`wiring.patch` of the front-end role applied (App.svelte title bar and DesktopHost,
+`ArgosApp.desktop`, the app menu's commands, Quit in the Help menu and on ⌘Q,
+`revealAction`, toast actions, Reveal in About and Privacy, Reset all layouts resets the
+window, `app.quit` no longer `planned`), plus section 3's changes; protocol.md
+"Launching" names the desktop launch and `--sim-replay`.
+
+### 5. Open
+
+- release.yml (dmg on macOS, deb on Ubuntu, the sidecar smoke, the SDK ≥ 14 check) needs
+  the main session's workflow_dispatch run; Linux was never compiled locally.
+- Science workflow's file: `tests/server/test_photometry.py:363` needs
+  `pytest.importorskip("PyQt6")` first (it imports the Qt engine).
+- Review's export and re-run toasts carry no Reveal yet (`lib/review/**` belongs to the
+  science workflow): `app.toast('info', title, message, app.revealAction(result.path))`.
+- Owner: a save dialog for downloads instead of Downloads would need `tauri-plugin-dialog`
+  (OWNER DECISION, not added); Quit now's delay in the scrim (20 s) against the server's
+  60 s bound (Quit now now stops the server within 2 s); merging the title bar into the
+  44 px toolbar row (design review); a minimal native menu with Ctrl+Q on Linux (spec 01
+  §2, E4: Ctrl+Q works in the page there, also over dialogs and the start-up failure).
+- Version: 0.4.2 everywhere (`__version__`, Cargo.toml, pyproject.toml); 0.5.0 is the
+  owner's bump.
+
+### 6. Known gaps
+
+- A local quit's scrim now shows only after 0.4 s (no flash); a quit that ends sooner
+  shows none, so it was not captured (the remote shutdown's stage list was, shot 14).
+- Not exercised by hand: native menu items, real ⌘Q / ⌘1-5 keystrokes (System Events has
+  no Accessibility permission here; keys were sent in the page, quits by AppleScript),
+  title-bar drag, the system double-click setting live, edge resize of the borderless
+  window; whether ⌘1-5 / ⌘K fire twice (key and menu accelerator).
+- Start to a connected UI is about 1.5 s, above the "about 1 s" aim: the frozen server
+  prints its ready line 1.14-1.26 s after its spawn (importing `argos.server.app` pulls
+  numpy, astropy and requests through `argos.core.catalog` and `argos.core.imaging`;
+  `argos/core` is not changed in this wave).
+- The stages of a simulator shutdown are honestly "< 0.1 s" each but the sequence's
+  (0.4-0.6 s): a real mount's are longer.
+
+### 7. Design and technical review fixes (fixer, 2026-11-15)
+
+Every high and medium finding of the two reviews applied, and every low one; one point
+of each of three findings deliberately narrowed (below). Checked on a final DEV build and
+a final RELEASE build (never launched).
+
+**Design review.**
+- *Quit dialog (high)*: `QuitDialog` is a `ConfirmDialog` (destructive, `Quit ARGOS` /
+  `Cancel`, focus on Cancel, the button busy while the forced request runs; a refusal
+  that is not "busy" ends "Quit ARGOS still quits."). No hold, no nested confirmation;
+  the gallery's `w8-quit` updated. Shot 13 / 18 / 22.
+- *dmg READ ME (high)*: macOS 15+ path (open once, Done, System Settings › Privacy &
+  Security › Open Anyway) and the 11-14 right-click path; "GPL v3 or later"; the same in
+  release.yml's draft release text.
+- *One notice per cause (medium)*: a shutdown asked elsewhere keeps the scrim's panel
+  when the shell reports the exit ("The ARGOS server was shut down", "Another ARGOS window
+  or browser tab asked it to stop. Restart server starts it again.", no error mark, no
+  log); a crash is "The ARGOS server stopped unexpectedly"; `sawShutdown` resets with
+  the server (a later crash stays a crash). Shots 14, 15.
+- *Server's last lines (medium)*: `LogTail` (start-up failure and crash notice) opens at
+  its last line, keeps columns (`white-space: pre`, sideways scroll; its width never
+  widens the dialog), `PathText` breaks a path only after a slash; the failure column is
+  720 px. Shots 02, 15.
+- *Square corners (medium)*: first tried as the reviewer proposed (a titled window, its
+  title bar transparent, traffic lights hidden): rounded, but macOS draws a grey 1 px
+  outline around titled windows, and the Night Red audit failed (rule B 2 828 px). Done
+  instead as a borderless window whose content layer is rounded (10 pt) on a clear
+  background, with the system shadow (`appkit.rs round_corners`; square in full screen):
+  corner pixels transparent, Night Red 0 / 0. Native resize edges of a titled window are
+  not regained (the borderless window keeps tao's).
+- *Full screen (medium)*: `argos://window` {fullscreen}; the title bar hides in full
+  screen; Enter / Exit full screen in the palette and the rail's Help menu (⌃⌘F on
+  macOS); the Night Red help in Settings › Appearance says to use it. Checked live.
+- *Title bar (medium, minimal fix)*: the section alone, muted ("ARGOS" before a section
+  shows). Merging the bar into the toolbar row is an OWNER DECISION.
+- *Low*: the window behind the page is black, then the theme's `--bg` (`argos://theme`),
+  and the shell's fallback pages follow Night Red; stage times in tenths ("< 0.1 s" below),
+  `cut` has the attention mark and "cut short", the scrim's marks are the start-up
+  screen's (CSS aligned, no shared component), a local quit's scrim waits 0.4 s with the
+  app inert; title-bar controls are filled discs (`--border`, `--border-soft` unfocused)
+  at a 20 px pitch, double click follows `AppleActionOnDoubleClick`; wording (the unnamed
+  run "0 of 10 frames (no object name)", "Saved 1 line", the toast's file name on its own
+  line, bundle copyright and tagline as About, About's three buttons alike as text, Quit
+  ARGOS on the start-up failure); the palette and rail show ⌘1-⌘5 in the macOS app; the
+  W8 surfaces captured in Night Red in WKWebView (shots 06, 21-25: audit pass).
+
+**Technical review.**
+- *Abort on a closed stderr (medium)*: every diagnostic goes through `log!` (writes,
+  ignores EPIPE); checked: `argos-desktop 2>&1 | head -2` keeps the app and its server
+  running, no crash report.
+- *Start-up time (medium, partly)*: the sidecar is spawned at the top of `main` (ready
+  1.14-1.26 s after launch, was 1.32-1.51), and the waiting UI adopts the server in place
+  (`DesktopShell.adopt`: no reload; the address goes into the URL for a later reload):
+  UI connected at about 1.5 s (was 1.73-1.86). The server's import time is left (it is
+  `argos/core`'s).
+- *CI (medium)*: ci.yml job "Web UI and desktop shell" (npm ci, check, test, build; cargo
+  fmt, clippy -D warnings, test) and ruff / black over `packaging/`; release.yml runs the
+  same before its build; `hook-astropy.py` formatted.
+- *Low*: Mod+Q is `evenIfHandled` and the waiting / failed start-up handles it (shell
+  quits at once; checked); `STOP_GRACE` 65 s (the server's 60 s bound plus a margin, the
+  window hidden), "Quit now" asks the short path (`argos://quit` {now: true}, 2 s);
+  `ARGOS_SIDECAR` / `ARGOS_SIDECAR_ARGS` honoured by dev builds only, the extra arguments
+  first (checked: `--host 0.0.0.0` in them still listens on 127.0.0.1); release.yml's
+  deb check tests the executable bit and `_internal/`, and the smoke test runs the new
+  `argos-server --self-check` (loads `argos/core/session/review.py`); the reaper sweeps
+  the server's process group with `waitid(WNOWAIT)` before reaping on every exit (checked:
+  a helper left in the group by a wrapper is gone after an A7 quit); Reset all layouts
+  saves the window state once the resize has landed.
+
+**Evidence (final builds).** Freeze 97 MB, no Qt, smoke test with `--self-check` OK.
+DEV app, warm launches: UI attached 0.51-0.57 s, server ready 1.14-1.26 s after launch,
+UI connected about 1.5 s; idle quit 0.56-0.72 s; busy quit 409 → confirmation → Cancel
+keeps the run (3 assertions) → Quit ARGOS → 202, exit 0; SIGTERM of the shell during a
+run 1.0 s; SIGKILL of the shell (stdin EOF) server gone 0.9 s; kill -9 of the server →
+crash notice → Restart server; a remote shutdown → one notice → Restart server; a failed
+start (`--sim-replay` on a missing folder: `--port` in the dev arguments no longer
+overrides the shell's) → Quit ARGOS / Mod+Q; every case 0 sidecar, 0 caffeinate, 0
+assertion. 31 page loads, 0 CSP violations, 0 errors. RELEASE app `org.argos.argos`
+0.4.2, codesign verify ok, minos 11.0, sdk 26.5, 104 MB, copyright "Copyright © 2026 ARGOS
+contributors · GNU GPL v3 or later"; dmg 51 MB with the app, READ ME FIRST.txt (macOS 15+
+steps), LICENSE.txt, Applications link; never launched. Python suite 1624 passed, 85
+skipped + 38 passed; black and ruff (with packaging/) clean; npm check 0 / 0, 1165 tests,
+build; cargo fmt, clippy -D warnings, 11 tests.
+
+## Site (0.5.0) (2026-11-16)
+
+Scope: the public site for 0.5.0, both halves that `.github/workflows/pages.yml` deploys
+together on a push to `main`: the showcase `docs/` (index, install, CSS, fonts, images)
+and the Sphinx documentation `docsrc/` (built with `-W`), plus `README.md`, which repeats
+the install facts. Built by four roles (observer docs, science docs, showcase, developer
+docs) on the owner's decisions of 2026-11-16 (argos-website skill, audit §7), integrated
+here. Sources: the code at `175abf6`, `notes/release_0_5_0.md` (S1-S85, H1-H17, X1-X3),
+`web/spec/*independent-checks.md`.
+
+**Status: integrated, reviewed (art direction, science, technical), the reviews' findings
+applied by a fixer pass (section 7), built and checked locally. Not published, nothing
+committed. The site goes live only after the v0.5.0 release is published and
+`explore/web-ui` is merged into `main` (section 6).**
+
+### 1. Pages
+
+| File | Change |
+|---|---|
+| `docs/index.html` | 0.5.0 first beta in the owner's words; tested with the simulator and replays, live use on a telescope still to come; canonical, `og:*` and Twitter tags; the keyword grid for 0.5.0; the night (Plan, Night Red, Review, AAVSO export); field identification; "One night, checked" (inline SVG: RR Lyr 2026-09-25, the ARGOS re-run against star_var_script + Siril with the same 2 comparisons) in place of the template-fit plot; requirements |
+| `docs/install.html` | v0.5.0 asset names, READ ME FIRST's Gatekeeper steps, platform floors, setup with the UI's labels, profiles, 0.5.0 summary |
+| `docs/css/argos.css` | no brass text, `--muted` at 5.42:1 on paper, no decorative motion, skip link, chart styles |
+| `docs/fonts/OFL.txt` | the IBM Plex licence beside the fonts |
+| `docsrc/index.rst` | landing for 0.5.0: status admonition, cards without emoji (with "What changed in 0.5.0" and "How the results were checked"), "What it does" with the simulator and replays, the two-pipeline rule with the web UI's views |
+| `docsrc/install.md`, `guide.md`, `field_identification.md`, `exoplanet_transits.md`, `field_connectivity.md`, `glossary.md` | rewritten for the web UI, 8 figures in the guide |
+| `docsrc/release_0_5_0.md` (new) | what changed by task, check your old files, how the numbers were checked, known limits; anchors to the notes at `v0.5.0` |
+| `docsrc/validation.md` (new) | how the results were checked, with what was not |
+| `docsrc/differential_photometry.md`, `fits_headers.md`, `references.md` | the notes' final state (S66-S85) |
+| `docsrc/ARCHITECTURE.md`, `CONTRIBUTING.md` (and the root copy), `simulator_testing.md`, `seestar_protocol.md`, `diagrams/*.dot` (6, 2 new), `_static/diagrams.css` | server, web UI, Tauri shell and sidecar; diagrams in IBM Plex |
+| `docsrc/api/server.rst` (new), `api/index.rst`, `api/workers.rst`, `api/ui.rst` | 58 `argos.server` modules; the Qt pages labelled the legacy parity reference |
+| `docsrc/conf.py` | `release` read from `argos/__init__.py`; server imports mocked for the Pages job; ARGOS accent instead of Furo's blue |
+| `README.md` | 0.5.0 status, install with the v0.5.0 assets and Gatekeeper steps, links to the guide, release page and validation (the French 0.4.1 guide link removed), Settings › Plate solving, Help › Create support bundle…, the Qt app labelled the parity reference |
+
+### 2. Images
+
+(As integrated; the fixer pass changed them: section 7.) Nine jpg + webp pairs in `docs/img/`, 1600 px wide (1600 x 1000; `review-sessions` 1600 x
+622), 2.8 MB of jpg and 0.97 MB of webp: connection, plan, observe-field, observe-run (the
+hero and `og:image`), review-sessions, review-wall, review-wall-night-red, review-frame,
+aavso-export. Captured by `run_web.py --replay` on 66 header-stripped copies of the RR Lyr
+2026-09-25 lights, dev config (observer `TST`, the simulator's public default site,
+`sim_mount.DEFAULT_SITE`), headless Chrome at scale 2. Night Red audit on the originals
+(showcase role): rules A and B, 0 px. Removed: the five Qt-era pairs (`session-lightcurve`,
+`plan-sequence`, `review-session`, `field-identification`, `rrlyrae-sesar-fit-dark`); no
+page of the site links to them.
+
+### 3. Checks (integration)
+
+- **Build.** The assembled tree (`docs/` copied, Sphinx into `docs/`, as pages.yml does):
+  `sphinx -W` exit 0, 0 warnings, 35 s; pages.yml's six required files present.
+- **Links** (a checker in the scratchpad): 160 pages and 2 stylesheets, 20 199 internal
+  references, 9 325 fragments; 0 root-absolute links; 1 broken:
+  `docs/_modules/index.html` → `builtins.html` (viewcode lists the type aliases `RaDec`,
+  pre-existing at `175abf6`, and `ConnectReport` under the module `builtins`). 279
+  external links listed, not fetched; 105 point at the `v0.5.0` tag and 38 at `blob/main`:
+  they resolve only after the release and the merge.
+- **Preview**, headless Chrome at 1440 and 390 px (index, install; docs index, install,
+  guide, release, validation): no horizontal page scroll, every image loads its webp, the
+  showcase makes 0 external requests and loads IBM Plex. The docs load MathJax from
+  cdn.jsdelivr.net on 7 pages (Sphinx's default, as before), and request a missing
+  `/favicon.ico`.
+- **Privacy.** The owner's config read only: observer name, AAVSO code, site name,
+  coordinates (2-6 decimals and sexagesimal), elevation, Alpaca and Stellarium hosts, home
+  path. 0 hits in both halves, the built site, the images' metadata and their OCR text
+  (Vision), except the observer name inside the public repository URL and the existing
+  credit, and the site's city name once, in `argos/server/site_check.py`'s docstring as
+  rendered by the API reference (the same city is already in the Qt app's placeholder and
+  the tests). Images: EXIF of 78 bytes with no text, webp with a VP8 chunk only. Each of
+  the nine viewed: observer `TST`, the simulator's site, the `192.168.x.x` placeholder,
+  scratch paths with no user name, the FITS header card folded, no serial.
+- **Consistency between the halves.** Version 0.5.0 (`argos/__init__.py`,
+  `pyproject.toml`, `Cargo.toml`, `conf.py`); asset names; Gatekeeper steps (=
+  `make_dmg.sh` READ ME FIRST and release.yml's body); platform floors; profiles
+  (`catalog.py`); the numbers 0.228 e⁻/ADU and 2.6 e⁻ (S73, `catalog.py`), +0.0021 /
+  0.0083 mag on n 195, +0.0166 ± 0.0015 mag, 0.86 on RR2's 6 pairs, 0.0000 s (S73-S80
+  D.2, `validation.md`).
+
+### 4. Minimum OS (owner decision 5; from the build files and the bundle, not run)
+
+macOS: `tauri.conf.json` `minimumSystemVersion` 11.0, the W8 release binary minos 11.0;
+the shipped UI needs the WebKit of Safari 16.2 (`color-mix()` in `tokens.css`) and
+container queries (16.0); the Popover API, anchor positioning and `@starting-style` appear
+only in `web/src/lab`. The site says macOS 11 or later with Safari 16.2+, Apple silicon,
+tested on macOS 26 only. Linux: the deb is built on ubuntu-22.04 against
+libwebkit2gtk-4.1; the minimum WebKitGTK version is not determined; never run on a Linux
+desktop.
+
+### 5. Open
+
+(Closed by the fixer pass, section 7: the brass shadows, the fake title bars, the hero's
+width, the diagrams on Furo's dark pages, MathJax from a CDN, `html_favicon`, `.doctrees`
+in the deploy, Graphviz without IBM Plex on the runner, and the aavso-export layout. Still
+open below unless marked.)
+
+- The `.deb` name `ARGOS_0.5.0_amd64.deb` is inferred from Tauri's bundler naming; the
+  `.dmg` name follows `make_dmg.sh`. Neither exists yet.
+- The aavso-export capture predates the dialog's "Uncalibrated frames" line (working
+  tree, `web/src/lib/review/dialogs/`, not the site wave).
+- Owner: the h1 "Put your smart telescope to scientific work." (the site plan's own
+  anti-pattern); art director: brass offset shadows, fake title bars, brass rules, the
+  hero's width, a dark band around app captures, the diagrams on Furo's dark pages.
+- Docs: MathJax from a CDN (a remote script, `mathjax@4` unpinned); no `html_favicon`;
+  pages.yml publishes `.doctrees`; Graphviz on the runner has no IBM Plex; the viewcode
+  `builtins` link.
+- Product and notes, found by the roles: Settings › Plate solving locks Database set while
+  a folder is set although S24 passes both; `web/README.md` line 319 says Run mode is
+  unavailable; `main.rs`'s header says the UI reloads; `scripts/validate_alpaca.py` imports
+  names that no longer exist; the notes' S80 wording inverts `consistent_pairs`; D2 C.5
+  calls the XX Cyg checks "within error" (1.20-1.25 combined σ).
+- `presentation/` (untracked) and `design-proposals/04-argos-041.html` still reference the
+  removed images: `git show 175abf6:docs/img/<file>` restores one.
+- Not checked: real Safari or WebKitGTK, a screen reader, external links, social unfurls,
+  the Pages job's docs-only environment (its imports were checked statically: every
+  third-party import of `argos/` is a base dependency or mocked).
+
+### 6. Publish checklist
+
+1. Commit the site with the release, including the untracked files
+   (`docsrc/release_0_5_0.md`, `validation.md`, `api/server.rst`, `_static/diagrams.css`,
+   `_static/diagrams.js`, `_static/mathjax/` (2), `diagrams/architecture.dot`,
+   `diagrams/server_threads.dot`, `docs/fonts/OFL.txt`, the 18 files of `docs/img/`) and
+   the 10 deleted Qt-era images. Stage by path: never `presentation/` or the PDF at the
+   root.
+2. Tag `v0.5.0`: release.yml builds the dmg and the deb and creates a draft release.
+3. Compare the draft's asset names with the site (`docs/install.html` twice,
+   `docsrc/install.md`, `README.md`); fix them if they differ; add sizes and the date from
+   the published assets if wanted.
+4. Publish the draft.
+5. Merge `explore/web-ui` into `main`: pages.yml builds with `-W` and deploys both halves.
+6. After the deploy: open `/argos/`, `/argos/install.html` and `/argos/docs/`, try both
+   downloads and one `blob/v0.5.0` anchor of the release page.
+
+### 7. Fixer pass (2026-11-16): the reviews applied
+
+Three reviews of the integrated site (art direction, science, technical) returned 54
+findings; the fixer applied every high and medium one but the palette (an owner decision)
+and the ones that need code or a new capture, and the cheap low ones.
+
+**Science** (every number from the checks docs or the notes):
+- The RR Lyr reference is **not calibrated**: the Siril + `star_var_script` reduction read
+  the same raw frames ("No calibration frames — proceeding with raw lights", its own
+  `pipeline.log`). Said in the showcase's section 04 (lede, figure caption, the Siril
+  card), `validation.md` §1 and §4.1, and the release page's "what these numbers do not
+  show".
+- The XX Cyg check stars are 1.25 and 1.20 combined σ from VSP, just outside its errors
+  (release page; was "within VSP's errors").
+- The run-level floor: live, only points without a detection are left out; a re-run also
+  leaves out unverified fields and off-centre rows (guide, glossary, method §5).
+- Old runs and the AAVSO export: Review flags no-detection points only when the run saved
+  diagnostic records (off by default); `few_anchors` points are written with a warning
+  until a re-run (S56, S58); `CHART` stays `na` for a run recorded before 0.5.0 unless typed
+  (S68) (guide §11-§12, release page, method §8.2, glossary).
+- The showcase's AAVSO card states raw, uncalibrated, untransformed (TG, `TRANS=NO`), a
+  field check, and the unconfirmed `#OBSTYPE=CCD`; "honest error bars" replaced by "error
+  bars from the camera's measured noise", with 1.3-1.6× for bright stars (install page,
+  method page).
+- σ_real's own uncertainty: about ±45 % at 10 points, ±30 % at 20, ±25 % at 30 (the
+  science review's simulation of `estimate_lightcurve_scatter` on white noise, 20 000
+  trials; was "±20–30 %"). **To record**: the simulation is not in a checks doc yet.
+- Pair ratios: median 0.86 against robust 0.75 named (showcase, `validation.md` §6, release
+  page, which now cites checks C.6 and D.8 instead of progress); `bjd_tdb` 0.0000 s
+  (D.2); `KNAME` falls back to the check star's name; scintillation's airmass is each
+  star's own only in a re-run; the glossary's simulator and airmass entries; the method
+  page's colour paragraph (the Field band flags Δ(B−V) > 0.3) and closing sentence; the
+  guide's exposure and gain advice; "a detailed scientific header"; a 1 % transit is
+  11 mmag.
+
+**Showcase** (`docs/index.html`, `install.html`, `css/argos.css`):
+- Captures legible: the hero's capture below the text at the content width (1198 px at
+  1440, was 497); section 02 stacked rows, text above a full-width capture; the AAVSO
+  dialog cropped to itself (1296 x 1208, shown at 597 px, the UI at 0.92 of its size);
+  Connection cropped to its panels (1600 x 537). A phone keeps each figure after its text.
+- No brass offset shadows, no fake title bars or readout strips: a 1 px frame and one
+  caption below. Focus ring `--orange-deep` (4.42:1 on paper). Plex Sans and Mono fall
+  back to each other; `e<sup>−</sup>`; numbers and units joined by no-break spaces; display
+  headings at −0.025 em; the stats and file names in Plex Mono; the limits ("Before you
+  observe", the beta note) at 15 px in ink; the install page's band full width; the
+  keyword-grid rule scoped; `--orange-hi` (unused) removed.
+- Night Red as a lossless WebP with a PNG fallback: rules A and B 0 px on the published
+  files and as Chrome decodes them (the JPG had 18 768 rule-B pixels). Section 02's
+  "During the night" text names what the image shows (Review in Night Red; Run mode is the
+  hero), and "After the night" shows the frame inspector, so Review is not shown twice.
+- The result chart's magnitude axis runs from 7.2, so no point sits above the top
+  gridline; its ±σ band is visible; the plot facts carry their qualifiers in the labels.
+- The hero has an 800 px variant (`srcset`, `fetchpriority`); meta descriptions ≤ 160
+  characters; `review-sessions` (unused) and the Night Red JPG removed.
+- Linux floor: Ubuntu 22.04 or Debian 12 and later (glibc 2.34+, inferred from the
+  ubuntu-22.04 build; install page, `install.md`, README, requirements row).
+
+**Docs** (`docsrc/conf.py`, `_static/custom.css`, `diagrams.css`, `diagrams.js`):
+- IBM Plex for text and code; links in the text colour with a brass underline; sidebar
+  in the text colour; admonitions in ARGOS's roles (brass, a neutral grey or `--cyan`,
+  `--danger`) with ARGOS's attention mark and a hollow ring instead of Furo's icons; flat
+  cards (4 px, no lift, no shadow); tabular figures in tables.
+- The mark as the sidebar logo and the favicon; "ARGOS home and download" at the head of
+  the navigation; `html_baseurl` (a canonical link per page).
+- Diagrams: Observatory colours on dark pages, Furo's toggle included (checked: light OS +
+  dark theme, dark OS + light theme); they scroll sideways on a phone.
+- MathJax 3.2.2 `tex-svg-full.js` vendored in `_static/mathjax/` (npm integrity checked;
+  Apache 2.0, its licence beside it; menu off, since its accessibility explorer loads from
+  a CDN): the docs load nothing remote.
+- `autodoc_default_options = {"ignore-module-all": True}` and anchors for `sequencer` and
+  `session_log`: the viewcode `[docs]` links all resolve (31 broken before); PyQt6 mocks
+  named (`PyQt6.QtWidgets.QPushButton`, no memory address in `api/ui.html`).
+- `validation.md`'s evidence links on `blob/v0.5.0`.
+- pages.yml: doctrees outside the published folder (20 MB less); `fonts-ibm-plex`
+  installed with Graphviz (the Ubuntu package ships the TTFs).
+
+**Checks after the pass.** `sphinx -W` exit 0, 0 warnings; the assembled tree 281 files,
+28 MB, pages.yml's six files present; links: 160 pages, 20 930 internal references,
+12 055 fragments (viewcode included), 1 broken (`_modules/index.html` → `builtins.html`,
+pre-existing); preview in headless Chrome (showcase at 1440 and 390 px; 8 docs pages light
+and dark at 1440, 2 at 390): no page scroll, 0 remote requests, 0 failed requests, every
+image loads; privacy scan (counts only): no coordinate, observer code, host, home path or
+user name; the observer name only in the repository URL and the footer credit; the
+Settings site's city twice, from `site_check.py`'s docstring (code, below); 6 elevation
+pattern matches, all digits inside SVG coordinates (chart points, a diagram polygon).
+
+**Main session, after the pass (2026-11-16).**
+- The h1 is "Variable-star photometry with a Seestar." (the art director's wording);
+  MathJax stays vendored (nothing remote); the section 04 lede no longer says Siril
+  calibrated that night; the method page's known limits name the field-rotation trends
+  and calibration for 0.6.
+- `site_check.py` and `server/__init__.py` docstrings reworded (no stale site's name or
+  mount coordinates; Qt retired). The built docs have no hit for the city.
+- The σ_real simulation is recorded in `validation.md` §6, run on
+  `estimate_lightcurve_scatter` itself: relative σ 0.47, 0.32, 0.26 at 10, 20 and 30
+  points; the method and references pages quote ±47 %, ±32 %, ±26 % and cite it.
+- Found by the roles and fixed: the server's ASTAP status had not followed S24 (it
+  showed `-d <folder>` alone, said the set was ignored, and Settings locked
+  **Database set** while a folder was set); notes S80 inverted `consistent_pairs`;
+  D2 C.5 called 000-BJV-169 and 000-BJV-171 "within error" (1.25 and 1.20 combined σ);
+  `web/README.md` said Run mode was unavailable; the `main.rs` header said the UI reloads.
+
+**Still open:**
+- Palette alignment (graphite neutrals for the showcase, Observatory tokens for the docs'
+  dark pages, `--orange*` renamed `--accent*`) and a dark band behind section 02: a 0.5.x
+  site pass.
+- Captures that need the replay again: the hero without the VSX layer; Plan with four
+  steps; phone crops; a 1200 x 630 social card.
+- The simulator names itself "Seestar S50" in the connection log while the S30 Pro
+  profile is active (visible on the `connection` capture).
+- `scripts/validate_alpaca.py` imports `BAYER_PATTERN` and `FOCAL_LENGTH`, gone from
+  `argos.core.alpaca.camera`.
+- viewcode: `_modules/index.html` links a missing `builtins.html` (pre-existing).

@@ -60,8 +60,11 @@ class ComparisonCurvePanel(QWidget):
         self._curves = comparisons
         self._selector.blockSignals(True)
         self._selector.clear()
+        multi = len({getattr(c, "filter_name", "") for c in curves.values()}) > 1
         for key, curve in comparisons.items():
             label = str(getattr(curve, "name", "") or getattr(curve, "auid", "") or key)
+            if multi and getattr(curve, "filter_name", ""):
+                label = f"{label} [{curve.filter_name}]"  # one curve per filter (S49)
             self._selector.addItem(label, key)
         if comparisons:
             self._selector.addItem("All comparison stars", _ALL_COMPARISONS)

@@ -17,6 +17,10 @@ from argos.ui import design, theme
 
 logger = logging.getLogger(__name__)
 
+#: Longest device-badge info shown in the bar; longer text is cut, with the
+#: whole of it in the badge's tooltip.
+_BADGE_INFO_MAX = 48
+
 
 # (device_id, display label). Order is what the user sees, left to right.
 DEVICES: tuple[tuple[str, str], ...] = (
@@ -308,8 +312,12 @@ class _Badge(QLabel):
 
         text = f"{glyph}  {self._label}"
         if info:
-            text += f" · {info}"
+            # One line in the bar; the full reason (an error's cause) is in
+            # the tooltip and on the Connection page.
+            short = info if len(info) <= _BADGE_INFO_MAX else info[: _BADGE_INFO_MAX - 1] + "…"
+            text += f" · {short}"
         self.setText(text)
+        self.setToolTip(info if len(info) > _BADGE_INFO_MAX else "")
         self.setStyleSheet(
             f"color:{color}; font-size:{design.FONT_SIZE_SMALL}px; padding:4px 8px;"
             f" background:transparent;"

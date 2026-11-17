@@ -1,0 +1,726 @@
+{
+ "title": "Wave 4: Field identification and image tools (after the review fixes)",
+ "date": "2026-11-08",
+ "summary": "Wave 4 of web/spec/README.md section 7 after its design, technical and science reviews: Observe's Field mode against copies of real Seestar raw frames of the RR Lyr field opened through Open FITS. Identify field (ASTAP, cancellable job), the field chip in words ('Identified · 3.67″/px · PA …'), catalogue layers drawn in screen space (1 px at fit zoom, variables smaller when dense, a set star drawn only as its role mark), the target set at 17 / 15 px floors, the selection as brass corner brackets and list hovers as foreground brackets, grid labels in the UI format broken under the line, the star card titled by the identity with facts built from the fields, the candidates band with the target and the rules in words and a row that selects its star on the image, one grouped Undo toast at the bottom left of the image, the Mount card's Solved field row first in Field mode (Centre and Sync refused for an opened file's solution), the Catalogue layers popover as the legend, Framing and Focus showing the grid and the set only. Captured at device scale 2 (2 880 x 1 800 files for 1 440 x 900); 13 scenes in the three themes at 1 440 x 900 and in Observatory at 1 280 x 800, plus the Settings sheet, the command palette, Sync refused and Labels on (Observatory and Night Red). The Night Red originals pass the audit.",
+ "shots": [
+  {
+   "file": "charcoal-1440x900-01-field-solved.png",
+   "caption": "Field mode after Identify field (S) on a real raw frame of the RR Lyr field (copy, Open FITS). The HUD chip says 'Identified · 3.67″/px · PA −177.0° · Δtarget 77.3′' (PA: the sensor frame's angle as ASTAP reports it, said in the tooltip). The 139 VSX variables are drawn at r 9 and 1 px (dense field, fit zoom), so the target RR Lyr (brass circle, r 17, its own VSX circle left out) and the comparison (square) stand out. Grid labels read '19h 28m'. Band: Candidates sorted by Sep because the target's B−V is unknown; the note line gives the target, the aperture (10.8 px, 40″), what most rows share ('41 of 49 beyond 25′ · 19 of 49 not detected', no longer underlined on every row) and the rules in words. Rail: the Mount card's Solved field row comes right under the readouts and the GoTo entry is folded; Centre target and Sync are unavailable (this solution is an opened file's). (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "overlays",
+    "grid",
+    "compass",
+    "candidates",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-02-star-card.png",
+   "caption": "A click on RR Lyr: the star card is titled by the identity alone ('RR Lyr', never cut) with the facts built from the fields; the selection is four brass corner brackets outside the role mark (never a second circle). (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "star-card",
+    "roles",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-03-role-check.png",
+   "caption": "A detected VSP star given the Check role from its card: card title '000-BJW-675', facts 'V 11.29 · B−V 0.60 · 3.6′ from target' (the pressed role says the role); the triangle on the image and in the table; the Inspector with 'From target 3.6′'. The Undo toast ('Written to targets/RR_Lyr.json') now sits at the bottom left of the image, above the scale bar, never over the rail. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "roles",
+    "targets-json",
+    "undo",
+    "inspector",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-04-candidates-hover.png",
+   "caption": "A candidates row clicked selects its star on the image (A49 at the tracked position): brass brackets, the star card and the Inspector agree; another row hovered is marked with foreground corner brackets. History chips read 'BJW-673' with the role glyph. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "candidates",
+    "hover-link",
+    "inspector",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-05-catalogue-popover.png",
+   "caption": "Catalogue layers popover (O): each row's swatch is the overlay's own mark in its overlay token (the popover is the legend); the failed sources are stated (Gaia timed out, SIMBAD and NASA unavailable from this network), so an empty Stars layer has its reason; 'VSP references, detected' and 'Labels · catalogue names' say what they count and show. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "popover",
+    "catalogue",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-06-context-menu.png",
+   "caption": "The viewer context menu over the field; the selection made from the candidates row is the same star as the card and the Inspector. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "viewer",
+    "context-menu",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-07-loupe.png",
+   "caption": "The loupe (Z) and the identity popover of the target marker: the name as the title, the facts as a key and value grid, RA and Dec in the UI format ('19h 25m 27.9s', '+42° 47′ 04″'). (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "viewer",
+    "loupe",
+    "tooltip",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-08-statistics-region.png",
+   "caption": "Framing with the Statistics card (I) and the region tool (R). Framing keeps its own layer choice: the grid and the target set only, so the image is the hero. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "viewer",
+    "statistics",
+    "region",
+    "framing",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-09-exposure-hover.png",
+   "caption": "Hovering an exposure-check row: the row takes the hover fill and its star is marked with the same corner brackets as every list hover. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "framing",
+    "exposure-check",
+    "hover-link",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-10-palette-fire.png",
+   "caption": "View options, Palette Fire over the colour preview: the Preview reads 'Colour (luminance)' and a note says the palette applies to the luminance. The ramp starts at the darkest 8-bit grey, so no faint level is crushed (256 distinct entries). (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "viewer",
+    "palette",
+    "fire",
+    "view-options",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-11-palette-ice.png",
+   "caption": "Palette Ice, same rules as Fire. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "viewer",
+    "palette",
+    "ice",
+    "view-options",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-12-solving.png",
+   "caption": "Identifying in progress (a simulator frame, which ASTAP cannot solve): the chip shows the solve stage; the toolbar button cancels it. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "solving",
+    "job",
+    "cancel",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "charcoal-1440x900-13-invalidated.png",
+   "caption": "The field invalidated by a GoTo: the chip says 'Field moved: identify again'; layers, grid and selection are gone. (charcoal, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "invalidated",
+    "slew",
+    "charcoal",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-01-field-solved.png",
+   "caption": "Field mode after Identify field (S) on a real raw frame of the RR Lyr field (copy, Open FITS). The HUD chip says 'Identified · 3.67″/px · PA −177.0° · Δtarget 77.3′' (PA: the sensor frame's angle as ASTAP reports it, said in the tooltip). The 139 VSX variables are drawn at r 9 and 1 px (dense field, fit zoom), so the target RR Lyr (brass circle, r 17, its own VSX circle left out) and the comparison (square) stand out. Grid labels read '19h 28m'. Band: Candidates sorted by Sep because the target's B−V is unknown; the note line gives the target, the aperture (10.8 px, 40″), what most rows share ('41 of 49 beyond 25′ · 19 of 49 not detected', no longer underlined on every row) and the rules in words. Rail: the Mount card's Solved field row comes right under the readouts and the GoTo entry is folded; Centre target and Sync are unavailable (this solution is an opened file's). (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "overlays",
+    "grid",
+    "compass",
+    "candidates",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-02-star-card.png",
+   "caption": "A click on RR Lyr: the star card is titled by the identity alone ('RR Lyr', never cut) with the facts built from the fields; the selection is four brass corner brackets outside the role mark (never a second circle). (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "star-card",
+    "roles",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-03-role-check.png",
+   "caption": "A detected VSP star given the Check role from its card: card title '000-BJW-675', facts 'V 11.29 · B−V 0.60 · 3.6′ from target' (the pressed role says the role); the triangle on the image and in the table; the Inspector with 'From target 3.6′'. The Undo toast ('Written to targets/RR_Lyr.json') now sits at the bottom left of the image, above the scale bar, never over the rail. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "roles",
+    "targets-json",
+    "undo",
+    "inspector",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-04-candidates-hover.png",
+   "caption": "A candidates row clicked selects its star on the image (A49 at the tracked position): brass brackets, the star card and the Inspector agree; another row hovered is marked with foreground corner brackets. History chips read 'BJW-673' with the role glyph. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "candidates",
+    "hover-link",
+    "inspector",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-05-catalogue-popover.png",
+   "caption": "Catalogue layers popover (O): each row's swatch is the overlay's own mark in its overlay token (the popover is the legend); the failed sources are stated (Gaia timed out, SIMBAD and NASA unavailable from this network), so an empty Stars layer has its reason; 'VSP references, detected' and 'Labels · catalogue names' say what they count and show. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "popover",
+    "catalogue",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-06-context-menu.png",
+   "caption": "The viewer context menu over the field; the selection made from the candidates row is the same star as the card and the Inspector. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "viewer",
+    "context-menu",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-07-loupe.png",
+   "caption": "The loupe (Z) and the identity popover of the target marker: the name as the title, the facts as a key and value grid, RA and Dec in the UI format ('19h 25m 27.9s', '+42° 47′ 04″'). (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "viewer",
+    "loupe",
+    "tooltip",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-08-statistics-region.png",
+   "caption": "Framing with the Statistics card (I) and the region tool (R). Framing keeps its own layer choice: the grid and the target set only, so the image is the hero. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "viewer",
+    "statistics",
+    "region",
+    "framing",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-09-exposure-hover.png",
+   "caption": "Hovering an exposure-check row: the row takes the hover fill and its star is marked with the same corner brackets as every list hover. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "framing",
+    "exposure-check",
+    "hover-link",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-10-palette-fire.png",
+   "caption": "View options, Palette Fire over the colour preview: the Preview reads 'Colour (luminance)' and a note says the palette applies to the luminance. The ramp starts at the darkest 8-bit grey, so no faint level is crushed (256 distinct entries). (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "viewer",
+    "palette",
+    "fire",
+    "view-options",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-11-palette-ice.png",
+   "caption": "Palette Ice, same rules as Fire. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "viewer",
+    "palette",
+    "ice",
+    "view-options",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-12-solving.png",
+   "caption": "Identifying in progress (a simulator frame, which ASTAP cannot solve): the chip shows the solve stage; the toolbar button cancels it. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "solving",
+    "job",
+    "cancel",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-13-invalidated.png",
+   "caption": "The field invalidated by a GoTo: the chip says 'Field moved: identify again'; layers, grid and selection are gone. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "invalidated",
+    "slew",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "night-red-1440x900-17-labels-on.png",
+   "caption": "Labels on (N): long names follow Qt's 18-character rule, labels avoid the HUD (chips, compass, scale bar, readout) and each other, at most 40 catalogue names at fit zoom (nearest the target first); the set's names in --fg, the catalogue's in --text-muted. (night-red, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "labels",
+    "overlays",
+    "night-red",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-01-field-solved.png",
+   "caption": "Field mode after Identify field (S) on a real raw frame of the RR Lyr field (copy, Open FITS). The HUD chip says 'Identified · 3.67″/px · PA −177.0° · Δtarget 77.3′' (PA: the sensor frame's angle as ASTAP reports it, said in the tooltip). The 139 VSX variables are drawn at r 9 and 1 px (dense field, fit zoom), so the target RR Lyr (brass circle, r 17, its own VSX circle left out) and the comparison (square) stand out. Grid labels read '19h 28m'. Band: Candidates sorted by Sep because the target's B−V is unknown; the note line gives the target, the aperture (10.8 px, 40″), what most rows share ('41 of 49 beyond 25′ · 19 of 49 not detected', no longer underlined on every row) and the rules in words. Rail: the Mount card's Solved field row comes right under the readouts and the GoTo entry is folded; Centre target and Sync are unavailable (this solution is an opened file's). (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "overlays",
+    "grid",
+    "compass",
+    "candidates",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-02-star-card.png",
+   "caption": "A click on RR Lyr: the star card is titled by the identity alone ('RR Lyr', never cut) with the facts built from the fields; the selection is four brass corner brackets outside the role mark (never a second circle). (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "star-card",
+    "roles",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-03-role-check.png",
+   "caption": "A detected VSP star given the Check role from its card: card title '000-BJW-675', facts 'V 11.29 · B−V 0.60 · 3.6′ from target' (the pressed role says the role); the triangle on the image and in the table; the Inspector with 'From target 3.6′'. The Undo toast ('Written to targets/RR_Lyr.json') now sits at the bottom left of the image, above the scale bar, never over the rail. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "roles",
+    "targets-json",
+    "undo",
+    "inspector",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-04-candidates-hover.png",
+   "caption": "A candidates row clicked selects its star on the image (A49 at the tracked position): brass brackets, the star card and the Inspector agree; another row hovered is marked with foreground corner brackets. History chips read 'BJW-673' with the role glyph. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "candidates",
+    "hover-link",
+    "inspector",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-05-catalogue-popover.png",
+   "caption": "Catalogue layers popover (O): each row's swatch is the overlay's own mark in its overlay token (the popover is the legend); the failed sources are stated (Gaia timed out, SIMBAD and NASA unavailable from this network), so an empty Stars layer has its reason; 'VSP references, detected' and 'Labels · catalogue names' say what they count and show. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "popover",
+    "catalogue",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-06-context-menu.png",
+   "caption": "The viewer context menu over the field; the selection made from the candidates row is the same star as the card and the Inspector. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave4",
+    "viewer",
+    "context-menu",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-07-loupe.png",
+   "caption": "The loupe (Z) and the identity popover of the target marker: the name as the title, the facts as a key and value grid, RA and Dec in the UI format ('19h 25m 27.9s', '+42° 47′ 04″'). (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave4",
+    "viewer",
+    "loupe",
+    "tooltip",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-08-statistics-region.png",
+   "caption": "Framing with the Statistics card (I) and the region tool (R). Framing keeps its own layer choice: the grid and the target set only, so the image is the hero. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave4",
+    "viewer",
+    "statistics",
+    "region",
+    "framing",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-09-exposure-hover.png",
+   "caption": "Hovering an exposure-check row: the row takes the hover fill and its star is marked with the same corner brackets as every list hover. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave4",
+    "framing",
+    "exposure-check",
+    "hover-link",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-10-palette-fire.png",
+   "caption": "View options, Palette Fire over the colour preview: the Preview reads 'Colour (luminance)' and a note says the palette applies to the luminance. The ramp starts at the darkest 8-bit grey, so no faint level is crushed (256 distinct entries). (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave4",
+    "viewer",
+    "palette",
+    "fire",
+    "view-options",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-11-palette-ice.png",
+   "caption": "Palette Ice, same rules as Fire. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave4",
+    "viewer",
+    "palette",
+    "ice",
+    "view-options",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-12-solving.png",
+   "caption": "Identifying in progress (a simulator frame, which ASTAP cannot solve): the chip shows the solve stage; the toolbar button cancels it. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "solving",
+    "job",
+    "cancel",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1280x800-13-invalidated.png",
+   "caption": "The field invalidated by a GoTo: the chip says 'Field moved: identify again'; layers, grid and selection are gone. (observatory, 1280x800, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "invalidated",
+    "slew",
+    "observatory",
+    "1280x800"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-01-field-solved.png",
+   "caption": "Field mode after Identify field (S) on a real raw frame of the RR Lyr field (copy, Open FITS). The HUD chip says 'Identified · 3.67″/px · PA −177.0° · Δtarget 77.3′' (PA: the sensor frame's angle as ASTAP reports it, said in the tooltip). The 139 VSX variables are drawn at r 9 and 1 px (dense field, fit zoom), so the target RR Lyr (brass circle, r 17, its own VSX circle left out) and the comparison (square) stand out. Grid labels read '19h 28m'. Band: Candidates sorted by Sep because the target's B−V is unknown; the note line gives the target, the aperture (10.8 px, 40″), what most rows share ('41 of 49 beyond 25′ · 19 of 49 not detected', no longer underlined on every row) and the rules in words. Rail: the Mount card's Solved field row comes right under the readouts and the GoTo entry is folded; Centre target and Sync are unavailable (this solution is an opened file's). (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "overlays",
+    "grid",
+    "compass",
+    "candidates",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-02-star-card.png",
+   "caption": "A click on RR Lyr: the star card is titled by the identity alone ('RR Lyr', never cut) with the facts built from the fields; the selection is four brass corner brackets outside the role mark (never a second circle). (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "star-card",
+    "roles",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-03-role-check.png",
+   "caption": "A detected VSP star given the Check role from its card: card title '000-BJW-675', facts 'V 11.29 · B−V 0.60 · 3.6′ from target' (the pressed role says the role); the triangle on the image and in the table; the Inspector with 'From target 3.6′'. The Undo toast ('Written to targets/RR_Lyr.json') now sits at the bottom left of the image, above the scale bar, never over the rail. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "roles",
+    "targets-json",
+    "undo",
+    "inspector",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-04-candidates-hover.png",
+   "caption": "A candidates row clicked selects its star on the image (A49 at the tracked position): brass brackets, the star card and the Inspector agree; another row hovered is marked with foreground corner brackets. History chips read 'BJW-673' with the role glyph. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "candidates",
+    "hover-link",
+    "inspector",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-05-catalogue-popover.png",
+   "caption": "Catalogue layers popover (O): each row's swatch is the overlay's own mark in its overlay token (the popover is the legend); the failed sources are stated (Gaia timed out, SIMBAD and NASA unavailable from this network), so an empty Stars layer has its reason; 'VSP references, detected' and 'Labels · catalogue names' say what they count and show. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "popover",
+    "catalogue",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-06-context-menu.png",
+   "caption": "The viewer context menu over the field; the selection made from the candidates row is the same star as the card and the Inspector. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "viewer",
+    "context-menu",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-07-loupe.png",
+   "caption": "The loupe (Z) and the identity popover of the target marker: the name as the title, the facts as a key and value grid, RA and Dec in the UI format ('19h 25m 27.9s', '+42° 47′ 04″'). (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "viewer",
+    "loupe",
+    "tooltip",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-08-statistics-region.png",
+   "caption": "Framing with the Statistics card (I) and the region tool (R). Framing keeps its own layer choice: the grid and the target set only, so the image is the hero. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "viewer",
+    "statistics",
+    "region",
+    "framing",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-09-exposure-hover.png",
+   "caption": "Hovering an exposure-check row: the row takes the hover fill and its star is marked with the same corner brackets as every list hover. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "framing",
+    "exposure-check",
+    "hover-link",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-10-palette-fire.png",
+   "caption": "View options, Palette Fire over the colour preview: the Preview reads 'Colour (luminance)' and a note says the palette applies to the luminance. The ramp starts at the darkest 8-bit grey, so no faint level is crushed (256 distinct entries). (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "viewer",
+    "palette",
+    "fire",
+    "view-options",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-11-palette-ice.png",
+   "caption": "Palette Ice, same rules as Fire. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "viewer",
+    "palette",
+    "ice",
+    "view-options",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-12-solving.png",
+   "caption": "Identifying in progress (a simulator frame, which ASTAP cannot solve): the chip shows the solve stage; the toolbar button cancels it. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "solving",
+    "job",
+    "cancel",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-13-invalidated.png",
+   "caption": "The field invalidated by a GoTo: the chip says 'Field moved: identify again'; layers, grid and selection are gone. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "invalidated",
+    "slew",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-14-settings-sheet.png",
+   "caption": "Settings › Catalogues as a sheet over Observe: below 640 px the Gaia depth preset stacks its key above the control, so no segment crosses the box or the sheet's edge. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "settings-sheet",
+    "catalogue",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-15-palette-centre.png",
+   "caption": "Command palette, 'centre': Centre target is unavailable with the reason (this solution is an opened file's, not where the mount points). (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "command-palette",
+    "centre",
+    "hardware",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-16-sync-confirm.png",
+   "caption": "The Mount card's Sync is refused for an opened file's solution, with the reason in its tooltip: a file of another night must never sync the mount (server 409 file_solution). (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "mount",
+    "sync",
+    "confirmation",
+    "observatory",
+    "1440x900"
+   ]
+  },
+  {
+   "file": "observatory-1440x900-17-labels-on.png",
+   "caption": "Labels on (N): long names follow Qt's 18-character rule, labels avoid the HUD (chips, compass, scale bar, readout) and each other, at most 40 catalogue names at fit zoom (nearest the target first); the set's names in --fg, the catalogue's in --text-muted. (observatory, 1440x900, device scale 2.)",
+   "tags": [
+    "wave4",
+    "field",
+    "labels",
+    "overlays",
+    "observatory",
+    "1440x900"
+   ]
+  }
+ ],
+ "scale": 2
+}

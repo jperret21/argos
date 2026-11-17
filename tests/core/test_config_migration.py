@@ -133,3 +133,25 @@ def test_versioned_catalogue_display_choice_is_preserved():
     data = {"catalog": {"display_mag_limit": 12.0, "display_limit_version": 2}}
     _migrate_catalogue_display_limit(data, on_disk={"catalog": dict(data["catalog"])})
     assert data["catalog"]["display_mag_limit"] == 12.0
+
+
+def test_observing_site_is_never_the_0_0_default():
+    """The site defaults are 0/0: photometry used them as a real site
+    (airmass, BJD_TDB, FITS SITELAT/SITELONG) when none was set."""
+    from argos.core.config import Config, observing_site
+
+    def site(**values):
+        return observing_site(Config({"site": dict(_DEFAULTS["site"], **values)}))
+
+    assert site() is None  # the untouched defaults
+    assert site(name="Paris", latitude=48.85, longitude=2.35, elevation=35.0) == (
+        48.85,
+        2.35,
+        35.0,
+    )
+    # Typed without a name, or migrated from the pre-0.4 observer keys.
+    assert site(latitude=46.2, longitude=6.1) == (46.2, 6.1, 0.0)
+    assert site(latitude=0.0, longitude=-78.5) == (0.0, -78.5, 0.0)  # on the equator
+    assert site(name="Gulf of Guinea buoy") == (0.0, 0.0, 0.0)  # named: taken as set
+    assert site(name="  ") is None
+    assert observing_site(Config({})) is None
