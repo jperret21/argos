@@ -293,7 +293,7 @@ KEYS: tuple[KeyMeta, ...] = (
        "Empty: auto-detect (astap_cli on PATH).",
        "plate_solving", used_by=("plate solving",), path_kind="exe", allow_empty=True),
     _k("astrometry.database", "str", "", "Database set",
-       "ASTAP star database to use; ignored while a star database folder is set.",
+       "ASTAP star database set to use (-D); a star database folder below is passed with it (-d).",
        "plate_solving", used_by=("plate solving",),
        options=(("", "Auto"),) + tuple(
            (name, name) for name in ("D05", "D20", "D50", "D80", "G17", "H17", "H18", "V17", "W08")

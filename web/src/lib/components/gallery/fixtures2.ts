@@ -100,7 +100,7 @@ export const META: Record<string, KeyMeta> = {
     type: 'str',
     default: '',
     label: 'Database set',
-    help: 'ASTAP star database to use; ignored while a star database folder is set.',
+    help: 'ASTAP star database set to use (-D); a star database folder below is passed with it (-d).',
     category: 'plate_solving',
     options: [{ value: '', label: 'Auto' }, ...['D05', 'D20', 'D50', 'D80', 'G17', 'H17', 'H18', 'V17', 'W08'].map((n) => ({ value: n, label: n }))],
   }),

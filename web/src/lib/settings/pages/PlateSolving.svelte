@@ -2,9 +2,9 @@
   Settings › Plate solving (02 1.9, 1.14, W5; M30, M35, M37). The ASTAP
   status (A81: the program the solve would run, the star database and the
   -D / -d flags it passes) is re-read after every change of the three ASTAP
-  keys, from any client. The database set is unavailable with the reason
-  while a database folder is set (Q-C9: ASTAP ignores it then). The
-  automatic-solving keys sit under Advanced (Q-C4).
+  keys, from any client. The database set and a database folder are passed
+  together (-D and -d, S24). The automatic-solving keys sit under Advanced
+  (Q-C4).
 -->
 <script lang="ts">
   import type { AstapState } from '../../api/types';
@@ -103,7 +103,7 @@
           <p class="line"><span class="key">Solve flags</span><span class="mono">{astap.database_args.join(' ')}</span></p>
         {/if}
         {#if astap.database_ignored}
-          <p class="line note">The database set is ignored while a star database folder is set (ASTAP uses -d).</p>
+          <p class="line note">The database set {astap.database} is not passed to ASTAP.</p>
         {/if}
       {:else}
         <p class="line muted">Detecting ASTAP…</p>

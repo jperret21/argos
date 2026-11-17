@@ -211,11 +211,6 @@ export function dependencyReason(key: string, values: Record<string, ConfigValue
       return off('catalog.named_objects_enabled') ? 'Turn on SIMBAD named objects first' : null;
     case 'catalog.exoplanet_hosts_allow_network':
       return off('catalog.exoplanet_hosts_enabled') ? 'Turn on exoplanet hosts first' : null;
-    case 'astrometry.database':
-      // Q-C9: ASTAP ignores the set while a database folder is given (astrometry_session.py:64).
-      return typeof values['astrometry.database_path'] === 'string' && values['astrometry.database_path'] !== ''
-        ? 'Ignored while a star database folder is set'
-        : null;
     default:
       return null;
   }

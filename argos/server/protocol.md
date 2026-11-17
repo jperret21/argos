@@ -878,15 +878,16 @@ AstapState = {"astap": path|null,                 // the binary ASTAP would run
               "database_source": "configured"|"detected"|null,
               "database_found": bool,             // star files (*.1476, *.290, *.101) in that folder
               "database": string,                 // the database set asked about
-              "database_ignored": bool,           // a set and a folder are both given: the set is ignored (Q-C9)
+              "database_ignored": bool,           // the set asked about is not in database_args (false since S24: the set and a folder are passed together)
               "database_args": [string],          // the -D / -d flags the solve will pass
               "message": string}                  // one line for Settings › Plate solving
 ```
 
 Port of `ConfigurationPage._refresh_astap_status`
 (`configuration_page.py:1208-1231`) with `find_astap`, `find_astap_db` and
-`_database_args` (`platesolve.py:119-144, 305-319`) and the database choice
-of `astrometry_session.py:64`. It only looks at the filesystem (no ASTAP
+`_database_args` (`platesolve.py:119-144, 305-319`) called as
+`astrometry_session.py` calls it: the set as `-D` and the folder as `-d`,
+together (S24). It only looks at the filesystem (no ASTAP
 run), so the form can call it on every committed change.
 
 ### Place search (A82)

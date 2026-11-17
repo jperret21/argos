@@ -147,7 +147,8 @@ describe('dependent keys and pickers', () => {
   it('is unavailable with the reason while the parent is off', () => {
     expect(dependencyReason('catalog.field_stars_mag_limit', { 'catalog.field_stars_enabled': false })).toMatch(/Gaia/);
     expect(dependencyReason('catalog.field_stars_mag_limit', { 'catalog.field_stars_enabled': true })).toBeNull();
-    expect(dependencyReason('astrometry.database', { 'astrometry.database_path': '/data/d50' })).toMatch(/Ignored/);
+    // S24: the solve passes the set (-D) with the folder (-d), so the set stays available.
+    expect(dependencyReason('astrometry.database', { 'astrometry.database_path': '/data/d50' })).toBeNull();
     expect(dependencyReason('astrometry.database', { 'astrometry.database_path': '' })).toBeNull();
   });
 

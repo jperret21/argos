@@ -61,7 +61,7 @@
   const values = $state(initialValues());
   const patch = fakePatch(values);
   // The pinned plate-solving form has its own values: a database folder is set
-  // there, so "Database set" shows its Q-C9 reason.
+  // there, passed with the database set (S24).
   const pinnedValues = $state({ ...initialValues(), 'astrometry.database_path': `${HOME_DIR}/astap/d50` });
   const pinnedPatch = fakePatch(pinnedValues);
   const undo = new UndoQueue();
@@ -302,7 +302,7 @@
           'astrometry.database_path': { phase: 'applied' },
         }}
       />
-      <figcaption>refused, not saved, saved; Database set unavailable while a folder is set (Q-C9)</figcaption>
+      <figcaption>refused, not saved, saved</figcaption>
     </figure>
     <figure class="form-w">
       <SettingsForm

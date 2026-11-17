@@ -198,13 +198,14 @@ def test_astap_detection(client, tmp_path):
     assert body["database_args"] == ["-d", str(db)]
     assert body["database_ignored"] is False
     assert body["message"].startswith(f"ASTAP detected: {exe}")
-    # A set and a folder: the set is ignored (Q-C9).
+    # A set and a folder: both are passed, as the solve passes them (S24).
     both = client.get(
         "/api/astrometry/astap",
         params={"path": str(exe), "database_path": str(db), "database": "D50"},
         headers=AUTH,
     ).json()
-    assert both["database_ignored"] is True and "ignored while a folder is set" in both["message"]
+    assert both["database_args"] == ["-D", "D50", "-d", str(db)]
+    assert both["database_ignored"] is False and "D50" not in both["message"]
     # An empty folder is "not found".
     empty = tmp_path / "empty"
     empty.mkdir()

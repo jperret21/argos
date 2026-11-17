@@ -48,9 +48,9 @@ def astap_state(path: str, database_path: str, database: str) -> dict[str, Any]:
     database = (database or "").strip()
     configured_found = bool(configured) and Path(configured).expanduser().is_file()
     astap = platesolve.find_astap(str(Path(configured).expanduser()) if configured else "")
-    # astrometry_session.py:64: the folder, when set, wins over the set.
-    chosen = folder_text or database
-    args = platesolve._database_args(astap or "", chosen)
+    # astrometry_session.py: the set (-D) and the folder holding it (-d) are
+    # passed together; a folder never drops the chosen set (S24).
+    args = platesolve._database_args(astap or "", database, folder_text)
     database_dir: str | None = None
     source: str | None = None
     if folder_text:
@@ -72,8 +72,11 @@ def astap_state(path: str, database_path: str, database: str) -> dict[str, Any]:
         message = f"ASTAP detected: {astap} · Star database not detected"
     if configured and not configured_found:
         message += f" · {configured} is not a file: auto-detected instead"
-    if folder_text and database:
-        message += f" · Database set {database} ignored while a folder is set"
+    # Since S24 the solve passes the chosen set with any folder, so a set is
+    # never dropped; the field stays for API 2 and reads the real flags.
+    ignored = bool(database) and database not in args
+    if ignored:
+        message += f" · Database set {database} not passed to ASTAP"
     return {
         "astap": astap,
         "configured": configured,
@@ -82,7 +85,7 @@ def astap_state(path: str, database_path: str, database: str) -> dict[str, Any]:
         "database_source": source,
         "database_found": found,
         "database": database,
-        "database_ignored": bool(folder_text and database),
+        "database_ignored": ignored,
         "database_args": list(args),
         "message": message,
     }
