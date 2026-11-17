@@ -44,7 +44,7 @@ port is Seestar-specific.
 | 4700 | JSON-RPC TCP | Silent — unusable | Accepts TCP but never responds to any command |
 | 4720 | UDP | No response observed | `scan_iscope` intro. ARGOS sends it on **every** native connect and treats failure as non-fatal (`native_client.py`) — so it is neither "required" nor skippable from the outside |
 | 32227 | UDP | No response | Alpaca discovery broadcast — unreliable on S30-Pro |
-| 4801 | Binary | Open but unused | Preview frame stream — see plan_live_preview.md |
+| 4801 | Binary | Open but unused | Preview frame stream, not read by ARGOS |
 | 80 | HTTP | Incomplete responses | Internal firmware web UI — not usable |
 
 ### Key insight (validated 2026-05-10, firmware 7.18)
@@ -59,12 +59,14 @@ port is Seestar-specific.
 
 ## 3. Validated Connection Recipe (2026-05-10)
 
-Tested against real Seestar S30 Pro at 192.168.0.18, firmware 7.18.
+Tested against a real Seestar S30 Pro on the local network, firmware 7.18.
+`<seestar-ip>` below is the telescope's address on that network (on its own
+access point, `10.0.0.1`).
 
 ### Step 1 — Connect telescope
 
 ```http
-PUT http://192.168.0.18:32323/api/v1/telescope/0/connected
+PUT http://<seestar-ip>:32323/api/v1/telescope/0/connected
 Body: ClientID=1&ClientTransactionID=1&Connected=true
 → {"ErrorNumber":0, ...}
 ```
@@ -72,7 +74,7 @@ Body: ClientID=1&ClientTransactionID=1&Connected=true
 ### Step 2 — Read position
 
 ```http
-GET http://192.168.0.18:32323/api/v1/telescope/0/rightascension?ClientID=1&ClientTransactionID=2
+GET http://<seestar-ip>:32323/api/v1/telescope/0/rightascension?ClientID=1&ClientTransactionID=2
 → {"Value": 22.52, "ErrorNumber": 0, ...}
 ```
 
@@ -96,7 +98,7 @@ Positive rate: North / East. Negative rate: South / West.
 ### Step 4 — Connect camera
 
 ```http
-PUT http://192.168.0.18:32323/api/v1/camera/0/connected
+PUT http://<seestar-ip>:32323/api/v1/camera/0/connected
 Body: ClientID=1&ClientTransactionID=5&Connected=true
 ```
 
@@ -123,14 +125,14 @@ GET /api/v1/camera/0/imagearray
 from argos.core.alpaca.telescope import Telescope
 from argos.core.alpaca.camera import Camera
 
-scope = Telescope("192.168.0.18", 32323)
+scope = Telescope("<seestar-ip>", 32323)
 scope.connect()                         # returns "Seestar S30 Pro_... Telescope"
 
 scope.move_axis(1, 2.0)                 # start moving North
 import time; time.sleep(2.0)
 scope.stop_axis(1)                      # stop
 
-cam = Camera("192.168.0.18", 32323)
+cam = Camera("<seestar-ip>", 32323)
 cam.connect()                           # width=3840, height=2160, gain 0-600
 cam.set_gain(80)
 cam.start_exposure(10.0)
@@ -293,10 +295,19 @@ mount slew):
 - `EXPOSE_TIMEOUT = 120 s`
 - `DOWNLOAD_TIMEOUT = 300 s`
 
-## 7. Native JSON-RPC TCP (Port 4700) — Jogging Only
+## 7. Native JSON-RPC TCP (Port 4700) — not used by ARGOS
 
-Port 4700 is retained **exclusively** for `scope_speed_move`.
-Everything else uses Alpaca.
+```{admonition} No ARGOS app uses this port
+:class: note
+
+ARGOS controls the Seestar over Alpaca only. The jog of 0.5.0 is Alpaca
+`MoveAxis`, sent by the server with a server-side dead-man that stops an axis
+whose renewal does not arrive (`argos/server/jog.py`), as the retired Qt app
+jogged with `MoveAxis` before it. The native client,
+`argos/core/seestar/native_client.py`, and its tests remain in the
+repository as the record of what follows; nothing imports it. On the units
+tested (§2), port 4700 accepted the connection and answered no command.
+```
 
 ### Wire format
 
@@ -431,21 +442,27 @@ event here.
 The user may need to use the native Seestar app for the first initialization in a session.
 After that, `park` / `unpark` via Alpaca work correctly.
 
-## 12. Safety thresholds — proposed, NOT implemented in 0.4.2
+## 12. Safety thresholds — proposed, not implemented in 0.5.0
 
 ```{danger}
-**None of the following exists in ARGOS 0.4.2.** This table is a design note
-that was previously presented as behaviour. Do not rely on any of it.
+**None of the actions below exists in ARGOS 0.5.0.** This table is a design
+note that was once presented as behaviour. Do not rely on any of it, and
+operate the telescope attended: ARGOS has no weather safety and no restart
+recovery.
 
-Verified against the source: the string `battery` appears **nowhere** in
-`argos/`. No altitude minimum, no pointing-error threshold and no temperature
-comparison exist. `CCD-TEMP` is read and recorded — into the FITS header and the
-session log — and never acted upon. The only `park()` call is the opt-in
-end-of-plan action you choose in the acquisition options.
+Verified against the source on 2026-11-16: the string `battery` appears
+nowhere in `argos/`, and no temperature comparison and no pointing-error
+threshold exist. `CCD-TEMP` is read and recorded, in the FITS header and the
+session log, and never acted upon. The mount is parked only by the observer
+(Park) or by the plan's opt-in end-of-sequence option (`argos/server/hub.py`
+`mount_park`, `argos/server/sequence.py`).
 
-This is why {doc}`index` says, in its first admonition, that there is no weather
-safety and no restart recovery, and that the telescope must be operated
-attended. That statement is the accurate one.
+What 0.5.0 adds is **alerts, never an action on the mount**: during a run,
+the attention rules of `argos/server/attention.py` warn when the target will
+drop below the site's minimum altitude within `alerts.altitude_warn_min`
+(15 minutes by default), when no new frame arrives, when the disk holds fewer
+than `alerts.disk_minutes` of frames (30 by default), when the HFD or the
+star count degrade, and when fewer than three comparisons are used.
 ```
 
 Retained as a specification for a future release:
@@ -454,22 +471,11 @@ Retained as a specification for a future release:
 |-----------|-----------|--------|---|
 | Sensor temperature | > 55 °C | Park, abort | value read, never compared |
 | Battery | < 10 % | Park, alert | **no battery telemetry at all** |
-| Target below horizon | altitude < 30° | Skip target | not implemented |
+| Target below horizon | altitude < 30° | Skip target | not implemented; 0.5.0 only alerts before the site's minimum altitude |
 | Pointing error (post-solve) | > 12 arcmin | Retry/skip | not implemented |
 
-## 13. FITS Headers (Correct Values for S30 Pro)
+## 13. FITS headers
 
-```
-BAYERPAT = 'GRBG'        # Sony IMX585 — NOT RGGB
-INSTRUME = 'IMX585'
-TELESCOP = 'ZWO Seestar S30 Pro'
-FOCALLEN = 160            # mm
-XPIXSZ  = 2.9            # µm
-YPIXSZ  = 2.9
-NAXIS1  = 3840            # width
-NAXIS2  = 2160            # height
-GAIN    = 80              # default gain
-```
-
-> **Correction vs earlier assumption:** CLAUDE.md listed BAYERPAT=RGGB and FOCALLEN=150.
-> The correct values (from seevar hardware docs) are GRBG and 160 mm.
+The keywords ARGOS writes for the S30 Pro (`BAYERPAT = 'GRBG'`, never RGGB;
+`FOCALLEN = 160`; `XPIXSZ` and `YPIXSZ` 2.9 µm; 3840 × 2160) and where each
+value comes from are specified once, in {doc}`fits_headers`.

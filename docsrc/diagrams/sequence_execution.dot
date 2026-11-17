@@ -1,31 +1,40 @@
+// One sequence sub on the server (docsrc/ARCHITECTURE.md, "A sequence").
+// Source: argos/server/protocol.md "Each sub (SequenceWorker._run, _shoot_one)",
+// argos/server/sequence.py.
 digraph sequence_execution {
   rankdir=TB;
-  graph [fontname="Helvetica", fontsize=11, nodesep=0.4, ranksep=0.5];
-  node  [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", fillcolor="#eef3f8", color="#2b3e50"];
-  edge  [fontname="Helvetica", fontsize=9, color="#5a6b7b"];
+  graph [fontname="IBM Plex Sans, Helvetica, Arial, sans-serif", fontsize=11, fontcolor="#1a2120",
+         bgcolor="#f3f3ee", pad=0.3, nodesep=0.35, ranksep=0.32,
+         size="7.9,40", stylesheet="../_static/diagrams.css"];
+  node  [fontname="IBM Plex Sans, Helvetica, Arial, sans-serif", fontsize=10, fontcolor="#1a2120",
+         shape=box, style="rounded,filled", fillcolor="#ffffff", color="#1a2120", penwidth=1];
+  edge  [fontname="IBM Plex Mono, Menlo, Consolas, monospace", fontsize=8.5, fontcolor="#1a2120",
+         color="#65706d", arrowsize=0.7];
 
-  plan   [label="SequencePlan\n(steps: count, start_index)"];
-  expand [label="expand_plan()", fillcolor="#dce7f1"];
-  specs  [label="FrameSpec iterator"];
+  plan   [label="Plan (steps, counts, repeats)"];
+  expand [label="expand_plan()  (argos/core/imaging/sequencer.py)", fillcolor="#e5e8e1"];
+  plan -> expand;
 
-  plan -> expand -> specs;
-
-  subgraph cluster_worker {
-    label="SequenceWorker (QThread) -- per FrameSpec";
-    style="rounded"; color="#9fb3c8"; fontname="Helvetica"; fontsize=10;
-    filt  [label="1. Filter change\n(if differs)"];
-    af    [label="2. Autofocus\n(filter change / every N)"];
-    expo  [label="3. Expose\n(start, poll ImageReady, download)"];
-    qa    [label="4. QA metrics\n(HFD, stars, sky, FWHM)"];
-    write [label="5. Write FITS\n(Siril layout + headers)"];
-    emit  [label="6. Emit signals"];
-    filt -> af -> expo -> qa -> write -> emit;
+  subgraph cluster_run {
+    label="Run thread (argos/server/sequence.py), for each frame"; labeljust=l;
+    style="rounded"; color="#b9c1ba"; margin=12;
+    gate  [label="1. Stop flag, pause gate"];
+    wheel [label="2. Wheel to the step's filter (opaque slot for darks and biases),\nsettle up to 20 s; autofocus on a filter change if asked"];
+    af    [label="3. Periodic autofocus (every N frames, if asked)"];
+    filt  [label="4. FILTER read back from the wheel"];
+    expo  [label="5. Exposure: DATE-OBS just before StartExposure, end at ImageReady"];
+    pub   [label="6. Frame published on /ws/frames; metrics; field identification (lights)"];
+    fits  [label="7. QA metrics, then the FITS through FITSWriter (never overwriting);\nsession.json rewritten"];
+    saved [label="8. frame_saved event"];
+    phot  [label="9. One photometry point per saved light sub\n(photometry thread, when the field is identified and a target is set)"];
+    prog  [label="10. Progress; dither every N subs if asked"];
+    wait  [label="11. Wait: cadence (start to start) or interval"];
+    gate -> wheel -> af -> filt -> expo;
+    expo -> pub [color="#c49a3c", penwidth=2.2];
+    pub -> fits [color="#c49a3c", penwidth=2.2];
+    fits -> saved [color="#c49a3c", penwidth=2.2];
+    saved -> phot -> prog -> wait;
   }
-  specs -> filt;
-  emit  -> filt [label="next frame", style=dashed, constraint=false];
-
-  fs [label="frame_saved(path, record)", shape=note, fillcolor="#fff6e6", color="#b8893b"];
-  pr [label="progress(done, total, eta)", shape=note, fillcolor="#fff6e6", color="#b8893b"];
-  emit -> fs [style=dashed];
-  emit -> pr [style=dashed];
+  expand -> gate;
+  wait -> gate [label="next frame", style=dashed, constraint=false];
 }

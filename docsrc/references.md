@@ -27,16 +27,18 @@ green plane.
 
 :::::{grid-item-card} Siril
 Calibration, registration and stacking of the raw frames ARGOS preserves. This
-is where a quick-look curve becomes a reducible dataset.
+is where a quick-look curve becomes a reducible dataset. With `star_var_script`,
+it is also the independent reference ARGOS's magnitudes were checked against
+({doc}`validation` §4).
 
 **Free-Astro team**, GPLv3 — <https://siril.org>
 :::::
 
 :::::{grid-item-card} `star_var_script`
 The companion reduction script: a Siril script for automatic variable-star
-study with the Seestar S30 Pro. ARGOS's run-level uncertainty floor is
-deliberately the same model, so the live preview and the final reduction quote
-comparable error bars.
+study with the Seestar S30 Pro. ARGOS's run-level uncertainty floor uses the
+same estimator; the formal errors it is added to differ
+({doc}`differential_photometry` §5).
 
 **Jules Perret** — <https://github.com/jperret21/star_var_script>
 :::::
@@ -64,9 +66,11 @@ its Bayer mosaic. The keyword conventions used are catalogued in
 Pence, W. D., Chiappetti, L., Page, C. G., Shaw, R. A., & Stobie, E. 2010,
 *A&A*, **524**, A42 — [doi:10.1051/0004-6361/201015362](https://doi.org/10.1051/0004-6361/201015362)
 
-**AAVSO Extended File Format** — the submission format ARGOS's target export
-produces. The observer code goes in Settings; left unset, the export is
-refused.
+**AAVSO Extended File Format** — the submission format ARGOS's AAVSO export
+produces, one band per report, with `#SOFTWARE` naming ARGOS and its version. The
+observer code goes in Settings › Observer & site; left unset, the export is
+refused. What ARGOS writes in each field, and how the files were checked against
+the format: {doc}`differential_photometry` §8.2, {doc}`validation` §8.
 AAVSO — <https://www.aavso.org/aavso-extended-file-format>
 
 **TG — the untransformed green band.** ARGOS measures the green plane of the
@@ -79,13 +83,14 @@ AAVSO, *DSLR Observing Manual* —
 ## Catalogues and services
 
 Queried live when there is internet, then cached locally so the field still
-works offline. Cache locations are set in **Settings → Catalogues · data**.
+works offline. The sources are chosen in **Settings › Catalogues**; the cache
+folders are in **Settings › Data & storage**.
 
 | Source | Used for | Endpoint / citation |
 |---|---|---|
 | **AAVSO VSX** | Variable-star identity, type, period, magnitude range | <https://vsx.aavso.org/index.php> · Watson, Henden & Price 2006, *SASS*, **25**, 47 |
-| **AAVSO VSP** | Comparison-star sequences with AUIDs and calibrated magnitudes | <https://app.aavso.org/vsp/> |
-| **Gaia DR3** | Field stars for overlays and identification | ESA TAP service · Gaia Collaboration, Vallenari et al. 2023, *A&A*, **674**, A1 — [doi:10.1051/0004-6361/202243940](https://doi.org/10.1051/0004-6361/202243940) |
+| **AAVSO VSP** | Comparison-star sequences with AUIDs, calibrated magnitudes and their errors, and the chart ID the AAVSO report names | <https://app.aavso.org/vsp/> |
+| **Gaia DR3** | Field stars for overlays and identification; the proper motions (epoch 2016.0) that move each aperture to the frame's date | ESA TAP service · Gaia Collaboration, Vallenari et al. 2023, *A&A*, **674**, A1 — [doi:10.1051/0004-6361/202243940](https://doi.org/10.1051/0004-6361/202243940) |
 | **SIMBAD** | Deep-sky and stellar identity, cross-identifications | <https://simbad.cds.unistra.fr/> · Wenger et al. 2000, *A&AS*, **143**, 9 |
 | **CDS Sesame** | Name → coordinates resolution for arbitrary designations | <https://cds.unistra.fr/cgi-bin/nph-sesame/> |
 | **NASA Exoplanet Archive** | Transit ephemerides, depth and duration | TAP service · Akeson et al. 2013, *PASP*, **125**, 989 — [doi:10.1086/672273](https://doi.org/10.1086/672273) |
@@ -108,7 +113,9 @@ Each of these is implemented in {mod}`argos.core.photometry` or
 
 **The CCD equation.** The uncertainty budget of a single aperture measurement:
 source photon noise, sky photon noise and read noise, each summed over the
-aperture pixels. Implemented in {mod}`argos.core.photometry.aperture`; see
+aperture pixels, with the error of the subtracted sky level. ARGOS evaluates it
+for the green plane it measures (two raw pixels per value) above the camera's
+black level. Implemented in {mod}`argos.core.photometry.aperture`; see
 [§3.3](differential_photometry.md#33-noise).
 Merline, W. J. & Howell, S. B. 1995, *Experimental Astronomy*, **6**, 163 —
 [doi:10.1007/BF00421131](https://doi.org/10.1007/BF00421131) ·
@@ -122,10 +129,18 @@ Howell, S. B. 1989, *PASP*, **101**, 616 —
 Naylor, T. 1998, *MNRAS*, **296**, 339 —
 [doi:10.1046/j.1365-8711.1998.01314.x](https://doi.org/10.1046/j.1365-8711.1998.01314.x)
 
+**Sigma-clipped sky.** The sky under each aperture is the 3σ-clipped mean of
+its annulus, iterated to convergence (at most 10 passes): the default of
+photutils' `ApertureStats` and of astropy's `sigma_clipped_stats(sigma=3,
+maxiters=10)`, against which ARGOS's implementation was checked
+({doc}`validation` §4.1). See
+[§3.2](differential_photometry.md#32-sky-and-flux).
+
 **MAD as a robust scale estimator.** The factor **1.4826** that converts a
 median absolute deviation into a Gaussian-equivalent standard deviation. It
-appears three times in ARGOS: rejecting a bad comparison star, estimating the
-run-level scatter, and setting the star-detection threshold. The consistency
+appears in ARGOS's run-level scatter (and the comparison check that reuses it)
+and in the star-detection threshold; since 0.5.0 the comparison clip uses each
+star's own error instead (S71). The consistency
 constant is standard robust-statistics material (Hampel 1974; Huber 1981);
 Rousseeuw & Croux is cited here for the *properties* of the estimator, and
 argues for Sₙ/Qₙ **instead of** MAD.
@@ -135,8 +150,9 @@ Rousseeuw, P. J. & Croux, C. 1993, *JASA*, **88**, 1273 —
 ```{important}
 The MAD has ~37 % Gaussian efficiency. With the 10–30 points a short run
 provides, any scatter ARGOS estimates through a MAD — including the systematic
-floor of {doc}`differential_photometry` §5 — is itself uncertain at the
-±20–30 % level. Treat it as an order-of-magnitude floor, not a calibration.
+floor of {doc}`differential_photometry` §5 — is itself uncertain: about ±47 %
+with 10 points, ±32 % with 20 and ±26 % with 30 for the floor's estimator on
+white noise ({doc}`validation` §6). Treat it as an order-of-magnitude floor, not a calibration.
 ```
 
 **Successive-difference variance estimation.** The observed scatter of a light
@@ -155,7 +171,10 @@ Pont, F., Zucker, S., & Queloz, D. 2006, *MNRAS*, **373**, 231 —
 
 **Scintillation.** The atmospheric noise floor that no amount of exposure on a
 small aperture removes, and which dominates bright-star photometry through a
-30 mm objective.
+30 mm objective. ARGOS adds Young's formula with Osborn et al.'s coefficient
+$C_Y = 1.5$ to every star's error
+([§3.3](differential_photometry.md#33-noise),
+[§9](differential_photometry.md#9-the-floor-you-cannot-get-under)).
 Young, A. T. 1967, *AJ*, **72**, 747 —
 [doi:10.1086/110303](https://doi.org/10.1086/110303) ·
 Osborn, J., Föhring, D., Dhillon, V. S., & Wilson, R. W. 2015, *MNRAS*,
@@ -170,16 +189,24 @@ Honeycutt, R. K. 1992, *PASP*, **104**, 435 —
 ```{warning}
 ARGOS does **not** implement Honeycutt's method. Honeycutt solves a global
 least-squares system over a whole inhomogeneous set of exposures; ARGOS forms a
-clipped mean zero point independently on each frame, which is what a live
-preview can do. The citation is context, not attribution.
+clipped, inverse-variance weighted mean zero point independently on each frame,
+which is what a live preview can do. The citation is context, not attribution.
 ```
 
 **Airmass.** Pickering's formula, accurate to better than 0.01 airmass down to
-1° altitude and finite at the horizon, unlike a naive $\sec z$. The same
-function fills the FITS `AIRMASS` header and the light-curve metric, so the two
-cannot disagree — see {mod}`argos.core.imaging.sky_geometry`.
+1° altitude and finite at the horizon, unlike a naive $\sec z$. One function,
+{mod}`argos.core.imaging.sky_geometry` `compute_airmass`, computes the FITS
+`AIRMASS` header (from the mount's reported altitude at the exposure start) and
+the airmass ARGOS computes from a star's own position at mid-exposure; the two
+differ by their input, not their formula
+([§7](differential_photometry.md#7-time-and-airmass)).
 Pickering, K. A. 2002, *DIO*, **12**, 20 —
 <https://www.dioi.org/vols/wc0.pdf>
+
+**Precession.** A star's J2000 position is precessed to the date before its
+altitude is computed, with the IAU 1976 angles in Meeus's form.
+Lieske, J. H., Lederle, T., Fricke, W., & Morando, B. 1977, *A&A*, **58**, 1 ·
+Meeus, J. 1998, *Astronomical Algorithms*, 2nd ed., Willmann-Bell, ch. 21.
 
 **Julian date.** The Fliegel–Van Flandern integer day-number algorithm, used for
 the fast per-frame JD; `BJD_TDB` is delegated to astropy.
@@ -241,7 +268,9 @@ Collins, K. A., Kielkopf, J. F., Stassun, K. G., & Hessman, F. V. 2017, *AJ*,
 ARGOS's runtime dependencies, in the order they matter scientifically.
 
 **Astropy** — FITS I/O, WCS, coordinate frames, time scales and the `BJD_TDB`
-correction.
+correction (with its bundled Earth-orientation tables, so it works offline). It
+is also the independent reference for ARGOS's times, airmass and sky estimator
+({doc}`validation`).
 Astropy Collaboration 2013, *A&A*, **558**, A33 ·
 2018, *AJ*, **156**, 123 ·
 2022, *ApJ*, **935**, 167 — <https://www.astropy.org>
@@ -253,12 +282,18 @@ Harris, C. R. et al. 2020, *Nature*, **585**, 357 —
 **Alpyca** — the Python ASCOM Alpaca client library.
 <https://github.com/ASCOMInitiative/alpyca>
 
-**PyQt6 / Qt 6** — the desktop interface. Confined to `argos/ui` and
-`argos/workers`; see {doc}`ARCHITECTURE`.
-<https://www.riverbankcomputing.com/software/pyqt/>
+**FastAPI** and **Uvicorn** — the headless server (`argos/server`) the desktop
+app runs: its HTTP and WebSocket interface.
+<https://fastapi.tiangolo.com> · <https://www.uvicorn.org>
 
-**pyqtgraph** — the live plots: light curve, focus V-curve, quality trends.
-<https://www.pyqtgraph.org>
+The interface itself is not Python: a **Svelte 5** and TypeScript web UI
+(`web/`), with **uPlot** for the light curves and plots, in a **Tauri 2** desktop
+window. <https://svelte.dev> · <https://github.com/leeoniya/uPlot> ·
+<https://tauri.app>
+
+**PyQt6** and **pyqtgraph** — the retired 0.4.x desktop interface, kept in the
+repository only for the parity tests (`argos/ui`, `argos/workers`; the `qt`
+extra). <https://www.riverbankcomputing.com/software/pyqt/>
 
 ## Citing ARGOS
 
@@ -267,7 +302,7 @@ to a result, cite it as software with its version and repository:
 
 ```text
 Perret, J. 2026, ARGOS: differential photometry for smart telescopes,
-v0.4.2, https://github.com/jperret21/argos
+v0.5.0, https://github.com/jperret21/argos
 ```
 
 ```{important}

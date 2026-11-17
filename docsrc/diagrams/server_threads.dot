@@ -1,0 +1,46 @@
+// Inside argos/server: who runs where (docsrc/ARCHITECTURE.md, "Threads and the event bus").
+// Sources: the module docstrings of argos/server/app.py, hub.py, events.py,
+// jobs.py, field.py and sequence.py.
+digraph server_threads {
+  rankdir=LR;
+  graph [fontname="IBM Plex Sans, Helvetica, Arial, sans-serif", fontsize=11, fontcolor="#1a2120",
+         bgcolor="#f3f3ee", pad=0.3, nodesep=0.25, ranksep=0.4, size="7.9,40",
+         stylesheet="../_static/diagrams.css"];
+  node  [fontname="IBM Plex Sans, Helvetica, Arial, sans-serif", fontsize=10, fontcolor="#1a2120",
+         shape=box, style="rounded,filled", fillcolor="#ffffff", color="#1a2120", penwidth=1];
+  edge  [fontname="IBM Plex Mono, Menlo, Consolas, monospace", fontsize=8.5, fontcolor="#1a2120",
+         color="#65706d", arrowsize=0.7];
+
+  ui [label="Web UI"];
+
+  subgraph cluster_threads {
+    label="Plain threads (blocking I/O allowed)"; labeljust=l;
+    style="rounded"; color="#b9c1ba"; margin=12;
+    req  [label="Request threads\n(FastAPI threadpool):\neach route, a plain def,\ncalls one Hub method"];
+    dev  [label="Device threads\nexposure job, mount poller,\nwheel, focuser, autofocus,\njog watcher"];
+    svc  [label="Service threads\nfield (solve, frame,\ncatalogue, projection),\nphotometry, sequence run,\nattention, metrics"];
+    jobs [label="Job threads\ndiscovery, session open,\nre-run, support bundle, …\n(202 + job id, cancellable)"];
+  }
+
+  hub [label="Hub\nowns the devices and the\ncontract records; publishes\neach change under _lock,\nwith a sequence number", fillcolor="#e5e8e1"];
+  bus [label="EventBus\npublish() from any\nthread, handed over\nwith call_soon_threadsafe", fillcolor="#e5e8e1"];
+
+  subgraph cluster_loop {
+    label="uvicorn event loop (asyncio)"; labeljust=l;
+    style="rounded"; color="#b9c1ba"; margin=12;
+    wse [label="/ws/events sender\nper client: a FIFO,\ncompacted to the\nnewest snapshots"];
+    wsf [label="/ws/frames sender\nper client: one\npending frame,\nlatest wins"];
+  }
+
+  ui   -> req  [label="REST"];
+  req  -> hub;
+  dev  -> hub;
+  svc  -> hub;
+  jobs -> hub;
+  hub  -> bus;
+  { rank=same; hub; bus; }
+  bus  -> wse;
+  bus  -> wsf  [color="#c49a3c", penwidth=2.2];
+  wse  -> ui   [label="JSON events"];
+  wsf  -> ui   [label="binary frames", color="#c49a3c", penwidth=2.2];
+}

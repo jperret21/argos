@@ -1,13 +1,17 @@
 # FITS headers reference
 
-Everything on this page is written by {mod}`argos.core.imaging.fits_writer`. The
-data array is `uint16`, linear, and still in its Bayer mosaic — ARGOS never
-debayers, stretches or scales what it writes to disk.
+Everything on this page is written by {mod}`argos.core.imaging.fits_writer`, which
+the 0.5.0 server uses for every frame it saves. The data array is `uint16`, linear,
+and still in its Bayer mosaic — ARGOS never debayers, stretches or scales what it
+writes to disk. On the S30 Pro the values the camera delivers are 12-bit counts
+scaled by 16 (99.92 % of the raw values of three nights are multiples of 16:
+release notes S73), so the full scale is $4095 \times 16 = 65\,520$ ADU.
 
 ```{note}
-Many headers are written **only when the acquisition supplied the value**. A
-frame taken with no site configured has no `SITELAT`; a frame taken without a
-solved target has no `TARGRA`. The tables below mark those *conditional*.
+The writer knows **65 keywords**: 38 on every frame, and 27 written **only when
+the acquisition supplied the value**. A frame taken with no site configured has
+no `SITELAT`; a frame taken without a solved target has no `TARGRA`. The tables
+below mark those *conditional*.
 ```
 
 ````{admonition} Reading one for yourself
@@ -54,13 +58,24 @@ For example `XX_Cyg_ir_light_e020000ms_g080_00024.fit`: a 20 s exposure at gain
 ├── flats/
 ├── biases/
 ├── session.json
+├── targets.json
+├── photometry/
 ├── photometry_quality.json
-└── diagnostics/
+├── photometry_selection.json
+├── diagnostics/
+└── photometry_rerun_<UTC>/
 ```
 
 `{RUN}` is the run identifier, or the first frame's UTC timestamp formatted
 `%Y%m%dT%H%M%SZ` when there is none — for example `20260906T213734Z_XX_Cyg`.
-Image-type folders are lower-case plurals, as Siril expects.
+Image-type folders are lower-case plurals, as Siril expects. A run with
+photometry also writes the target set it measured (`targets.json`), one curve CSV
+per star and filter (`photometry/`), the ensemble's vetting report
+(`photometry_quality.json`, or `photometry_quality_<filter>.json` for a second
+filter) and the comparison choices (`photometry_selection.json`, with its history);
+`diagnostics/` holds the flight recorder when **Settings › Privacy & diagnostics**
+enables it. A batch re-run writes only a new `photometry_rerun_<UTC>/` folder and
+never rewrites the session (release notes S13; {doc}`differential_photometry` §8).
 
 ## Structure
 
@@ -86,18 +101,23 @@ Image-type folders are lower-case plurals, as Siril expects.
 | `EXPTIME` | [s] exposure time |
 | `EXPOSURE` | [s] exposure time (alias) |
 
-The midpoint headers are the ones photometry uses: a light curve point is timed
-by `DATE-AVG`, not `DATE-OBS`. One exception: a frame written by ARGOS before
-0.5.0 (`SOFTWARE` = `Argos v0.4.x`) is timed by `DATE-OBS + EXPTIME/2`, because
-a sequence frame of those versions has a `DATE-AVG` late by half the image
-download (seconds over Wi-Fi). Other software reading those files should do the
-same.
+The midpoint headers are the ones photometry uses: a saved frame opened or
+re-measured by ARGOS is timed by `DATE-AVG`, else by `DATE-OBS + EXPTIME/2`. One
+exception: a frame written by ARGOS before 0.5.0 (`SOFTWARE` = `Argos` or
+`Argos v0.4.x`) is always timed by `DATE-OBS + EXPTIME/2`, because a sequence
+frame of those versions has a `DATE-AVG` late by half the image download (+5.2 s
+median on 10 s subs over Wi-Fi; S36, S39). Other software reading those files
+should do the same.
+
+`DATE-OBS` is the computer's clock, read just before ARGOS tells the camera to
+start (S36). Its offset from UTC is not checked: keep the computer's clock
+synchronised. `DATE-LOC` is the same instant in the computer's time zone.
 
 ## Sensor and gain
 
 | Keyword | Meaning |
 |---|---|
-| `GAIN` | camera gain **setting** (0–600 on the Seestar), not a physical unit |
+| `GAIN` | camera gain **setting**, the driver's dimensionless index, not a physical unit |
 | `EGAIN` | [e⁻/ADU] electron gain, with its source named in the comment |
 | `GAIN_E` | [e⁻/ADU] electron gain (AAVSO alias) |
 | `EPERDN` | [e⁻/ADU] electron gain (alias) |
@@ -132,10 +152,11 @@ gain 251, the driver's value or the sensor reference, named in the comment (not 
 measurement of your unit).
 
 Frames of 0.4.x carry the driver's 0.8 or the reference's 1.723 e⁻/ADU at gain 80,
-3.5 and 7.6 times the measured value; Open FITS and the batch re-run take the
-measurement instead (S73). `FULLWELL` stays a reference value. Everything
-*differential* is unaffected by a constant gain error, which cancels; the errors and
-SNR are not.
+3.5 and 7.6 times the measured value; Open FITS image and the batch re-run take the
+measurement instead (S73). `FULLWELL` stays a reference value. The errors and the
+SNR scale with the e⁻/ADU; the magnitudes barely depend on it, only through the
+ensemble's weights and the SNR gates (correcting it moved the RR Lyr 6-comparison
+curve by 2.6 mmag against the Siril reduction: S73). The full chain is in {doc}`differential_photometry` §3.3.
 ```
 
 ## Instrument and optics
@@ -163,7 +184,7 @@ at all. Both are corrected in 0.4.1 — check any frame you already hold.
 
 | Keyword | Meaning |
 |---|---|
-| `OBJECT` | target name, truncated to 68 characters |
+| `OBJECT` | target name, truncated to 68 characters *(conditional)* |
 | `FILTER` | the **physical filter-wheel** selection: `IR`, `LP` or `Dark` |
 | `TARGRA`, `TARGDEC` | [h], [deg] requested target coordinates (J2000) *(conditional)* |
 | `RA`, `DEC` | [h], [deg] pointing coordinates (J2000) *(conditional)* |
@@ -173,6 +194,21 @@ at all. Both are corrected in 0.4.1 — check any frame you already hold.
 
 Sexagesimal formats are `HH MM SS.ss` for `OBJCTRA` (two decimals) and
 `±DD MM SS.s` for `OBJCTDEC` (one decimal).
+
+`RA`, `DEC`, `ALTITUDE` and `AZIMUTH` are the mount's last report, not a solved
+position (see *What is not in the header*). Since 0.5.0 they, with `OBJCTRA`,
+`OBJCTDEC` and `AIRMASS`, are left out once the mount is disconnected or its
+connection lost (X1; within the three failed polls, 2 s apart, that detect a lost
+connection, the last report is still used).
+
+```{admonition} Frames written before 0.5.0
+:class: warning
+
+ARGOS 0.3.0-0.4.2 kept a lost mount's last report: frames saved after the mount
+dropped carry a frozen `RA`, `DEC`, `ALTITUDE`, `AZIMUTH` and `AIRMASS` (X1).
+Review and the batch re-run recognise them (all five keys equal to those of a
+light 60 s or more earlier) and do not trust their `AIRMASS` (S66).
+```
 
 ```{important}
 `FILTER` is the filter wheel's position, never a photometric band. The band used
@@ -184,10 +220,16 @@ for differential photometry is a separate setting (`photometry.default_band`,
 
 | Keyword | Meaning |
 |---|---|
-| `AIRMASS` | airmass at exposure start, Pickering (2002) *(conditional)* |
+| `AIRMASS` | airmass at exposure start, Pickering (2002), from the mount's reported altitude: the field centre's *(conditional)* |
 | `MOONSEP` | [deg] angular separation between target and Moon *(conditional)* |
 | `MOONALT` | [deg] Moon altitude at the site *(conditional)* |
 | `MOONPHAS` | Moon illuminated fraction, 0–1 *(conditional)* |
+
+`AIRMASS` does not depend on the Settings site: it comes from the mount's own
+altitude. That is why Review, the AAVSO export and the batch re-run take it for
+the target's airmass (S66); on the study runs it is within 0.00044 of astropy at
+mid-exposure ({doc}`validation` §3). `MOONALT` is computed for the Settings site,
+so a wrong site makes it wrong.
 
 ## Observer and site
 
@@ -198,13 +240,30 @@ for differential photometry is a separate setting (`photometry.default_band`,
 | `SITELONG` | [deg] site longitude, east positive *(conditional)* |
 | `SITEELEV` | [m] site elevation *(conditional)* |
 
+These are the Settings site's. Since 0.5.0 a site left at the 0/0 default counts as
+no site and is not written (X2), and the Settings site is compared with the mount's
+pointing when the mount connects (X3); a site set but wrong (an earlier trip's, for
+example) is still written as set. `SITEELEV` sets the scintillation term of the
+errors ({doc}`differential_photometry` §3.3).
+
+```{admonition} These keywords locate you
+:class: warning
+
+`OBSERVER`, `SITELAT`, `SITELONG` and `SITEELEV` (and, with the time, `ALTITUDE`
+and `AZIMUTH`) say who you are and where you observe. Check them before you share
+frames publicly.
+```
+
 ## Software
 
 | Keyword | Meaning |
 |---|---|
-| `SOFTWARE` | acquisition software and version |
+| `SOFTWARE` | acquisition software and version: `Argos v0.5.0` |
 | `SWCREATE`, `CREATOR` | the same, under their conventional aliases |
 | `ANNOTATE` | session annotation *(conditional)* |
+
+The same string opens every AAVSO report ARGOS writes (`#SOFTWARE`, S64), and it is
+how ARGOS recognises a frame of a version whose `DATE-AVG` is late (*Timing*).
 
 ## Frame quality
 
@@ -221,9 +280,10 @@ Measured on the green plane and written per frame when the metric is available.
 ```{important}
 `HFD` and `FWHM` are both in **green-plane pixels**, which are twice the size of
 raw sensor pixels. To convert to arcseconds, multiply by 2 and then by the
-full-resolution plate scale — 3.74″/px on an S30 Pro, so one green pixel is
-7.48″. Using the full-resolution scale directly gives an answer a factor of two
-too small.
+full-resolution plate scale — 3.74″/px on an S30 Pro (nominal:
+$206.265 \times 2.9\ \mu\text{m} / 160\ \text{mm}$; a plate solution measures the
+real one), so one green pixel is 7.48″. Using the full-resolution scale directly
+gives an answer a factor of two too small.
 ```
 
 These describe the frame, not the photometry: they are the trends Review plots
@@ -235,7 +295,7 @@ to tell a good hour from a bad one.
 :class: warning
 
 ARGOS writes no WCS. There is no `CRVAL`, no `CRPIX`, no `CD` matrix, no
-`CTYPE`, and no plate-scale keyword of any kind among the 65 written above.
+`CTYPE`, and no plate-scale keyword of any kind among the 65 keywords above.
 `RA`/`DEC` and `OBJCTRA`/`OBJCTDEC` record where the **mount** was pointing —
 they are not a solved position and cannot be used to convert pixels to
 coordinates.

@@ -2,6 +2,14 @@
 ``argos.ui``
 =====================
 
+.. admonition:: Legacy: the retired Qt app
+   :class: note
+
+   This package belongs to the PyQt6 app that ARGOS shipped up to 0.4.2. It is
+   not part of the 0.5.0 desktop app; it stays as the parity reference of the
+   server's tests (:doc:`../ARCHITECTURE`, "The retired Qt app, and why it
+   stays").
+
 .. automodule:: argos.ui
    :members:
    :undoc-members:
