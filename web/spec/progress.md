@@ -3157,3 +3157,248 @@ contributors · GNU GPL v3 or later"; dmg 51 MB with the app, READ ME FIRST.txt 
 steps), LICENSE.txt, Applications link; never launched. Python suite 1624 passed, 85
 skipped + 38 passed; black and ruff (with packaging/) clean; npm check 0 / 0, 1165 tests,
 build; cargo fmt, clippy -D warnings, 11 tests.
+
+## Site (0.5.0) (2026-11-16)
+
+Scope: the public site for 0.5.0, both halves that `.github/workflows/pages.yml` deploys
+together on a push to `main`: the showcase `docs/` (index, install, CSS, fonts, images)
+and the Sphinx documentation `docsrc/` (built with `-W`), plus `README.md`, which repeats
+the install facts. Built by four roles (observer docs, science docs, showcase, developer
+docs) on the owner's decisions of 2026-11-16 (argos-website skill, audit §7), integrated
+here. Sources: the code at `175abf6`, `notes/release_0_5_0.md` (S1-S85, H1-H17, X1-X3),
+`web/spec/*independent-checks.md`.
+
+**Status: integrated, reviewed (art direction, science, technical), the reviews' findings
+applied by a fixer pass (section 7), built and checked locally. Not published, nothing
+committed. The site goes live only after the v0.5.0 release is published and
+`explore/web-ui` is merged into `main` (section 6).**
+
+### 1. Pages
+
+| File | Change |
+|---|---|
+| `docs/index.html` | 0.5.0 first beta in the owner's words; tested with the simulator and replays, live use on a telescope still to come; canonical, `og:*` and Twitter tags; the keyword grid for 0.5.0; the night (Plan, Night Red, Review, AAVSO export); field identification; "One night, checked" (inline SVG: RR Lyr 2026-09-25, the ARGOS re-run against star_var_script + Siril with the same 2 comparisons) in place of the template-fit plot; requirements |
+| `docs/install.html` | v0.5.0 asset names, READ ME FIRST's Gatekeeper steps, platform floors, setup with the UI's labels, profiles, 0.5.0 summary |
+| `docs/css/argos.css` | no brass text, `--muted` at 5.42:1 on paper, no decorative motion, skip link, chart styles |
+| `docs/fonts/OFL.txt` | the IBM Plex licence beside the fonts |
+| `docsrc/index.rst` | landing for 0.5.0: status admonition, cards without emoji (with "What changed in 0.5.0" and "How the results were checked"), "What it does" with the simulator and replays, the two-pipeline rule with the web UI's views |
+| `docsrc/install.md`, `guide.md`, `field_identification.md`, `exoplanet_transits.md`, `field_connectivity.md`, `glossary.md` | rewritten for the web UI, 8 figures in the guide |
+| `docsrc/release_0_5_0.md` (new) | what changed by task, check your old files, how the numbers were checked, known limits; anchors to the notes at `v0.5.0` |
+| `docsrc/validation.md` (new) | how the results were checked, with what was not |
+| `docsrc/differential_photometry.md`, `fits_headers.md`, `references.md` | the notes' final state (S66-S85) |
+| `docsrc/ARCHITECTURE.md`, `CONTRIBUTING.md` (and the root copy), `simulator_testing.md`, `seestar_protocol.md`, `diagrams/*.dot` (6, 2 new), `_static/diagrams.css` | server, web UI, Tauri shell and sidecar; diagrams in IBM Plex |
+| `docsrc/api/server.rst` (new), `api/index.rst`, `api/workers.rst`, `api/ui.rst` | 58 `argos.server` modules; the Qt pages labelled the legacy parity reference |
+| `docsrc/conf.py` | `release` read from `argos/__init__.py`; server imports mocked for the Pages job; ARGOS accent instead of Furo's blue |
+| `README.md` | 0.5.0 status, install with the v0.5.0 assets and Gatekeeper steps, links to the guide, release page and validation (the French 0.4.1 guide link removed), Settings › Plate solving, Help › Create support bundle…, the Qt app labelled the parity reference |
+
+### 2. Images
+
+(As integrated; the fixer pass changed them: section 7.) Nine jpg + webp pairs in `docs/img/`, 1600 px wide (1600 x 1000; `review-sessions` 1600 x
+622), 2.8 MB of jpg and 0.97 MB of webp: connection, plan, observe-field, observe-run (the
+hero and `og:image`), review-sessions, review-wall, review-wall-night-red, review-frame,
+aavso-export. Captured by `run_web.py --replay` on 66 header-stripped copies of the RR Lyr
+2026-09-25 lights, dev config (observer `TST`, the simulator's public default site,
+`sim_mount.DEFAULT_SITE`), headless Chrome at scale 2. Night Red audit on the originals
+(showcase role): rules A and B, 0 px. Removed: the five Qt-era pairs (`session-lightcurve`,
+`plan-sequence`, `review-session`, `field-identification`, `rrlyrae-sesar-fit-dark`); no
+page of the site links to them.
+
+### 3. Checks (integration)
+
+- **Build.** The assembled tree (`docs/` copied, Sphinx into `docs/`, as pages.yml does):
+  `sphinx -W` exit 0, 0 warnings, 35 s; pages.yml's six required files present.
+- **Links** (a checker in the scratchpad): 160 pages and 2 stylesheets, 20 199 internal
+  references, 9 325 fragments; 0 root-absolute links; 1 broken:
+  `docs/_modules/index.html` → `builtins.html` (viewcode lists the type aliases `RaDec`,
+  pre-existing at `175abf6`, and `ConnectReport` under the module `builtins`). 279
+  external links listed, not fetched; 105 point at the `v0.5.0` tag and 38 at `blob/main`:
+  they resolve only after the release and the merge.
+- **Preview**, headless Chrome at 1440 and 390 px (index, install; docs index, install,
+  guide, release, validation): no horizontal page scroll, every image loads its webp, the
+  showcase makes 0 external requests and loads IBM Plex. The docs load MathJax from
+  cdn.jsdelivr.net on 7 pages (Sphinx's default, as before), and request a missing
+  `/favicon.ico`.
+- **Privacy.** The owner's config read only: observer name, AAVSO code, site name,
+  coordinates (2-6 decimals and sexagesimal), elevation, Alpaca and Stellarium hosts, home
+  path. 0 hits in both halves, the built site, the images' metadata and their OCR text
+  (Vision), except the observer name inside the public repository URL and the existing
+  credit, and the site's city name once, in `argos/server/site_check.py`'s docstring as
+  rendered by the API reference (the same city is already in the Qt app's placeholder and
+  the tests). Images: EXIF of 78 bytes with no text, webp with a VP8 chunk only. Each of
+  the nine viewed: observer `TST`, the simulator's site, the `192.168.x.x` placeholder,
+  scratch paths with no user name, the FITS header card folded, no serial.
+- **Consistency between the halves.** Version 0.5.0 (`argos/__init__.py`,
+  `pyproject.toml`, `Cargo.toml`, `conf.py`); asset names; Gatekeeper steps (=
+  `make_dmg.sh` READ ME FIRST and release.yml's body); platform floors; profiles
+  (`catalog.py`); the numbers 0.228 e⁻/ADU and 2.6 e⁻ (S73, `catalog.py`), +0.0021 /
+  0.0083 mag on n 195, +0.0166 ± 0.0015 mag, 0.86 on RR2's 6 pairs, 0.0000 s (S73-S80
+  D.2, `validation.md`).
+
+### 4. Minimum OS (owner decision 5; from the build files and the bundle, not run)
+
+macOS: `tauri.conf.json` `minimumSystemVersion` 11.0, the W8 release binary minos 11.0;
+the shipped UI needs the WebKit of Safari 16.2 (`color-mix()` in `tokens.css`) and
+container queries (16.0); the Popover API, anchor positioning and `@starting-style` appear
+only in `web/src/lab`. The site says macOS 11 or later with Safari 16.2+, Apple silicon,
+tested on macOS 26 only. Linux: the deb is built on ubuntu-22.04 against
+libwebkit2gtk-4.1; the minimum WebKitGTK version is not determined; never run on a Linux
+desktop.
+
+### 5. Open
+
+(Closed by the fixer pass, section 7: the brass shadows, the fake title bars, the hero's
+width, the diagrams on Furo's dark pages, MathJax from a CDN, `html_favicon`, `.doctrees`
+in the deploy, Graphviz without IBM Plex on the runner, and the aavso-export layout. Still
+open below unless marked.)
+
+- The `.deb` name `ARGOS_0.5.0_amd64.deb` is inferred from Tauri's bundler naming; the
+  `.dmg` name follows `make_dmg.sh`. Neither exists yet.
+- The aavso-export capture predates the dialog's "Uncalibrated frames" line (working
+  tree, `web/src/lib/review/dialogs/`, not the site wave).
+- Owner: the h1 "Put your smart telescope to scientific work." (the site plan's own
+  anti-pattern); art director: brass offset shadows, fake title bars, brass rules, the
+  hero's width, a dark band around app captures, the diagrams on Furo's dark pages.
+- Docs: MathJax from a CDN (a remote script, `mathjax@4` unpinned); no `html_favicon`;
+  pages.yml publishes `.doctrees`; Graphviz on the runner has no IBM Plex; the viewcode
+  `builtins` link.
+- Product and notes, found by the roles: Settings › Plate solving locks Database set while
+  a folder is set although S24 passes both; `web/README.md` line 319 says Run mode is
+  unavailable; `main.rs`'s header says the UI reloads; `scripts/validate_alpaca.py` imports
+  names that no longer exist; the notes' S80 wording inverts `consistent_pairs`; D2 C.5
+  calls the XX Cyg checks "within error" (1.20-1.25 combined σ).
+- `presentation/` (untracked) and `design-proposals/04-argos-041.html` still reference the
+  removed images: `git show 175abf6:docs/img/<file>` restores one.
+- Not checked: real Safari or WebKitGTK, a screen reader, external links, social unfurls,
+  the Pages job's docs-only environment (its imports were checked statically: every
+  third-party import of `argos/` is a base dependency or mocked).
+
+### 6. Publish checklist
+
+1. Commit the site with the release, including the untracked files
+   (`docsrc/release_0_5_0.md`, `validation.md`, `api/server.rst`, `_static/diagrams.css`,
+   `_static/diagrams.js`, `_static/mathjax/` (2), `diagrams/architecture.dot`,
+   `diagrams/server_threads.dot`, `docs/fonts/OFL.txt`, the 18 files of `docs/img/`) and
+   the 10 deleted Qt-era images. Stage by path: never `presentation/` or the PDF at the
+   root.
+2. Tag `v0.5.0`: release.yml builds the dmg and the deb and creates a draft release.
+3. Compare the draft's asset names with the site (`docs/install.html` twice,
+   `docsrc/install.md`, `README.md`); fix them if they differ; add sizes and the date from
+   the published assets if wanted.
+4. Publish the draft.
+5. Merge `explore/web-ui` into `main`: pages.yml builds with `-W` and deploys both halves.
+6. After the deploy: open `/argos/`, `/argos/install.html` and `/argos/docs/`, try both
+   downloads and one `blob/v0.5.0` anchor of the release page.
+
+### 7. Fixer pass (2026-11-16): the reviews applied
+
+Three reviews of the integrated site (art direction, science, technical) returned 54
+findings; the fixer applied every high and medium one but the palette (an owner decision)
+and the ones that need code or a new capture, and the cheap low ones.
+
+**Science** (every number from the checks docs or the notes):
+- The RR Lyr reference is **not calibrated**: the Siril + `star_var_script` reduction read
+  the same raw frames ("No calibration frames — proceeding with raw lights", its own
+  `pipeline.log`). Said in the showcase's section 04 (lede, figure caption, the Siril
+  card), `validation.md` §1 and §4.1, and the release page's "what these numbers do not
+  show".
+- The XX Cyg check stars are 1.25 and 1.20 combined σ from VSP, just outside its errors
+  (release page; was "within VSP's errors").
+- The run-level floor: live, only points without a detection are left out; a re-run also
+  leaves out unverified fields and off-centre rows (guide, glossary, method §5).
+- Old runs and the AAVSO export: Review flags no-detection points only when the run saved
+  diagnostic records (off by default); `few_anchors` points are written with a warning
+  until a re-run (S56, S58); `CHART` stays `na` for a run recorded before 0.5.0 unless typed
+  (S68) (guide §11-§12, release page, method §8.2, glossary).
+- The showcase's AAVSO card states raw, uncalibrated, untransformed (TG, `TRANS=NO`), a
+  field check, and the unconfirmed `#OBSTYPE=CCD`; "honest error bars" replaced by "error
+  bars from the camera's measured noise", with 1.3-1.6× for bright stars (install page,
+  method page).
+- σ_real's own uncertainty: about ±45 % at 10 points, ±30 % at 20, ±25 % at 30 (the
+  science review's simulation of `estimate_lightcurve_scatter` on white noise, 20 000
+  trials; was "±20–30 %"). **To record**: the simulation is not in a checks doc yet.
+- Pair ratios: median 0.86 against robust 0.75 named (showcase, `validation.md` §6, release
+  page, which now cites checks C.6 and D.8 instead of progress); `bjd_tdb` 0.0000 s
+  (D.2); `KNAME` falls back to the check star's name; scintillation's airmass is each
+  star's own only in a re-run; the glossary's simulator and airmass entries; the method
+  page's colour paragraph (the Field band flags Δ(B−V) > 0.3) and closing sentence; the
+  guide's exposure and gain advice; "a detailed scientific header"; a 1 % transit is
+  11 mmag.
+
+**Showcase** (`docs/index.html`, `install.html`, `css/argos.css`):
+- Captures legible: the hero's capture below the text at the content width (1198 px at
+  1440, was 497); section 02 stacked rows, text above a full-width capture; the AAVSO
+  dialog cropped to itself (1296 x 1208, shown at 597 px, the UI at 0.92 of its size);
+  Connection cropped to its panels (1600 x 537). A phone keeps each figure after its text.
+- No brass offset shadows, no fake title bars or readout strips: a 1 px frame and one
+  caption below. Focus ring `--orange-deep` (4.42:1 on paper). Plex Sans and Mono fall
+  back to each other; `e<sup>−</sup>`; numbers and units joined by no-break spaces; display
+  headings at −0.025 em; the stats and file names in Plex Mono; the limits ("Before you
+  observe", the beta note) at 15 px in ink; the install page's band full width; the
+  keyword-grid rule scoped; `--orange-hi` (unused) removed.
+- Night Red as a lossless WebP with a PNG fallback: rules A and B 0 px on the published
+  files and as Chrome decodes them (the JPG had 18 768 rule-B pixels). Section 02's
+  "During the night" text names what the image shows (Review in Night Red; Run mode is the
+  hero), and "After the night" shows the frame inspector, so Review is not shown twice.
+- The result chart's magnitude axis runs from 7.2, so no point sits above the top
+  gridline; its ±σ band is visible; the plot facts carry their qualifiers in the labels.
+- The hero has an 800 px variant (`srcset`, `fetchpriority`); meta descriptions ≤ 160
+  characters; `review-sessions` (unused) and the Night Red JPG removed.
+- Linux floor: Ubuntu 22.04 or Debian 12 and later (glibc 2.34+, inferred from the
+  ubuntu-22.04 build; install page, `install.md`, README, requirements row).
+
+**Docs** (`docsrc/conf.py`, `_static/custom.css`, `diagrams.css`, `diagrams.js`):
+- IBM Plex for text and code; links in the text colour with a brass underline; sidebar
+  in the text colour; admonitions in ARGOS's roles (brass, a neutral grey or `--cyan`,
+  `--danger`) with ARGOS's attention mark and a hollow ring instead of Furo's icons; flat
+  cards (4 px, no lift, no shadow); tabular figures in tables.
+- The mark as the sidebar logo and the favicon; "ARGOS home and download" at the head of
+  the navigation; `html_baseurl` (a canonical link per page).
+- Diagrams: Observatory colours on dark pages, Furo's toggle included (checked: light OS +
+  dark theme, dark OS + light theme); they scroll sideways on a phone.
+- MathJax 3.2.2 `tex-svg-full.js` vendored in `_static/mathjax/` (npm integrity checked;
+  Apache 2.0, its licence beside it; menu off, since its accessibility explorer loads from
+  a CDN): the docs load nothing remote.
+- `autodoc_default_options = {"ignore-module-all": True}` and anchors for `sequencer` and
+  `session_log`: the viewcode `[docs]` links all resolve (31 broken before); PyQt6 mocks
+  named (`PyQt6.QtWidgets.QPushButton`, no memory address in `api/ui.html`).
+- `validation.md`'s evidence links on `blob/v0.5.0`.
+- pages.yml: doctrees outside the published folder (20 MB less); `fonts-ibm-plex`
+  installed with Graphviz (the Ubuntu package ships the TTFs).
+
+**Checks after the pass.** `sphinx -W` exit 0, 0 warnings; the assembled tree 281 files,
+28 MB, pages.yml's six files present; links: 160 pages, 20 930 internal references,
+12 055 fragments (viewcode included), 1 broken (`_modules/index.html` → `builtins.html`,
+pre-existing); preview in headless Chrome (showcase at 1440 and 390 px; 8 docs pages light
+and dark at 1440, 2 at 390): no page scroll, 0 remote requests, 0 failed requests, every
+image loads; privacy scan (counts only): no coordinate, observer code, host, home path or
+user name; the observer name only in the repository URL and the footer credit; the
+Settings site's city twice, from `site_check.py`'s docstring (code, below); 6 elevation
+pattern matches, all digits inside SVG coordinates (chart points, a diagram polygon).
+
+**Main session, after the pass (2026-11-16).**
+- The h1 is "Variable-star photometry with a Seestar." (the art director's wording);
+  MathJax stays vendored (nothing remote); the section 04 lede no longer says Siril
+  calibrated that night; the method page's known limits name the field-rotation trends
+  and calibration for 0.6.
+- `site_check.py` and `server/__init__.py` docstrings reworded (no stale site's name or
+  mount coordinates; Qt retired). The built docs have no hit for the city.
+- The σ_real simulation is recorded in `validation.md` §6, run on
+  `estimate_lightcurve_scatter` itself: relative σ 0.47, 0.32, 0.26 at 10, 20 and 30
+  points; the method and references pages quote ±47 %, ±32 %, ±26 % and cite it.
+- Found by the roles and fixed: the server's ASTAP status had not followed S24 (it
+  showed `-d <folder>` alone, said the set was ignored, and Settings locked
+  **Database set** while a folder was set); notes S80 inverted `consistent_pairs`;
+  D2 C.5 called 000-BJV-169 and 000-BJV-171 "within error" (1.25 and 1.20 combined σ);
+  `web/README.md` said Run mode was unavailable; the `main.rs` header said the UI reloads.
+
+**Still open:**
+- Palette alignment (graphite neutrals for the showcase, Observatory tokens for the docs'
+  dark pages, `--orange*` renamed `--accent*`) and a dark band behind section 02: a 0.5.x
+  site pass.
+- Captures that need the replay again: the hero without the VSX layer; Plan with four
+  steps; phone crops; a 1200 x 630 social card.
+- The simulator names itself "Seestar S50" in the connection log while the S30 Pro
+  profile is active (visible on the `connection` capture).
+- `scripts/validate_alpaca.py` imports `BAYER_PATTERN` and `FOCAL_LENGTH`, gone from
+  `argos.core.alpaca.camera`.
+- viewcode: `_modules/index.html` links a missing `builtins.html` (pre-existing).
