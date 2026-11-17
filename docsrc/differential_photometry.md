@@ -1072,7 +1072,8 @@ atmosphere and is worth chasing.
 
 The list above is long, so here is the other side of it, plainly. An ARGOS run
 is a legitimate **detection and monitoring** measurement: that a star varied,
-by roughly how much, timed from the frame headers to the millisecond, against
+by roughly how much, timed from the frame headers to the millisecond (as accurate as the
+computer's clock), against
 references you have evidence were stable. That is a real observation and worth
 recording.
 

@@ -7,8 +7,8 @@ result, and what was not checked. The method itself is in
 ```{admonition} In one paragraph
 :class: important
 
-On three nights of one Seestar S30 Pro, ARGOS's times agree with astropy to the
-millisecond, its targets' airmass within 0.0005, its RR Lyr curve with an
+On three nights of one Seestar S30 Pro, ARGOS's times reproduce the frames' headers
+to the millisecond (the computer's clock itself was not checked), its targets' airmass within 0.0005, its RR Lyr curve with an
 independent Siril reduction of the same frames to 2 mmag with 8 mmag of scatter,
 its three check stars with their AAVSO VSP magnitudes within 1.25 σ (VSP's own
 errors included), and its noise model with the noise measured on the frames
