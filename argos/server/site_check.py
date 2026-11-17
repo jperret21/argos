@@ -4,9 +4,8 @@ The mount reports where it points (altitude, azimuth) from **its own** site
 and clock; the Seestar takes them from the phone. ARGOS computes airmass,
 BJD_TDB and FITS ``SITELAT`` / ``SITELONG`` from the **Settings** site.
 Nothing compared the two, so a site left from an earlier trip went unnoticed
-for a whole run: on 2026-09-25 the Settings site was Berkeley while the
-telescope was in France, the mount put RR Lyr at altitude 75.4°, azimuth
-258.9°, the Settings site at 13.8°, 45.9° (88.5° apart), and that run's
+for a whole run: on 2026-09-25 the Settings site was on another continent, the
+mount and the Settings site put RR Lyr 88.5° apart on the sky, and that run's
 photometry airmass and AAVSO AMASS are wrong.
 
 This is a Qt-free port of the reference implementation of release 0.5.0

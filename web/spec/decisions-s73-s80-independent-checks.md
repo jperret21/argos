@@ -751,9 +751,9 @@ Here random = inst ⊕ sqrt(1/Σ 1/err²), with no 0.01 floor and no rms branch.
 
 | Check | Mean ± sem | VSP error | Result |
 |---|---|---|---|
-| 000-BCG-523 | +0.0160 ± 0.0017 | ±0.100 | within error |
-| 000-BJV-169 | −0.0647 ± 0.0091 | ±0.051 | within error |
-| 000-BJV-171 | +0.0447 ± 0.0223 | ±0.030 | within error |
+| 000-BCG-523 | +0.0160 ± 0.0017 | ±0.100 | within error (0.16 combined σ) |
+| 000-BJV-169 | −0.0647 ± 0.0091 | ±0.051 | 1.25 combined σ: outside VSP's error, not significant |
+| 000-BJV-171 | +0.0447 ± 0.0223 | ±0.030 | 1.20 combined σ: outside VSP's error, not significant |
 
 ### 6. The AAVSO MERR
 

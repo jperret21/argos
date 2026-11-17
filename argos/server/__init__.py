@@ -1,13 +1,14 @@
 """Headless ARGOS server — the HTTP + WebSocket back end of the web front-end.
 
-The desktop UI is moving from PyQt6 to a web front-end (Svelte) that talks to
-this server over ``http://127.0.0.1``. The server drives the devices (the
-built-in simulator, or a Seestar through the existing Alpaca wrappers in
-``argos.core.alpaca``) and streams state and frames to the browser.
+Since 0.5.0 the desktop app is a web front-end (Svelte, in a Tauri shell) that
+talks to this server over ``http://127.0.0.1``. The server drives the devices
+(the built-in simulator, or a Seestar through the Alpaca wrappers in
+``argos.core.alpaca``) and streams state and frames to the front-end.
 
 **No Qt, anywhere.** Nothing under ``argos.server`` may import PyQt6, directly
 or transitively — ``tests/server/test_no_qt.py`` enforces it. The scientific
-core is reused untouched; the Qt app keeps running unchanged next to it.
+core is shared with the retired PyQt6 app, which stays in the repository only
+as the reference for the parity tests.
 
 The wire contract is documented in ``argos/server/protocol.md``. Run with::
 

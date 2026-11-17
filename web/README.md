@@ -316,8 +316,8 @@ fields in place.
 └──────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Task modes** (owner D1): Framing (Alt+1), Focus (Alt+2) and Field (Alt+3, wave 4); Run
-  is listed, unavailable, and says which wave brings it. Each mode remembers its rail
+- **Task modes** (owner D1): Framing (Alt+1), Focus (Alt+2), Field (Alt+3, wave 4) and Run
+  (Alt+4). Each mode remembers its rail
   width, card states, band, drawer and catalogue layers (Framing and Focus default to the
   grid and the target set only) (Arrange, `arrange`, with Reset and Undo).
 - **Toolbar**, built from data (`components/Toolbar`): the equipment button and the modes,

@@ -8,7 +8,7 @@
 //! sidecar (sidecar.rs) and reads `ARGOS_PORT` / `ARGOS_TOKEN` from its stdout
 //! within `sidecar::STARTUP_TIMEOUT`; the shell then sends the UI
 //! `argos://server-state` "ready" with the address and token, and the UI
-//! reloads itself on them. A server that is missing, cannot be launched,
+//! adopts that server in place (desktop.svelte.ts `adopt`), without a reload. A server that is missing, cannot be launched,
 //! stops or stays silent is "failed" (cause, last stderr lines, log folder:
 //! the UI's start-up failure, Retry = `argos://restart-server`); a server
 //! that ends later, unasked, is "stopped" (the UI's crash notice). A page that
