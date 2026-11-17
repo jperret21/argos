@@ -67,7 +67,9 @@ class FilterWheelService:
         self._settled_at: datetime | None = None
         self._moving = False
         self._settle_poll_s = settle_poll_s
-        #: Called (outside the hub lock) with the settled slot name after every move.
+        #: Called with the settled slot name after every move, under the hub lock
+        #: and in the same step as ``_moving = False`` (a waiting Take shot then
+        #: sees the new filter); on attach, with the slot found.
         self.on_settled: Callable[[str | None], None] | None = None
 
     # -- state (hub lock held by the callers that need consistency) ----------
@@ -305,6 +307,13 @@ class FilterWheelService:
                     message=message,
                     settled_utc=utc_iso(self._settled_at),
                 )
+            # In the same step as "not moving": a Take shot released by
+            # wait_settled must snapshot the settled filter, not the old one.
+            if self.on_settled is not None:
+                try:
+                    self.on_settled(settled_name)
+                except Exception:  # never kill the move thread on a listener
+                    logger.exception("Filter settle listener failed")
         if refusal is None and position >= 0 and name.lower() != target.lower():
             hub.log(
                 "warning",
@@ -314,11 +323,6 @@ class FilterWheelService:
             )
         elif refusal is None and position < 0:
             hub.log("error", f"Filter move: {STILL_TURNING}", source="filterwheel", topic="camera")
-        if self.on_settled is not None:
-            try:
-                self.on_settled(settled_name)
-            except Exception:  # never kill the move thread on a listener
-                logger.exception("Filter settle listener failed")
 
     def wait_settled(
         self, cancel: threading.Event, timeout_s: float = SETTLE_TIMEOUT_S + 5

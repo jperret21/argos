@@ -74,6 +74,21 @@ def _idle(client, timeout: float = 10.0) -> dict:
     )
 
 
+def _conditions_row(client, frame_seq: int, timeout: float = 5.0) -> dict:
+    """The conditions row of frame *frame_seq*, once the metrics thread wrote it."""
+    return wait_for(
+        lambda: next(
+            (
+                r
+                for r in client.get("/api/session/conditions", headers=AUTH).json()["rows"]
+                if r["frame_seq"] == frame_seq
+            ),
+            None,
+        ),
+        timeout=timeout,
+    )
+
+
 def _shot(client, **body) -> dict:
     response = client.post("/api/camera/capture", json={"save": True, **body}, headers=AUTH)
     assert response.status_code == 200, response.text
@@ -649,11 +664,31 @@ def test_a_light_shot_waiting_for_the_wheel_records_the_new_filter(science):
     _shot(science, exposure_s=0.02, frame_type="light")
     saved = _saved(science)[0]
     assert saved["filter"] == "LP" and _header(saved["path"])["FILTER"] == "LP"
-    rows = wait_for(
-        lambda: science.get("/api/session/conditions", headers=AUTH).json()["rows"], timeout=5
-    )
-    assert rows[-1]["filter"] == "LP"
+    assert _conditions_row(science, saved["frame_seq"])["filter"] == "LP"
     assert not any("not on the form's" in m for m in log_messages(science))
+
+
+def test_a_shot_released_by_the_wheel_sees_the_settled_filter(science):
+    """The wheel's "settled" and the form's new filter are one step under the lock.
+
+    A slow settle listener held the shot's snapshot open on the old filter: the
+    wheel said settled, the form still said IR, so the conditions row and the
+    live curve took IR while the FITS header (read from the wheel) said LP.
+    """
+    hub = science.app.state.hub
+    hub._sim_optics.wheel._slot_s = 0.3
+    listener = hub.wheel.on_settled
+
+    def slow_listener(slot):
+        time.sleep(0.3)
+        listener(slot)
+
+    hub.wheel.on_settled = slow_listener
+    science.post("/api/filterwheel/select", json={"name": "LP"}, headers=AUTH)
+    _shot(science, exposure_s=0.02, frame_type="light")
+    saved = _saved(science)[0]
+    assert _header(saved["path"])["FILTER"] == "LP"
+    assert _conditions_row(science, saved["frame_seq"])["filter"] == "LP"
 
 
 def test_offset_and_binning_cannot_change_while_a_take_shot_waits(science):
