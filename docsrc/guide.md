@@ -747,7 +747,9 @@ observation presented as a calibrated one is worse than none.
 Practical submission is through the AAVSO's own
 [WebObs](https://www.aavso.org/webobs) upload; the file format is documented
 under [Extended File Format](https://www.aavso.org/aavso-extended-file-format).
-Neither is part of ARGOS.
+Neither is part of ARGOS. ARGOS's rows were checked field by field against that
+format, offline; they have not yet been through the WebObs validator, and
+whether the AAVSO accepts `#OBSTYPE=CCD` for a CMOS camera is unconfirmed.
 
 ## 13. Reporting a problem
 
