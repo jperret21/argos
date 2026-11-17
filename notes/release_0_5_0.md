@@ -2391,10 +2391,10 @@ S69's neighbour rule): an anchor on its neighbour (000-BJV-173 on 000-BJV-169) a
 one on noise (000-BCK-501); every comparison off-centre, no target point. On a
 synthetic field with two wrong anchors of six the fit turned 0.255° where the
 field turned 0.7°, the good stars' apertures 1.61 px off.
-**What changed.** A rigid motion keeps distances: before the fit, an anchor whose
-separations from at least max(1, (n − 1) // 2) of the other matched anchors are
-not the solution's within 1.5 green px is rejected (`consistent_pairs`, the web
-overlay tracker's rule since wave 4, now the core's); two anchors that disagree
+**What changed.** A rigid motion keeps distances: before the fit, an anchor is
+kept only when its separations from at least max(1, (n − 1) // 2) of the other
+matched anchors are the solution's within 1.5 green px, and rejected otherwise
+(`consistent_pairs`, the web overlay tracker's rule since wave 4, now the core's); two anchors that disagree
 are both dropped (nothing tells which one is wrong); the residual clip follows.
 Every rejected anchor leaves the S56/S58 count (`rejected_anchors`); the re-run's
 recorder counts them (`anchors_inconsistent`). The web overlay tracker
